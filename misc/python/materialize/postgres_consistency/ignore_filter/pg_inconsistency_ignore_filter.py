@@ -35,6 +35,7 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     matches_fun_by_name,
     matches_op_by_any_pattern,
     matches_op_by_pattern,
+    matches_recursively,
     matches_x_and_y,
     matches_x_or_y,
 )
@@ -60,8 +61,12 @@ from materialize.output_consistency.input_data.operations.generic_operations_pro
 )
 from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
     TAG_JSONB_AGGREGATION,
+    TAG_JSONB_OBJECT_GENERATION,
     TAG_JSONB_TO_TEXT,
     TAG_JSONB_VALUE_ACCESS,
+)
+from materialize.output_consistency.input_data.operations.number_operations_provider import (
+    TAG_BASIC_ARITHMETIC_OP,
 )
 from materialize.output_consistency.input_data.operations.record_operations_provider import (
     TAG_RECORD_CREATION,
@@ -88,6 +93,9 @@ from materialize.output_consistency.operation.operation import (
 )
 from materialize.output_consistency.query.query_result import QueryFailure, QueryResult
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.column_selection import (
+    ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+)
 from materialize.output_consistency.validation.validation_message import ValidationError
 
 NAME_OF_NON_EXISTING_FUNCTION_PATTERN = re.compile(
@@ -339,6 +347,25 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ):
                 return YesIgnore("Consequence of #25723: decimal 0s are not shown")
 
+        if expression.matches(
+            partial(
+                matches_fun_by_name,
+                function_name_in_lower_case="pg_size_pretty",
+            ),
+            True,
+        ):
+            if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
+                # different value presentation, potentially an issue in Postgres
+                return YesIgnore("Postgres behaves differently for max_value")
+            if expression.matches(
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers=DECIMAL_TYPE_IDENTIFIERS,
+                ),
+                True,
+            ):
+                return YesIgnore("Consequence of #25723: decimal 0s are not shown")
+
         return NoIgnore()
 
     def _matches_problematic_operation_invocation(
@@ -476,6 +503,30 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             assert isinstance(pg_outcome, QueryResult)
             return self._shall_ignore_mz_failure_where_pg_succeeds(
                 query_template, mz_outcome
+            )
+
+        if query_template.matches_any_expression(
+            partial(
+                matches_x_and_y,
+                x=partial(
+                    is_operation_tagged,
+                    tag=TAG_JSONB_OBJECT_GENERATION,
+                ),
+                y=partial(
+                    matches_recursively,
+                    matcher=partial(
+                        matches_any_expression_arg,
+                        arg_matcher=partial(
+                            matches_fun_by_any_name,
+                            function_names_in_lower_case=MATH_FUNCTIONS_WITH_PROBLEMATIC_FLOATING_BEHAVIOR,
+                        ),
+                    ),
+                ),
+            ),
+            True,
+        ):
+            return YesIgnore(
+                "Deviations in floating point functions may cause an invalid JSONB (e.g., #29350 producing NaN in mz)"
             )
 
         return super()._shall_ignore_success_mismatch(
@@ -654,6 +705,16 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Not supported by Postgres")
 
+        if query_template.matches_any_expression(
+            is_table_function,
+            True,
+        ) and ExpressionCharacteristics.NULL in query_template.get_involved_characteristics(
+            ALL_QUERY_COLUMNS_BY_INDEX_SELECTION
+        ):
+            # known at least for unnest: where condition will not be evaluated if mz knows that the number of resulting
+            # rows is zero
+            return YesIgnore("Evaluation shortcut for table functions")
+
         return NoIgnore()
 
     def _shall_ignore_mz_failure_where_pg_succeeds(
@@ -807,6 +868,10 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore(
                 "Different evaluation order of join clause and where filter"
             )
+
+        if query_template.uses_join():
+            # more generic catch
+            return YesIgnore("#29347: eager evaluation of select expression in mz")
 
         if (
             "invalid input syntax for type jsonb" in mz_error_msg
@@ -975,27 +1040,6 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
             partial(
-                matches_fun_by_name,
-                function_name_in_lower_case="pg_size_pretty",
-            ),
-            True,
-        ):
-            if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
-                # different value presentation, potentially an issue in Postgres
-                return YesIgnore("Postgres behaves differently for max_value")
-            if query_template.matches_specific_select_or_filter_expression(
-                col_index,
-                partial(
-                    is_known_to_involve_exact_data_types,
-                    internal_data_type_identifiers=DECIMAL_TYPE_IDENTIFIERS,
-                ),
-                True,
-            ):
-                return YesIgnore("Consequence of #25723: decimal 0s are not shown")
-
-        if query_template.matches_specific_select_or_filter_expression(
-            col_index,
-            partial(
                 is_operation_tagged,
                 tag=TAG_JSONB_AGGREGATION,
             ),
@@ -1119,9 +1163,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 matches_x_and_y,
                 x=partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
                 y=partial(
-                    matches_any_expression_arg,
-                    arg_matcher=partial(
-                        matches_fun_by_name, function_name_in_lower_case="pg_typeof"
+                    matches_recursively,
+                    matcher=partial(
+                        matches_any_expression_arg,
+                        arg_matcher=partial(
+                            matches_fun_by_name, function_name_in_lower_case="pg_typeof"
+                        ),
                     ),
                 ),
             ),
@@ -1133,7 +1180,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             )
 
         if query_template.matches_specific_select_or_filter_expression(
-            col_index, partial(matches_op_by_pattern, pattern="$ / $"), True
+            col_index, partial(is_operation_tagged, tag=TAG_BASIC_ARITHMETIC_OP), True
         ):
             return YesIgnore("#28852: numeric return type inconsistency")
 

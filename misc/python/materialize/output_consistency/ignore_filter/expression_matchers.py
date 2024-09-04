@@ -118,6 +118,15 @@ def matches_any_expression_arg(
     return False
 
 
+def matches_recursively(
+    expression: Expression, matcher: Callable[[Expression], bool]
+) -> bool:
+    if isinstance(expression, ExpressionWithArgs):
+        for arg_expression in expression.args:
+            return matches_recursively(arg_expression, matcher)
+    return matcher(expression)
+
+
 def matches_nested_expression(expression: Expression) -> bool:
     return not matches_expression_with_only_plain_arguments(expression)
 
