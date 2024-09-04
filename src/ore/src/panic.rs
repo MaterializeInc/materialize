@@ -126,7 +126,7 @@ pub fn install_enhanced_handler() {
                 lines.next();
                 backtrace = lines
                     .take_while(|l| !l.contains("backtrace::__rust_begin_short_backtrace"))
-                    .chain_one("note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.")
+                    .chain_one("note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\n")
                     .join("\n");
             }
         };
