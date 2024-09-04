@@ -2857,6 +2857,7 @@ where
             IntrospectionType::SourceStatusHistory
             | IntrospectionType::SinkStatusHistory
             | IntrospectionType::PrivatelinkConnectionStatusHistory
+            | IntrospectionType::ReplicaStatusHistory
             | IntrospectionType::ReplicaMetricsHistory => {
                 if !self.read_only {
                     self.prepare_introspection_collection(
@@ -3075,6 +3076,14 @@ where
                 )
                 .await;
             }
+            IntrospectionType::ReplicaStatusHistory => {
+                let write_handle = write_handle.expect("filled in by caller");
+                self.partially_truncate_status_history(
+                    IntrospectionType::ReplicaStatusHistory,
+                    write_handle,
+                )
+                .await;
+            }
 
             // Truncate compute-maintained collections.
             IntrospectionType::ComputeDependencies
@@ -3194,6 +3203,10 @@ where
                     .expect("schema has not changed")
                     .0,
             ),
+            IntrospectionType::ReplicaStatusHistory => {
+                // FIXME: needs some rewriting to return a two-column key (replica_id, process_id)
+                return BTreeMap::new();
+            }
             _ => unreachable!(),
         };
 
