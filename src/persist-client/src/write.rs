@@ -145,7 +145,6 @@ where
             Compactor::new(
                 cfg.clone(),
                 Arc::clone(&metrics),
-                Arc::clone(&isolated_runtime),
                 writer_id.clone(),
                 schemas.clone(),
                 gc.clone(),

@@ -13,13 +13,13 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::{Blob, Consensus, ExternalError};
@@ -496,6 +496,7 @@ where
                 schemas,
             )
             .await?;
+            metrics.compaction.admin_count.inc();
             info!(
                 "attempt {} req {}: compacted into {} parts {} bytes in {:?}",
                 attempt,
@@ -663,4 +664,139 @@ async fn force_gc(
     }
 
     Ok(Box::new(machine))
+}
+
+/// WIP
+pub const CATALOG_FORCE_COMPACTION_FUEL: Config<usize> = Config::new(
+    "persist_catalog_force_compaction_fuel",
+    // WIP
+    1024,
+    "WIP",
+);
+
+/// WIP
+pub const CATALOG_FORCE_COMPACTION_WAIT: Config<Duration> = Config::new(
+    "persist_catalog_force_compaction_duration",
+    // WIP
+    Duration::from_secs(1),
+    "WIP",
+);
+
+/// Attempts to compact all batches in a shard into a minimal number.
+///
+/// This destroys most hope of filter pushdown doing anything useful. If you
+/// think you want this, you almost certainly want something else, please come
+/// talk to the persist team before using.
+///
+/// This is accomplished by adding artificial fuel (representing some count of
+/// updates) to the shard's internal Spine of batches structure on some schedule
+/// and doing any compaction work that results. Both the amount of fuel and
+/// cadence are dynamically tunable. However, it is not clear exactly how much
+/// fuel is safe to add in each call: 10 definitely seems fine, usize::MAX may
+/// not be. This also adds to the danger in "dangerous".
+///
+/// This is intentionally not even hooked up to `persistcli admin` for the above
+/// reasons.
+pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
+    write: &WriteHandle<K, V, T, D>,
+    fuel: impl Fn() -> usize,
+    wait: impl Fn() -> Duration,
+) -> Result<(), anyhow::Error>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
+{
+    let mut machine = write.machine.clone();
+
+    let mut last_exert: Instant;
+    loop {
+        last_exert = Instant::now();
+        let fuel = fuel();
+        let (reqs, mut maintenance) = machine.spine_exert(fuel).await;
+        for req in reqs {
+            info!(
+                "dangerous_force_compaction_and_break_pushdown {} {} compacting {} batches in {} parts totaling {} bytes: lower={:?} upper={:?} since={:?}",
+                machine.applier.shard_metrics.name,
+                machine.applier.shard_metrics.shard_id,
+                req.inputs.len(),
+                req.inputs.iter().flat_map(|x| &x.parts).count(),
+                req.inputs.iter().flat_map(|x| &x.parts).map(|x| x.encoded_size_bytes()).sum::<usize>(),
+                req.desc.lower().elements(),
+                req.desc.upper().elements(),
+                req.desc.since().elements(),
+            );
+            let start = Instant::now();
+            let (res, apply_maintenance) = Compactor::<K, V, T, D>::compact_and_apply(
+                &mut machine,
+                req,
+                write.writer_id.clone(),
+                write.schemas.clone(),
+            )
+            .await?;
+            machine.applier.metrics.compaction.admin_count.inc();
+            info!(
+                "dangerous_force_compaction_and_break_pushdown {} {} compacted in {:?}: {:?}",
+                machine.applier.shard_metrics.name,
+                machine.applier.shard_metrics.shard_id,
+                start.elapsed(),
+                res
+            );
+            maintenance.merge(apply_maintenance);
+        }
+        maintenance.perform(&machine, &write.gc).await;
+
+        // Now sleep before the next one. Make sure to delay from when we
+        // started the last exert in case the compaction takes non-trivial time.
+        let next_exert = last_exert + wait();
+        tokio::time::sleep_until(next_exert.into()).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use mz_dyncfg::ConfigUpdates;
+    use mz_persist_types::ShardId;
+    use tokio::task::yield_now;
+    use tracing::debug;
+
+    use crate::tests::new_test_client;
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn dangerous_force_compaction_and_break_pushdown(dyncfgs: ConfigUpdates) {
+        let (mut write, _read) = new_test_client(&dyncfgs)
+            .await
+            .expect_open::<String, (), u64, i64>(ShardId::new())
+            .await;
+        let machine = write.machine.clone();
+
+        // Push some arbitrary prime number of batches into the shard and
+        // validate that we end up with more than two.
+        const NUM_BATCHES: u64 = 17;
+        for idx in 0..NUM_BATCHES {
+            let () = write
+                .expect_compare_and_append(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)
+                .await;
+        }
+        assert!(machine.applier.all_batches().len() > 2);
+
+        // Run the tool and verify that we get down to at most two at some point.
+        let _task = mz_ore::task::spawn(|| "", async move {
+            super::dangerous_force_compaction_and_break_pushdown(&write, || 10, || Duration::ZERO)
+                .await
+        })
+        .abort_on_drop();
+        loop {
+            let num_batches = machine.applier.all_batches().len();
+            debug!("have {} batches left", num_batches);
+            if num_batches <= 2 {
+                break;
+            }
+            let () = yield_now().await;
+        }
+    }
 }

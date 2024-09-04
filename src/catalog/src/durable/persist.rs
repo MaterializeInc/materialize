@@ -31,6 +31,7 @@ use mz_ore::{
     soft_assert_or_log, soft_panic_or_log,
 };
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
+use mz_persist_client::cli::admin::{CATALOG_FORCE_COMPACTION_FUEL, CATALOG_FORCE_COMPACTION_WAIT};
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
@@ -1359,6 +1360,31 @@ impl UnopenedPersistCatalogState {
             catalog
                 .increment_catalog_upgrade_shard_version(self.update_applier.organization_id)
                 .await;
+            let write_handle = catalog
+                .persist_client
+                .open_writer::<SourceData, (), Timestamp, i64>(
+                    catalog.write_handle.shard_id(),
+                    Arc::new(desc()),
+                    Arc::new(UnitSchema::default()),
+                    Diagnostics {
+                        shard_name: CATALOG_SHARD_NAME.to_string(),
+                        handle_purpose: "durable catalog state handles".to_string(),
+                    },
+                )
+                .await
+                .expect("invalid usage");
+            let fuel = CATALOG_FORCE_COMPACTION_FUEL.handle(catalog.persist_client.dyncfgs());
+            let wait = CATALOG_FORCE_COMPACTION_WAIT.handle(catalog.persist_client.dyncfgs());
+            let _ = mz_ore::task::spawn(|| "catalog::force_shard_compaction", async move {
+                let () =
+                    mz_persist_client::cli::admin::dangerous_force_compaction_and_break_pushdown(
+                        &write_handle,
+                        || fuel.get(),
+                        || wait.get(),
+                    )
+                    .await
+                    .expect("WIP");
+            });
         }
 
         Ok(Box::new(catalog))

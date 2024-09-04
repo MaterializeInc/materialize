@@ -519,6 +519,30 @@ impl<T: Timestamp + Lattice> Trace<T> {
         self.spine.insert(batch, &mut SpineLog::Disabled);
     }
 
+    /// Apply some amount of effort to trace maintenance.
+    ///
+    /// The units of effort are updates, and the method should be thought of as
+    /// analogous to inserting as many empty updates, where the trace is
+    /// permitted to perform proportionate work.
+    ///
+    /// Returns true if this did work and false if it left the spine unchanged.
+    #[must_use]
+    pub fn exert(&mut self, fuel: usize) -> (Vec<FueledMergeReq<T>>, bool) {
+        let mut fuel = isize::try_from(fuel).unwrap_or(isize::MAX);
+
+        let mut merge_reqs = Vec::new();
+        let did_work = self.spine.exert(
+            &mut fuel,
+            &mut SpineLog::Enabled {
+                merge_reqs: &mut merge_reqs,
+            },
+        );
+        debug_assert_eq!(self.spine.validate(), Ok(()), "{:?}", self);
+        // See the comment in [Self::push_batch].
+        let merge_reqs = Self::remove_redundant_merge_reqs(merge_reqs);
+        (merge_reqs, did_work)
+    }
+
     /// Validates invariants.
     ///
     /// See `Spine::validate` for details.
@@ -1125,6 +1149,27 @@ impl<T: Timestamp + Lattice> Spine<T> {
             since: Antichain::from_elem(T::minimum()),
             upper: Antichain::from_elem(T::minimum()),
             merging: Vec::new(),
+        }
+    }
+
+    /// Apply some amount of effort to trace maintenance.
+    ///
+    /// The units of effort are updates, and the method should be thought of as
+    /// analogous to inserting as many empty updates, where the trace is
+    /// permitted to perform proportionate work.
+    ///
+    /// Returns true if this did work and false if it left the spine unchanged.
+    fn exert(&mut self, effort: &mut isize, log: &mut SpineLog<'_, T>) -> bool {
+        // If any merges exist, we can directly call `apply_fuel`.
+        if self.merging.iter().any(|b| b.merge.is_some()) {
+            self.apply_fuel(effort, log);
+            true
+        } else {
+            // TODO: Should we resurrect the rest of the old Spine::exert
+            // method? It does a bit more logic around tidying layers and
+            // introducing a fake batch if there are no already in-progress
+            // merges.
+            false
         }
     }
 
