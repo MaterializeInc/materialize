@@ -9,6 +9,8 @@ aliases:
   - /transform-data/patterns/time-travel-queries/#history-retention-period
 ---
 
+[//]: # "TODO: Move to Serve results section"
+
 [Subscriptions](/sql/subscribe/) allow you to stream changing results from
 Materialize to an external application programatically. Like any connection
 over the network, subscriptions might get disrupted for both expected and

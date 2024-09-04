@@ -2,13 +2,12 @@
 title: "JOIN"
 description: "`JOIN` lets you combine two or more table expressions."
 aliases:
-  - /sql/join/
   - /transform-data/join/
+  - /sql/join/
 menu:
   main:
-    parent: 'transform-overview'
+    parent: 'SELECT'
     name: Joins
-    weight: 20
 ---
 
 `JOIN` lets you combine two or more table expressions into a single table
