@@ -83,7 +83,7 @@ async fn reclock_resume_uppers<C, IntoTime>(
     persist_clients: &PersistClientCache,
     ingestion_description: &IngestionDescription<CollectionMetadata>,
     as_of: Antichain<IntoTime>,
-    resume_uppers: &BTreeMap<GlobalId, (Antichain<IntoTime>, SourceEnvelope)>,
+    resume_uppers: &BTreeMap<GlobalId, Antichain<IntoTime>>,
     config_set: Arc<ConfigSet>,
 ) -> BTreeMap<GlobalId, Antichain<C::Time>>
 where
@@ -101,16 +101,7 @@ where
     let mut remap_updates = vec![];
     let mut remap_upper = as_of.clone();
     let mut subscription = None;
-    for (upper, envelope) in resume_uppers.values() {
-        // We can only resume with certain envelope types otherwise we must re-ingest everything.
-        // TODO(petrosagg): move this reasoning to the controller
-        if !matches!(
-            envelope,
-            SourceEnvelope::None(_) | SourceEnvelope::Upsert(_)
-        ) {
-            continue;
-        }
-
+    for upper in resume_uppers.values() {
         // TODO(petrosagg): this feels icky, we shouldn't have exceptions in frontier reasoning
         // unless there is a good explanation as to why it is the case. It seems to me that this is
         // because in various moments in ingestion we mix uppers and sinces and try to derive one
@@ -201,22 +192,9 @@ where
     };
 
     let mut source_resume_uppers = BTreeMap::new();
-    for (id, (upper, envelope)) in resume_uppers {
-        // We can only resume with certain envelope types otherwise we must re-ingest everything.
-        // TODO(petrosagg): move this reasoning to the controller
-        if !matches!(
-            envelope,
-            SourceEnvelope::None(_) | SourceEnvelope::Upsert(_)
-        ) {
-            if upper.is_empty() {
-                source_resume_uppers.insert(*id, Antichain::new());
-            } else {
-                source_resume_uppers.insert(*id, Antichain::from_elem(Timestamp::minimum()));
-            }
-        } else {
-            let source_upper = source_upper_at_frontier(upper);
-            source_resume_uppers.insert(*id, source_upper);
-        }
+    for (id, upper) in resume_uppers {
+        let source_upper = source_upper_at_frontier(upper);
+        source_resume_uppers.insert(*id, source_upper);
     }
     source_resume_uppers
 }
@@ -298,8 +276,14 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 .await
                                 .unwrap();
                             let upper = write_handle.fetch_recent_upper().await;
-                            resume_uppers
-                                .insert(*id, (upper.clone(), export.data_config.envelope.clone()));
+                            let upper = match export.data_config.envelope {
+                                // The CdcV2 envelope must re-ingest everything since the Mz frontier does not have a relation to upstream timestamps.
+                                // TODO(petrosagg): move this reasoning to the controller
+                                SourceEnvelope::CdcV2 if upper.is_empty() => Antichain::new(),
+                                SourceEnvelope::CdcV2 => Antichain::from_elem(Timestamp::minimum()),
+                                _ => upper.clone(),
+                            };
+                            resume_uppers.insert(*id, upper);
                             write_handle.expire().await;
 
                             // TODO(petrosagg): The as_of of the ingestion should normally be based
@@ -432,10 +416,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                             id,
                             ingestion_description,
                             as_of,
-                            resume_uppers: resume_uppers
-                                .into_iter()
-                                .map(|(id, (upper, _))| (id, upper))
-                                .collect(),
+                            resume_uppers,
                             source_resume_uppers,
                         });
 
