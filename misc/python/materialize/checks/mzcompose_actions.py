@@ -413,11 +413,11 @@ class PromoteMz(MzcomposeAction):
         )
         assert result["result"] == "Success", f"Unexpected result {result}"
 
-        mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
-        e.current_mz_version = mz_version
-
         # Wait until new Materialize is ready to handle queries
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, self.mz_service)
+
+        mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
+        e.current_mz_version = mz_version
 
 
 class SystemVarChange(MzcomposeAction):
