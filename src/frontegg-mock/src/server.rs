@@ -58,6 +58,9 @@ const SSO_CONFIG_GROUP_PATH: &str =
     "/frontegg/team/resources/sso/v1/configurations/:id/groups/:group_id";
 const SSO_CONFIG_ROLES_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/:id/roles";
 
+// Internal endpoints for testing
+const INTERNAL_USER_PASSWORD_PATH: &str = "/api/internal-mock/user-password";
+
 pub struct FronteggMockServer {
     pub base_url: String,
     pub refreshes: Arc<Mutex<u64>>,
@@ -234,6 +237,10 @@ impl FronteggMockServer {
             .route(
                 SCIM_CONFIGURATION_PATH,
                 delete(handle_delete_scim_configuration),
+            )
+            .route(
+                INTERNAL_USER_PASSWORD_PATH,
+                post(internal_handle_get_user_password),
             )
             .layer(middleware::from_fn(logging_middleware))
             .layer(middleware::from_fn_with_state(

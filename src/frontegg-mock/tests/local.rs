@@ -703,6 +703,58 @@ async fn test_delete_nonexistent_user() {
     assert_eq!(response.status(), 404);
 }
 
+#[mz_ore::test(tokio::test)]
+async fn test_get_user_password() {
+    let ctx = setup_test_context().await;
+    let access_token = authenticate(&ctx).await.unwrap();
+
+    // Create a new user
+    let new_user_email = "password_test_user@example.com";
+    let create_response = ctx
+        .client
+        .post(format!("{}/identity/resources/users/v2", ctx.base_url))
+        .bearer_auth(&access_token)
+        .json(&json!({
+            "email": new_user_email,
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(create_response.status(), 201);
+
+    // Get the user's password
+    let get_password_response = ctx
+        .client
+        .post(format!("{}/api/internal-mock/user-password", ctx.base_url))
+        .bearer_auth(access_token)
+        .json(&json!({
+            "email": new_user_email
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(get_password_response.status(), 200);
+    let user_data: serde_json::Value = get_password_response.json().await.unwrap();
+    assert_eq!(user_data["email"], new_user_email);
+    assert!(!user_data["password"].as_str().unwrap().is_empty());
+
+    // Verify that the password works by authenticating with it
+    let auth_response = ctx
+        .client
+        .post(format!("{}/identity/resources/auth/v1/user", ctx.base_url))
+        .json(&json!({
+            "email": user_data["email"],
+            "password": user_data["password"]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(auth_response.status(), 200);
+}
+
 // SSO Configuration Tests
 
 #[mz_ore::test(tokio::test)]
