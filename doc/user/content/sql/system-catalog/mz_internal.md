@@ -181,6 +181,24 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
 | `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes.                                                                                                                             |
 
+## `mz_cluster_replica_metrics_history`
+
+{{< warn-if-unreleased v0.116 >}}
+The `mz_cluster_replica_metrics_history` table records resource utilization metrics
+for all processes of all extant cluster replicas.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_replica_metrics_history -->
+| Field            | Type      | Meaning
+| ---------------- | --------- | --------
+| `replica_id`     | [`text`]  | The ID of a cluster replica.
+| `process_id`     | [`uint8`] | An identifier of a process within the replica.
+| `cpu_nano_cores` | [`uint8`] | Approximate CPU usage in billionths of a vCPU core.
+| `memory_bytes`   | [`uint8`] | Approximate memory usage in bytes.
+| `disk_bytes`     | [`uint8`] | Approximate disk usage in bytes.
+| `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
+
 ## `mz_cluster_replica_statuses`
 
 The `mz_cluster_replica_statuses` table contains a row describing the status
@@ -210,6 +228,24 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.                                                                                                                              |
 | `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.                                                                                                                              |
 | `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation.                                                                                                                             |
+
+## `mz_cluster_replica_utilization_history`
+
+{{< warn-if-unreleased v0.116 >}}
+The `mz_cluster_replica_utilization_history` view records resource utilization metrics
+for all processes of all extant cluster replicas, as a percentage of the total resource allocation.
+
+At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_replica_utilization_history -->
+| Field            | Type                 | Meaning
+|------------------|----------------------|--------
+| `replica_id`     | [`text`]             | The ID of a cluster replica.
+| `process_id`     | [`uint8`]            | An identifier of a compute process within the replica.
+| `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.
+| `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.
+| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation.
+| `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
 
 ## `mz_cluster_replica_history`
 

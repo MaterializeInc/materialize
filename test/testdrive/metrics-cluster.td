@@ -31,3 +31,24 @@ foo size_2_2 0 true true <null>
 foo size_2_2 1 true true <null>
 foo size_32 0 true true <null>
 xyzzy size_4 0 true true <null>
+
+> SELECT DISTINCT ON (c.name, r.name, u.process_id)
+      c.name,
+      r.name,
+      u.process_id,
+      u.cpu_percent >= 0.0,
+      u.memory_percent > 0.0,
+      u.disk_percent
+  FROM
+      mz_clusters AS c
+          JOIN mz_cluster_replicas AS r ON r.cluster_id = c.id
+          JOIN
+              mz_internal.mz_cluster_replica_utilization_history AS u
+              ON r.id = u.replica_id
+  WHERE c.name IN ( 'foo', 'bar', 'xyzzy' )
+  ORDER BY c.name, r.name, process_id, occurred_at DESC
+foo size_1 0 true true <null>
+foo size_2_2 0 true true <null>
+foo size_2_2 1 true true <null>
+foo size_32 0 true true <null>
+xyzzy size_4 0 true true <null>

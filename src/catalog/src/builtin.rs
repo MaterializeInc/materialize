@@ -50,6 +50,7 @@ use mz_sql::session::user::{
     MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NAME,
 };
 use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::healthcheck::REPLICA_METRICS_HISTORY_DESC;
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
     MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
@@ -3218,10 +3219,10 @@ pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     access: vec![PUBLIC_SELECT],
 });
 
+// TODO(teskje) Remove this table in favor of `MZ_CLUSTER_REPLICA_METRICS_HISTORY`, once the latter
+//              has been backfilled to 30 days worth of data.
 pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_cluster_replica_metrics",
-    // TODO[btv] - make this public once we work out whether and how to fuse it with
-    // the corresponding Storage tables.
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::TABLE_MZ_CLUSTER_REPLICA_METRICS_OID,
     desc: RelationDesc::builder()
@@ -3234,6 +3235,17 @@ pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinTable> = LazyLock::new(||
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
+
+pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
+    LazyLock::new(|| BuiltinSource {
+        name: "mz_cluster_replica_metrics_history",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_CLUSTER_REPLICA_METRICS_HISTORY_OID,
+        data_source: IntrospectionType::ReplicaMetricsHistory,
+        desc: REPLICA_METRICS_HISTORY_DESC.clone(),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    });
 
 pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
@@ -5360,6 +5372,27 @@ FROM
         JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id",
     access: vec![PUBLIC_SELECT],
 });
+
+pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
+    LazyLock::new(|| BuiltinView {
+        name: "mz_cluster_replica_utilization_history",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY_OID,
+        column_defs: None,
+        sql: "
+SELECT
+    r.id AS replica_id,
+    m.process_id,
+    m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
+    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent,
+    m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent,
+    m.occurred_at
+FROM
+    mz_catalog.mz_cluster_replicas AS r
+        JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
+        JOIN mz_internal.mz_cluster_replica_metrics_history AS m ON m.replica_id = r.id",
+        access: vec![PUBLIC_SELECT],
+    });
 
 pub static MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER: LazyLock<BuiltinView> =
     LazyLock::new(|| BuiltinView {
@@ -7630,6 +7663,15 @@ ON mz_internal.mz_cluster_replica_metrics (replica_id)",
     is_retained_metrics_object: true,
 };
 
+pub const MZ_CLUSTER_REPLICA_METRICS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_metrics_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_REPLICA_METRICS_HISTORY_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_cluster_replica_metrics_history (replica_id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_CLUSTER_REPLICA_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -8051,6 +8093,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_METRICS),
+        Builtin::Source(&MZ_CLUSTER_REPLICA_METRICS_HISTORY),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::Table(&MZ_INTERNAL_CLUSTER_REPLICAS),
@@ -8087,6 +8130,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
         Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION),
+        Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS),
         Builtin::View(&MZ_COMPUTE_EXPORTS),
@@ -8288,6 +8332,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_HISTORY_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_HISTORY_IND),
         Builtin::Index(&MZ_OBJECT_LIFETIMES_IND),
         Builtin::Index(&MZ_OBJECT_DEPENDENCIES_IND),

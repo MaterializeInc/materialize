@@ -21,8 +21,29 @@ def test_replica_metrics(mz: MaterializeApplication) -> None:
             """
             > CREATE CLUSTER my_cluster REPLICAS (my_replica (SIZE '4-4'))
 
-            > SELECT COUNT(*) FROM mz_internal.mz_cluster_replica_metrics m JOIN mz_cluster_replicas cr ON m.replica_id = cr.id WHERE cr.name = 'my_replica' AND m.cpu_nano_cores IS NOT NULL AND m.memory_bytes IS NOT NULL
-            4
+            > SELECT process_id
+              FROM mz_internal.mz_cluster_replica_metrics m
+              JOIN mz_cluster_replicas cr ON m.replica_id = cr.id
+              WHERE
+                  cr.name = 'my_replica' AND
+                  m.cpu_nano_cores IS NOT NULL AND
+                  m.memory_bytes IS NOT NULL
+            0
+            1
+            2
+            3
+
+            > SELECT DISTINCT process_id
+              FROM mz_internal.mz_cluster_replica_metrics_history m
+              JOIN mz_cluster_replicas cr ON m.replica_id = cr.id
+              WHERE
+                  cr.name = 'my_replica' AND
+                  m.cpu_nano_cores IS NOT NULL AND
+                  m.memory_bytes IS NOT NULL
+            0
+            1
+            2
+            3
 
             > DROP CLUSTER my_cluster
             """

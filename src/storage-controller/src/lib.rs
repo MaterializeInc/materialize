@@ -18,6 +18,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
@@ -32,6 +33,7 @@ use mz_cluster_client::ReplicaId;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_storage_client::storage_collections::{CollectionFrontiers, StorageCollections};
+use mz_storage_types::dyncfgs::REPLICA_METRICS_HISTORY_RETENTION_INTERVAL;
 use timely::progress::Timestamp as TimelyTimestamp;
 
 use mz_ore::metrics::MetricsRegistry;
@@ -2975,7 +2977,8 @@ where
             // it resilient to the upper moving concurrently.
             IntrospectionType::SourceStatusHistory
             | IntrospectionType::SinkStatusHistory
-            | IntrospectionType::PrivatelinkConnectionStatusHistory => {
+            | IntrospectionType::PrivatelinkConnectionStatusHistory
+            | IntrospectionType::ReplicaMetricsHistory => {
                 if !self.read_only {
                     self.prepare_introspection_collection(
                         id,
@@ -3067,6 +3070,18 @@ where
             IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
                 // Differential collections start with an empty
                 // desired state. No need to manually reset.
+            }
+            IntrospectionType::ReplicaMetricsHistory => {
+                let write_handle = write_handle.expect("filled in by caller");
+                let result = self
+                    .partially_truncate_metrics_history(
+                        IntrospectionType::ReplicaMetricsHistory,
+                        write_handle,
+                    )
+                    .await;
+                if let Err(error) = result {
+                    soft_panic_or_log!("error truncating replica metrics history: {error}");
+                }
             }
             IntrospectionType::StorageSourceStatistics => {
                 let prev = self.snapshot_statistics(id, recent_upper).await;
@@ -3444,6 +3459,84 @@ where
                 }
             })
             .collect()
+    }
+
+    /// Truncates the given metrics history by removing all entries older than that history's
+    /// configured retention interval.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `collection` is not a metrics history.
+    async fn partially_truncate_metrics_history(
+        &mut self,
+        collection: IntrospectionType,
+        write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    ) -> Result<(), anyhow::Error> {
+        let (keep_duration, occurred_at_col) = match collection {
+            IntrospectionType::ReplicaMetricsHistory => (
+                REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(self.config.config_set()),
+                collection_status::REPLICA_METRICS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("occurred_at"))
+                    .expect("schema has not changed")
+                    .0,
+            ),
+            _ => panic!("not a metrics history: {collection:?}"),
+        };
+
+        let id = self.introspection_ids.lock().expect("poisoned")[&collection];
+
+        let upper = write_handle.fetch_recent_upper().await;
+        let Some(upper_ts) = upper.as_option() else {
+            bail!("collection is sealed");
+        };
+        let Some(as_of_ts) = upper_ts.step_back() else {
+            return Ok(()); // nothing to truncate
+        };
+
+        let mut rows = self
+            .snapshot(id, as_of_ts)
+            .await
+            .map_err(|e| anyhow!("reading snapshot: {e:?}"))?;
+
+        let now = mz_ore::now::to_datetime((self.now)());
+        let keep_since = now - keep_duration;
+
+        // Produce retractions by inverting diffs of rows we want to delete and setting the diffs
+        // of all other rows to 0.
+        for (row, diff) in &mut rows {
+            let datums = row.unpack();
+            let occurred_at = datums[occurred_at_col].unwrap_timestamptz();
+            *diff = if *occurred_at < keep_since { -*diff } else { 0 };
+        }
+
+        // Consolidate to avoid superfluous writes.
+        differential_dataflow::consolidation::consolidate(&mut rows);
+
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        // It is very important that we append our retractions at the timestamp
+        // right after the timestamp at which we got our snapshot. Otherwise,
+        // it's possible for someone else to sneak in retractions or other
+        // unexpected changes.
+        let old_upper_ts = upper_ts.clone();
+        let write_ts = old_upper_ts.clone();
+        let new_upper_ts = TimestampManipulation::step_forward(&old_upper_ts);
+
+        let updates = rows
+            .into_iter()
+            .map(|(row, diff)| ((SourceData(Ok(row)), ()), write_ts.clone(), diff));
+
+        write_handle
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(old_upper_ts),
+                Antichain::from_elem(new_upper_ts),
+            )
+            .await
+            .expect("valid usage")
+            .map_err(|e| anyhow!("appending retractions: {e:?}"))
     }
 
     /// Appends a new global ID, shard ID pair to the appropriate collection.
