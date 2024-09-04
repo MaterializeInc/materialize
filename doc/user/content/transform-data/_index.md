@@ -94,7 +94,8 @@ For more information, see:
 
 In Materialize, [indexes](/concepts/indexes/) represent query results stored in
 memory within a cluster. By making up-to-date view results available in memory,
-indexes can help improve performance within the cluster. Indexes can also help [optimize query performance](/transform-data/optimization/).
+indexes can help improve performance within the cluster. Indexes can also help
+[optimize query performance](/transform-data/optimization/).
 
 For more information, see:
 
