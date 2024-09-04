@@ -145,9 +145,9 @@ impl TimestampProvider for Coordinator {
     ) -> AntichainRef<'a, Timestamp> {
         self.controller
             .compute
-            .collection(instance, id)
+            .collection_frontiers(id, Some(instance))
             .expect("id does not exist")
-            .read_frontier()
+            .read_frontier
     }
 
     /// Reports a collection's current write frontier.
@@ -158,9 +158,9 @@ impl TimestampProvider for Coordinator {
     ) -> AntichainRef<'a, Timestamp> {
         self.controller
             .compute
-            .collection(instance, id)
+            .collection_frontiers(id, Some(instance))
             .expect("id does not exist")
-            .write_frontier()
+            .write_frontier
     }
 
     fn storage_frontiers(

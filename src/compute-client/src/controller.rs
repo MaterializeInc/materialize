@@ -52,6 +52,7 @@ use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
+use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use tokio::time::{self, MissedTickBehavior};
 use tracing::warn;
@@ -62,7 +63,7 @@ use crate::controller::error::{
     InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError, ReplicaDropError,
     SubscribeTargetError,
 };
-use crate::controller::instance::{CollectionState, Instance};
+use crate::controller::instance::Instance;
 use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
@@ -299,26 +300,28 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         Ok(ids)
     }
 
-    /// Return a read-only handle to the indicated collection.
-    pub fn collection(
+    /// Return the frontiers of the indicated collection.
+    ///
+    /// If an `instance_id` is provided, the collection is assumed to be installed on that
+    /// instance. Otherwise all available instances are searched.
+    pub fn collection_frontiers(
         &self,
-        instance_id: ComputeInstanceId,
         collection_id: GlobalId,
-    ) -> Result<&CollectionState<T>, CollectionLookupError> {
-        let collection = self.instance(instance_id)?.collection(collection_id)?;
-        Ok(collection)
-    }
+        instance_id: Option<ComputeInstanceId>,
+    ) -> Result<CollectionFrontiers<T>, CollectionLookupError> {
+        let collection = match instance_id {
+            Some(id) => self.instance(id)?.collection(collection_id)?,
+            None => self
+                .instances
+                .values()
+                .find_map(|i| i.collection(collection_id).ok())
+                .ok_or(CollectionLookupError::CollectionMissing(collection_id))?,
+        };
 
-    /// Return a read-only handle to the indicated collection.
-    pub fn find_collection(
-        &self,
-        collection_id: GlobalId,
-    ) -> Result<&CollectionState<T>, CollectionLookupError> {
-        self.instances
-            .values()
-            .flat_map(|i| i.collection(collection_id).ok())
-            .next()
-            .ok_or(CollectionLookupError::CollectionMissing(collection_id))
+        Ok(CollectionFrontiers {
+            read_frontier: collection.read_frontier(),
+            write_frontier: collection.write_frontier(),
+        })
     }
 
     /// List compute collections that depend on the given collection.
@@ -409,8 +412,8 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             .map_err(|e| e.into())
     }
 
-    /// Returns the read and write frontiers for each collection.
-    pub fn collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
+    /// Returns a map with the read and write frontiers of each collection.
+    pub fn collect_collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
         let collections = self.instances.values().flat_map(|i| i.collections_iter());
         collections
             .map(|(id, collection)| {
@@ -421,8 +424,8 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             .collect()
     }
 
-    /// Returns the write frontier for each collection installed on each replica.
-    pub fn replica_write_frontiers(&self) -> BTreeMap<(GlobalId, ReplicaId), Antichain<T>> {
+    /// Returns a map with the write frontier of each collection installed on each replica.
+    pub fn collect_replica_write_frontiers(&self) -> BTreeMap<(GlobalId, ReplicaId), Antichain<T>> {
         self.instances
             .values()
             .flat_map(|i| i.replica_write_frontiers())
@@ -914,4 +917,12 @@ where
         // of data we have to record.
         self.record_introspection_updates(storage);
     }
+}
+
+/// The frontiers of a compute collection.
+pub struct CollectionFrontiers<'a, T> {
+    /// The read frontier.
+    pub read_frontier: AntichainRef<'a, T>,
+    /// The write frontier.
+    pub write_frontier: AntichainRef<'a, T>,
 }

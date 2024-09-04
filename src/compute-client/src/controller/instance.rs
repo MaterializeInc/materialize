@@ -1993,7 +1993,7 @@ where
 /// A compute collection is either an index, or a storage sink, or a subscribe, exported by a
 /// compute dataflow.
 #[derive(Debug)]
-pub struct CollectionState<T: Timestamp> {
+pub(super) struct CollectionState<T: Timestamp> {
     /// Whether this collection is a log collection.
     ///
     /// Log collections are special in that they are only maintained by a subset of all replicas.
