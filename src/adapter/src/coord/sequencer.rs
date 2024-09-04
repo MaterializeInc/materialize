@@ -123,13 +123,14 @@ impl Coordinator {
 
             if let Err(e) = rbac::check_plan(
                 &session_catalog,
-                &self
-                    .active_conns()
-                    .into_iter()
-                    .map(|(conn_id, conn_meta)| {
-                        (conn_id.unhandled(), *conn_meta.authenticated_role_id())
-                    })
-                    .collect(),
+                |id| {
+                    // We use linear search through active connections if needed, which is fine
+                    // because the RBAC check will call the closure at most once.
+                    self.active_conns()
+                        .into_iter()
+                        .find(|(conn_id, _)| conn_id.unhandled() == id)
+                        .map(|(_, conn_meta)| *conn_meta.authenticated_role_id())
+                },
                 ctx.session(),
                 &plan,
                 target_cluster_id,
