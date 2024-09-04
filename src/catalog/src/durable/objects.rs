@@ -986,6 +986,10 @@ impl Snapshot {
     }
 }
 
+/// Token used to fence out other processes.
+///
+/// Every time a new process takes over, the `epoch` should be incremented.
+/// Every time a new version is deployed, the `deploy` generation should be incremented.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Arbitrary)]
 pub struct FenceToken {
     pub(crate) deploy_generation: u64,
