@@ -97,7 +97,11 @@ if is_truthy "${CI_HEAP_PROFILES:-}"; then
     ) &
 fi
 
-TEST_CMD="bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]}"
+if [ "${BUILDKITE_PARALLEL_JOB_COUNT:-1}" -gt 1 ]; then
+    TEST_CMD="BUILDKITE_PARALLEL_JOB=$BUILDKITE_PARALLEL_JOB BUILDKITE_PARALLEL_JOB_COUNT=$BUILDKITE_PARALLEL_JOB_COUNT bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]}"
+else
+    TEST_CMD="bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]}"
+fi
 echo "$TEST_CMD" > test_cmd
 TEST_DESC="$(mzcompose description)"
 echo "$TEST_DESC" > test_desc
