@@ -128,11 +128,14 @@ impl<'a> Transaction<'a> {
     ) -> Result<Transaction, CatalogError> {
         Ok(Transaction {
             durable_catalog,
-            databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
-            schemas: TableTransaction::new(schemas, |a: &SchemaValue, b| {
+            databases: TableTransaction::new_with_uniqueness_fn(
+                databases,
+                |a: &DatabaseValue, b| a.name == b.name,
+            )?,
+            schemas: TableTransaction::new_with_uniqueness_fn(schemas, |a: &SchemaValue, b| {
                 a.database_id == b.database_id && a.name == b.name
             })?,
-            items: TableTransaction::new(items, |a: &ItemValue, b| {
+            items: TableTransaction::new_with_uniqueness_fn(items, |a: &ItemValue, b| {
                 let a_type = a.item_type();
                 let b_type = b.item_type();
                 a.schema_id == b.schema_id
@@ -141,31 +144,35 @@ impl<'a> Transaction<'a> {
                         || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
                         || (b_type == CatalogItemType::Type && a_type.conflicts_with_type()))
             })?,
-            comments: TableTransaction::new(comments, |_a, _b| false)?,
-            roles: TableTransaction::new(roles, |a: &RoleValue, b| a.name == b.name)?,
-            clusters: TableTransaction::new(clusters, |a: &ClusterValue, b| a.name == b.name)?,
-            cluster_replicas: TableTransaction::new(
+            comments: TableTransaction::new(comments)?,
+            roles: TableTransaction::new_with_uniqueness_fn(roles, |a: &RoleValue, b| {
+                a.name == b.name
+            })?,
+            clusters: TableTransaction::new_with_uniqueness_fn(clusters, |a: &ClusterValue, b| {
+                a.name == b.name
+            })?,
+            cluster_replicas: TableTransaction::new_with_uniqueness_fn(
                 cluster_replicas,
                 |a: &ClusterReplicaValue, b| a.cluster_id == b.cluster_id && a.name == b.name,
             )?,
-            introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false)?,
-            id_allocator: TableTransaction::new(id_allocator, |_a, _b| false)?,
-            configs: TableTransaction::new(configs, |_a, _b| false)?,
-            settings: TableTransaction::new(settings, |_a, _b| false)?,
-            source_references: TableTransaction::new(source_references, |_a, _b| false)?,
-            system_gid_mapping: TableTransaction::new(system_object_mappings, |_a, _b| false)?,
-            system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
-            default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
-            system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
-            storage_collection_metadata: TableTransaction::new(
+            introspection_sources: TableTransaction::new(introspection_sources)?,
+            id_allocator: TableTransaction::new(id_allocator)?,
+            configs: TableTransaction::new(configs)?,
+            settings: TableTransaction::new(settings)?,
+            source_references: TableTransaction::new(source_references)?,
+            system_gid_mapping: TableTransaction::new(system_object_mappings)?,
+            system_configurations: TableTransaction::new(system_configurations)?,
+            default_privileges: TableTransaction::new(default_privileges)?,
+            system_privileges: TableTransaction::new(system_privileges)?,
+            storage_collection_metadata: TableTransaction::new_with_uniqueness_fn(
                 storage_collection_metadata,
                 |a: &StorageCollectionMetadataValue, b| a.shard == b.shard,
             )?,
-            unfinalized_shards: TableTransaction::new(unfinalized_shards, |_a, _b| false)?,
+            unfinalized_shards: TableTransaction::new(unfinalized_shards)?,
             // Uniqueness violations for this value occur at the key rather than
             // the value (the key is the unit struct `()` so this is a singleton
             // value).
-            txn_wal_shard: TableTransaction::new(txn_wal_shard, |_a, _b| false)?,
+            txn_wal_shard: TableTransaction::new(txn_wal_shard)?,
             audit_log_updates: Vec::new(),
             commit_ts,
             op_id: 0,
@@ -812,6 +819,10 @@ impl<'a> Transaction<'a> {
         &mut self,
         databases: &BTreeSet<DatabaseId>,
     ) -> Result<(), CatalogError> {
+        if databases.is_empty() {
+            return Ok(());
+        }
+
         let to_remove = databases
             .iter()
             .map(|id| (DatabaseKey { id: *id }, None))
@@ -862,6 +873,10 @@ impl<'a> Transaction<'a> {
         &mut self,
         schemas: &BTreeMap<SchemaId, ResolvedDatabaseSpecifier>,
     ) -> Result<(), CatalogError> {
+        if schemas.is_empty() {
+            return Ok(());
+        }
+
         let to_remove = schemas
             .iter()
             .map(|(schema_id, _)| (SchemaKey { id: *schema_id }, None))
@@ -916,6 +931,10 @@ impl<'a> Transaction<'a> {
     /// NOTE: On error, there still may be some roles removed from the transaction. It
     /// is up to the caller to either abort the transaction or commit.
     pub fn remove_roles(&mut self, roles: &BTreeSet<RoleId>) -> Result<(), CatalogError> {
+        if roles.is_empty() {
+            return Ok(());
+        }
+
         let to_remove = roles
             .iter()
             .map(|role_id| (RoleKey { id: *role_id }, None))
@@ -967,6 +986,10 @@ impl<'a> Transaction<'a> {
     /// NOTE: On error, there still may be some clusters removed from the transaction. It is up to
     /// the caller to either abort the transaction or commit.
     pub fn remove_clusters(&mut self, clusters: &BTreeSet<ClusterId>) -> Result<(), CatalogError> {
+        if clusters.is_empty() {
+            return Ok(());
+        }
+
         let to_remove = clusters
             .iter()
             .map(|cluster_id| (ClusterKey { id: *cluster_id }, None))
@@ -1018,6 +1041,10 @@ impl<'a> Transaction<'a> {
         &mut self,
         replicas: &BTreeSet<ReplicaId>,
     ) -> Result<(), CatalogError> {
+        if replicas.is_empty() {
+            return Ok(());
+        }
+
         let to_remove = replicas
             .iter()
             .map(|replica_id| (ClusterReplicaKey { id: *replica_id }, None))
@@ -1055,6 +1082,10 @@ impl<'a> Transaction<'a> {
     /// NOTE: On error, there still may be some items removed from the transaction. It is
     /// up to the caller to either abort the transaction or commit.
     pub fn remove_items(&mut self, ids: &BTreeSet<GlobalId>) -> Result<(), CatalogError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+
         let n = self
             .items
             .delete(|k, _v| ids.contains(&k.gid), self.op_id)
@@ -1078,6 +1109,10 @@ impl<'a> Transaction<'a> {
         &mut self,
         descriptions: BTreeSet<SystemObjectDescription>,
     ) -> Result<(), CatalogError> {
+        if descriptions.is_empty() {
+            return Ok(());
+        }
+
         let n = self
             .system_gid_mapping
             .delete(
@@ -1124,6 +1159,10 @@ impl<'a> Transaction<'a> {
         &mut self,
         introspection_source_indexes: BTreeSet<(ClusterId, String)>,
     ) -> Result<(), CatalogError> {
+        if introspection_source_indexes.is_empty() {
+            return Ok(());
+        }
+
         let n = self
             .introspection_sources
             .delete(
@@ -1184,6 +1223,10 @@ impl<'a> Transaction<'a> {
     /// NOTE: On error, there still may be some items updated in the transaction. It is
     /// up to the caller to either abort the transaction or commit.
     pub fn update_items(&mut self, items: BTreeMap<GlobalId, Item>) -> Result<(), CatalogError> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
         let n = self.items.update(
             |k, v| {
                 if let Some(item) = items.get(&k.gid) {
@@ -1244,6 +1287,10 @@ impl<'a> Transaction<'a> {
     /// NOTE: On error, there still may be some roles updated in the transaction. It is
     /// up to the caller to either abort the transaction or commit.
     pub fn update_roles(&mut self, roles: BTreeMap<RoleId, Role>) -> Result<(), CatalogError> {
+        if roles.is_empty() {
+            return Ok(());
+        }
+
         let n = self.roles.update(
             |k, _v| {
                 if let Some(role) = roles.get(&k.id) {
@@ -1275,6 +1322,10 @@ impl<'a> Transaction<'a> {
         &mut self,
         mappings: BTreeMap<GlobalId, SystemObjectMapping>,
     ) -> Result<(), CatalogError> {
+        if mappings.is_empty() {
+            return Ok(());
+        }
+
         let n = self.system_gid_mapping.update(
             |_k, v| {
                 if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
@@ -1443,6 +1494,10 @@ impl<'a> Transaction<'a> {
         &mut self,
         default_privileges: Vec<DefaultPrivilege>,
     ) -> Result<(), CatalogError> {
+        if default_privileges.is_empty() {
+            return Ok(());
+        }
+
         let default_privileges = default_privileges
             .into_iter()
             .map(DurableType::into_key_value)
@@ -1475,6 +1530,10 @@ impl<'a> Transaction<'a> {
         &mut self,
         system_privileges: Vec<MzAclItem>,
     ) -> Result<(), CatalogError> {
+        if system_privileges.is_empty() {
+            return Ok(());
+        }
+
         let system_privileges = system_privileges
             .into_iter()
             .map(DurableType::into_key_value)
@@ -1508,7 +1567,11 @@ impl<'a> Transaction<'a> {
         &mut self,
         introspection_source_indexes: Vec<(ClusterId, String, GlobalId)>,
         temporary_oids: &HashSet<u32>,
-    ) -> Result<Vec<IntrospectionSourceIndex>, CatalogError> {
+    ) -> Result<(), CatalogError> {
+        if introspection_source_indexes.is_empty() {
+            return Ok(());
+        }
+
         let amount = usize_to_u64(introspection_source_indexes.len());
         let oids = self.allocate_oids(amount, temporary_oids)?;
         let introspection_source_indexes: Vec<_> = introspection_source_indexes
@@ -1524,12 +1587,12 @@ impl<'a> Transaction<'a> {
             )
             .collect();
 
-        for introspection_source_index in &introspection_source_indexes {
-            let (key, value) = introspection_source_index.clone().into_key_value();
+        for introspection_source_index in introspection_source_indexes {
+            let (key, value) = introspection_source_index.into_key_value();
             self.introspection_sources.insert(key, value, self.op_id)?;
         }
 
-        Ok(introspection_source_indexes)
+        Ok(())
     }
 
     /// Set persisted system object mappings.
@@ -1537,6 +1600,10 @@ impl<'a> Transaction<'a> {
         &mut self,
         mappings: Vec<SystemObjectMapping>,
     ) -> Result<(), CatalogError> {
+        if mappings.is_empty() {
+            return Ok(());
+        }
+
         let mappings = mappings
             .into_iter()
             .map(DurableType::into_key_value)
@@ -1548,6 +1615,10 @@ impl<'a> Transaction<'a> {
 
     /// Set persisted replica.
     pub fn set_replicas(&mut self, replicas: Vec<ClusterReplica>) -> Result<(), CatalogError> {
+        if replicas.is_empty() {
+            return Ok(());
+        }
+
         let replicas = replicas
             .into_iter()
             .map(DurableType::into_key_value)
@@ -1649,15 +1720,14 @@ impl<'a> Transaction<'a> {
     pub fn drop_comments(
         &mut self,
         object_ids: &BTreeSet<CommentObjectId>,
-    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, CatalogError> {
-        let deleted = self
-            .comments
+    ) -> Result<(), CatalogError> {
+        if object_ids.is_empty() {
+            return Ok(());
+        }
+
+        self.comments
             .delete(|k, _v| object_ids.contains(&k.object_id), self.op_id);
-        let deleted = deleted
-            .into_iter()
-            .map(|(k, v)| (k.object_id, k.sub_component, v.comment))
-            .collect();
-        Ok(deleted)
+        Ok(())
     }
 
     /// Upserts persisted system configuration `name` to `value`.
@@ -2308,7 +2378,7 @@ struct TableTransaction<K, V> {
     // The desired updates to keys after commit.
     // Invariant: Value is sorted by `ts`.
     pending: BTreeMap<K, Vec<TransactionUpdate<V>>>,
-    uniqueness_violation: fn(a: &V, b: &V) -> bool,
+    uniqueness_violation: Option<fn(a: &V, b: &V) -> bool>,
 }
 
 impl<K, V> TableTransaction<K, V>
@@ -2316,14 +2386,32 @@ where
     K: Ord + Eq + Clone + Debug,
     V: Ord + Clone + Debug,
 {
-    /// Create a new TableTransaction with initial data. `uniqueness_violation` is a function
-    /// whether there is a uniqueness violation among two values.
+    /// Create a new TableTransaction with initial data.
     ///
     /// Internally the catalog serializes data as protobuf. All fields in a proto message are
     /// optional, which makes using them in Rust cumbersome. Generic parameters `KP` and `VP` are
     /// protobuf types which deserialize to `K` and `V` that a [`TableTransaction`] is generic
     /// over.
-    fn new<KP, VP>(
+    fn new<KP, VP>(initial: BTreeMap<KP, VP>) -> Result<Self, TryFromProtoError>
+    where
+        K: RustType<KP>,
+        V: RustType<VP>,
+    {
+        let initial = initial
+            .into_iter()
+            .map(RustType::from_proto)
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self {
+            initial,
+            pending: BTreeMap::new(),
+            uniqueness_violation: None,
+        })
+    }
+
+    /// Like [`Self::new`], but you can also provide `uniqueness_violation`, which is a function
+    /// that determines whether there is a uniqueness violation among two values.
+    fn new_with_uniqueness_fn<KP, VP>(
         initial: BTreeMap<KP, VP>,
         uniqueness_violation: fn(a: &V, b: &V) -> bool,
     ) -> Result<Self, TryFromProtoError>
@@ -2339,7 +2427,7 @@ where
         Ok(Self {
             initial,
             pending: BTreeMap::new(),
-            uniqueness_violation,
+            uniqueness_violation: Some(uniqueness_violation),
         })
     }
 
@@ -2368,12 +2456,14 @@ where
     }
 
     fn verify(&self) -> Result<(), DurableCatalogError> {
-        // Compare each value to each other value and ensure they are unique.
-        let items = self.items();
-        for (i, vi) in items.values().enumerate() {
-            for (j, vj) in items.values().enumerate() {
-                if i != j && (self.uniqueness_violation)(vi, vj) {
-                    return Err(DurableCatalogError::UniquenessViolation);
+        if let Some(uniqueness_violation) = self.uniqueness_violation {
+            // Compare each value to each other value and ensure they are unique.
+            let items = self.items();
+            for (i, vi) in items.values().enumerate() {
+                for (j, vj) in items.values().enumerate() {
+                    if i != j && uniqueness_violation(vi, vj) {
+                        return Err(DurableCatalogError::UniquenessViolation);
+                    }
                 }
             }
         }
@@ -2458,8 +2548,10 @@ where
             if &k == for_k {
                 violation = Some(DurableCatalogError::DuplicateKey);
             }
-            if (self.uniqueness_violation)(for_v, &v) {
-                violation = Some(DurableCatalogError::UniquenessViolation);
+            if let Some(uniqueness_violation) = self.uniqueness_violation {
+                if uniqueness_violation(for_v, &v) {
+                    violation = Some(DurableCatalogError::UniquenessViolation);
+                }
             }
         });
         if let Some(violation) = violation {
@@ -2664,7 +2756,7 @@ mod tests {
         fn uniqueness_violation(a: &String, b: &String) -> bool {
             a == b
         }
-        let mut table = TableTransaction::new(
+        let mut table = TableTransaction::new_with_uniqueness_fn(
             BTreeMap::from([(1i64.to_le_bytes().to_vec(), "a".to_string())]),
             uniqueness_violation,
         )
@@ -2703,7 +2795,8 @@ mod tests {
 
         table.insert(1i64.to_le_bytes().to_vec(), "v1".to_string());
         table.insert(2i64.to_le_bytes().to_vec(), "v2".to_string());
-        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
         assert_eq!(table_txn.items(), table);
         assert_eq!(table_txn.delete(|_k, _v| false, 0).len(), 0);
         assert_eq!(table_txn.delete(|_k, v| v == "v2", 1).len(), 1);
@@ -2759,7 +2852,8 @@ mod tests {
             ])
         );
 
-        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
         // Deleting then creating an item that has a uniqueness violation should work.
         assert_eq!(
             table_txn.delete(|k, _v| k == &1i64.to_le_bytes(), 0).len(),
@@ -2806,7 +2900,8 @@ mod tests {
             ])
         );
 
-        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
         assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 3);
         table_txn
             .insert(1i64.to_le_bytes().to_vec(), "v1".to_string(), 0)
@@ -2818,7 +2913,8 @@ mod tests {
             BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string()),])
         );
 
-        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
         assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 1);
         table_txn
             .insert(1i64.to_le_bytes().to_vec(), "v2".to_string(), 0)
@@ -2830,7 +2926,8 @@ mod tests {
         );
 
         // Verify we don't try to delete v3 or v4 during commit.
-        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
         assert_eq!(table_txn.delete(|_k, _v| true, 0).len(), 1);
         table_txn
             .insert(1i64.to_le_bytes().to_vec(), "v3".to_string(), 0)
@@ -2849,7 +2946,8 @@ mod tests {
         );
 
         // Test `set`.
-        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
         // Uniqueness violation.
         table_txn
             .set(2i64.to_le_bytes().to_vec(), Some("v5".to_string()), 0)
@@ -2874,7 +2972,8 @@ mod tests {
         );
 
         // Duplicate `set`.
-        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
         table_txn
             .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()), 0)
             .unwrap();
@@ -2882,7 +2981,8 @@ mod tests {
         assert!(pending.is_empty());
 
         // Test `set_many`.
-        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
         // Uniqueness violation.
         table_txn
             .set_many(
@@ -2930,7 +3030,8 @@ mod tests {
         );
 
         // Duplicate `set_many`.
-        let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
         table_txn
             .set_many(
                 BTreeMap::from([
