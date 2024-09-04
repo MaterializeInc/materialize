@@ -1327,25 +1327,25 @@ mod test {
     fn test_fence_token_order() {
         let ft1 = FenceToken {
             deploy_generation: 10,
-            epoch: Epoch::new(20).unwrap(),
+            epoch: Epoch::new(20).expect("non-zero"),
         };
         let ft2 = FenceToken {
             deploy_generation: 10,
-            epoch: Epoch::new(19).unwrap(),
+            epoch: Epoch::new(19).expect("non-zero"),
         };
 
         assert!(ft1 > ft2);
 
         let ft3 = FenceToken {
             deploy_generation: 11,
-            epoch: Epoch::new(10).unwrap(),
+            epoch: Epoch::new(10).expect("non-zero"),
         };
 
         assert!(ft3 > ft1);
 
         let ft4 = FenceToken {
             deploy_generation: 11,
-            epoch: Epoch::new(30).unwrap(),
+            epoch: Epoch::new(30).expect("non-zero"),
         };
 
         assert!(ft4 > ft1);
