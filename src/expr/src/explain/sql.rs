@@ -52,6 +52,19 @@ where
     T: DisplaySql<PlanRenderingContext<'a, T>> + Ord,
 {
     fn to_sql_query(&self, _ctx: &mut ()) -> Query<Raw> {
+        if self.plans.is_empty() {
+            ::tracing::error!("could not convert MIR to SQL: empty ExplainMultiPlan");
+
+            // dummy empty select
+            return Query::<Raw> {
+                ctes: CteBlock::Simple(vec![]),
+                body: SetExpr::Values(Values(vec![])),
+                order_by: vec![],
+                limit: None,
+                offset: None,
+            };
+        }
+
         let mut ctes = Vec::with_capacity(self.plans.len());
         for (id, plan) in self.plans.iter() {
             let mut ctx = PlanRenderingContext::new(
@@ -74,12 +87,19 @@ where
             });
         }
 
+        let query = ctes.pop().unwrap().query;
+
+        let CteBlock::Simple(last_ctes) = query.ctes else {
+            unimplemented!("unexpected WMR\n{:?}", query.ctes);
+        };
+        ctes.extend(last_ctes);
+
         SqlQuery {
             ctes: CteBlock::Simple(ctes),
-            body: SetExpr::Values(Values(vec![])),
-            order_by: vec![],
-            limit: None,
-            offset: None,
+            body: query.body,
+            order_by: query.order_by,
+            limit: query.limit,
+            offset: query.offset,
         }
     }
 }
@@ -441,7 +461,7 @@ impl MirToSql {
                 input: _,
                 func: _,
                 exprs: _,
-            } => unimplemented!("MIR-to-SQL FlatMap"),
+            } => unimplemented!("MIR-to-SQL FlatMap\n{expr:?}"),
             Filter { input, predicates } => {
                 let mut q = sc.to_sql_query(input, bindings, ctx)?;
                 if predicates.is_empty() {
@@ -738,8 +758,15 @@ impl MirToSql {
                 offset: _,
                 monotonic: _,
                 expected_group_size: _,
-            } => unimplemented!("MIR-to-SQL TopK"),
-            Union { base: _, inputs: _ } => unimplemented!("MIR-to-SQL Union"),
+            } => unimplemented!("MIR-to-SQL TopK\n{expr:?}"),
+            Union { base, inputs } => {
+                // detect aggregates
+                if let Some(query) = sc.detect_aggregate_union(base, inputs, bindings, ctx) {
+                    return Ok(query);
+                }
+
+                unimplemented!("MIR-to-SQL Union\n{expr:?}")
+            }
             ArrangeBy { input, keys: _keys } => sc.to_sql_query(input, bindings, ctx),
             // Negate forms are handled under `Union` but not elsewhere (SQL doesn't have negative cardinalities!)
             Negate { input: _ } => Err(SqlConversionError::UnexpectedNegation),
@@ -752,6 +779,93 @@ impl MirToSql {
                 body: _,
             } => Err(SqlConversionError::UnexpectedWMR),
         })
+    }
+
+    fn detect_aggregate_union(
+        &mut self,
+        base: &MirRelationExpr,
+        inputs: &Vec<MirRelationExpr>,
+        bindings: &mut BTreeMap<LocalId, RawItemName>,
+        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+    ) -> Option<Query<Raw>> {
+        // detect the following idiom:
+        //
+        // Union
+        //   Get l0
+        //   Map (VALUE)
+        //     Union
+        //       Negate
+        //         Project ()
+        //           Get l0
+        //       Constant
+        //         - ()
+        //
+        // where:
+        //   cte l0 =
+        //     Reduce aggregates=[...]
+
+        use MirRelationExpr::*;
+
+        let Get { id, .. } = base else { return None };
+
+        if inputs.len() != 1 {
+            return None;
+        }
+        let Map { input, scalars: _ } = &inputs[0] else {
+            return None;
+        };
+
+        let Union {
+            base: inner_base,
+            inputs: inner_inputs,
+        } = &**input
+        else {
+            return None;
+        };
+
+        if inner_inputs.len() != 1 {
+            return None;
+        }
+        let Constant { rows, .. } = &inner_inputs[0] else {
+            return None;
+        };
+        let Ok(rows) = rows else {
+            return None;
+        };
+        if !rows.len() == 1 {
+            return None;
+        }
+        if !rows[0].0.unpack().is_empty() {
+            return None;
+        }
+
+        let Negate { input } = &**inner_base else {
+            return None;
+        };
+
+        let Project { input, outputs } = &**input else {
+            return None;
+        };
+        if !outputs.is_empty() {
+            return None;
+        }
+
+        let Get { id: inner_id, .. } = &**input else {
+            return None;
+        };
+        if *id != *inner_id {
+            return None;
+        }
+
+        // if we conformed to that pattern... just behave like Get l0,
+        // which should be the rendering of the (MRE) reduce as a (SQL) aggregate
+        self.to_sql_query(base, bindings, ctx).map_or_else(
+            |err| {
+                ::tracing::error!("MIR-to-SQL error caused aggregate detection to fail: {err:?}",);
+                None
+            },
+            |query| Some(query),
+        )
     }
 
     fn equivalence_to_conjunct(
@@ -855,7 +969,7 @@ impl MirToSql {
             | FirstValue { .. }
             | LastValue { .. }
             | WindowAggregate { .. }
-            | Dummy { .. } => unimplemented!("MIR-to-SQL AggregateFunc"),
+            | Dummy { .. } => unimplemented!("MIR-to-SQL AggregateFunc: {:?}", expr.func),
             _ => (),
         };
 
@@ -897,7 +1011,7 @@ impl MirToSql {
             | Datum::MzTimestamp(_)
             | Datum::Range(_)
             | Datum::MzAclItem(_)
-            | Datum::AclItem(_) => unimplemented!("MIR-to-SQL esoteric Datum"),
+            | Datum::AclItem(_) => unimplemented!("MIR-to-SQL esoteric Datum: {datum}"),
         }
     }
 
