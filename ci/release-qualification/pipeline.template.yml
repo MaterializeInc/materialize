@@ -14,9 +14,17 @@ steps:
   - group: Builds
     key: builds
     steps:
-      - id: build-aarch64
-        label: Build aarch64
+      - id: bazel-build-aarch64
+        label: ":bazel: Build aarch64"
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+          - "WORKSPACE"
+          - ".bazelrc"
+          - "**/*.bzl"
+        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
@@ -27,9 +35,18 @@ steps:
         # sure we use the exact same version for testing here as was tagged and
         # will be released, and don't build our own version just for the tests.
         if: build.source == "ui" || build.source == "schedule" || build.source == "api"
-      - id: build-x86_64
-        label: Build x86_64
+
+      - id: bazel-build-x86_64
+        label: ":bazel: Build x86_64"
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+          - "WORKSPACE"
+          - ".bazelrc"
+          - "**/*.bzl"
+        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
@@ -41,7 +58,7 @@ steps:
     steps:
     - id: zippy-kafka-sources-large
       label: "Large Zippy Kafka Sources"
-      depends_on: build-aarch64
+      depends_on: bazel-build-aarch64
       # 48h
       timeout_in_minutes: 2880
       agents:
@@ -55,7 +72,7 @@ steps:
 
     - id: zippy-dataflows-large
       label: "Large Zippy w/ complex dataflows"
-      depends_on: build-aarch64
+      depends_on: bazel-build-aarch64
       # 24h
       timeout_in_minutes: 1440
       agents:
@@ -69,7 +86,7 @@ steps:
 
     - id: zippy-pg-cdc-large
       label: "Large Zippy PostgresCdc"
-      depends_on: build-aarch64
+      depends_on: bazel-build-aarch64
       timeout_in_minutes: 2880
       agents:
         # TODO: Move back to Hetzner when agent lost issues are fixed
@@ -82,7 +99,7 @@ steps:
 
     - id: zippy-mysql-cdc-large
       label: "Large Zippy MySqlCdc"
-      depends_on: build-aarch64
+      depends_on: bazel-build-aarch64
       timeout_in_minutes: 1440
       agents:
         # TODO: Move back to Hetzner when agent lost issues are fixed
@@ -94,7 +111,7 @@ steps:
 
     - id: zippy-cluster-replicas-long
       label: "Longer Zippy ClusterReplicas"
-      depends_on: build-aarch64
+      depends_on: bazel-build-aarch64
       timeout_in_minutes: 2880
       agents:
         # TODO: Move back to Hetzner when agent lost issues are fixed
@@ -107,7 +124,7 @@ steps:
 
     - id: zippy-user-tables-large
       label: "Large Zippy w/ user tables"
-      depends_on: build-aarch64
+      depends_on: bazel-build-aarch64
       timeout_in_minutes: 2880
       agents:
         # TODO: Move back to Hetzner when agent lost issues are fixed
@@ -119,7 +136,7 @@ steps:
 
     - id: zippy-debezium-postgres-long
       label: "Longer Zippy Debezium Postgres"
-      depends_on: build-aarch64
+      depends_on: bazel-build-aarch64
       timeout_in_minutes: 1440
       agents:
         # TODO: Move back to Hetzner when agent lost issues are fixed
@@ -132,7 +149,7 @@ steps:
 
     - id: zippy-backup-and-restore-large
       label: "Large-scale backup+restore"
-      depends_on: build-aarch64
+      depends_on: bazel-build-aarch64
       timeout_in_minutes: 2880
       agents:
         # TODO: Move back to Hetzner when agent lost issues are fixed
@@ -146,7 +163,7 @@ steps:
 
     - id: zippy-kafka-parallel-insert
       label: "Longer Zippy Kafka Parallel Insert"
-      depends_on: build-aarch64
+      depends_on: bazel-build-aarch64
       timeout_in_minutes: 1440
       agents:
         # TODO: Move back to Hetzner when agent lost issues are fixed
@@ -159,7 +176,7 @@ steps:
 
   - id: feature-benchmark-scale-plus-one
     label: "Feature benchmark against 'common-ancestor' with --scale=+1 %N"
-    depends_on: build-aarch64
+    depends_on: bazel-build-aarch64
     timeout_in_minutes: 2880
     parallelism: 8
     agents:
@@ -176,7 +193,7 @@ steps:
     steps:
     - id: sqlsmith-long
       label: "Longer SQLsmith"
-      depends_on: build-aarch64
+      depends_on: bazel-build-aarch64
       timeout_in_minutes: 120
       agents:
         queue: hetzner-aarch64-8cpu-16gb
@@ -188,7 +205,7 @@ steps:
 
     - id: sqlsmith-explain-long
       label: "Longer SQLsmith explain"
-      depends_on: build-aarch64
+      depends_on: bazel-build-aarch64
       timeout_in_minutes: 120
       agents:
         queue: hetzner-aarch64-8cpu-16gb
@@ -225,7 +242,7 @@ steps:
     steps:
       - id: mysql-cdc-5_7_44
         label: "MySQL CDC w/ 5.7.44"
-        depends_on: build-x86_64
+        depends_on: bazel-build-x86_64
         timeout_in_minutes: 30
         agents:
           # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
@@ -238,7 +255,7 @@ steps:
               args: [ "--mysql-version=5.7.44" ]
       - id: mysql-cdc-8_0_36
         label: "MySQL CDC w/ 8.0.36"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -252,7 +269,7 @@ steps:
     steps:
       - id: pg-cdc-15_6
         label: "Postgres CDC w/ 15.6"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
         plugins:
@@ -263,7 +280,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-14_11
         label: "Postgres CDC w/ 14.11"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
         plugins:
@@ -274,7 +291,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-13_14
         label: "Postgres CDC w/ 13.14"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
         plugins:
@@ -285,7 +302,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-12_18
         label: "Postgres CDC w/ 12.18"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
         plugins:
@@ -296,7 +313,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-11_22
         label: "Postgres CDC w/ 11.22"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
         plugins:
@@ -311,7 +328,7 @@ steps:
     steps:
       - id: checks-restart-cockroach
         label: "Checks + restart Cockroach %N"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 180
         # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
         parallelism: 2
@@ -325,7 +342,7 @@ steps:
 
       - id: checks-backup-restore-before-manipulate
         label: "Checks backup + restore between the two manipulate() %N"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -337,7 +354,7 @@ steps:
 
       - id: checks-backup-restore-after-manipulate
         label: "Checks backup + restore after manipulate() %N"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -349,7 +366,7 @@ steps:
 
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous %N"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -361,7 +378,7 @@ steps:
 
       - id: checks-preflight-check-continue
         label: "Checks preflight-check and continue upgrade %N"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -373,7 +390,7 @@ steps:
 
       - id: checks-upgrade-clusterd-compute-first
         label: "Platform checks upgrade, restarting compute clusterd first %N"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -385,7 +402,7 @@ steps:
 
       - id: checks-upgrade-clusterd-compute-last
         label: "Platform checks upgrade, restarting compute clusterd last %N"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -397,7 +414,7 @@ steps:
 
       - id: checks-kill-clusterd-storage
         label: "Checks + kill storage clusterd %N"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -409,7 +426,7 @@ steps:
 
       - id: checks-restart-source-postgres
         label: "Checks + restart source Postgres %N"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -421,7 +438,7 @@ steps:
 
       - id: checks-restart-clusterd-compute
         label: "Checks + restart clusterd compute %N"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -433,7 +450,7 @@ steps:
 
       - id: checks-drop-create-default-replica
         label: "Checks + DROP/CREATE replica %N"
-        depends_on: build-aarch64
+        depends_on: bazel-build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
