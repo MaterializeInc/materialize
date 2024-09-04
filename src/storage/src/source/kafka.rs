@@ -87,9 +87,9 @@ pub struct KafkaSourceReader {
     /// Total count of workers
     worker_count: usize,
     /// The most recently read offset for each partition known to this source
-    /// reader. An offset of -1 indicates that no prior message has been read
-    /// for the given partition.
-    last_offsets: BTreeMap<PartitionId, i64>,
+    /// reader by output-index. An offset of -1 indicates that no prior message
+    /// has been read for the given partition.
+    last_offsets: BTreeMap<usize, BTreeMap<PartitionId, i64>>,
     /// The offset to start reading from for each partition.
     start_offsets: BTreeMap<PartitionId, i64>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
@@ -509,7 +509,10 @@ impl SourceRender for KafkaSourceConnection {
                     consumer: Arc::clone(&consumer),
                     worker_id: config.worker_id,
                     worker_count: config.worker_count,
-                    last_offsets: BTreeMap::new(),
+                    last_offsets: outputs
+                        .iter()
+                        .map(|output| (output.output_index, BTreeMap::new()))
+                        .collect(),
                     start_offsets,
                     stats_rx,
                     progress_statistics: Default::default(),
@@ -730,7 +733,7 @@ impl SourceRender for KafkaSourceConnection {
                                     .collect::<Vec<_>>();
                                 for (output_index, message, ts) in output_messages {
                                     if let Some((msg, time, diff)) =
-                                        reader.handle_message(message, ts)
+                                        reader.handle_message(message, ts, &output_index)
                                     {
                                         let pid =
                                             time.interval().singleton().unwrap().unwrap_exact();
@@ -757,15 +760,15 @@ impl SourceRender for KafkaSourceConnection {
                     // Take the consumers temporarily to get around borrow checker errors
                     let mut consumers = std::mem::take(&mut reader.partition_consumers);
                     for consumer in consumers.iter_mut() {
+                        let pid = consumer.pid();
                         while let Some(message) = consumer.get_next_message().transpose() {
-                            let mut errs = vec![];
                             for output in outputs.iter() {
                                 let message = match &message {
                                     Ok((msg, pid)) => {
                                         let (msg, ts) =
                                             construct_source_message(msg, &output.metadata_columns);
                                         assert_eq!(*pid, ts.0);
-                                        Ok(reader.handle_message(msg, ts))
+                                        Ok(reader.handle_message(msg, ts, &output.output_index))
                                     }
                                     Err(err) => Err(err),
                                 };
@@ -789,33 +792,32 @@ impl SourceRender for KafkaSourceConnection {
                                     // The message was from an offset we've already seen.
                                     Ok(None) => continue,
                                     Err(err) => {
-                                        errs.push(err);
+                                        let last_offset = reader
+                                            .last_offsets
+                                            .get(&output.output_index)
+                                            .expect("output known to be installed")
+                                            .get(&pid)
+                                            .expect("partition known to be installed");
+
+                                        let status = HealthStatusUpdate::stalled(
+                                            format!(
+                                                "error consuming from source: {} topic: {topic}:\
+                                                partition: {pid} last processed offset:\
+                                                {last_offset} : {err}",
+                                                config.name
+                                            ),
+                                            None,
+                                        );
+                                        health_output.give(
+                                            &health_cap,
+                                            HealthStatusMessage {
+                                                index: output.output_index,
+                                                namespace: Self::STATUS_NAMESPACE.clone(),
+                                                update: status,
+                                            },
+                                        );
                                     }
                                 }
-                            }
-                            for err in errs {
-                                let pid = consumer.pid();
-                                let last_offset = reader
-                                    .last_offsets
-                                    .get(&pid)
-                                    .expect("partition known to be installed");
-
-                                let status = HealthStatusUpdate::stalled(
-                                    format!(
-                                        "error consuming from source: {} topic: {topic}: partition:\
-                                        {pid} last processed offset: {last_offset} : {err}",
-                                        config.name
-                                    ),
-                                    None,
-                                );
-                                health_output.give(
-                                    &health_cap,
-                                    HealthStatusMessage {
-                                        index: 0,
-                                        namespace: Self::STATUS_NAMESPACE.clone(),
-                                        update: status,
-                                    },
-                                );
                             }
                         }
                     }
@@ -1013,15 +1015,20 @@ impl KafkaResumeUpperProcessor {
 impl KafkaSourceReader {
     /// Ensures that a partition queue for `pid` exists.
     fn ensure_partition(&mut self, pid: PartitionId) {
-        if self.last_offsets.contains_key(&pid) {
-            return;
+        for last_offsets in self.last_offsets.values() {
+            // early exit if we've already inserted this partition
+            if last_offsets.contains_key(&pid) {
+                return;
+            }
         }
 
         let start_offset = self.start_offsets.get(&pid).copied().unwrap_or(0);
         self.create_partition_queue(pid, Offset::Offset(start_offset));
 
-        let prev = self.last_offsets.insert(pid, start_offset - 1);
-        assert_none!(prev);
+        for last_offsets in self.last_offsets.values_mut() {
+            let prev = last_offsets.insert(pid, start_offset - 1);
+            assert_none!(prev);
+        }
     }
 
     /// Creates a new partition queue for `partition_id`.
@@ -1112,6 +1119,7 @@ impl KafkaSourceReader {
         &mut self,
         message: Result<SourceMessage, KafkaHeaderParseError>,
         (partition, offset): (PartitionId, MzOffset),
+        output_index: &usize,
     ) -> Option<(
         Result<SourceMessage, KafkaHeaderParseError>,
         KafkaTimestamp,
@@ -1128,10 +1136,16 @@ impl KafkaSourceReader {
 
         // Given the explicit consumer to partition assignment, we should never receive a message
         // for a partition for which we have no metadata
-        assert!(self.last_offsets.contains_key(&partition));
+        assert!(self
+            .last_offsets
+            .get(output_index)
+            .unwrap()
+            .contains_key(&partition));
 
         let last_offset_ref = self
             .last_offsets
+            .get_mut(output_index)
+            .expect("output known to be installed")
             .get_mut(&partition)
             .expect("partition known to be installed");
 
@@ -1143,11 +1157,12 @@ impl KafkaSourceReader {
                 worker_id = self.worker_id,
                 num_workers = self.worker_count,
                 "kafka message before expected offset: \
-                source {} (reading topic {}, partition {}) \
+                source {} (reading topic {}, partition {}, output {}) \
                 received offset {} expected offset {:?}",
                 self.source_name,
                 self.topic_name,
                 partition,
+                output_index,
                 offset.offset,
                 last_offset + 1,
             );
