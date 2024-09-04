@@ -302,7 +302,7 @@ class LoadPhase(Phase):
         for i in range(self.duration):
             assert (
                 jobs.qsize() < 100
-            ), "Too many jobs in queue, can't keep up: {jobs.qsize()}"
+            ), f"Too many jobs in queue, can't keep up: {jobs.qsize()}"
             time.sleep(1)
         for thread in threads:
             thread.join()
@@ -428,7 +428,7 @@ class Kafka(Scenario):
                             action=StandaloneQuery(
                                 "SELECT * FROM kafka_mv",
                                 conn_infos["materialized"],
-                                strict_serializable=True,
+                                strict_serializable=False,
                             ),
                         )
                         for i in range(10)
@@ -488,7 +488,7 @@ class PgReadReplica(Scenario):
                             action=StandaloneQuery(
                                 "SELECT * FROM mv_sum",
                                 conn_infos["materialized"],
-                                strict_serializable=True,
+                                strict_serializable=False,
                             ),
                         )
                         for i in range(10)
@@ -611,7 +611,7 @@ class MySQLReadReplica(Scenario):
                             action=StandaloneQuery(
                                 "SELECT * FROM mv_sum_mysql",
                                 conn_info=conn_infos["materialized"],
-                                strict_serializable=True,
+                                strict_serializable=False,
                             ),
                         )
                         for i in range(10)
