@@ -1196,7 +1196,7 @@ where
         let all_empty_reqs = merge_reqs
             .iter()
             .all(|req| req.inputs.iter().all(|b| b.batch.is_empty()));
-        if record_compactions && all_empty_reqs {
+        if record_compactions && all_empty_reqs && !batch.is_empty() {
             let mut reqs_to_take = claim_compaction_percent / 100;
             if (usize::cast_from(idempotency_token.hashed()) % 100)
                 < (claim_compaction_percent % 100)
