@@ -30,7 +30,7 @@ workspace status/build info. The process works in the following way:
 
 py_binary(
     name = "gen_rust_module",
-    srcs = ["gen_rust_module.py"]
+    srcs = ["gen_rust_module.py"],
 )
 
 gen_build_info(

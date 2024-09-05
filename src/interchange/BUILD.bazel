@@ -9,130 +9,129 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
 
-load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test", "rust_binary")
-load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
-
 rust_library(
-	name = "mz_interchange",
-	version = "0.0.0",
-	srcs = glob(["src/**/*.rs"]),
-	crate_features = ["default"],
-	aliases = aliases(
-		normal = True,
-		proc_macro = True,
-	),
-	deps = [
-		":mz_interchange_build_script",
-		"//src/avro:mz_avro",
-		"//src/ccsr:mz_ccsr",
-		"//src/ore:mz_ore",
-		"//src/pgrepr:mz_pgrepr",
-		"//src/repr:mz_repr",
-	] + all_crate_deps(normal = True),
-	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-	compile_data = [],
-	data = [],
-	rustc_flags = [],
-	rustc_env = {},
+    name = "mz_interchange",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(
+        normal = True,
+        proc_macro = True,
+    ),
+    compile_data = [],
+    crate_features = ["default"],
+    data = [],
+    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.0.0",
+    deps = [
+        ":mz_interchange_build_script",
+        "//src/avro:mz_avro",
+        "//src/ccsr:mz_ccsr",
+        "//src/ore:mz_ore",
+        "//src/pgrepr:mz_pgrepr",
+        "//src/repr:mz_repr",
+    ] + all_crate_deps(normal = True),
 )
 
 rust_test(
-	name = "mz_interchange_lib_tests",
-	version = "0.0.0",
-	crate = ":mz_interchange",
-	crate_features = ["default"],
-	aliases = aliases(
-		normal = True,
-		normal_dev = True,
-		proc_macro = True,
-		proc_macro_dev = True,
-	),
-	deps = [
-		"//src/avro:mz_avro",
-		"//src/ccsr:mz_ccsr",
-		"//src/ore:mz_ore",
-		"//src/pgrepr:mz_pgrepr",
-		"//src/repr:mz_repr",
-	] + all_crate_deps(
-		normal = True,
-		normal_dev = True,
-	),
-	proc_macro_deps = [] + all_crate_deps(
-		proc_macro = True,
-		proc_macro_dev = True,
-	),
-	size = "medium",
-	compile_data = [],
-	data = [],
-	env = {},
-	rustc_flags = [],
-	rustc_env = {},
+    name = "mz_interchange_lib_tests",
+    size = "medium",
+    aliases = aliases(
+        normal = True,
+        normal_dev = True,
+        proc_macro = True,
+        proc_macro_dev = True,
+    ),
+    compile_data = [],
+    crate = ":mz_interchange",
+    crate_features = ["default"],
+    data = [],
+    env = {},
+    proc_macro_deps = [] + all_crate_deps(
+        proc_macro = True,
+        proc_macro_dev = True,
+    ),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.0.0",
+    deps = [
+        "//src/avro:mz_avro",
+        "//src/ccsr:mz_ccsr",
+        "//src/ore:mz_ore",
+        "//src/pgrepr:mz_pgrepr",
+        "//src/repr:mz_repr",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
 )
 
 rust_doc_test(
-	name = "mz_interchange_doc_test",
-	crate = ":mz_interchange",
-	deps = [
-		"//src/avro:mz_avro",
-		"//src/ccsr:mz_ccsr",
-		"//src/ore:mz_ore",
-		"//src/pgrepr:mz_pgrepr",
-		"//src/repr:mz_repr",
-	] + all_crate_deps(
-		normal = True,
-		normal_dev = True,
-	),
+    name = "mz_interchange_doc_test",
+    crate = ":mz_interchange",
+    deps = [
+        "//src/avro:mz_avro",
+        "//src/ccsr:mz_ccsr",
+        "//src/ore:mz_ore",
+        "//src/pgrepr:mz_pgrepr",
+        "//src/repr:mz_repr",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
 )
 
 filegroup(
-	name = "all_protos",
-	srcs = ["testdata/benchmark.proto"],
+    name = "all_protos",
+    srcs = ["testdata/benchmark.proto"],
 )
 
 cargo_build_script(
-	name = "mz_interchange_build_script",
-	srcs = ["build.rs"],
-	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
-		normal = True,
-		build = True,
-	),
-	proc_macro_deps = [] + all_crate_deps(
-		proc_macro = True,
-		build_proc_macro = True,
-	),
-	build_script_env = {},
-	data = [":all_protos"],
-	compile_data = [],
-	rustc_flags = [],
-	rustc_env = {},
+    name = "mz_interchange_build_script",
+    srcs = ["build.rs"],
+    build_script_env = {},
+    compile_data = [],
+    data = [":all_protos"],
+    proc_macro_deps = [] + all_crate_deps(
+        build_proc_macro = True,
+        proc_macro = True,
+    ),
+    rustc_env = {},
+    rustc_flags = [],
+    deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
+        build = True,
+        normal = True,
+    ),
 )
 
 rust_binary(
-	name = "avro_decode",
-	version = "0.0.0",
-	crate_root = "src/bin/avro-decode.rs",
-	srcs = glob(["src/**/*.rs"]),
-	features = [],
-	aliases = aliases(
-		normal = True,
-		proc_macro = True,
-	),
-	deps = [
-		":mz_interchange",
-		"//src/avro:mz_avro",
-		"//src/ccsr:mz_ccsr",
-		"//src/ore:mz_ore",
-		"//src/pgrepr:mz_pgrepr",
-		"//src/repr:mz_repr",
-	] + all_crate_deps(normal = True),
-	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-	compile_data = [],
-	data = [],
-	env = {},
-	rustc_flags = [],
-	rustc_env = {},
+    name = "avro_decode",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(
+        normal = True,
+        proc_macro = True,
+    ),
+    compile_data = [],
+    crate_root = "src/bin/avro-decode.rs",
+    data = [],
+    env = {},
+    features = [],
+    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.0.0",
+    deps = [
+        ":mz_interchange",
+        "//src/avro:mz_avro",
+        "//src/ccsr:mz_ccsr",
+        "//src/ore:mz_ore",
+        "//src/pgrepr:mz_pgrepr",
+        "//src/repr:mz_repr",
+    ] + all_crate_deps(normal = True),
 )

@@ -18,6 +18,7 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 try cargo fmt
+try bin/bazel fmt
 
 if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
   bin/pyfmt

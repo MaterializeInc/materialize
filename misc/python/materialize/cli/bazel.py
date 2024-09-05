@@ -14,7 +14,7 @@ import os
 import pathlib
 import subprocess
 
-from materialize import MZ_ROOT
+from materialize import MZ_ROOT, ui
 
 
 def main() -> int:
@@ -28,6 +28,8 @@ def main() -> int:
 
     if args.action == "gen":
         gen_cmd(sub_args)
+    elif args.action == "fmt":
+        fmt_cmd(sub_args)
     elif args.action == "output_path":
         output_path_cmd(sub_args)
     else:
@@ -56,6 +58,13 @@ def gen_cmd(args: list[str]):
         path = None
 
     gen(path)
+
+
+def fmt_cmd(args: list[str]):
+    """Invokes the fmt function."""
+    assert len(args) <= 1, "expected at most one path to format"
+    path = args[0] if len(args) == 1 else None
+    fmt(path)
 
 
 def output_path_cmd(args: list[str]):
@@ -94,6 +103,37 @@ def gen(path):
         "--manifest-path=misc/bazel/cargo-gazelle/Cargo.toml",
         "--",
         "--path",
+        f"{str(path)}",
+    ]
+    subprocess.run(cmd_args, check=True)
+
+    # Make sure we format everything after generating it so the linter doesn't
+    # conflict with the formatter.
+    fmt(path.parent)
+
+
+def fmt(path):
+    """
+    Formats all of the `BUILD`, `.bzl`, and `WORKSPACE` files at the provided path.
+
+    Defaults to formatting the entire Materialize repository.
+    """
+
+    if not path:
+        path = MZ_ROOT
+
+    if subprocess.run(["which", "bazel"]).returncode != 0:
+        ui.warn("couldn't find 'bazel' skipping formatting of BUILD files")
+        return
+
+    cmd_args = [
+        "bazel",
+        "run",
+        "-c",
+        "opt",
+        "//misc/bazel/tools:buildifier",
+        "--",
+        "-r",
         f"{str(path)}",
     ]
     subprocess.run(cmd_args, check=True)

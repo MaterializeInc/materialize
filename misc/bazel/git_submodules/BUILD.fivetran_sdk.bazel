@@ -10,7 +10,7 @@
 # Our Fivetran Destination references the protobuf files at the top-level of
 # the `fivetran-sdk` repository.
 filegroup(
-	name = "all_protos",
-	srcs = glob(["*.proto"]),
-    visibility = ["//visibility:public"]
+    name = "all_protos",
+    srcs = glob(["*.proto"]),
+    visibility = ["//visibility:public"],
 )

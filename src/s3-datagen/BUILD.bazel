@@ -9,31 +9,29 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
-package(default_visibility = ["//visibility:public"])
-
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary")
 
+package(default_visibility = ["//visibility:public"])
 
 rust_binary(
-	name = "mz_s_3_datagen",
-	version = "0.0.0",
-	crate_root = "src/main.rs",
-	srcs = glob(["src/**/*.rs"]),
-	features = [],
-	aliases = aliases(
-		normal = True,
-		proc_macro = True,
-	),
-	deps = [
-		"//src/aws-util:mz_aws_util",
-		"//src/ore:mz_ore",
-	] + all_crate_deps(normal = True),
-	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-	compile_data = [],
-	data = [],
-	env = {},
-	rustc_flags = [],
-	rustc_env = {},
+    name = "mz_s_3_datagen",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(
+        normal = True,
+        proc_macro = True,
+    ),
+    compile_data = [],
+    crate_root = "src/main.rs",
+    data = [],
+    env = {},
+    features = [],
+    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.0.0",
+    deps = [
+        "//src/aws-util:mz_aws_util",
+        "//src/ore:mz_ore",
+    ] + all_crate_deps(normal = True),
 )

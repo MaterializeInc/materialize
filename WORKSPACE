@@ -632,3 +632,11 @@ new_local_repository(
     build_file = "//misc/bazel:git_submodules/BUILD.fivetran_sdk.bazel",
     path = "misc/fivetran-sdk",
 )
+
+# tools
+#
+# Extra non-critical tools (e.g. linters or formatters) that are used as part of the development
+# cycle.
+load("//misc/bazel/tools:repositories.bzl", "tools_repositories")
+
+tools_repositories()

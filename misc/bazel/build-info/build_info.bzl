@@ -19,9 +19,9 @@ def _impl(ctx):
     # 'stable' variables in the 'info_file', no idea why they chose this naming
     # scheme, but see <https://bazel.build/rules/lib/builtins/ctx#info_file>
     # for more info.
-    args = ["--rust_file", ctx.outputs.rust_file.path] \
-         + ["--volatile_file", ctx.version_file.path] \
-         + ["--stable_file", ctx.info_file.path]
+    args = ["--rust_file", ctx.outputs.rust_file.path] + \
+           ["--volatile_file", ctx.version_file.path] + \
+           ["--stable_file", ctx.info_file.path]
 
     ctx.actions.run(
         inputs = [ctx.version_file, ctx.info_file],
@@ -41,5 +41,5 @@ gen_build_info = rule(
             default = Label("//misc/bazel/build-info:gen_rust_module"),
         ),
         "rust_file": attr.output(mandatory = True),
-    }
+    },
 )
