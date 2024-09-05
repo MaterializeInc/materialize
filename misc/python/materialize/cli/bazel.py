@@ -15,6 +15,7 @@ import pathlib
 import subprocess
 
 from materialize import MZ_ROOT
+from materialize import ui
 
 
 def main() -> int:
@@ -93,12 +94,14 @@ def gen(path):
 
     # Note: We build cargo-gazelle with optimizations because the speedup is
     # worth it and Bazel should cache the resulting binary.
+
+    # TODO(parkmycar): Use Bazel to run this lint.
     cmd_args = [
-        "bazel",
+        "cargo",
         "run",
-        "-c",
-        "opt",
-        "@//misc/bazel/cargo-gazelle:main",
+        "--release",
+        "--no-default-features",
+        "--manifest-path=misc/bazel/cargo-gazelle/Cargo.toml",
         "--",
         "--path",
         f"{str(path)}",
@@ -119,6 +122,10 @@ def fmt(path):
 
     if not path:
         path = MZ_ROOT
+
+    if subprocess.run(["which", "bazel"]).returncode != 0:
+        ui.warn("couldn't find 'bazel' skipping formatting of BUILD files")
+        return
 
     cmd_args = [
         "bazel",
