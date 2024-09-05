@@ -1635,8 +1635,26 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Source(_))
     }
 
+    /// Reports whether this catalog entry is a subsource and, if it is, the
+    /// ingestion it is an export of, as well as the item it exports.
+    pub fn subsource_details(
+        &self,
+    ) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
+        match &self.item() {
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                    details,
+                } => Some((*ingestion_id, external_reference, details)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Reports whether this catalog entry is a source export and, if it is, the
-    /// ingestion it is an export of of, as well as the item it exports.
+    /// ingestion it is an export of, as well as the item it exports.
     pub fn source_export_details(
         &self,
     ) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
@@ -1647,6 +1665,14 @@ impl CatalogEntry {
                     external_reference,
                     details,
                 } => Some((*ingestion_id, external_reference, details)),
+                _ => None,
+            },
+            CatalogItem::Table(table) => match &table.data_source {
+                TableDataSource::DataSource(DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                    details,
+                }) => Some((*ingestion_id, external_reference, details)),
                 _ => None,
             },
             _ => None,
@@ -2422,6 +2448,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn used_by(&self) -> &[GlobalId] {
         self.used_by()
+    }
+
+    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
+        self.subsource_details()
     }
 
     fn source_export_details(
