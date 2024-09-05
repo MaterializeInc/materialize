@@ -30,6 +30,7 @@ use mz_ore::task::JoinHandle;
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64, Opaque};
+use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug, info, trace_span, warn, Instrument};
@@ -87,6 +88,20 @@ pub(crate) const CLAIM_UNCLAIMED_COMPACTIONS: Config<bool> = Config::new(
     false,
     "If an append doesn't result in a compaction request, but there is some uncompacted batch \
     in state, compact that instead.",
+);
+
+pub(crate) const CLAIM_COMPACTION_PERCENT: Config<usize> = Config::new(
+    "persist_claim_compaction_percent",
+    100,
+    "Claim a compaction with the given percent chance, if claiming compactions is enabled. \
+    (If over 100, we'll always claim at least one; for example, if set to 365, we'll claim at least \
+    three and have a 65% chance of claiming a fourth.)",
+);
+
+pub(crate) const CLAIM_COMPACTION_MIN_VERSION: Config<String> = Config::new(
+    "persist_claim_compaction_min_version",
+    String::new(),
+    "If set to a valid version string, compact away any earlier versions if possible.",
 );
 
 impl<K, V, T, D> Machine<K, V, T, D>
@@ -424,7 +439,14 @@ where
                         debug_info,
                         INLINE_WRITES_TOTAL_MAX_BYTES.get(cfg),
                         RECORD_COMPACTIONS.get(cfg),
-                        CLAIM_UNCLAIMED_COMPACTIONS.get(cfg),
+                        if CLAIM_UNCLAIMED_COMPACTIONS.get(cfg) {
+                            CLAIM_COMPACTION_PERCENT.get(cfg)
+                        } else {
+                            0
+                        },
+                        Version::parse(&CLAIM_COMPACTION_MIN_VERSION.get(cfg))
+                            .ok()
+                            .as_ref(),
                     )
                 })
                 .await;

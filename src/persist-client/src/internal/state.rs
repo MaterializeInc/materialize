@@ -21,6 +21,7 @@ use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::Description;
+use differential_dataflow::Hashable;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
@@ -221,7 +222,7 @@ impl<T> BatchPart<T> {
 
     pub fn writer_key(&self) -> Option<WriterKey> {
         match self {
-            BatchPart::Hollow(x) => Some(x.key.split().0),
+            BatchPart::Hollow(x) => x.key.split().map(|(writer, _part)| writer),
             BatchPart::Inline { .. } => None,
         }
     }
@@ -1093,7 +1094,8 @@ where
         debug_info: &HandleDebugState,
         inline_writes_total_max_bytes: usize,
         record_compactions: bool,
-        claim_unclaimed_compactions: bool,
+        claim_compaction_percent: usize,
+        claim_compaction_min_version: Option<&Version>,
     ) -> ControlFlow<CompareAndAppendBreak<T>, Vec<FueledMergeReq<T>>> {
         // We expire all writers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -1194,9 +1196,22 @@ where
         let all_empty_reqs = merge_reqs
             .iter()
             .all(|req| req.inputs.iter().all(|b| b.batch.is_empty()));
-        if record_compactions && claim_unclaimed_compactions && all_empty_reqs {
+        if record_compactions && all_empty_reqs && !batch.is_empty() {
+            let mut reqs_to_take = claim_compaction_percent / 100;
+            if (usize::cast_from(idempotency_token.hashed()) % 100)
+                < (claim_compaction_percent % 100)
+            {
+                reqs_to_take += 1;
+            }
             let threshold_ms = heartbeat_timestamp_ms.saturating_sub(lease_duration_ms);
-            merge_reqs.extend(self.trace.fueled_merge_reqs_before_ms(threshold_ms).take(1))
+            let min_writer = claim_compaction_min_version.map(WriterKey::for_version);
+            merge_reqs.extend(
+                // We keep the oldest `reqs_to_take` batches, under the theory that they're least
+                // likely to be compacted soon for other reasons.
+                self.trace
+                    .fueled_merge_reqs_before_ms(threshold_ms, min_writer)
+                    .take(reqs_to_take),
+            )
         }
 
         if record_compactions {
@@ -2603,7 +2618,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             ),
             Break(CompareAndAppendBreak::Upper {
                 shard_upper: Antichain::from_elem(0),
@@ -2622,7 +2638,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
 
@@ -2637,7 +2654,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             ),
             Break(CompareAndAppendBreak::InvalidUsage(InvalidBounds {
                 lower: Antichain::from_elem(5),
@@ -2656,7 +2674,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             ),
             Break(CompareAndAppendBreak::InvalidUsage(
                 InvalidEmptyTimeInterval {
@@ -2678,7 +2697,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
     }
@@ -2725,7 +2745,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
 
@@ -2799,7 +2820,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
 
@@ -2830,7 +2852,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
 
@@ -2893,7 +2916,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
         assert!(state
@@ -2907,7 +2931,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
 
@@ -2964,7 +2989,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
 
@@ -2985,7 +3011,8 @@ pub(crate) mod tests {
                 &debug_state(),
                 0,
                 true,
-                true,
+                100,
+                None
             )
             .is_continue());
     }
@@ -3020,7 +3047,8 @@ pub(crate) mod tests {
             &debug_state(),
             0,
             true,
-            true,
+            100,
+            None,
         );
         assert_eq!(state.maybe_gc(false), None);
 

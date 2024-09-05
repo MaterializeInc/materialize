@@ -54,6 +54,7 @@ use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
 
+use crate::internal::paths::WriterKey;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
@@ -536,14 +537,26 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 
     /// Obtain all fueled merge reqs that either have no active compaction, or the previous
-    /// compaction was started at or before the threshold time.
+    /// compaction was started at or before the threshold time, in order from oldest to newest.
     pub(crate) fn fueled_merge_reqs_before_ms(
         &self,
         threshold_ms: u64,
+        threshold_writer: Option<WriterKey>,
     ) -> impl Iterator<Item = FueledMergeReq<T>> + '_ {
         self.spine
             .spine_batches()
-            .filter(|b| !b.is_compact())
+            .filter(move |b| {
+                let noncompact = !b.is_compact();
+                let old_writer = threshold_writer.as_ref().map_or(false, |min_writer| {
+                    b.parts.iter().any(|b| {
+                        b.batch
+                            .parts
+                            .iter()
+                            .any(|p| p.writer_key().map_or(false, |writer| writer < *min_writer))
+                    })
+                });
+                noncompact || old_writer
+            })
             .filter(move |b| {
                 // Either there's no active compaction, or the last active compaction
                 // is not after the timeout timestamp.
@@ -1087,10 +1100,12 @@ struct Spine<T> {
 }
 
 impl<T> Spine<T> {
+    /// All batches in the spine, oldest to newest.
     pub fn spine_batches(&self) -> impl Iterator<Item = &SpineBatch<T>> {
         self.merging.iter().rev().flat_map(|m| &m.batches)
     }
 
+    /// All (mutable) batches in the spine, oldest to newest.
     pub fn spine_batches_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut SpineBatch<T>> {
         self.merging.iter_mut().rev().flat_map(|m| &mut m.batches)
     }
@@ -1720,6 +1735,7 @@ pub(crate) mod tests {
     use std::ops::Range;
 
     use proptest::prelude::*;
+    use semver::Version;
 
     use crate::internal::state::tests::any_hollow_batch;
 
@@ -1756,7 +1772,9 @@ pub(crate) mod tests {
                     lower.clone_from(batch.desc.upper());
                     let _merge_req = trace.push_batch(batch);
                 }
-                let reqs: Vec<_> = trace.fueled_merge_reqs_before_ms(timeout_ms).collect();
+                let reqs: Vec<_> = trace
+                    .fueled_merge_reqs_before_ms(timeout_ms, None)
+                    .collect();
                 for req in reqs {
                     trace.claim_compaction(req.id, ActiveCompaction { start_ms: 0 })
                 }
@@ -1777,6 +1795,44 @@ pub(crate) mod tests {
         }
 
         proptest!(|(trace in any_trace::<i64>(1..10))| { check(trace) })
+    }
+
+    #[mz_ore::test]
+    fn fueled_merge_reqs() {
+        let mut trace: Trace<u64> = Trace::default();
+        let fueled_reqs = trace.push_batch(crate::internal::state::tests::hollow(
+            0,
+            10,
+            &["n0011500/p3122e2a1-a0c7-429f-87aa-1019bf4f5f86"],
+            1000,
+        ));
+
+        assert!(fueled_reqs.is_empty());
+        assert_eq!(
+            trace.fueled_merge_reqs_before_ms(u64::MAX, None).count(),
+            0,
+            "no merge reqs when not filtering by version"
+        );
+        assert_eq!(
+            trace
+                .fueled_merge_reqs_before_ms(
+                    u64::MAX,
+                    Some(WriterKey::for_version(&Version::new(0, 50, 0)))
+                )
+                .count(),
+            0,
+            "zero batches are older than a past version"
+        );
+        assert_eq!(
+            trace
+                .fueled_merge_reqs_before_ms(
+                    u64::MAX,
+                    Some(WriterKey::for_version(&Version::new(99, 99, 0)))
+                )
+                .count(),
+            1,
+            "one batch is older than a future version"
+        );
     }
 
     #[mz_ore::test]
