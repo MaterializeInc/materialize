@@ -21,7 +21,9 @@ to Materialize using the [MySQL source](/sql/create-source/mysql/).
 
 {{% mysql-direct/before-you-begin %}}
 
-## Step 1. Enable GTID-based binlog replication
+## A. Configure AlloyDB
+
+### 1. Enable GTID-based binlog replication
 
 {{< note >}}
 GTID-based replication is supported for Amazon Aurora MySQL v2 and v3, as well
@@ -45,11 +47,11 @@ Configuration parameter          | Value  | Details
 For guidance on enabling GTID-based binlog replication in Aurora, see the
 [Amazon Aurora MySQL documentation](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/mysql-replication-gtid.html).
 
-## Step 2. Create a user for replication
+### 2. Create a user for replication
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-## Step 3. Configure network security
+## B. Configure network security
 
 {{< note >}}
 Support for AWS PrivateLink connections is planned for a future release.
@@ -144,7 +146,9 @@ configuration of resources for an SSH tunnel. For more details, see the
 
 {{< /tabs >}}
 
-## Step 4. (Optional) Create a cluster
+## C. Ingest data in Materialize
+
+### 1. (Optional) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your MySQL
@@ -155,7 +159,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% mysql-direct/create-a-cluster %}}
 
-## Step 5. Start ingesting data
+### 2. Start ingesting data
 
 [//]: # "TODO(morsapaes) MySQL connections support multiple SSL modes. We should
 adapt to that, rather than just state SSL MODE REQUIRED."
@@ -180,11 +184,11 @@ networking configuration, so start by selecting the relevant option.
 new progress metrics in mz_source_statistics + console monitoring, when
 available(also for PostgreSQL)."
 
-## Step 6. Check the ingestion status
+### 3. Monitor the ingestion status
 
 {{% mysql-direct/check-the-ingestion-status %}}
 
-## Step 7. Right-size the cluster
+### 4. Right-size the cluster
 
 {{% mysql-direct/right-size-the-cluster %}}
 

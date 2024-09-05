@@ -21,7 +21,9 @@ Materialize using the [MySQL source](/sql/create-source/mysql/).
 
 {{% mysql-direct/before-you-begin %}}
 
-## Step 1. Enable GTID-based binlog replication
+## A. Configure MySQL
+
+### 1. Enable GTID-based binlog replication
 
 Before creating a source in Materialize, you **must** configure your MySQL
 database for GTID-based binlog replication. This requires the following
@@ -39,11 +41,11 @@ Configuration parameter          | Value  | Details
 For guidance on enabling GTID-based binlog replication, see the
 [MySQL documentation](https://dev.mysql.com/blog-archive/enabling-gtids-without-downtime-in-mysql-5-7-6/).
 
-## Step 2. Create a user for replication
+### 2. Create a user for replication
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-## Step 3. Configure network security
+## B. Configure network security
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -110,7 +112,9 @@ traffic from the bastion host.
 
 {{< /tabs >}}
 
-## Step 4. (Optional) Create a cluster
+## C. Ingest data in Materialize
+
+### 1. (Optional) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your MySQL
@@ -121,7 +125,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% mysql-direct/create-a-cluster %}}
 
-## Step 5. Start ingesting data
+### 2. Start ingesting data
 
 Now that you've configured your database network, you can connect Materialize to
 your MySQL database and start ingesting data. The exact steps depend on your
@@ -144,11 +148,11 @@ networking configuration, so start by selecting the relevant option.
 new progress metrics in mz_source_statistics + console monitoring, when
 available(also for PostgreSQL)."
 
-## Step 6. Check the ingestion status
+### 3. Monitor the ingestion status
 
 {{% mysql-direct/check-the-ingestion-status %}}
 
-## Step 7. Right-size the cluster
+### 4. Right-size the cluster
 
 {{% mysql-direct/right-size-the-cluster %}}
 
