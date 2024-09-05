@@ -21,6 +21,13 @@ from materialize.observed_error import ObservedBaseError, WithIssue
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
 
+GROUP_REPO = {
+    "timelydataflow": "TimelyDataflow/timely-dataflow",
+    "materialize": "MaterializeInc/materialize",
+    "cloud": "MaterializeInc/cloud",
+    "incidentsandescalations": "MaterializeInc/incidents-and-escalations",
+}
+
 
 @dataclass
 class KnownGitHubIssue:
@@ -40,7 +47,7 @@ class GitHubIssueWithInvalidRegexp(ObservedBaseError, WithIssue):
         return f'<a href="{self.issue_url}">{self.issue_title} (#{self.issue_number})</a>: Invalid regex in ci-regexp: {self.regex_pattern}, ignoring'
 
 
-def get_known_issues_from_github_page(page: int = 1) -> Any:
+def get_known_issues_from_github_page(repo: str, page: int = 1) -> Any:
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -49,7 +56,7 @@ def get_known_issues_from_github_page(page: int = 1) -> Any:
         headers["Authorization"] = f"Bearer {token}"
 
     response = requests.get(
-        f'https://api.github.com/search/issues?q=repo:MaterializeInc/materialize%20type:issue%20in:body%20"ci-regexp%3A"&per_page=100&page={page}',
+        f'https://api.github.com/search/issues?q=repo:{repo}%20type:issue%20in:body%20"ci-regexp%3A"&per_page=100&page={page}',
         headers=headers,
     )
 
@@ -61,14 +68,14 @@ def get_known_issues_from_github_page(page: int = 1) -> Any:
     return issues_json
 
 
-def get_known_issues_from_github() -> (
-    tuple[list[KnownGitHubIssue], list[GitHubIssueWithInvalidRegexp]]
-):
+def get_known_issues_from_github(
+    repo: str,
+) -> tuple[list[KnownGitHubIssue], list[GitHubIssueWithInvalidRegexp]]:
     page = 1
-    issues_json = get_known_issues_from_github_page(page)
+    issues_json = get_known_issues_from_github_page(repo, page)
     while issues_json["total_count"] > len(issues_json["items"]):
         page += 1
-        next_page_json = get_known_issues_from_github_page(page)
+        next_page_json = get_known_issues_from_github_page(repo, page)
         if not next_page_json["items"]:
             break
         issues_json["items"].extend(next_page_json["items"])
