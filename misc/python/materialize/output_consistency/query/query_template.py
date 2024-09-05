@@ -28,8 +28,8 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
-from materialize.output_consistency.query.additional_data_source import (
-    AdditionalDataSource,
+from materialize.output_consistency.query.additional_source import (
+    AdditionalSource,
     as_data_sources,
 )
 from materialize.output_consistency.query.data_source import (
@@ -58,7 +58,7 @@ class QueryTemplate:
         row_selection: DataRowSelection,
         offset: int | None = None,
         limit: int | None = None,
-        additional_data_sources: list[AdditionalDataSource] = [],
+        additional_sources: list[AdditionalSource] = [],
         custom_order_expressions: list[Expression] | None = None,
     ) -> None:
         assert storage_layout != ValueStorageLayout.ANY
@@ -67,7 +67,7 @@ class QueryTemplate:
         self.where_expression = where_expression
         self.storage_layout = storage_layout
         self.data_source = data_source
-        self.additional_data_sources = additional_data_sources
+        self.additional_sources = additional_sources
         self.contains_aggregations = contains_aggregations
         self.row_selection = row_selection
         self.offset = offset
@@ -77,7 +77,7 @@ class QueryTemplate:
 
     def get_all_data_sources(self) -> list[DataSource]:
         all_data_sources = [self.data_source]
-        all_data_sources.extend(as_data_sources(self.additional_data_sources))
+        all_data_sources.extend(as_data_sources(self.additional_sources))
         return all_data_sources
 
     def get_all_expressions(
@@ -97,8 +97,8 @@ class QueryTemplate:
             all_expressions.extend(self.custom_order_expressions)
 
         if include_join_constraints:
-            for additional_data_source in self.additional_data_sources:
-                all_expressions.append(additional_data_source.join_constraint)
+            for additional_source in self.additional_sources:
+                all_expressions.append(additional_source.join_constraint)
 
         return all_expressions
 
@@ -148,7 +148,7 @@ class QueryTemplate:
         return self._post_format_sql(sql, output_format)
 
     def uses_join(self) -> bool:
-        return len(self.additional_data_sources) > 0
+        return len(self.additional_sources) > 0
 
     def has_where_condition(self) -> bool:
         return self.where_expression is not None
@@ -201,16 +201,16 @@ class QueryTemplate:
         sql_adjuster: SqlDialectAdjuster,
         space_separator: str,
     ) -> str:
-        if len(self.additional_data_sources) == 0:
+        if len(self.additional_sources) == 0:
             # no JOIN necessary
             return ""
 
         join_clauses = ""
 
-        for additional_data_source in self.additional_data_sources:
+        for additional_source in self.additional_sources:
             join_clauses = (
                 f"{join_clauses}"
-                f"\n{self._create_join_clause(strategy, additional_data_source, override_db_object_base_name, sql_adjuster, space_separator)}"
+                f"\n{self._create_join_clause(strategy, additional_source, override_db_object_base_name, sql_adjuster, space_separator)}"
             )
 
         return join_clauses
@@ -218,22 +218,22 @@ class QueryTemplate:
     def _create_join_clause(
         self,
         strategy: EvaluationStrategy,
-        additional_data_source_to_join: AdditionalDataSource,
+        additional_source_to_join: AdditionalSource,
         override_db_object_base_name: str | None,
         sql_adjuster: SqlDialectAdjuster,
         space_separator: str,
     ) -> str:
         db_object_name_to_join = strategy.get_db_object_name(
             self.storage_layout,
-            data_source=additional_data_source_to_join.data_source,
+            data_source=additional_source_to_join.data_source,
             override_base_name=override_db_object_base_name,
         )
 
-        join_operator_sql = additional_data_source_to_join.join_operator.to_sql()
+        join_operator_sql = additional_source_to_join.join_operator.to_sql()
 
         return (
-            f"{join_operator_sql} {db_object_name_to_join} {additional_data_source_to_join.data_source.alias()}"
-            f"{space_separator}ON {additional_data_source_to_join.join_constraint.to_sql(sql_adjuster, True, True)}"
+            f"{join_operator_sql} {db_object_name_to_join} {additional_source_to_join.data_source.alias()}"
+            f"{space_separator}ON {additional_source_to_join.join_constraint.to_sql(sql_adjuster, True, True)}"
         )
 
     def _create_where_clause(self, sql_adjuster: SqlDialectAdjuster) -> str:
@@ -434,6 +434,6 @@ class QueryTemplate:
             row_selection=self.row_selection,
             offset=self.offset,
             limit=self.limit,
-            additional_data_sources=self.additional_data_sources,
+            additional_sources=self.additional_sources,
             custom_order_expressions=self.custom_order_expressions,
         )

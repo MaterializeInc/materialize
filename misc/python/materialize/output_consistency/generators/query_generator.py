@@ -40,8 +40,8 @@ from materialize.output_consistency.input_data.operations.generic_operations_pro
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
-from materialize.output_consistency.query.additional_data_source import (
-    AdditionalDataSource,
+from materialize.output_consistency.query.additional_source import (
+    AdditionalSource,
     as_data_sources,
 )
 from materialize.output_consistency.query.data_source import (
@@ -211,15 +211,15 @@ class QueryGenerator:
                 offset_index : offset_index + self.config.max_cols_per_query
             ]
 
-            data_source, additional_data_sources = self._select_sources(storage_layout)
+            data_source, additional_sources = self._select_sources(storage_layout)
             self._assign_random_sources(
-                [data_source] + as_data_sources(additional_data_sources),
+                [data_source] + as_data_sources(additional_sources),
                 expressions,
                 contains_aggregations,
             )
 
             row_selection = self._select_rows(
-                storage_layout, [data_source] + as_data_sources(additional_data_sources)
+                storage_layout, [data_source] + as_data_sources(additional_sources)
             )
 
             expressions = self._remove_known_inconsistencies(
@@ -236,14 +236,14 @@ class QueryGenerator:
                 pass
             else:
                 # remove sources that are not used by any (remaining) expression
-                data_source, additional_data_sources = self.minimize_sources(
-                    data_source, additional_data_sources, expressions
+                data_source, additional_sources = self.minimize_sources(
+                    data_source, additional_sources, expressions
                 )
                 row_selection.trim_to_minimized_sources(
-                    [data_source] + as_data_sources(additional_data_sources)
+                    [data_source] + as_data_sources(additional_sources)
                 )
 
-            uses_joins = len(additional_data_sources) > 0
+            uses_joins = len(additional_sources) > 0
 
             query = QueryTemplate(
                 expect_error,
@@ -265,7 +265,7 @@ class QueryGenerator:
                     uses_joins=uses_joins,
                     contains_aggregations=contains_aggregations,
                 ),
-                additional_data_sources=additional_data_sources,
+                additional_sources=additional_sources,
             )
 
             queries.append(query)
@@ -371,7 +371,7 @@ class QueryGenerator:
     def _select_sources(
         self,
         storage_layout: ValueStorageLayout,
-    ) -> tuple[DataSource, list[AdditionalDataSource]]:
+    ) -> tuple[DataSource, list[AdditionalSource]]:
         if storage_layout == ValueStorageLayout.HORIZONTAL:
             return DataSource(table_index=None), []
 
@@ -380,37 +380,37 @@ class QueryGenerator:
     def minimize_sources(
         self,
         data_source: DataSource,
-        additional_data_sources: list[AdditionalDataSource],
+        additional_sources: list[AdditionalSource],
         all_expressions: list[Expression],
-    ) -> tuple[DataSource, list[AdditionalDataSource]]:
+    ) -> tuple[DataSource, list[AdditionalSource]]:
         all_used_data_sources: set[DataSource] = set()
 
         for expression in all_expressions:
             all_used_data_sources.update(expression.collect_data_sources())
 
-        additional_data_sources = [
+        additional_sources = [
             additional_source
-            for additional_source in additional_data_sources
+            for additional_source in additional_sources
             if additional_source.data_source in all_used_data_sources
         ]
 
         if data_source not in all_used_data_sources:
-            if len(additional_data_sources) == 0:
+            if len(additional_sources) == 0:
                 # No data sources are needed by the query. This can be the case when expressions only hold enum
                 # constants as args. Still return the main data source so that all queries have one. This will allow to
                 # add a where clause. As a side effect, it will also influence the row count.
                 return data_source, []
 
             return (
-                additional_data_sources[0].data_source,
-                additional_data_sources[1:],
+                additional_sources[0].data_source,
+                additional_sources[1:],
             )
 
-        return data_source, additional_data_sources
+        return data_source, additional_sources
 
     def _random_source_tables(
         self, storage_layout: ValueStorageLayout
-    ) -> tuple[DataSource, list[AdditionalDataSource]]:
+    ) -> tuple[DataSource, list[AdditionalSource]]:
         main_source = DataSource(table_index=0)
 
         if self.randomized_picker.random_boolean(0.4):
@@ -419,7 +419,7 @@ class QueryGenerator:
         additional_sources = []
         for i in range(1, self.config.vertical_join_tables):
             if self.randomized_picker.random_boolean(0.3):
-                additional_source = AdditionalDataSource(
+                additional_source = AdditionalSource(
                     data_source=DataSource(table_index=i),
                     join_operator=self.randomized_picker.random_join_operator(),
                     join_constraint=TRUE_EXPRESSION,
@@ -545,7 +545,7 @@ class QueryGenerator:
         self,
         storage_layout: ValueStorageLayout,
         data_source: DataSource,
-        joined_source: AdditionalDataSource,
+        joined_source: AdditionalSource,
     ) -> Expression:
         assert (
             storage_layout == ValueStorageLayout.VERTICAL
