@@ -146,6 +146,7 @@ class Action:
                     "unknown schema",  # schema was dropped
                     "the transaction's active cluster has been dropped",  # cluster was dropped
                     "was removed",  # dependency was removed, started with moving optimization off main thread, see #24367
+                    "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
                 ]
             )
         if exe.db.scenario == Scenario.Cancel:
