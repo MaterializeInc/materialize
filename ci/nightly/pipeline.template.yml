@@ -10,42 +10,28 @@
 # Default priority, just set to be explicit
 priority: 0
 
-env:
-  CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
-
 steps:
   - group: Builds
     key: builds
     steps:
-      - id: bazel-build-x86_64
-        label: ":bazel: Build x86_64"
-        env:
-          CI_BUILD_WITH_BAZEL: "1"
+      - id: build-x86_64
+        label: Build x86_64
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-          - "WORKSPACE"
-          - ".bazelrc"
-          - "**/*.bzl"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
+        priority: 50
         agents:
           queue: builder-linux-x86_64
 
-      - id: bazel-build-aarch64
-        label: ":bazel: Build aarch64"
-        env:
-          CI_BUILD_WITH_BAZEL: "1"
+      - id: build-aarch64
+        label: Build aarch64
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
-        inputs:
-          - "*"
-          - "WORKSPACE"
-          - ".bazelrc"
-          - "**/*.bzl"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
+        # For releases we trigger nightly from the test job directly, no need to build again
+        branches: "!v*.*"
         agents:
           queue: builder-linux-aarch64
 
@@ -89,7 +75,7 @@ steps:
     steps:
       - id: feature-benchmark
         label: "Feature benchmark against merge base or 'latest' %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 720
         parallelism: 8
         agents:
@@ -105,7 +91,7 @@ steps:
                 - common-ancestor
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 240
         agents:
           # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
@@ -127,7 +113,7 @@ steps:
                 - "256"
       - id: scalability-benchmark-ddl
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 1200
         agents:
           # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
@@ -153,7 +139,7 @@ steps:
                 - "64"
       - id: scalability-benchmark-connection
         label: "Scalability benchmark (connection) against merge base or 'latest'"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
@@ -177,7 +163,7 @@ steps:
                 - "2048"
       - id: parallel-benchmark
         label: "Parallel Benchmark"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
@@ -192,7 +178,7 @@ steps:
     steps:
       - id: kafka-matrix
         label: Kafka smoke test against previous Kafka versions
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -202,7 +188,7 @@ steps:
 
       - id: kafka-multi-broker
         label: Kafka multi-broker test
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -212,7 +198,7 @@ steps:
 
       - id: redpanda-resumption
         label: ":panda_face: resumption tests"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         plugins:
           - ./ci/plugins/mzcompose:
@@ -227,7 +213,7 @@ steps:
     steps:
       - id: redpanda-testdrive
         label: ":panda_face: :racing_car: testdrive"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -238,7 +224,7 @@ steps:
 
       - id: redpanda-testdrive-aarch64
         label: ":panda_face: :racing_car: testdrive aarch64"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -250,7 +236,7 @@ steps:
 
       - id: testdrive-partitions-5
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -261,7 +247,7 @@ steps:
 
       - id: testdrive-replicas-4
         label: ":racing_car: testdrive 4 replicas"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -272,7 +258,7 @@ steps:
 
       - id: testdrive-size-1
         label: ":racing_car: testdrive with SIZE 1"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 360
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -283,7 +269,7 @@ steps:
 
       - id: testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -294,7 +280,7 @@ steps:
 
       - id: testdrive-structured-persist-arrow
         label: ":racing_car: testdrive with Structured Persist (Only Structured)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -309,7 +295,7 @@ steps:
 
       - id: testdrive-in-cloudtest
         label: "Full Testdrive in Cloudtest (K8s) %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         env:
@@ -326,7 +312,7 @@ steps:
 
       - id: persistence-testdrive
         label: ":racing_car: testdrive with --persistent-user-tables"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -341,7 +327,7 @@ steps:
     steps:
       - id: limits
         label: "Product limits %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -358,7 +344,7 @@ steps:
 
       - id: limits-instance-size
         label: "Instance size limits"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         agents:
           # A larger instance is needed due to the
           # many containers that are being created
@@ -376,7 +362,7 @@ steps:
 
       - id: bounded-memory
         label: "Bounded Memory %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 90
         parallelism: 2
         agents:
@@ -390,7 +376,7 @@ steps:
     steps:
       - id: upsert-compaction-enabled
         label: Upsert (compaction enabled)
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
@@ -400,7 +386,7 @@ steps:
 
       - id: upsert-compaction-disabled
         label: Upsert (compaction disabled)
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
@@ -411,7 +397,7 @@ steps:
 
   - id: ssh-connection-extended
     label: Extended SSH connection tests
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     timeout_in_minutes: 45
     plugins:
       - ./ci/plugins/mzcompose:
@@ -425,7 +411,7 @@ steps:
     steps:
       - id: zippy-kafka-sources
         label: "Zippy Kafka Sources"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -436,7 +422,7 @@ steps:
 
       - id: zippy-kafka-parallel-insert
         label: "Zippy Kafka Parallel Insert"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -447,7 +433,7 @@ steps:
 
       - id: zippy-user-tables
         label: "Zippy User Tables"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -458,7 +444,7 @@ steps:
 
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -469,7 +455,7 @@ steps:
 
       - id: zippy-mysql-cdc
         label: "Zippy MySQL CDC"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -480,7 +466,7 @@ steps:
 
       - id: zippy-debezium-postgres
         label: "Zippy Debezium Postgres"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -491,7 +477,7 @@ steps:
 
       - id: zippy-cluster-replicas
         label: "Zippy Cluster Replicas"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -502,7 +488,7 @@ steps:
 
       - id: zippy-crdb-latest
         label: "Zippy w/ latest CRDB"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -513,7 +499,7 @@ steps:
 
       - id: zippy-alter-connection
         label: "Zippy w/ alter connection"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -527,7 +513,7 @@ steps:
     steps:
       - id: aws-real
         label: AWS (Real)
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         retry:
           automatic:
@@ -543,7 +529,7 @@ steps:
 
       - id: aws-localstack
         label: AWS (Localstack)
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -553,7 +539,7 @@ steps:
 
       - id: secrets-local-file
         label: "Secrets Local File"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -566,7 +552,7 @@ steps:
     steps:
       - id: checks-restart-entire-mz
         label: "Checks + restart of the entire Mz %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
         parallelism: 2
@@ -580,7 +566,7 @@ steps:
 
       - id: checks-backup-multi
         label: "Checks + multiple backups/restores %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -592,7 +578,7 @@ steps:
 
       - id: checks-parallel-drop-create-default-replica
         label: "Checks parallel + DROP/CREATE replica %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 180
         parallelism: 2
@@ -605,7 +591,7 @@ steps:
 
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 180
         parallelism: 2
@@ -618,7 +604,7 @@ steps:
 
       - id: checks-parallel-restart-entire-mz
         label: "Checks parallel + restart of the entire Mz %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 180
         parallelism: 2
@@ -631,7 +617,7 @@ steps:
 
       - id: checks-parallel-restart-environmentd-clusterd-storage
         label: "Checks parallel + restart of environmentd & storage clusterd %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 180
         parallelism: 2
@@ -644,7 +630,7 @@ steps:
 
       - id: checks-parallel-kill-clusterd-storage
         label: "Checks parallel + kill storage clusterd %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 180
         parallelism: 2
@@ -657,7 +643,7 @@ steps:
 
       - id: checks-parallel-restart-redpanda
         label: "Checks parallel + restart Redpanda & Debezium %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         skip: "Affected by #23882"
         timeout_in_minutes: 180
         parallelism: 2
@@ -670,7 +656,7 @@ steps:
 
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -682,7 +668,7 @@ steps:
 
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -694,7 +680,7 @@ steps:
 
       - id: checks-upgrade-entire-mz-two-versions
         label: "Checks upgrade across two versions %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -706,7 +692,7 @@ steps:
 
       - id: checks-upgrade-entire-mz-four-versions
         label: "Checks upgrade across four versions %N"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -718,7 +704,7 @@ steps:
 
       - id: checks-0dt-restart-entire-mz
         label: "Checks 0dt restart of the entire Mz"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 240
         agents:
           # TODO(def-): Switch back to hetzner
@@ -730,7 +716,7 @@ steps:
 
       - id: checks-0dt-restart-entire-mz-forced-migrations
         label: "Checks 0dt restart of the entire Mz with forced migrations"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 240
         agents:
           # TODO(def-): Switch back to hetzner
@@ -742,7 +728,7 @@ steps:
 
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 240
         agents:
           # TODO(def-): Switch back to hetzner
@@ -754,7 +740,7 @@ steps:
 
       - id: checks-0dt-upgrade-entire-mz-two-versions
         label: "Checks 0dt upgrade across two versions"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 240
         agents:
           # TODO(def-): Switch back to hetzner
@@ -766,7 +752,7 @@ steps:
 
       - id: checks-0dt-upgrade-entire-mz-four-versions
         label: "Checks 0dt upgrade across four versions"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 240
         agents:
           # TODO(def-): Switch back to hetzner
@@ -778,7 +764,7 @@ steps:
 
       - id: checks-0dt-bump-version
         label: "Checks 0dt upgrade to a bumped version"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 240
         agents:
           # TODO(def-): Switch back to hetzner
@@ -790,7 +776,7 @@ steps:
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 240
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
@@ -808,7 +794,7 @@ steps:
     steps:
       - id: k8s-node-recovery-storage-on-failing
         label: "K8s recovery: storage on failing node"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         # TODO: #25108 (k8s node recovery tests flaky)
         retry:
@@ -834,7 +820,7 @@ steps:
 
       - id: k8s-node-recovery-compute-on-failing
         label: "K8s recovery: compute on failing node"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         # TODO: #25108 (k8s node recovery tests flaky)
         retry:
@@ -860,7 +846,7 @@ steps:
 
       - id: k8s-node-recovery-replicated-compute-on-failing
         label: "K8s recovery: replicated compute on failing node"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         # TODO: #25108 (k8s node recovery tests flaky)
         retry:
@@ -886,7 +872,7 @@ steps:
 
       - id: k8s-node-recovery-envd-on-failing
         label: "K8s recovery: envd on failing node"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         # TODO: #25108 (k8s node recovery tests flaky)
         retry:
@@ -915,7 +901,7 @@ steps:
     steps:
       - id: persist-maelstrom
         label: Maelstrom coverage of persist
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
@@ -927,7 +913,7 @@ steps:
 
       - id: persist-maelstrom-single-node
         label: Long single-node Maelstrom coverage of persist
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 20
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -939,7 +925,7 @@ steps:
 
       - id: persist-maelstrom-multi-node
         label: Long multi-node Maelstrom coverage of persist with postgres consensus
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 20
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -951,7 +937,7 @@ steps:
 
       - id: txn-wal-maelstrom
         label: Maelstrom coverage of txn-wal
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -963,7 +949,7 @@ steps:
 
       - id: persistence-failpoints
         label: Persistence failpoints
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -978,7 +964,7 @@ steps:
     steps:
       - id: sql-feature-flags
         label: "SQL-level feature flags"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -988,7 +974,7 @@ steps:
 
       - id: launchdarkly
         label: "LaunchDarkly"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           # Requires LAUNCHDARKLY_API_TOKEN
@@ -999,7 +985,7 @@ steps:
 
   - id: cloud-canary
     label: "Canary Deploy in Staging Cloud"
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     timeout_in_minutes: 1200
     concurrency: 1
     concurrency_group: 'cloud-canary'
@@ -1012,7 +998,7 @@ steps:
 
   - id: mz-e2e
     label: "Mz E2E Test"
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     timeout_in_minutes: 1200
     concurrency: 1
     concurrency_group: 'mz-e2e'
@@ -1028,7 +1014,7 @@ steps:
     steps:
       - id: output-consistency-internal
         label: "Output consistency (internal)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1039,7 +1025,7 @@ steps:
 
       - id: output-consistency-postgres
         label: "Output consistency (Postgres)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1050,7 +1036,7 @@ steps:
 
       - id: output-consistency-version-dfr
         label: "Output consistency (version for DFR)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1061,7 +1047,7 @@ steps:
 
       - id: output-consistency-version-ctf
         label: "Output consistency (version for CTF)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1072,7 +1058,7 @@ steps:
 
       - id: output-consistency-feature-flags-dfr
         label: "Output consistency (feature-flags for DFR)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
           queue: linux-aarch64-small
@@ -1087,7 +1073,7 @@ steps:
     steps:
       - id: sqlsmith
         label: "SQLsmith"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1099,7 +1085,7 @@ steps:
 
       - id: sqlsmith-explain
         label: "SQLsmith explain"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1114,7 +1100,7 @@ steps:
     steps:
       - id: sqlancer-pqs
         label: "SQLancer PQS"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1125,7 +1111,7 @@ steps:
 
       - id: sqlancer-norec
         label: "SQLancer NoREC"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1136,7 +1122,7 @@ steps:
 
       - id: sqlancer-query-partitioning
         label: "SQLancer QueryPartitioning"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1147,7 +1133,7 @@ steps:
 
       - id: sqlancer-having
         label: "SQLancer Having"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1161,7 +1147,7 @@ steps:
     steps:
       - id: rqg-simple-aggregates
         label: "RQG simple-aggregates workload"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1173,7 +1159,7 @@ steps:
 
       - id: rqg-db3-joins
         label: "RQG dbt3-joins workload"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           # Runs into timeout/OoM on small agents
@@ -1185,7 +1171,7 @@ steps:
 
       - id: rqg-lateral-joins
         label: "RQG lateral-joins workload"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         skip: "flaky until #25865 is fixed"
         timeout_in_minutes: 45
         agents:
@@ -1197,7 +1183,7 @@ steps:
 
       - id: rqg-subqueries
         label: "RQG subqueries workload"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1208,7 +1194,7 @@ steps:
 
       - id: rqg-window-functions
         label: "RQG window functions workload"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1219,7 +1205,7 @@ steps:
 
       - id: rqg-wmr
         label: "RQG WMR workload"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         skip: "flaky until #24904 is fixed"
         timeout_in_minutes: 45
         agents:
@@ -1233,7 +1219,7 @@ steps:
 
       - id: rqg-banking
         label: "RQG banking workload"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1244,7 +1230,7 @@ steps:
 
       - id: rqg-left-join-stacks
         label: "RQG left join stacks workload"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1255,7 +1241,7 @@ steps:
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
       queue: hetzner-aarch64-4cpu-8gb
@@ -1265,7 +1251,7 @@ steps:
 
   - id: pubsub-disruption
     label: "PubSub disruption"
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
       queue: hetzner-aarch64-8cpu-16gb
@@ -1275,7 +1261,7 @@ steps:
 
   - id: retain-history
     label: "Check retain history"
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     skip: "#24479"
     timeout_in_minutes: 15
     agents:
@@ -1286,7 +1272,7 @@ steps:
 
   - id: data-ingest
     label: "Data Ingest"
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     timeout_in_minutes: 90
     parallelism: 2
     retry:
@@ -1304,7 +1290,7 @@ steps:
     steps:
       - id: parallel-workload-dml
         label: "Parallel Workload (DML)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1316,7 +1302,7 @@ steps:
 
       - id: parallel-workload-ddl
         label: "Parallel Workload (DDL)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1328,7 +1314,7 @@ steps:
 
       - id: parallel-workload-ddl-only
         label: "Parallel Workload (DDL Only)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1340,7 +1326,7 @@ steps:
 
       - id: parallel-workload-many-threads
         label: "Parallel Workload (many threads)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1354,7 +1340,7 @@ steps:
 
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1366,7 +1352,7 @@ steps:
 
       - id: parallel-workload-rename
         label: "Parallel Workload (rename)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1378,7 +1364,7 @@ steps:
 
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         skip: "TODO(def-): Reenable when #2392 is fixed"
@@ -1391,7 +1377,7 @@ steps:
 
       - id: parallel-workload-kill
         label: "Parallel Workload (kill)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1403,7 +1389,7 @@ steps:
 
       - id: parallel-workload-backup-restore
         label: "Parallel Workload (backup & restore)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
@@ -1416,7 +1402,7 @@ steps:
 
       - id: parallel-workload-0dt
         label: "Parallel Workload (0dt deploy)"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1429,7 +1415,7 @@ steps:
 
   - id: incident-70
     label: "Test for incident 70"
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     timeout_in_minutes: 15
     skip: "Affected by incidents-and-escalations#72"
     agents:
@@ -1441,7 +1427,7 @@ steps:
 
   - id: balancerd
     label: "Tests for balancerd"
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     timeout_in_minutes: 15
     agents:
       queue: hetzner-aarch64-4cpu-8gb
@@ -1451,7 +1437,7 @@ steps:
 
   - id: restarts
     label: Restart test
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
@@ -1461,7 +1447,7 @@ steps:
 
   - id: legacy-upgrade
     label: Legacy upgrade tests (last version from git)
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
@@ -1472,7 +1458,7 @@ steps:
 
   - id: cloudtest-slow
     label: "Slow Cloudtest"
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     timeout_in_minutes: 45
     env:
       CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
@@ -1487,7 +1473,7 @@ steps:
 
   - id: txn-wal-fencing
     label: Txn-wal fencing
-    depends_on: bazel-build-aarch64
+    depends_on: build-aarch64
     timeout_in_minutes: 120
     parallelism: 2
     plugins:
@@ -1501,7 +1487,7 @@ steps:
     steps:
     - id: copy-to-s3-1-replica
       label: "Copy To S3 (1 replica)"
-      depends_on: bazel-build-aarch64
+      depends_on: build-aarch64
       timeout_in_minutes: 60
       plugins:
         - ./ci/plugins/mzcompose:
@@ -1512,7 +1498,7 @@ steps:
 
     - id: copy-to-s3-2-replicas
       label: "Copy To S3 (2 replicas)"
-      depends_on: bazel-build-aarch64
+      depends_on: build-aarch64
       timeout_in_minutes: 60
       plugins:
         - ./ci/plugins/mzcompose:
@@ -1527,7 +1513,7 @@ steps:
     steps:
       - id: lang-csharp
         label: ":csharp: tests"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 10
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1537,7 +1523,7 @@ steps:
 
       - id: lang-js
         label: ":js: tests"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 10
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1547,7 +1533,7 @@ steps:
 
       - id: lang-java
         label: ":java: tests"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 10
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1557,7 +1543,7 @@ steps:
 
       - id: lang-python
         label: ":python: tests"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 10
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1567,7 +1553,7 @@ steps:
 
       - id: lang-ruby
         label: ":ruby: tests"
-        depends_on: bazel-build-aarch64
+        depends_on: build-aarch64
         timeout_in_minutes: 10
         plugins:
           - ./ci/plugins/mzcompose:
