@@ -68,7 +68,6 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 use futures::{Future, FutureExt};
-use mz_ore::channel::ReceiverExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
@@ -548,6 +547,8 @@ where
     }
 
     async fn run(mut self) -> ControlFlow<String> {
+        const BATCH_SIZE: usize = 4096;
+        let mut updates = Vec::with_capacity(BATCH_SIZE);
         loop {
             tokio::select! {
                 // Prefer sending actual updates over just bumping the upper,
@@ -562,11 +563,9 @@ where
                 }
 
                 // Pull a chunk of queued updates off the channel.
-                cmd = self.cmd_rx.mz_recv_many(4096) => {
-                    if let Some(batch) = cmd {
-
-                        let _ = self.handle_updates(batch).await?;
-
+                count = self.cmd_rx.recv_many(&mut updates, BATCH_SIZE) => {
+                    if count > 0 {
+                        let _ = self.handle_updates(&mut updates).await?;
                     } else {
                         // Sender has been dropped, which means the collection
                         // should have been unregistered, break out of the run
@@ -665,7 +664,7 @@ where
 
     async fn handle_updates(
         &mut self,
-        batch: Vec<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>,
+        batch: &mut Vec<(StorageWriteOp, oneshot::Sender<Result<(), StorageError<T>>>)>,
     ) -> ControlFlow<String> {
         // Put in place _some_ rate limiting.
         let batch_duration_ms = STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
@@ -681,7 +680,7 @@ where
         );
 
         let mut responders = Vec::with_capacity(batch.len());
-        for (op, tx) in batch {
+        for (op, tx) in batch.drain(..) {
             self.apply_write_op(op);
             responders.push(tx);
         }
@@ -903,6 +902,9 @@ where
         async move {
             let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_TICK_MS));
 
+            const BATCH_SIZE: usize = 4096;
+            let mut batch: Vec<(Vec<_>, _)> = Vec::with_capacity(BATCH_SIZE);
+
             'run: loop {
                 tokio::select! {
                     // Prefer sending actual updates over just bumping the upper, because sending
@@ -932,8 +934,8 @@ where
                     }
 
                     // Pull a chunk of queued updates off the channel.
-                    cmd = rx.mz_recv_many(4096) => {
-                        if let Some(batch) = cmd {
+                    count = rx.recv_many(&mut batch, BATCH_SIZE) => {
+                        if count > 0 {
                             // To rate limit appends to persist we add artificial latency, and will
                             // finish no sooner than this instant.
                             let batch_duration_ms = match id {
@@ -961,25 +963,24 @@ where
                             // at `t + 13`, `t + 23`, ... which reseting the interval accomplishes.
                             interval.reset();
 
-                            let (rows, responders): (Vec<_>, Vec<_>) = batch
-                                .into_iter()
-                                .unzip();
+                            let mut all_rows = Vec::with_capacity(batch.iter().map(|(rows, _)| rows.len()).sum());
+                            let mut responders = Vec::with_capacity(batch.len());
+
+                            for (rows, reponders) in batch.drain(..) {
+                                all_rows.extend(rows.into_iter().map(|(row, diff)| TimestamplessUpdate { row, diff}));
+                                responders.push(reponders);
+                            }
 
                             if *read_only.borrow() {
-                                tracing::warn!(%id, ?rows, "append while in read-only mode");
+                                tracing::warn!(%id, ?all_rows, "append while in read-only mode");
                                 notify_listeners(responders, || Err(StorageError::ReadOnly));
                                 continue;
                             }
 
                             // Append updates to persist!
-                            let rows = rows
-                                .into_iter()
-                                .flatten()
-                                .map(|(row, diff)| TimestamplessUpdate { row, diff })
-                            .collect();
                             let at_least = T::from(now());
 
-                            monotonic_append(&mut write_handle, rows, at_least).await;
+                            monotonic_append(&mut write_handle, all_rows, at_least).await;
                             // Notify all of our listeners.
                             notify_listeners(responders, || Ok(()));
 

@@ -18,7 +18,6 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use async_trait::async_trait;
 use futures::{Future, FutureExt};
 use prometheus::core::Atomic;
 use tokio::sync::mpsc::{error, unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -27,83 +26,6 @@ use tokio::sync::oneshot;
 use crate::metrics::PromLabelsExt;
 
 pub mod trigger;
-
-/// Extensions for the receiving end of asynchronous channels.
-#[async_trait]
-pub trait ReceiverExt<T: Send> {
-    /// Receives all of the currently buffered elements on the channel, up to some max.
-    ///
-    /// This method returns `None` if the channel has been closed and there are no remaining
-    /// messages in the channel's buffer.
-    ///
-    /// If there are no messages in the channel's buffer, but the channel is not yet closed, this
-    /// method will sleep until a message is sent or the channel is closed. When woken it will
-    /// return up to max currently buffered elements.
-    ///
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv_many` is used as the event in a `select!` statement
-    /// and some other branch completes first, it is guaranteed that no messages were received on
-    /// this channel.
-    ///
-    /// # Max Buffer Size
-    ///
-    /// The provided max buffer size should always be less than the total capacity of the channel.
-    /// Otherwise a good value is probably a fraction of the total channel size, or however large
-    /// a batch that your receiving component can handle.
-    ///
-    /// TODO(parkmycar): We should refactor this to use `impl Iterator` instead of `Vec` when
-    /// "impl trait in trait" is supported.
-    async fn mz_recv_many(&mut self, max: usize) -> Option<Vec<T>>;
-}
-
-#[async_trait]
-impl<T: Send> ReceiverExt<T> for tokio::sync::mpsc::Receiver<T> {
-    async fn mz_recv_many(&mut self, max: usize) -> Option<Vec<T>> {
-        // Wait for a value to be ready.
-        let first = self.recv().await?;
-        let mut buffer = Vec::from([first]);
-
-        // Note(parkmycar): It's very important for cancelation safety that we don't add any more
-        // .await points other than the initial one.
-
-        // Pull all of the remaining values off the channel.
-        while let Ok(v) = self.try_recv() {
-            buffer.push(v);
-
-            // Break so we don't loop here continuously.
-            if buffer.len() >= max {
-                break;
-            }
-        }
-
-        Some(buffer)
-    }
-}
-
-#[async_trait]
-impl<T: Send> ReceiverExt<T> for tokio::sync::mpsc::UnboundedReceiver<T> {
-    async fn mz_recv_many(&mut self, max: usize) -> Option<Vec<T>> {
-        // Wait for a value to be ready.
-        let first = self.recv().await?;
-        let mut buffer = Vec::from([first]);
-
-        // Note(parkmycar): It's very important for cancelation safety that we don't add any more
-        // .await points other than the initial one.
-
-        // Pull all of the remaining values off the channel.
-        while let Ok(v) = self.try_recv() {
-            buffer.push(v);
-
-            // Break so we don't loop here continuously.
-            if buffer.len() >= max {
-                break;
-            }
-        }
-
-        Some(buffer)
-    }
-}
 
 /// A trait describing a metric that can be used with an `instrumented_unbounded_channel`.
 pub trait InstrumentedChannelMetric {
