@@ -20,7 +20,7 @@ included via crates_repository.
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
-load("@rules_rust//crate_universe:defs.bzl", "crates_repository", "crate")
+load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
 
 def rust_repositories():
     """Download third-party Rust repositories and their dependencies."""

@@ -13,14 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@//misc/bazel/rules:rust_cxx_bridge.bzl", "rust_cxx_bridge")
 load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+load("@rules_cc//cc:defs.bzl", "cc_library")
 
 cc_library(
     name = "protobuf-native-bridge",
-    hdrs = glob(["src/**/*.h"]),
-    include_prefix = "protobuf-native",
     srcs = [
         "src/compiler.cc",
         "src/compiler.rs.cc",
@@ -29,34 +27,36 @@ cc_library(
         "src/lib.cc",
         "src/lib.rs.cc",
     ],
-    linkstatic = True,
+    hdrs = glob(["src/**/*.h"]),
     copts = ["-std=c++17"],
+    include_prefix = "protobuf-native",
+    linkstatic = True,
     deps = [
         ":compiler-bridge/include",
+        ":internal-bridge/include",
         ":io-bridge/include",
         ":lib-bridge/include",
-        ":internal-bridge/include",
+        "@com_google_absl//absl/strings",
         "@crates_io__cxx-1.0.122//:cxx_cc",
-        "@protobuf//src/google/protobuf/compiler:importer",
         "@protobuf//src/google/protobuf/compiler:code_generator",
-        "@com_google_absl//absl/strings:strings",
+        "@protobuf//src/google/protobuf/compiler:importer",
     ],
 )
 
 rust_cxx_bridge(
     name = "compiler-bridge",
-    headers_prefix = "protobuf-native",
     src = "src/compiler.rs",
+    headers_prefix = "protobuf-native",
     deps = [":internal-include"],
 )
 
 rust_cxx_bridge(
     name = "io-bridge",
-    headers_prefix = "protobuf-native",
     src = "src/io.rs",
+    headers_prefix = "protobuf-native",
     deps = [
-        ":io-include",
         ":internal-include",
+        ":io-include",
     ],
 )
 
@@ -73,11 +73,11 @@ cc_library(
 
 rust_cxx_bridge(
     name = "lib-bridge",
-    headers_prefix = "protobuf-native",
     src = "src/lib.rs",
+    headers_prefix = "protobuf-native",
     deps = [
-        ":lib-include",
         ":internal-include",
+        ":lib-include",
     ],
 )
 
@@ -85,13 +85,13 @@ cc_library(
     name = "lib-include",
     hdrs = ["src/lib.h"],
     include_prefix = "protobuf-native",
-    deps = ["@protobuf//src/google/protobuf/compiler:code_generator"]
+    deps = ["@protobuf//src/google/protobuf/compiler:code_generator"],
 )
 
 rust_cxx_bridge(
     name = "internal-bridge",
-    headers_prefix = "protobuf-native",
     src = "src/internal.rs",
+    headers_prefix = "protobuf-native",
     deps = [":internal-include"],
 )
 
@@ -99,5 +99,5 @@ cc_library(
     name = "internal-include",
     hdrs = ["src/internal.h"],
     include_prefix = "protobuf-native",
-    deps = ["@com_google_absl//absl/strings:strings"],
+    deps = ["@com_google_absl//absl/strings"],
 )

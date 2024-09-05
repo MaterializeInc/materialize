@@ -203,8 +203,8 @@ copy_to_directory(
 # overlapped with others and spammed the logs with WARNINGs.
 copy_to_directory(
     name = "rocksdb_include",
-    out = "include",
     srcs = [":out_dir"],
+    out = "include",
     root_paths = ["rocksdb/include"],
     visibility = ["//visibility:public"],
 )

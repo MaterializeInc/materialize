@@ -9,144 +9,143 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
 
-load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test", "rust_binary")
-load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
-
 rust_library(
-	name = "mz_prof_http",
-	version = "0.0.0",
-	srcs = glob(["src/**/*.rs"]),
-	crate_features = ["default"] + select({
-		"@//misc/bazel/platforms:linux_arm": [
-			"jemalloc",
-			"jemalloc_pprof",
-		],
-		"@//misc/bazel/platforms:linux_x86_64": [
-			"jemalloc",
-			"jemalloc_pprof",
-		],
-		"//conditions:default": [],
-	}),
-	aliases = aliases(
-		normal = True,
-		proc_macro = True,
-	),
-	deps = [
-		":mz_prof_http_build_script",
-		"//src/build-info:mz_build_info",
-		"//src/http-util:mz_http_util",
-		"//src/ore:mz_ore",
-		"//src/prof:mz_prof",
-	] + all_crate_deps(normal = True),
-	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-	compile_data = [] + glob([
-		"templates/*",
-		"src/http/static/**/*",
-	]),
-	data = [],
-	rustc_flags = [],
-	rustc_env = {},
+    name = "mz_prof_http",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(
+        normal = True,
+        proc_macro = True,
+    ),
+    compile_data = [] + glob([
+        "templates/*",
+        "src/http/static/**/*",
+    ]),
+    crate_features = ["default"] + select({
+        "@//misc/bazel/platforms:linux_arm": [
+            "jemalloc",
+            "jemalloc_pprof",
+        ],
+        "@//misc/bazel/platforms:linux_x86_64": [
+            "jemalloc",
+            "jemalloc_pprof",
+        ],
+        "//conditions:default": [],
+    }),
+    data = [],
+    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.0.0",
+    deps = [
+        ":mz_prof_http_build_script",
+        "//src/build-info:mz_build_info",
+        "//src/http-util:mz_http_util",
+        "//src/ore:mz_ore",
+        "//src/prof:mz_prof",
+    ] + all_crate_deps(normal = True),
 )
 
 rust_test(
-	name = "mz_prof_http_lib_tests",
-	version = "0.0.0",
-	crate = ":mz_prof_http",
-	crate_features = ["default"] + select({
-		"@//misc/bazel/platforms:linux_arm": [
-			"jemalloc",
-			"jemalloc_pprof",
-		],
-		"@//misc/bazel/platforms:linux_x86_64": [
-			"jemalloc",
-			"jemalloc_pprof",
-		],
-		"//conditions:default": [],
-	}),
-	aliases = aliases(
-		normal = True,
-		normal_dev = True,
-		proc_macro = True,
-		proc_macro_dev = True,
-	),
-	deps = [
-		"//src/build-info:mz_build_info",
-		"//src/http-util:mz_http_util",
-		"//src/ore:mz_ore",
-		"//src/prof:mz_prof",
-	] + all_crate_deps(
-		normal = True,
-		normal_dev = True,
-	),
-	proc_macro_deps = [] + all_crate_deps(
-		proc_macro = True,
-		proc_macro_dev = True,
-	),
-	size = "medium",
-	compile_data = [],
-	data = [],
-	env = {},
-	rustc_flags = [],
-	rustc_env = {},
+    name = "mz_prof_http_lib_tests",
+    size = "medium",
+    aliases = aliases(
+        normal = True,
+        normal_dev = True,
+        proc_macro = True,
+        proc_macro_dev = True,
+    ),
+    compile_data = [],
+    crate = ":mz_prof_http",
+    crate_features = ["default"] + select({
+        "@//misc/bazel/platforms:linux_arm": [
+            "jemalloc",
+            "jemalloc_pprof",
+        ],
+        "@//misc/bazel/platforms:linux_x86_64": [
+            "jemalloc",
+            "jemalloc_pprof",
+        ],
+        "//conditions:default": [],
+    }),
+    data = [],
+    env = {},
+    proc_macro_deps = [] + all_crate_deps(
+        proc_macro = True,
+        proc_macro_dev = True,
+    ),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.0.0",
+    deps = [
+        "//src/build-info:mz_build_info",
+        "//src/http-util:mz_http_util",
+        "//src/ore:mz_ore",
+        "//src/prof:mz_prof",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
 )
 
 rust_doc_test(
-	name = "mz_prof_http_doc_test",
-	crate = ":mz_prof_http",
-	deps = [
-		"//src/build-info:mz_build_info",
-		"//src/http-util:mz_http_util",
-		"//src/ore:mz_ore",
-		"//src/prof:mz_prof",
-	] + all_crate_deps(
-		normal = True,
-		normal_dev = True,
-	),
+    name = "mz_prof_http_doc_test",
+    crate = ":mz_prof_http",
+    deps = [
+        "//src/build-info:mz_build_info",
+        "//src/http-util:mz_http_util",
+        "//src/ore:mz_ore",
+        "//src/prof:mz_prof",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
 )
 
 cargo_build_script(
-	name = "mz_prof_http_build_script",
-	srcs = ["build.rs"],
-	deps = ["//src/npm:mz_npm"] + all_crate_deps(
-		normal = True,
-		build = True,
-	),
-	proc_macro_deps = [] + all_crate_deps(
-		proc_macro = True,
-		build_proc_macro = True,
-	),
-	build_script_env = {},
-	data = [],
-	compile_data = [],
-	rustc_flags = [],
-	rustc_env = {},
+    name = "mz_prof_http_build_script",
+    srcs = ["build.rs"],
+    build_script_env = {},
+    compile_data = [],
+    data = [],
+    proc_macro_deps = [] + all_crate_deps(
+        build_proc_macro = True,
+        proc_macro = True,
+    ),
+    rustc_env = {},
+    rustc_flags = [],
+    deps = ["//src/npm:mz_npm"] + all_crate_deps(
+        build = True,
+        normal = True,
+    ),
 )
 
 rust_binary(
-	name = "fgviz",
-	version = "0.0.0",
-	crate_root = "src/bin/fgviz.rs",
-	srcs = glob(["src/**/*.rs"]),
-	features = [],
-	aliases = aliases(
-		normal = True,
-		proc_macro = True,
-	),
-	deps = [
-		":mz_prof_http",
-		"//src/build-info:mz_build_info",
-		"//src/http-util:mz_http_util",
-		"//src/ore:mz_ore",
-		"//src/prof:mz_prof",
-	] + all_crate_deps(normal = True),
-	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-	compile_data = [],
-	data = [],
-	env = {},
-	rustc_flags = [],
-	rustc_env = {},
+    name = "fgviz",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(
+        normal = True,
+        proc_macro = True,
+    ),
+    compile_data = [],
+    crate_root = "src/bin/fgviz.rs",
+    data = [],
+    env = {},
+    features = [],
+    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.0.0",
+    deps = [
+        ":mz_prof_http",
+        "//src/build-info:mz_build_info",
+        "//src/http-util:mz_http_util",
+        "//src/ore:mz_ore",
+        "//src/prof:mz_prof",
+    ] + all_crate_deps(normal = True),
 )

@@ -9,38 +9,36 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
-package(default_visibility = ["//visibility:public"])
-
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary")
 
+package(default_visibility = ["//visibility:public"])
 
 rust_binary(
-	name = "persistcli",
-	version = "0.0.0",
-	crate_root = "src/main.rs",
-	srcs = glob(["src/**/*.rs"]),
-	features = [],
-	aliases = aliases(
-		normal = True,
-		proc_macro = True,
-	),
-	deps = [
-		"//src/http-util:mz_http_util",
-		"//src/orchestrator-tracing:mz_orchestrator_tracing",
-		"//src/ore:mz_ore",
-		"//src/persist-client:mz_persist_client",
-		"//src/persist-types:mz_persist_types",
-		"//src/persist:mz_persist",
-		"//src/repr:mz_repr",
-		"//src/timestamp-oracle:mz_timestamp_oracle",
-		"//src/txn-wal:mz_txn_wal",
-	] + all_crate_deps(normal = True),
-	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-	compile_data = [],
-	data = [],
-	env = {},
-	rustc_flags = [],
-	rustc_env = {},
+    name = "persistcli",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(
+        normal = True,
+        proc_macro = True,
+    ),
+    compile_data = [],
+    crate_root = "src/main.rs",
+    data = [],
+    env = {},
+    features = [],
+    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.0.0",
+    deps = [
+        "//src/http-util:mz_http_util",
+        "//src/orchestrator-tracing:mz_orchestrator_tracing",
+        "//src/ore:mz_ore",
+        "//src/persist:mz_persist",
+        "//src/persist-client:mz_persist_client",
+        "//src/persist-types:mz_persist_types",
+        "//src/repr:mz_repr",
+        "//src/timestamp-oracle:mz_timestamp_oracle",
+        "//src/txn-wal:mz_txn_wal",
+    ] + all_crate_deps(normal = True),
 )

@@ -12,33 +12,28 @@
 cc_library(
     name = "decnumber",
     srcs = [
-        "decnumber/decimal128.c",
-        "decnumber/decimal64.c",
-        "decnumber/decimal32.c",
         "decnumber/decContext.c",
-        "decnumber/decNumber.c",
-        "decnumber/decSingle.c",
         "decnumber/decDouble.c",
-        "decnumber/decQuad.c",
+        "decnumber/decNumber.c",
         "decnumber/decPacked.c",
+        "decnumber/decQuad.c",
+        "decnumber/decSingle.c",
+        "decnumber/decimal128.c",
+        "decnumber/decimal32.c",
+        "decnumber/decimal64.c",
     ],
     hdrs = [
-        "decnumber/decimal128.h",
-        "decnumber/decimal64.h",
-        "decnumber/decimal32.h",
         "decnumber/decContext.h",
-        "decnumber/decNumber.h",
-        "decnumber/decSingle.h",
-        "decnumber/decDouble.h",
-        "decnumber/decQuad.h",
-        "decnumber/decPacked.h",
         "decnumber/decDPD.h",
+        "decnumber/decDouble.h",
+        "decnumber/decNumber.h",
         "decnumber/decNumberLocal.h",
-    ],
-    textual_hdrs = [
-        # The ordering of these is important.
-        "decnumber/decCommon.c",
-        "decnumber/decBasic.c",
+        "decnumber/decPacked.h",
+        "decnumber/decQuad.h",
+        "decnumber/decSingle.h",
+        "decnumber/decimal128.h",
+        "decnumber/decimal32.h",
+        "decnumber/decimal64.h",
     ],
     # libdecimal strongly recommends always enabling optimizations.
     #
@@ -56,5 +51,10 @@ cc_library(
         # correctly define `DECLITEND`.
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+    textual_hdrs = [
+        # The ordering of these is important.
+        "decnumber/decCommon.c",
+        "decnumber/decBasic.c",
+    ],
     visibility = ["//visibility:public"],
 )

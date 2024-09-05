@@ -28,14 +28,14 @@ cc_library(
         "randtable.c",
     ],
     hdrs = ["bzlib.h"],
+    copts = select({
+        "//conditions:default": [
+            "-Wno-unused-but-set-variable",
+        ],
+    }),
     local_defines = [
         "_FILE_OFFSET_BITS=64",
         "BZ_NO_STDIO",
     ],
-    copts = select({
-        "//conditions:default": [
-            "-Wno-unused-but-set-variable"
-        ],
-    }),
     visibility = ["//visibility:public"],
 )

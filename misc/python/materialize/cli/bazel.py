@@ -14,8 +14,7 @@ import os
 import pathlib
 import subprocess
 
-from materialize import MZ_ROOT
-from materialize import ui
+from materialize import MZ_ROOT, ui
 
 
 def main() -> int:
