@@ -6,15 +6,3 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
-name: jobs
-pre-image:
-  - type: cargo-build
-    bin:
-      - persistcli
-      - mz-catalog-debug
-    bazel-bin:
-      persistcli: "@//src/persist-cli:persistcli"
-      mz-catalog-debug: "@//src/catalog-debug:mz_catalog_debug"
-    strip: false
-publish: true

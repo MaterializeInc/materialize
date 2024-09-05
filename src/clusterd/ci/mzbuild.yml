@@ -11,3 +11,4 @@ name: clusterd
 pre-image:
   - type: cargo-build
     bin: clusterd
+    bazel-bin: "@//src/clusterd:clusterd"

@@ -149,9 +149,9 @@ def shell_quote(args: Iterable[Any]) -> str:
     return " ".join(shlex.quote(str(arg)) for arg in args)
 
 
-def env_is_truthy(env_var: str) -> bool:
+def env_is_truthy(env_var: str, default: str = "0") -> bool:
     """Return true if `env_var` is set and is not one of: 0, '', no, false"""
-    env = os.getenv(env_var)
+    env = os.getenv(env_var, default)
     if env is not None:
         return env not in ("", "0", "no", "false")
     return False

@@ -123,6 +123,17 @@ filegroup(
 cmake(
     name = "rocksdb",
     build_args = ["-j8"],
+    # rocksdb requires these flags to be enabled, all instances we run on support them.
+    copts = select(
+        {
+            "@platforms//cpu:x86_64": [
+                "-msse4.2",
+                "-mpclmul",
+            ],
+            "@platforms//cpu:aarch64": [],
+        },
+        no_match_error = "Building rocksdb for the specified CPU is not supported.",
+    ),
     generate_args = [
         "-DWITH_SNAPPY=1",
         "-DWITH_LZ4=1",
@@ -133,6 +144,9 @@ cmake(
         "-DWITH_TOOLS=OFF",
         "-DUSE_RTTI=1",
         "-DROCKSDB_BUILD_SHARED=OFF",
+        # Without this set, rocksdb enables `-march=native` which prevents us
+        # from running across various different instances.
+        "-DPORTABLE=1",
         # `cmake` tries _very_ hard to find libraries to link against, and it
         # generally prefers dynamic libraries in the sysroot, which is exactly
         # what we don't want because it breaks hermeticity.

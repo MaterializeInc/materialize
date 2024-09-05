@@ -28,6 +28,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -39,6 +40,7 @@ from typing import IO, Any, cast
 import yaml
 
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize.bazel.utils import output_paths as bazel_output_paths
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
@@ -71,6 +73,8 @@ class RepositoryDetails:
         image_registry: The Docker image registry to pull images from and push
             images to.
         image_prefix: A prefix to apply to all Docker image names.
+        bazel: Whether or not to use Bazel as the build system instead of Cargo.
+        bazel_remote_cache: URL of a Bazel Remote Cache that we can build with.
     """
 
     def __init__(
@@ -82,6 +86,8 @@ class RepositoryDetails:
         sanitizer: Sanitizer,
         image_registry: str,
         image_prefix: str,
+        bazel: bool,
+        bazel_remote_cache: str | None,
     ):
         self.root = root
         self.arch = arch
@@ -91,22 +97,33 @@ class RepositoryDetails:
         self.cargo_workspace = cargo.Workspace(root)
         self.image_registry = image_registry
         self.image_prefix = image_prefix
+        self.bazel = bazel
+        self.bazel_remote_cache = bazel_remote_cache
 
-    def cargo(
+    def build(
         self,
         subcommand: str,
         rustflags: list[str],
         channel: str | None = None,
         extra_env: dict[str, str] = {},
     ) -> list[str]:
-        """Start a cargo invocation for the configured architecture."""
-        return xcompile.cargo(
-            arch=self.arch,
-            channel=channel,
-            subcommand=subcommand,
-            rustflags=rustflags,
-            extra_env=extra_env,
-        )
+        """Start a build invocation for the configured architecture."""
+        if self.bazel:
+            assert not channel, "Bazel doesn't support building for multiple channels."
+            return xcompile.bazel(
+                arch=self.arch,
+                subcommand=subcommand,
+                rustflags=rustflags,
+                extra_env=extra_env,
+            )
+        else:
+            return xcompile.cargo(
+                arch=self.arch,
+                channel=channel,
+                subcommand=subcommand,
+                rustflags=rustflags,
+                extra_env=extra_env,
+            )
 
     def tool(self, name: str) -> list[str]:
         """Start a binutils tool invocation for the configured architecture."""
@@ -115,6 +132,10 @@ class RepositoryDetails:
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
         return self.root / "target-xcompile" / xcompile.target(self.arch)
+
+    def bazel_workspace_dir(self) -> Path:
+        """Determine the path to the root of the Bazel workspace."""
+        return self.root
 
     def rewrite_builder_path_for_host(self, path: Path) -> Path:
         """Rewrite a path that is relative to the target directory inside the
@@ -236,7 +257,7 @@ class CargoPreImage(PreImage):
     """A `PreImage` action that uses Cargo."""
 
     def inputs(self) -> set[str]:
-        return {
+        inputs = {
             "ci/builder",
             "Cargo.toml",
             # TODO(benesch): we could in theory fingerprint only the subset of
@@ -245,6 +266,9 @@ class CargoPreImage(PreImage):
             "Cargo.lock",
             ".cargo/config",
         }
+        if self.rd.bazel:
+            inputs |= {".bazelrc", "WORKSPACE"}
+        return inputs
 
     def extra(self) -> str:
         # Cargo images depend on the release mode and whether
@@ -275,8 +299,68 @@ class CargoBuild(CargoPreImage):
         self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
+
+        bazel_bins = config.pop("bazel-bin")
+        self.bazel_bins = (
+            bazel_bins if isinstance(bazel_bins, dict) else {self.bins[0]: bazel_bins}
+        )
+        self.bazel_tars = config.pop("bazel-tar", {})
+
         if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
+        for bin in self.bins:
+            if bin not in self.bazel_bins:
+                raise ValueError(
+                    f"need to specify a 'bazel-bin' for '{bin}' at '{path}'"
+                )
+
+    @staticmethod
+    def generate_bazel_build_command(
+        rd: RepositoryDetails,
+        bins: list[str],
+        examples: list[str],
+        bazel_bins: dict[str, str],
+        bazel_tars: dict[str, str],
+    ) -> list[str]:
+        assert (
+            rd.bazel
+        ), "Programming error, tried to invoke Bazel when it is not enabled."
+
+        rustflags = []
+        cflags = []
+
+        if rd.coverage:
+            assert (
+                rd.sanitizer == Sanitizer.none
+            ), "cannot get coverage and run a sanitizer at the same time"
+            rustflags += rustc_flags.coverage
+        elif rd.sanitizer != Sanitizer.none:
+            rustflags += rustc_flags.sanitizer[rd.sanitizer]
+            cflags += rustc_flags.sanitizer_cflags[rd.sanitizer]
+        else:
+            rustflags += ["--cfg=tokio_unstable"]
+
+        extra_env = {
+            "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
+        }
+
+        bazel_build = rd.build(
+            "build", channel=None, rustflags=rustflags, extra_env=extra_env
+        )
+
+        for bin in bins:
+            bazel_build.append(bazel_bins[bin])
+        for tar in bazel_tars:
+            bazel_build.append(tar)
+        # TODO(parkmycar): Make sure cargo-gazelle generates rust_binary targets for examples.
+        assert len(examples) == 0, "Bazel doesn't support building examples."
+
+        if rd.release_mode:
+            bazel_build.extend(["--config=release"])
+        if rd.bazel_remote_cache:
+            bazel_build.append(f"--remote_cache={rd.bazel_remote_cache}")
+
+        return bazel_build
 
     @staticmethod
     def generate_cargo_build_command(
@@ -284,6 +368,10 @@ class CargoBuild(CargoPreImage):
         bins: list[str],
         examples: list[str],
     ) -> list[str]:
+        assert (
+            not rd.bazel
+        ), "Programming error, tried to invoke Cargo when Bazel is enabled."
+
         rustflags = (
             rustc_flags.coverage
             if rd.coverage
@@ -323,7 +411,7 @@ class CargoBuild(CargoPreImage):
             else {}
         )
 
-        cargo_build = rd.cargo(
+        cargo_build = rd.build(
             "build", channel=None, rustflags=rustflags, extra_env=extra_env
         )
 
@@ -349,11 +437,11 @@ class CargoBuild(CargoPreImage):
         return cargo_build
 
     @classmethod
-    def prepare_batch(cls, cargo_builds: list["PreImage"]) -> str:
+    def prepare_batch(cls, cargo_builds: list["PreImage"]) -> dict[str, Any]:
         super().prepare_batch(cargo_builds)
 
         if not cargo_builds:
-            return ""
+            return {}
 
         # Building all binaries and examples in the same `cargo build` command
         # allows Cargo to link in parallel with other work, which can
@@ -363,15 +451,28 @@ class CargoBuild(CargoPreImage):
         builds = cast(list[CargoBuild], cargo_builds)
         bins = set()
         examples = set()
+        bazel_bins = dict()
+        bazel_tars = dict()
         for build in builds:
             if not rd:
                 rd = build.rd
             bins.update(build.bins)
             examples.update(build.examples)
+            bazel_bins.update(build.bazel_bins)
+            bazel_tars.update(build.bazel_tars)
         assert rd
 
         ui.section(f"Common cargo build for: {', '.join(bins | examples)}")
-        cargo_build = cls.generate_cargo_build_command(rd, list(bins), list(examples))
+
+        if rd.bazel:
+            cargo_build = cls.generate_bazel_build_command(
+                rd, list(bins), list(examples), bazel_bins, bazel_tars
+            )
+        else:
+            cargo_build = cls.generate_cargo_build_command(
+                rd, list(bins), list(examples)
+            )
+
         spawn.runv(cargo_build, cwd=rd.root)
 
         # Re-run with JSON-formatted messages and capture the output so we can
@@ -379,20 +480,53 @@ class CargoBuild(CargoPreImage):
         # instantaneous since we just compiled above with the same crates and
         # features. (We don't want to do the compile above with JSON-formatted
         # messages because it wouldn't be human readable.)
-        json_output = spawn.capture(
-            cargo_build + ["--message-format=json"],
-            cwd=rd.root,
-        )
+        if rd.bazel:
+            # TODO(parkmycar): Having to assign the same compilation flags as the build process
+            # is a bit brittle. It would be better if the Bazel build process itself could
+            # output the file to a known location.
+            options = ["--config=release"] if rd.release_mode else []
+            paths_to_binaries = {}
+            for bin in bins:
+                paths = bazel_output_paths(bazel_bins[bin], options)
+                assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
+                paths_to_binaries[bin] = paths[0]
+            for tar in bazel_tars:
+                paths = bazel_output_paths(tar, options)
+                assert len(paths) == 1, f"more than one output path found for '{tar}'"
+                paths_to_binaries[tar] = paths[0]
+            prep = {"bazel": paths_to_binaries}
+        else:
+            json_output = spawn.capture(
+                cargo_build + ["--message-format=json"],
+                cwd=rd.root,
+            )
+            prep = {"cargo": json_output}
 
-        return json_output
+        return prep
 
-    def build(self, cargo_build_json_output: str) -> None:
+    def build(self, build_output: dict[str, Any]) -> None:
         cargo_profile = "release" if self.rd.release_mode else "debug"
 
-        def copy(exe: Path) -> None:
-            exe_path = self.path / exe
+        def copy(src: Path, relative_dst: Path) -> None:
+            exe_path = self.path / relative_dst
             exe_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(self.rd.cargo_target_dir() / cargo_profile / exe, exe_path)
+            shutil.copy(src, exe_path)
+
+            # Bazel doesn't add write or exec permissions for built binaries
+            # but `strip` and `objcopy` need write permissions and we add exec
+            # permissions for the built Docker images.
+            current_perms = os.stat(exe_path).st_mode
+            new_perms = (
+                current_perms
+                # chmod +wx
+                | stat.S_IWUSR
+                | stat.S_IWGRP
+                | stat.S_IWOTH
+                | stat.S_IXUSR
+                | stat.S_IXGRP
+                | stat.S_IXOTH
+            )
+            os.chmod(exe_path, new_perms)
 
             if self.strip:
                 # The debug information is large enough that it slows down CI,
@@ -424,11 +558,21 @@ class CargoBuild(CargoPreImage):
                 )
 
         for bin in self.bins:
-            copy(Path(bin))
+            if "bazel" in build_output:
+                src_path = self.rd.bazel_workspace_dir() / build_output["bazel"][bin]
+            else:
+                src_path = self.rd.cargo_target_dir() / cargo_profile / bin
+            copy(src_path, bin)
         for example in self.examples:
-            copy(Path("examples") / example)
+            src_path = (
+                self.rd.cargo_target_dir() / cargo_profile / Path("examples") / example
+            )
+            copy(src_path, Path("examples") / example)
 
-        if self.extract:
+        # Bazel doesn't support 'extract', instead you need to use 'bazel-tar'
+        if self.extract and "bazel" not in build_output:
+            cargo_build_json_output = build_output["cargo"]
+
             target_dir = self.rd.cargo_target_dir()
             for line in cargo_build_json_output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
@@ -456,9 +600,22 @@ class CargoBuild(CargoPreImage):
                 for src, dst in self.extract.get(package, {}).items():
                     spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
 
+        if self.bazel_tars and "bazel" in build_output:
+            ui.section("Extracing 'bazel-tar'")
+            for tar in self.bazel_tars:
+                # Where Bazel built the tarball.
+                tar_path = self.rd.bazel_workspace_dir() / build_output["bazel"][tar]
+                # Where we need to extract it into.
+                tar_dest = self.path / self.bazel_tars[tar]
+                ui.say(f"extracing {tar_path} to {tar_dest}")
+
+                with tarfile.open(tar_path, "r") as tar_file:
+                    os.makedirs(tar_dest, exist_ok=True)
+                    tar_file.extractall(path=tar_dest)
+
         self.acquired = True
 
-    def run(self, prep: str) -> None:
+    def run(self, prep: dict[str, Any]) -> None:
         super().run(prep)
         self.build(prep)
 
@@ -468,14 +625,17 @@ class CargoBuild(CargoPreImage):
         for bin in self.bins:
             crate = self.rd.cargo_workspace.crate_for_bin(bin)
             deps |= self.rd.cargo_workspace.transitive_path_dependencies(crate)
-
         for example in self.examples:
             crate = self.rd.cargo_workspace.crate_for_example(example)
             deps |= self.rd.cargo_workspace.transitive_path_dependencies(
                 crate, dev=True
             )
+        inputs = super().inputs() | set(inp for dep in deps for inp in dep.inputs())
 
-        return super().inputs() | set(inp for dep in deps for inp in dep.inputs())
+        if self.rd.bazel:
+            inputs |= {"BUILD.bazel"}
+
+        return inputs
 
 
 class Image:
@@ -928,9 +1088,19 @@ class Repository:
         sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = "materialize",
         image_prefix: str = "",
+        bazel: bool = False,
+        bazel_remote_cache: str | None = None,
     ):
         self.rd = RepositoryDetails(
-            root, arch, release_mode, coverage, sanitizer, image_registry, image_prefix
+            root,
+            arch,
+            release_mode,
+            coverage,
+            sanitizer,
+            image_registry,
+            image_prefix,
+            bazel,
+            bazel_remote_cache,
         )
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
@@ -1026,6 +1196,16 @@ class Repository:
             default="",
             help="a prefix to apply to all Docker image names",
         )
+        parser.add_argument(
+            "--bazel",
+            default=ui.env_is_truthy("CI_BUILD_WITH_BAZEL", "1"),
+            action="store_true",
+        )
+        parser.add_argument(
+            "--bazel-remote-cache",
+            default=os.getenv("CI_BAZEL_REMOTE_CACHE"),
+            action="store",
+        )
 
     @classmethod
     def from_arguments(cls, root: Path, args: argparse.Namespace) -> "Repository":
@@ -1042,6 +1222,8 @@ class Repository:
             image_registry=args.image_registry,
             image_prefix=args.image_prefix,
             arch=args.arch,
+            bazel=args.bazel,
+            bazel_remote_cache=args.bazel_remote_cache,
         )
 
     @property

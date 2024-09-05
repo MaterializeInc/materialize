@@ -11,3 +11,4 @@ name: environmentd
 pre-image:
   - type: cargo-build
     bin: environmentd
+    bazel-bin: "@//src/environmentd:environmentd"

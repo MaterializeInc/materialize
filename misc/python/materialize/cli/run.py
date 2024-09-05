@@ -394,7 +394,7 @@ def _bazel_command(args: argparse.Namespace, subcommands: list[str]) -> list[str
     command = ["bazel"] + subcommands
 
     if args.release:
-        command += ["-c", "opt"]
+        command += ["--config=release"]
     return command
 
 

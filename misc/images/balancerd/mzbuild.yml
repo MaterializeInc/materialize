@@ -12,4 +12,5 @@ description: Ingress balancer.
 pre-image:
   - type: cargo-build
     bin: [mz-balancerd]
+    bazel-bin: "@//src/balancerd:mz_balancerd_bin"
     split_debuginfo: true

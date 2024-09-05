@@ -16,6 +16,7 @@ dag: true
 
 env:
   CI_BUILDER_SCCACHE: 1
+  CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
   # Note: In .cargo/config we set the default build jobs to -1 so on developer machines we keep
   # a single core open when compiling. But we want to use all of CI's resources, hence setting the
   # build jobs to "default" which will use all cores.
@@ -50,9 +51,11 @@ steps:
         agents:
           queue: builder-linux-aarch64
 
-      - id: build-x86_64-bazel
+      - id: bazel-build-x86_64
         label: ":bazel: Build x86_64"
-        command: bin/ci-builder run stable bin/bazel-temp
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
           - "WORKSPACE"
@@ -64,9 +67,11 @@ steps:
         agents:
           queue: builder-linux-x86_64
 
-      - id: build-aarch64-bazel
+      - id: bazel-build-aarch64
         label: ":bazel: Build aarch64"
-        command: bin/ci-builder run stable bin/bazel-temp
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
           - "WORKSPACE"

@@ -85,6 +85,44 @@ def target_features(arch: Arch) -> list[str]:
         raise RuntimeError("unreachable")
 
 
+def bazel(
+    arch: Arch,
+    subcommand: str,
+    rustflags: list[str],
+    extra_env: dict[str, str] = {},
+) -> list[str]:
+    """Construct a Bazel invocation for cross compiling.
+
+    Args:
+        arch: The CPU architecture to build for.
+        subcommand: The Bazel subcommand to invoke.
+        rustflags: Override the flags passed to the Rust compiler. If the list
+            is empty, the default flags are used.
+        extra_env: Extra environment variables to set for the execution of
+            Bazel.
+    """
+    # Note: Unlike `cargo`, Bazel does not use CI_BUILDER and all of the cross
+    # compilation is handled at a higher level.
+
+    platform = f"--platforms=@toolchains_llvm//platforms:linux-{str(arch)}"
+    assert not (
+        sys.platform == "darwin" and arch == Arch.X86_64
+    ), "cross compiling to Linux x86_64 is not supported from macOS"
+
+    bazel_flags = ["--config=linux"]
+    if sys.platform != "darwin":
+        bazel_flags += [f"--config=linux-{arch.go_str()}"]
+
+    rustc_flags = [
+        f"--@rules_rust//:extra_rustc_flag={flag}"
+        for flag in rustflags
+        # TODO(parkmycar): Fix tokio_unstable in Bazel.
+        if "tokio_unstable" not in flag
+    ]
+
+    return ["bazel", subcommand, platform, *bazel_flags, *rustc_flags]
+
+
 def cargo(
     arch: Arch,
     subcommand: str,

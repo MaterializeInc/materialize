@@ -12,4 +12,7 @@ description: Materialize is a fast, distributed SQL database built on streaming 
 pre-image:
   - type: cargo-build
     bin: [clusterd, environmentd]
+    bazel-bin:
+      clusterd: "@//src/clusterd:clusterd"
+      environmentd: "@//src/environmentd:environmentd"
     strip: false
