@@ -13,7 +13,7 @@ load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 # Extra files that are needed to make the Docker image for testdrive.
 
 pkg_tar(
-    name="testdrive_image_extras",
+    name = "testdrive_image_extras",
     srcs = [
         ":protobuf_bin",
         ":protobuf_include",
@@ -21,13 +21,13 @@ pkg_tar(
 )
 
 pkg_files(
-    name="protobuf_bin",
+    name = "protobuf_bin",
     srcs = ["@protobuf//:protoc"],
-    prefix="/protobuf-bin",
+    prefix = "/protobuf-bin",
 )
 
 pkg_files(
-    name="protobuf_include",
+    name = "protobuf_include",
     srcs = ["@protobuf//:well_known_type_protos"],
     prefix = "/protobuf-include/google/protobuf",
 )

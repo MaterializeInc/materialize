@@ -31,11 +31,10 @@ cc_library(
     linkstatic = True,
     deps = [
         ":compiler-bridge/include",
+        ":internal-bridge",
         ":internal-bridge/include",
         ":io-bridge/include",
         ":lib-bridge/include",
-        ":internal-bridge/include",
-        ":internal-bridge",
         "@crates_io__cxx-1.0.122//:cxx_cc",
         "@protobuf//src/google/protobuf/compiler:code_generator",
         "@protobuf//src/google/protobuf/compiler:importer",
