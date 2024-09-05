@@ -280,7 +280,7 @@ where
         writer_id: WriterId,
         schemas: Schemas<K, V>,
     ) -> Result<(ApplyMergeResult, RoutineMaintenance), anyhow::Error> {
-        let metrics = machine.applier.metrics.clone();
+        let metrics = Arc::clone(&machine.applier.metrics);
         metrics.compaction.started.inc();
         let start = Instant::now();
 

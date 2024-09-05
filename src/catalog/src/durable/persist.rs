@@ -1368,13 +1368,15 @@ impl UnopenedPersistCatalogState {
                     Arc::new(UnitSchema::default()),
                     Diagnostics {
                         shard_name: CATALOG_SHARD_NAME.to_string(),
-                        handle_purpose: "durable catalog state handles".to_string(),
+                        handle_purpose: "compact catalog".to_string(),
                     },
                 )
                 .await
                 .expect("invalid usage");
             let fuel = CATALOG_FORCE_COMPACTION_FUEL.handle(catalog.persist_client.dyncfgs());
             let wait = CATALOG_FORCE_COMPACTION_WAIT.handle(catalog.persist_client.dyncfgs());
+            // We're going to gradually turn this on via dyncfgs. Run it in a task so that it
+            // doesn't block startup.
             let _ = mz_ore::task::spawn(|| "catalog::force_shard_compaction", async move {
                 let () =
                     mz_persist_client::cli::admin::dangerous_force_compaction_and_break_pushdown(
@@ -1382,8 +1384,7 @@ impl UnopenedPersistCatalogState {
                         || fuel.get(),
                         || wait.get(),
                     )
-                    .await
-                    .expect("WIP");
+                    .await;
             });
         }
 

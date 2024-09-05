@@ -771,7 +771,6 @@ pub struct CompactionMetrics {
     pub(crate) parts_prefetched: IntCounter,
     pub(crate) parts_waited: IntCounter,
     pub(crate) fast_path_eligible: IntCounter,
-    // WIP probably should be a shard-level metric instead?
     pub(crate) admin_count: IntCounter,
 
     pub(crate) applied_exact_match: IntCounter,
