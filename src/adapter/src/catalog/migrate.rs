@@ -10,9 +10,10 @@
 use std::collections::BTreeMap;
 
 use futures::future::BoxFuture;
+use mz_catalog::builtin::BuiltinTable;
 use mz_catalog::durable::Item;
-use mz_catalog::memory::objects::{StateDiff, StateUpdate};
-use mz_catalog::{durable::Transaction, memory::objects::StateUpdateKind};
+use mz_catalog::durable::Transaction;
+use mz_catalog::memory::objects::StateUpdate;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_proto::RustType;
@@ -21,13 +22,12 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::visit_mut::VisitMut;
 use mz_sql::ast::{CreateSourceStatement, UnresolvedItemName, Value};
 use mz_sql_parser::ast::{Raw, Statement};
-use mz_storage_types::connections::ConnectionContext;
 use prost::Message;
 use semver::Version;
 use tracing::info;
-
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::catalog::{CatalogState, ConnCatalog};
+use crate::catalog::open::into_consolidatable_updates;
+use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
 
 async fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
 where
@@ -91,13 +91,16 @@ where
     Ok(())
 }
 
+/// Migrates all user items and loads them into `state`.
+///
+/// Returns the builtin updates corresponding to all user items.
 pub(crate) async fn migrate(
-    state: &CatalogState,
+    state: &mut CatalogState,
     tx: &mut Transaction<'_>,
+    item_updates: Vec<StateUpdate>,
     _now: NowFn,
     _boot_ts: Timestamp,
-    _connection_context: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, anyhow::Error> {
     let catalog_version = tx.get_catalog_content_version();
     let catalog_version = match catalog_version {
         Some(v) => Version::parse(&v)?,
@@ -126,18 +129,23 @@ pub(crate) async fn migrate(
     })
     .await?;
 
-    // Load up a temporary catalog.
-    let mut state = state.clone();
-    let item_updates = tx
-        .get_items()
-        .map(|item| StateUpdate {
-            kind: StateUpdateKind::Item(item),
-            ts: tx.commit_ts(),
-            diff: StateDiff::Addition,
+    // Load items into catalog. We make sure to consolidate the old updates with the new updates to
+    // avoid trying to apply unmigrated items.
+    let commit_ts = tx.commit_ts();
+    let mut item_updates = into_consolidatable_updates(item_updates, commit_ts);
+    let op_item_updates = tx.get_and_commit_op_updates();
+    let op_item_updates = into_consolidatable_updates(op_item_updates, commit_ts);
+    item_updates.extend(op_item_updates);
+    differential_dataflow::consolidation::consolidate_updates(&mut item_updates);
+    let item_updates = item_updates
+        .into_iter()
+        .map(|(kind, ts, diff)| StateUpdate {
+            kind: kind.into(),
+            ts,
+            diff: diff.try_into().expect("valid diff"),
         })
         .collect();
-    // The catalog is temporary, so we can throw out the builtin updates.
-    let _ = state.apply_updates_for_bootstrap(item_updates).await;
+    let mut ast_builtin_table_updates = state.apply_updates_for_bootstrap(item_updates).await;
 
     info!("migrating from catalog version {:?}", catalog_version);
 
@@ -170,11 +178,16 @@ pub(crate) async fn migrate(
     // Each migration should be a function that takes `tx` and `conn_cat` as
     // input and stages arbitrary transformations to the catalog on `tx`.
 
+    let op_item_updates = tx.get_and_commit_op_updates();
+    let item_builtin_table_updates = state.apply_updates_for_bootstrap(op_item_updates).await;
+
+    ast_builtin_table_updates.extend(item_builtin_table_updates);
+
     info!(
         "migration from catalog version {:?} complete",
         catalog_version
     );
-    Ok(())
+    Ok(ast_builtin_table_updates)
 }
 
 // Add new migrations below their appropriate heading, and precede them with a

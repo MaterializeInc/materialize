@@ -198,35 +198,6 @@ impl Catalog {
         config: StateConfig,
         storage: &'a mut Box<dyn mz_catalog::durable::DurableCatalogState>,
     ) -> Result<InitializeStateResult, AdapterError> {
-        /// Convert `updates` into a `Vec` that can be consolidated by doing the following:
-        ///
-        ///   - Convert each update into a type that implements [`std::cmp::Ord`].
-        ///   - Update the timestamp of each update to the same value.
-        ///   - Convert the diff of each update to a type that implements
-        ///     [`differential_dataflow::difference::Semigroup`].
-        ///
-        /// [`StateUpdateKind`] does not implement [`std::cmp::Ord`] only because it contains a
-        /// variant for temporary items, which do not implement [`std::cmp::Ord`]. However, we know
-        /// that during bootstrap no temporary items exist, because they are not persisted and are
-        /// only created after bootstrap is complete. So we forcibly convert each
-        /// [`StateUpdateKind`] into an [`BootstrapStateUpdateKind`], which is identical to
-        /// [`StateUpdateKind`] except it doesn't have a temporary item variant and does implement
-        /// [`std::cmp::Ord`].
-        fn into_consolidatable_updates(
-            updates: Vec<StateUpdate>,
-            ts: Timestamp,
-        ) -> Vec<(BootstrapStateUpdateKind, Timestamp, Diff)> {
-            updates
-                .into_iter()
-                .map(|StateUpdate { kind, ts: _, diff }| {
-                    let kind: BootstrapStateUpdateKind = kind.try_into().unwrap_or_else(|e| {
-                        panic!("temporary items do not exist during bootstrap: {e:?}")
-                    });
-                    (kind, ts, Diff::from(diff))
-                })
-                .collect()
-        }
-
         for builtin_role in BUILTIN_ROLES {
             assert!(
                 is_reserved_name(builtin_role.name),
@@ -375,7 +346,11 @@ impl Catalog {
                         diff: diff.try_into().expect("valid diff"),
                     })
                 }
-                BootstrapStateUpdateKind::Item(_) => item_updates.push((kind, ts, diff)),
+                BootstrapStateUpdateKind::Item(_) => item_updates.push(StateUpdate {
+                    kind: kind.into(),
+                    ts,
+                    diff: diff.try_into().expect("valid diff"),
+                }),
                 BootstrapStateUpdateKind::Comment(_)
                 | BootstrapStateUpdateKind::AuditLog(_)
                 | BootstrapStateUpdateKind::StorageCollectionMetadata(_)
@@ -398,13 +373,13 @@ impl Catalog {
             .unwrap_or_else(|| "new".to_string());
 
         // Migrate item ASTs.
-        let item_updates = if !config.skip_migrations {
+        let builtin_table_update = if !config.skip_migrations {
             migrate::migrate(
-                &state,
+                &mut state,
                 &mut txn,
+                item_updates,
                 config.now,
                 config.boot_ts,
-                &state.config.connection_context,
             )
             .await
             .map_err(|e| {
@@ -413,24 +388,10 @@ impl Catalog {
                     this_version: config.build_info.version,
                     cause: e.to_string(),
                 })
-            })?;
-            let op_item_updates = txn.get_and_commit_op_updates();
-            let op_item_updates = into_consolidatable_updates(op_item_updates, commit_ts);
-            item_updates.extend(op_item_updates);
-            differential_dataflow::consolidation::consolidate_updates(&mut item_updates);
-            item_updates
+            })?
         } else {
-            item_updates
+            state.apply_updates_for_bootstrap(item_updates).await
         };
-        let item_updates = item_updates
-            .into_iter()
-            .map(|(kind, ts, diff)| StateUpdate {
-                kind: kind.into(),
-                ts,
-                diff: diff.try_into().expect("valid diff"),
-            })
-            .collect();
-        let builtin_table_update = state.apply_updates_for_bootstrap(item_updates).await;
         builtin_table_updates.extend(builtin_table_update);
 
         let builtin_table_update = state.apply_updates_for_bootstrap(post_item_updates).await;
@@ -1328,6 +1289,35 @@ impl BuiltinBootstrapClusterSizes {
             ))
         }
     }
+}
+
+/// Convert `updates` into a `Vec` that can be consolidated by doing the following:
+///
+///   - Convert each update into a type that implements [`std::cmp::Ord`].
+///   - Update the timestamp of each update to the same value.
+///   - Convert the diff of each update to a type that implements
+///     [`differential_dataflow::difference::Semigroup`].
+///
+/// [`mz_catalog::memory::objects::StateUpdateKind`] does not implement [`std::cmp::Ord`] only
+/// because it contains a variant for temporary items, which do not implement [`std::cmp::Ord`].
+/// However, we know that during bootstrap no temporary items exist, because they are not persisted
+/// and are only created after bootstrap is complete. So we forcibly convert each
+/// [`mz_catalog::memory::objects::StateUpdateKind`] into an [`BootstrapStateUpdateKind`], which is
+/// identical to [`mz_catalog::memory::objects::StateUpdateKind`] except it doesn't have a
+/// temporary item variant and does implement [`std::cmp::Ord`].
+pub(crate) fn into_consolidatable_updates(
+    updates: Vec<StateUpdate>,
+    ts: Timestamp,
+) -> Vec<(BootstrapStateUpdateKind, Timestamp, Diff)> {
+    updates
+        .into_iter()
+        .map(|StateUpdate { kind, ts: _, diff }| {
+            let kind: BootstrapStateUpdateKind = kind
+                .try_into()
+                .unwrap_or_else(|e| panic!("temporary items do not exist during bootstrap: {e:?}"));
+            (kind, ts, Diff::from(diff))
+        })
+        .collect()
 }
 
 #[cfg(test)]
