@@ -613,6 +613,10 @@ pub trait CatalogItem {
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];
 
+    /// Reports whether this catalog entry is a subsource and, if it is, the
+    /// ingestion it is an export of, as well as the item it exports.
+    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)>;
+
     /// Reports whether this catalog entry is a source export and, if it is, the
     /// ingestion it is an export of, as well as the item it exports.
     fn source_export_details(

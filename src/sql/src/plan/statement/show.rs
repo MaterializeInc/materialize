@@ -959,25 +959,26 @@ fn humanize_sql_for_show_create(
         // source is altered.
         Statement::CreateSource(stmt) => {
             // Collect all current subsource references.
-            //
-            // TODO(roshan): this structure might need to change if we support
-            // multiple subsources to refer to the same upstream table in
-            // https://github.com/MaterializeInc/materialize/issues/28435.
-            let mut curr_references: BTreeMap<_, _> = catalog
-                .get_item(&id)
-                .used_by()
-                .into_iter()
-                .filter_map(|subsource| {
-                    let item = catalog.get_item(subsource);
-                    item.source_export_details()
-                        .map(|(_id, reference, _details)| {
+            let mut curr_references: BTreeMap<UnresolvedItemName, Vec<UnresolvedItemName>> =
+                catalog
+                    .get_item(&id)
+                    .used_by()
+                    .into_iter()
+                    .filter_map(|subsource| {
+                        let item = catalog.get_item(subsource);
+                        item.subsource_details().map(|(_id, reference, _details)| {
                             let name = item.name();
                             let subsource_name = catalog.resolve_full_name(name);
                             let subsource_name = UnresolvedItemName::from(subsource_name);
                             (reference.clone(), subsource_name)
                         })
-                })
-                .collect();
+                    })
+                    .fold(BTreeMap::new(), |mut map, (reference, subsource_name)| {
+                        map.entry(reference)
+                            .or_insert_with(Vec::new)
+                            .push(subsource_name);
+                        map
+                    });
 
             match &mut stmt.connection {
                 CreateSourceConnection::Postgres { options, .. }
@@ -1061,9 +1062,11 @@ fn humanize_sql_for_show_create(
             if !curr_references.is_empty() {
                 let mut subsources: Vec<_> = curr_references
                     .into_iter()
-                    .map(|(reference, name)| ExternalReferenceExport {
-                        reference,
-                        alias: Some(name),
+                    .flat_map(|(reference, names)| {
+                        names.into_iter().map(move |name| ExternalReferenceExport {
+                            reference: reference.clone(),
+                            alias: Some(name),
+                        })
                     })
                     .collect();
                 subsources.sort();
