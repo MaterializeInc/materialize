@@ -383,15 +383,15 @@ class QueryGenerator:
         additional_data_sources: list[AdditionalDataSource],
         all_expressions: list[Expression],
     ) -> tuple[DataSource, list[AdditionalDataSource]]:
-        all_used_data_sources = set()
+        all_used_data_sources: set[DataSource] = set()
 
         for expression in all_expressions:
             all_used_data_sources.update(expression.collect_data_sources())
 
         additional_data_sources = [
-            source
-            for source in additional_data_sources
-            if source in all_used_data_sources
+            additional_source
+            for additional_source in additional_data_sources
+            if additional_source.data_source in all_used_data_sources
         ]
 
         if data_source not in all_used_data_sources:
