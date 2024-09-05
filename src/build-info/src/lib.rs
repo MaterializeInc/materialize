@@ -90,11 +90,31 @@ macro_rules! build_info {
     };
 }
 
-#[cfg(bazel)]
+#[cfg(all(bazel, stamped))]
 #[macro_export]
 macro_rules! __git_sha_internal {
     () => {
         $crate::private::bazel_variables::GIT_COMMIT_HASH
+    };
+}
+
+// To improve the effectiveness of remote caching we only stamp "release" builds
+// and otherwise side-channel git status through a known file.
+//
+// See: <https://github.com/bazelbuild/bazel/issues/10075>
+#[cfg(all(bazel, not(stamped)))]
+#[macro_export]
+macro_rules! __git_sha_internal {
+    () => {
+        $crate::private::run_command_str!(
+            "sh",
+            "-c",
+            r#"if [ -f /tmp/mz_git_hash.txt ]; then
+                    cat /tmp/mz_git_hash.txt
+                else
+                    echo "0000000000000000000000000000000000000000"
+                fi"#
+        )
     };
 }
 
@@ -125,15 +145,6 @@ macro_rules! __git_sha_internal {
     }
 }
 
-#[cfg(bazel)]
-#[macro_export]
-macro_rules! __build_time_internal {
-    () => {
-        $crate::private::bazel_variables::MZ_BUILD_TIME
-    };
-}
-
-#[cfg(not(bazel))]
 #[macro_export]
 macro_rules! __build_time_internal {
     () => {
@@ -148,7 +159,7 @@ pub mod private {
     // Bazel has a "workspace status" feature that allows us to collect info from
     // the workspace (e.g. git hash) at build time. These values get incleded via
     // a generated file.
-    #[cfg(bazel)]
+    #[cfg(all(bazel, stamped))]
     #[allow(unused)]
     pub mod bazel_variables {
         include!(std::env!("BAZEL_GEN_BUILD_INFO"));

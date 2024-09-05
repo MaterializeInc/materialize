@@ -17,6 +17,10 @@ import subprocess
 from materialize import MZ_ROOT, ui
 from materialize.bazel.utils import output_paths as bazel_output_paths
 
+# Path where we put the current revision of the repo that we can side channel
+# into Bazel.
+MZ_GIT_HASH_FILE = "/tmp/mz_git_hash.txt"
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -26,6 +30,9 @@ def main() -> int:
     parser.add_argument("action", help="Action to run.")
 
     (args, sub_args) = parser.parse_known_args()
+
+    # Always update our side-channel git hash incase some command needs it.
+    write_git_hash()
 
     if args.action == "gen":
         gen_cmd(sub_args)
@@ -147,6 +154,34 @@ def output_path(target) -> pathlib.Path:
     cmd_args = ["bazel", "cquery", f"{target}", "--output=files"]
     path = subprocess.check_output(cmd_args, text=True)
     return pathlib.Path(path)
+
+
+def write_git_hash():
+    """
+    Temporary file where we write the current git hash, so we can side channel
+    it into Bazel.
+
+    For production releases we stamp builds with the `workspace_status_command`
+    but this workflow is not friendly to remote caching. Specifically, the
+    "volatile status" of a workspace is not supposed to cause builds to get
+    invalidated, and it doesn't when the result is cached locally, but it does
+    when it's cached remotely.
+
+    See: <https://bazel.build/docs/user-manual#workspace-status>
+         <https://github.com/bazelbuild/bazel/issues/10075>
+    """
+
+    repo = MZ_ROOT / ".git"
+    cmd_args = ["git", f"--git-dir={repo}", "rev-parse", "HEAD"]
+    result = subprocess.run(
+        cmd_args, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+    )
+
+    if result.returncode == 0:
+        with open(MZ_GIT_HASH_FILE, "w") as f:
+            f.write(result.stdout.strip())
+    else:
+        ui.warn(f"Failed to get current revision of {MZ_ROOT}, falling back to all 0s")
 
 
 if __name__ == "__main__":

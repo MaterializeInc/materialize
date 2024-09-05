@@ -38,3 +38,8 @@ gen_build_info(
     rust_file = "build_info.rs",
     visibility = ["//visibility:public"],
 )
+
+config_setting(
+    name = "stamped",
+    values = {"stamp": "true"},
+)
