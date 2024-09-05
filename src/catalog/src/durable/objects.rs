@@ -986,6 +986,10 @@ impl Snapshot {
     }
 }
 
+/// Token used to fence out other processes.
+///
+/// Every time a new process takes over, the `epoch` should be incremented.
+/// Every time a new version is deployed, the `deploy` generation should be incremented.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Arbitrary)]
 pub struct FenceToken {
     pub(crate) deploy_generation: u64,
@@ -1262,7 +1266,10 @@ mod test {
     use mz_proto::{ProtoType, RustType};
     use proptest::prelude::*;
 
-    use super::{DatabaseKey, DatabaseValue, ItemKey, ItemValue, SchemaKey, SchemaValue};
+    use super::{
+        DatabaseKey, DatabaseValue, FenceToken, ItemKey, ItemValue, SchemaKey, SchemaValue,
+    };
+    use crate::durable::Epoch;
 
     proptest! {
         #[mz_ore::test]
@@ -1318,5 +1325,33 @@ mod test {
 
             prop_assert_eq!(value, round);
         }
+    }
+
+    #[mz_ore::test]
+    fn test_fence_token_order() {
+        let ft1 = FenceToken {
+            deploy_generation: 10,
+            epoch: Epoch::new(20).expect("non-zero"),
+        };
+        let ft2 = FenceToken {
+            deploy_generation: 10,
+            epoch: Epoch::new(19).expect("non-zero"),
+        };
+
+        assert!(ft1 > ft2);
+
+        let ft3 = FenceToken {
+            deploy_generation: 11,
+            epoch: Epoch::new(10).expect("non-zero"),
+        };
+
+        assert!(ft3 > ft1);
+
+        let ft4 = FenceToken {
+            deploy_generation: 11,
+            epoch: Epoch::new(30).expect("non-zero"),
+        };
+
+        assert!(ft4 > ft1);
     }
 }
