@@ -436,6 +436,22 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         })
     }
 
+    /// Update introspection with the current collection frontiers.
+    ///
+    /// We could also do this directly in response to frontier changes, but doing it periodically
+    /// lets us avoid emitting some introspection updates that can be consolidated (e.g. a write
+    /// frontier updated immediately followed by a read frontier update).
+    ///
+    /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
+    /// per second during normal operation.
+    fn update_frontier_introspection(&mut self) {
+        for collection in self.collections.values_mut() {
+            collection
+                .introspection
+                .frontier_update(&collection.write_frontier);
+        }
+    }
+
     /// Refresh the controller state metrics for this instance.
     ///
     /// We could also do state metric updates directly in response to state changes, but that would
@@ -1571,11 +1587,7 @@ where
         };
         let _ = collection.implied_read_hold.try_downgrade(new_since);
 
-        // Report the frontier advancement internally and externally.
-        collection
-            .collection_introspection
-            .frontier_update(&new_frontier);
-
+        // Report the frontier advancement.
         self.deliver_response(ComputeControllerResponse::FrontierUpper {
             id,
             upper: new_frontier,
@@ -1984,6 +1996,7 @@ where
         self.apply_read_hold_changes();
         self.schedule_collections();
         self.cleanup_collections();
+        self.update_frontier_introspection();
         self.refresh_state_metrics();
     }
 }
@@ -2053,7 +2066,7 @@ pub(super) struct CollectionState<T: Timestamp> {
     write_frontier: Antichain<T>,
 
     /// Introspection state associated with this collection.
-    collection_introspection: CollectionIntrospection<T>,
+    introspection: CollectionIntrospection<T>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -2128,7 +2141,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             storage_dependencies,
             compute_dependencies,
             write_frontier: upper.clone(),
-            collection_introspection: CollectionIntrospection::new(
+            introspection: CollectionIntrospection::new(
                 collection_id,
                 introspection_tx,
                 initial_as_of,
@@ -2174,7 +2187,7 @@ struct CollectionIntrospection<T> {
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     /// Introspection state for `mz_materialized_view_refreshes`.
     /// `Some` if it is a REFRESH MV.
-    refresh_introspection_state: Option<RefreshIntrospectionState<T>>,
+    refresh: Option<RefreshIntrospectionState<T>>,
 }
 
 impl<T> CollectionIntrospection<T> {
@@ -2200,47 +2213,53 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
         initial_as_of: Option<Antichain<T>>,
         refresh_schedule: Option<RefreshSchedule>,
         upper: Antichain<T>,
-    ) -> CollectionIntrospection<T> {
-        let refresh_introspection_state = match (refresh_schedule, initial_as_of) {
-            (Some(refresh_schedule), Some(initial_as_of)) => Some(RefreshIntrospectionState::new(
-                refresh_schedule,
-                initial_as_of,
-                upper,
-            )),
-            (Some(_refresh_schedule), None) => {
-                soft_panic_or_log!("if we have a refresh_schedule, then it's an MV, so we should also have an initial_as_of");
-                None
-            }
-            _ => None,
-        };
-        let self_ = CollectionIntrospection {
+    ) -> Self {
+        let refresh =
+            match (refresh_schedule, initial_as_of) {
+                (Some(refresh_schedule), Some(initial_as_of)) => Some(
+                    RefreshIntrospectionState::new(refresh_schedule, initial_as_of, upper),
+                ),
+                (refresh_schedule, _) => {
+                    // If we have a `refresh_schedule`, then the collection is a MV, so we should also have
+                    // an `initial_as_of`.
+                    soft_assert_or_log!(
+                        refresh_schedule.is_none(),
+                        "`refresh_schedule` without an `initial_as_of`: {collection_id}"
+                    );
+                    None
+                }
+            };
+
+        let self_ = Self {
             collection_id,
             introspection_tx,
-            refresh_introspection_state,
+            refresh,
         };
 
-        if let Some(refresh_introspection_state) = self_.refresh_introspection_state.as_ref() {
-            let insertion = refresh_introspection_state.row_for_collection(collection_id);
-            self_.send(
-                IntrospectionType::ComputeMaterializedViewRefreshes,
-                vec![(insertion, 1)],
-            );
-        }
-
+        self_.report_initial_state();
         self_
+    }
+
+    /// Reports the initial introspection state.
+    fn report_initial_state(&self) {
+        if let Some(refresh) = &self.refresh {
+            let row = refresh.row_for_collection(self.collection_id);
+            let updates = vec![(row, 1)];
+            self.send(IntrospectionType::ComputeMaterializedViewRefreshes, updates);
+        }
     }
 
     /// Should be called whenever the write frontier of the collection advances. It updates the
     /// state that should be recorded in introspection relations, and sends it through the
     /// `introspection_tx` channel.
     fn frontier_update(&mut self, write_frontier: &Antichain<T>) {
-        if let Some(refresh_introspection_state) = &mut self.refresh_introspection_state {
+        if let Some(refresh) = &mut self.refresh {
             // Old row to retract based on old state.
-            let retraction = refresh_introspection_state.row_for_collection(self.collection_id);
+            let retraction = refresh.row_for_collection(self.collection_id);
             // Update state.
-            refresh_introspection_state.frontier_update(write_frontier);
+            refresh.frontier_update(write_frontier);
             // New row to insert based on new state.
-            let insertion = refresh_introspection_state.row_for_collection(self.collection_id);
+            let insertion = refresh.row_for_collection(self.collection_id);
             // Send changes.
             self.send(
                 IntrospectionType::ComputeMaterializedViewRefreshes,
@@ -2252,15 +2271,13 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
 
 impl<T> Drop for CollectionIntrospection<T> {
     fn drop(&mut self) {
-        self.refresh_introspection_state
-            .as_ref()
-            .map(|refresh_introspection_state| {
-                let retraction = refresh_introspection_state.row_for_collection(self.collection_id);
-                self.send(
-                    IntrospectionType::ComputeMaterializedViewRefreshes,
-                    vec![(retraction, -1)],
-                );
-            });
+        self.refresh.as_ref().map(|refresh| {
+            let retraction = refresh.row_for_collection(self.collection_id);
+            self.send(
+                IntrospectionType::ComputeMaterializedViewRefreshes,
+                vec![(retraction, -1)],
+            );
+        });
     }
 }
 
@@ -2294,8 +2311,8 @@ impl<T: ComputeControllerTimestamp> RefreshIntrospectionState<T> {
         refresh_schedule: RefreshSchedule,
         initial_as_of: Antichain<T>,
         upper: Antichain<T>,
-    ) -> RefreshIntrospectionState<T> {
-        let mut self_ = RefreshIntrospectionState {
+    ) -> Self {
+        let mut self_ = Self {
             refresh_schedule: refresh_schedule.clone(),
             initial_as_of: initial_as_of.clone(),
             next_refresh: Datum::Null,
