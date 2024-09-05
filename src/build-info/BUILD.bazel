@@ -22,15 +22,24 @@ rust_library(
         normal = True,
         proc_macro = True,
     ),
-    compile_data = ["@//misc/bazel/build-info:gen_build_info"],
+    compile_data = select({
+        "@//misc/bazel/build-info:stamped": ["@//misc/bazel/build-info:gen_build_info"],
+        "//conditions:default": [],
+    }),
     crate_features = [
         "default",
         "semver",
     ],
     data = [],
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-    rustc_env = {"BAZEL_GEN_BUILD_INFO": "$(execpath @//misc/bazel/build-info:gen_build_info)"},
-    rustc_flags = ["--cfg=bazel"],
+    rustc_env = select({
+        "@//misc/bazel/build-info:stamped": {"BAZEL_GEN_BUILD_INFO": "$(execpath @//misc/bazel/build-info:gen_build_info)"},
+        "//conditions:default": {},
+    }),
+    rustc_flags = ["--cfg=bazel"] + select({
+        "@//misc/bazel/build-info:stamped": ["--cfg=stamped"],
+        "//conditions:default": [],
+    }),
     version = "0.0.0",
     deps = [":mz_build_info_build_script"] + all_crate_deps(normal = True),
 )
@@ -57,7 +66,10 @@ rust_test(
         proc_macro_dev = True,
     ),
     rustc_env = {},
-    rustc_flags = ["--cfg=bazel"],
+    rustc_flags = ["--cfg=bazel"] + select({
+        "@//misc/bazel/build-info:stamped": ["--cfg=stamped"],
+        "//conditions:default": [],
+    }),
     version = "0.0.0",
     deps = [] + all_crate_deps(
         normal = True,

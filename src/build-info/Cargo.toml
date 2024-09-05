@@ -20,17 +20,7 @@ default = ["semver", "workspace-hack"]
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
-[package.metadata.cargo-gazelle.lib]
-compile_data = ["@//misc/bazel/build-info:gen_build_info"]
-rustc_flags = ["--cfg=bazel"]
-
-# Skip generating doc tests because there isn't a way to set the rustc flags
-# used for the test, so we can't set the `--cfg=bazel` flag.
-[package.metadata.cargo-gazelle.test.doc]
-skip = true
-
-[package.metadata.cargo-gazelle.lib.rustc_env]
-BAZEL_GEN_BUILD_INFO = "$(execpath @//misc/bazel/build-info:gen_build_info)"
-
-[package.metadata.cargo-gazelle.test.lib]
-rustc_flags = ["--cfg=bazel"]
+# This crate requires some pretty specific configuration, so we manually
+# maintain the BUILD file instead of having cargo-gazelle generate it for us.
+[package.metadata.cargo-gazelle]
+skip_generating = true

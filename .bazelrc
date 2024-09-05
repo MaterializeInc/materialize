@@ -28,7 +28,7 @@ build --copt=-Wno-error=deprecated-declarations
 # Required to stamp our development builds with the current git hash.
 #
 # This script gets run before every build, see the script for more info.
-build --workspace_status_command "python3 misc/bazel/build-info/workspace_status.py"
+build:release-stamp --stamp --workspace_status_command "python3 misc/bazel/build-info/workspace_status.py"
 
 # Output all test output by default, this makes it most like cargo.
 #
