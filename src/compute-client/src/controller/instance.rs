@@ -344,19 +344,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         self.collections.remove(&id);
     }
 
-    /// Returns the write frontier for each collection installed on each replica.
-    pub fn replica_write_frontiers(
-        &self,
-    ) -> impl Iterator<Item = ((GlobalId, ReplicaId), Antichain<T>)> + '_ {
-        self.replicas.iter().flat_map(|(replica_id, replica)| {
-            let collections = replica.collections.iter();
-            collections.map(|(collection_id, collection)| {
-                let frontier = collection.write_frontier.clone();
-                ((*collection_id, *replica_id), frontier)
-            })
-        })
-    }
-
     fn add_replica_state(
         &mut self,
         id: ReplicaId,

@@ -412,26 +412,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             .map_err(|e| e.into())
     }
 
-    /// Returns a map with the read and write frontiers of each collection.
-    pub fn collect_collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
-        let collections = self.instances.values().flat_map(|i| i.collections_iter());
-        collections
-            .map(|(id, collection)| {
-                let since = collection.read_frontier().to_owned();
-                let upper = collection.write_frontier().to_owned();
-                (id, (since, upper))
-            })
-            .collect()
-    }
-
-    /// Returns a map with the write frontier of each collection installed on each replica.
-    pub fn collect_replica_write_frontiers(&self) -> BTreeMap<(GlobalId, ReplicaId), Antichain<T>> {
-        self.instances
-            .values()
-            .flat_map(|i| i.replica_write_frontiers())
-            .collect()
-    }
-
     /// Returns the state of the [`ComputeController`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
