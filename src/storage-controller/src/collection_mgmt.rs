@@ -87,6 +87,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
+use crate::persist_handles::PersistTableWriteWorker;
 use crate::StorageError;
 
 // Note(parkmycar): The capacity here was chosen arbitrarily.
@@ -139,7 +140,7 @@ where
     ///
     /// Every write succeeds at _some_ timestamp, and we never check what the
     /// actual contents of the collection (in persist) are.
-    append_only_collections:
+    webhook_collections:
         Arc<Mutex<BTreeMap<GlobalId, (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender)>>>,
 
     /// Amount of time we'll wait before sending a batch of inserts to Persist, for user
@@ -175,7 +176,7 @@ where
             read_only_rx,
             hacky_always_false_watch: (always_false_tx, always_false_rx),
             differential_collections: Arc::new(Mutex::new(BTreeMap::new())),
-            append_only_collections: Arc::new(Mutex::new(BTreeMap::new())),
+            webhook_collections: Arc::new(Mutex::new(BTreeMap::new())),
             user_batch_duration_ms: Arc::new(AtomicU64::new(batch_duration_ms)),
             now,
         }
@@ -206,7 +207,7 @@ where
     pub(super) fn register_differential_collection<R>(
         &self,
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: PersistTableWriteWorker<T>,
         read_handle_fn: R,
         force_writable: bool,
     ) where
@@ -254,14 +255,14 @@ where
     ///
     /// The [CollectionManager] will automatically advance the upper of every
     /// registered collection every second.
-    pub(super) fn register_append_only_collection(
+    pub(super) fn register_webhook_collection(
         &self,
         id: GlobalId,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
         force_writable: bool,
     ) {
         let mut guard = self
-            .append_only_collections
+            .webhook_collections
             .lock()
             .expect("collection_mgmt panicked");
 
@@ -318,7 +319,7 @@ where
         }
 
         let prev = self
-            .append_only_collections
+            .webhook_collections
             .lock()
             .expect("CollectionManager panicked")
             .remove(&id);
@@ -333,35 +334,6 @@ where
         }
 
         Box::pin(futures::future::ready(()))
-    }
-
-    /// Appends `updates` to the append-only collection identified by `id`, at
-    /// _some_ timestamp. Does not wait for the append to complete.
-    ///
-    /// # Panics
-    /// - If `id` does not belong to an append-only collections.
-    /// - If this [`CollectionManager`] is in read-only mode.
-    /// - If the collection closed.
-    pub(super) async fn blind_write(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        if *self.read_only_rx.borrow() {
-            panic!("attempting blind write to {} while in read-only mode", id);
-        }
-
-        if !updates.is_empty() {
-            // Get the update channel in a block to make sure the Mutex lock is scoped.
-            let update_tx = {
-                let guard = self
-                    .append_only_collections
-                    .lock()
-                    .expect("CollectionManager panicked");
-                let (update_tx, _, _) = guard.get(&id).expect("missing append-only collection");
-                update_tx.clone()
-            };
-
-            // Specifically _do not_ wait for the append to complete, just for it to be sent.
-            let (tx, _rx) = oneshot::channel();
-            update_tx.send((updates, tx)).await.expect("rx hung up");
-        }
     }
 
     /// Updates the desired collection state of the differential collection identified by
@@ -406,7 +378,7 @@ where
         id: GlobalId,
     ) -> Result<MonotonicAppender<T>, StorageError<T>> {
         let guard = self
-            .append_only_collections
+            .webhook_collections
             .lock()
             .expect("CollectionManager panicked");
         let tx = guard
@@ -443,7 +415,7 @@ where
     /// The collection that we are writing to.
     id: GlobalId,
 
-    write_handle: WriteHandle<SourceData, (), T, Diff>,
+    write_handle: PersistTableWriteWorker<T>,
 
     /// For getting a [`ReadHandle`] to sync our state to persist contents.
     read_handle_fn: R,
@@ -502,7 +474,7 @@ where
     /// handles for interacting with it.
     fn spawn(
         id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: PersistTableWriteWorker<T>,
         read_handle_fn: R,
         read_only_watch: watch::Receiver<bool>,
         now: NowFn,
@@ -589,64 +561,8 @@ where
                     // there is something in persist that we have to retract.
                     let  _ = self.write_to_persist(vec![]).await?;
                 }
-
-                // If we haven't received any updates, then we'll move the upper forward.
-                _ = self.upper_tick_interval.tick() => {
-                    if self.read_only {
-                        // Not bumping uppers while in read-only mode.
-                        continue;
-                    }
-                    let _ = self.tick_upper().await?;
-                },
             }
         }
-    }
-
-    async fn tick_upper(&mut self) -> ControlFlow<String> {
-        let now = T::from((self.now)());
-
-        if now <= self.current_upper {
-            // Upper is already further along than current wall-clock time, no
-            // need to bump it.
-            return ControlFlow::Continue(());
-        }
-
-        assert!(!self.read_only);
-        let res = self
-            .write_handle
-            .compare_and_append_batch(
-                &mut [],
-                Antichain::from_elem(self.current_upper.clone()),
-                Antichain::from_elem(now.clone()),
-            )
-            .await
-            .expect("valid usage");
-        match res {
-            // All good!
-            Ok(()) => {
-                tracing::debug!(%self.id, "bumped upper of differential collection");
-                self.current_upper = now;
-            }
-            Err(err) => {
-                // Someone else wrote to the collection or bumped the upper. We
-                // need to sync to latest persist state and potentially patch up
-                // our `to_write`, based on what we learn and `desired`.
-
-                let actual_upper = if let Some(ts) = err.current.as_option() {
-                    ts.clone()
-                } else {
-                    return ControlFlow::Break("upper is the empty antichain".to_string());
-                };
-
-                tracing::info!(%self.id, ?actual_upper, expected_upper = ?self.current_upper, "upper mismatch while bumping upper, syncing to persist state");
-
-                self.current_upper = actual_upper;
-
-                self.sync_to_persist().await;
-            }
-        }
-
-        ControlFlow::Continue(())
     }
 
     fn handle_shutdown(&mut self) {
@@ -781,22 +697,22 @@ where
             let updates_to_write = self
                 .to_write
                 .iter()
-                .map(|(row, diff)| {
-                    (
-                        (SourceData(Ok(row.clone())), ()),
-                        self.current_upper.clone(),
-                        diff.clone(),
-                    )
+                .map(|(row, diff)| TimestamplessUpdate {
+                    row: row.clone(),
+                    diff: diff.clone(),
                 })
                 .collect::<Vec<_>>();
 
             assert!(!self.read_only);
             let res = self
                 .write_handle
-                .compare_and_append(
+                .append_conditional(
+                    self.id,
+                    // WIP this isn't correct yet, we need to catch up our read
+                    // to this point first, which requires Aljoscha's txn-wal
+                    // subscribe.
+                    self.current_upper.clone(),
                     updates_to_write,
-                    Antichain::from_elem(self.current_upper.clone()),
-                    Antichain::from_elem(new_upper.clone()),
                 )
                 .await
                 .expect("valid usage");
@@ -818,16 +734,10 @@ where
                     break;
                 }
                 // Failed to write to some collections,
-                Err(err) => {
+                Err(actual_upper) => {
                     // Someone else wrote to the collection. We need to read
                     // from persist and update to_write based on that and the
                     // desired state.
-                    let actual_upper = if let Some(ts) = err.current.as_option() {
-                        ts.clone()
-                    } else {
-                        return ControlFlow::Break("upper is the empty antichain".to_string());
-                    };
-
                     tracing::info!(%self.id, ?actual_upper, expected_upper = ?self.current_upper, "retrying append for differential collection");
 
                     // We've exhausted all of our retries, notify listeners and
@@ -835,7 +745,7 @@ where
                     if retries.next().await.is_none() {
                         let invalid_upper = InvalidUpper {
                             id: self.id,
-                            current_upper: err.current,
+                            current_upper: Antichain::from_elem(actual_upper),
                         };
                         notify_listeners(responders, || {
                             Err(StorageError::InvalidUppers(vec![invalid_upper.clone()]))
