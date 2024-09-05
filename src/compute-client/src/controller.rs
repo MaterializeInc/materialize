@@ -53,7 +53,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::AntichainRef;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::warn;
 use uuid::Uuid;
@@ -142,7 +142,7 @@ impl ComputeReplicaLogging {
 }
 
 /// A controller for the compute layer.
-pub struct ComputeController<T: Timestamp> {
+pub struct ComputeController<T: ComputeControllerTimestamp> {
     instances: BTreeMap<ComputeInstanceId, Instance<T>>,
     /// A map from an instance ID to an arbitrary string that describes the
     /// class of the workload that compute instance is running (e.g.,

@@ -147,7 +147,7 @@ enum Readiness<T> {
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
-pub struct Controller<T: Timestamp = mz_repr::Timestamp> {
+pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
     pub storage: Box<dyn StorageController<Timestamp = T>>,
     pub storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     pub compute: ComputeController<T>,

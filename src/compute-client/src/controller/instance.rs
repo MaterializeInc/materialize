@@ -157,7 +157,7 @@ pub(super) enum SubscribeTargetError {
 }
 
 /// The state we keep for a compute instance.
-pub(super) struct Instance<T: Timestamp> {
+pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
     /// A handle providing access to storage collections.
@@ -2006,7 +2006,7 @@ where
 /// A compute collection is either an index, or a storage sink, or a subscribe, exported by a
 /// compute dataflow.
 #[derive(Debug)]
-pub(super) struct CollectionState<T: Timestamp> {
+pub(super) struct CollectionState<T: ComputeControllerTimestamp> {
     /// Whether this collection is a log collection.
     ///
     /// Log collections are special in that they are only maintained by a subset of all replicas.
@@ -2067,32 +2067,6 @@ pub(super) struct CollectionState<T: Timestamp> {
 
     /// Introspection state associated with this collection.
     introspection: CollectionIntrospection<T>,
-}
-
-impl<T: Timestamp> CollectionState<T> {
-    /// Reports the current read frontier.
-    pub fn read_frontier(&self) -> AntichainRef<T> {
-        self.read_capabilities.frontier()
-    }
-
-    /// Reports the current write frontier.
-    pub fn write_frontier(&self) -> AntichainRef<T> {
-        self.write_frontier.borrow()
-    }
-
-    fn storage_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.storage_dependencies.keys().copied()
-    }
-
-    fn compute_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.compute_dependencies.keys().copied()
-    }
-
-    /// Reports the IDs of the dependencies of this collection.
-    fn dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.compute_dependency_ids()
-            .chain(self.storage_dependency_ids())
-    }
 }
 
 impl<T: ComputeControllerTimestamp> CollectionState<T> {
@@ -2173,6 +2147,30 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         state.scheduled = true;
         state
     }
+
+    /// Reports the current read frontier.
+    pub fn read_frontier(&self) -> AntichainRef<T> {
+        self.read_capabilities.frontier()
+    }
+
+    /// Reports the current write frontier.
+    pub fn write_frontier(&self) -> AntichainRef<T> {
+        self.write_frontier.borrow()
+    }
+
+    fn storage_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.storage_dependencies.keys().copied()
+    }
+
+    fn compute_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.compute_dependencies.keys().copied()
+    }
+
+    /// Reports the IDs of the dependencies of this collection.
+    fn dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.compute_dependency_ids()
+            .chain(self.storage_dependency_ids())
+    }
 }
 
 /// Manages certain introspection relations associated with a collection. Upon creation, it adds
@@ -2180,7 +2178,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
 ///
 /// TODO: `ComputeDependencies` could be moved under this.
 #[derive(Debug)]
-struct CollectionIntrospection<T> {
+struct CollectionIntrospection<T: ComputeControllerTimestamp> {
     /// The ID of the compute collection.
     collection_id: GlobalId,
     /// A channel through which introspection updates are delivered.
@@ -2188,22 +2186,6 @@ struct CollectionIntrospection<T> {
     /// Introspection state for `mz_materialized_view_refreshes`.
     /// `Some` if it is a REFRESH MV.
     refresh: Option<RefreshIntrospectionState<T>>,
-}
-
-impl<T> CollectionIntrospection<T> {
-    fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
-        let result = self.introspection_tx.send((introspection_type, updates));
-
-        if result.is_err() {
-            // The global controller holds on to the `introspection_rx`. So when we get here that
-            // probably means that the controller was dropped and the process is shutting down, in
-            // which case we don't care about introspection updates anymore.
-            tracing::info!(
-                ?introspection_type,
-                "discarding introspection update because the receiver disconnected"
-            );
-        }
-    }
 }
 
 impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
@@ -2267,9 +2249,23 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
             );
         }
     }
+
+    fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
+        let result = self.introspection_tx.send((introspection_type, updates));
+
+        if result.is_err() {
+            // The global controller holds on to the `introspection_rx`. So when we get here that
+            // probably means that the controller was dropped and the process is shutting down, in
+            // which case we don't care about introspection updates anymore.
+            tracing::info!(
+                ?introspection_type,
+                "discarding introspection update because the receiver disconnected"
+            );
+        }
+    }
 }
 
-impl<T> Drop for CollectionIntrospection<T> {
+impl<T: ComputeControllerTimestamp> Drop for CollectionIntrospection<T> {
     fn drop(&mut self) {
         self.refresh.as_ref().map(|refresh| {
             let retraction = refresh.row_for_collection(self.collection_id);
@@ -2407,7 +2403,7 @@ impl<T: ComputeControllerTimestamp> ActiveSubscribe<T> {
 
 /// State maintained about individual replicas.
 #[derive(Debug)]
-pub struct ReplicaState<T: Timestamp> {
+pub struct ReplicaState<T: ComputeControllerTimestamp> {
     /// The ID of the replica.
     id: ReplicaId,
     /// Client for the running replica task.
@@ -2538,7 +2534,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
 }
 
 #[derive(Debug)]
-struct ReplicaCollectionState<T: Timestamp> {
+struct ReplicaCollectionState<T: ComputeControllerTimestamp> {
     /// The replica write frontier of this collection.
     ///
     /// See [`FrontiersResponse::write_frontier`].
@@ -2563,7 +2559,7 @@ struct ReplicaCollectionState<T: Timestamp> {
     /// Whether the collection is hydrated.
     hydrated: bool,
     /// Tracks introspection state for this collection.
-    introspection: ReplicaCollectionIntrospection,
+    introspection: ReplicaCollectionIntrospection<T>,
     /// Read holds on storage inputs to this collection.
     ///
     /// These read holds are kept to ensure that the replica is able to read from storage inputs at
@@ -2572,11 +2568,11 @@ struct ReplicaCollectionState<T: Timestamp> {
     input_read_holds: Vec<ReadHold<T>>,
 }
 
-impl<T: Timestamp> ReplicaCollectionState<T> {
+impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
     fn new(
         metrics: Option<ReplicaCollectionMetrics>,
         as_of: Antichain<T>,
-        introspection: ReplicaCollectionIntrospection,
+        introspection: ReplicaCollectionIntrospection<T>,
         input_read_holds: Vec<ReadHold<T>>,
     ) -> Self {
         Self {
@@ -2672,7 +2668,7 @@ impl<T: Timestamp> ReplicaCollectionState<T> {
 /// Maintains the introspection state for a given replica and collection, and ensures that reported
 /// introspection data is retracted when the collection is dropped.
 #[derive(Debug)]
-struct ReplicaCollectionIntrospection {
+struct ReplicaCollectionIntrospection<T: ComputeControllerTimestamp> {
     /// The ID of the replica.
     replica_id: ReplicaId,
     /// The ID of the compute collection.
@@ -2684,7 +2680,7 @@ struct ReplicaCollectionIntrospection {
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
 }
 
-impl ReplicaCollectionIntrospection {
+impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
     /// Create a new `HydrationState` and initialize introspection.
     fn new(
         replica_id: ReplicaId,
@@ -2747,7 +2743,7 @@ impl ReplicaCollectionIntrospection {
     }
 }
 
-impl Drop for ReplicaCollectionIntrospection {
+impl<T: ComputeControllerTimestamp> Drop for ReplicaCollectionIntrospection<T> {
     fn drop(&mut self) {
         // Retract operator hydration status.
         let operators: Vec<_> = self.operators.keys().collect();
