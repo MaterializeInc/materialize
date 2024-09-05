@@ -12,12 +12,13 @@ Benchmark with scenarios combining closed and open loops, can run multiple
 actions concurrently, measures various kinds of statistics.
 """
 
-import collections
 import gc
+import os
 import queue
 import random
 import threading
 import time
+from collections import defaultdict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,25 @@ from materialize.mzcompose.test_result import (
     TestFailureDetails,
 )
 from materialize.util import PgConnInfo, all_subclasses, parse_pg_conn_string
+from materialize.version_list import resolve_ancestor_image_tag
+
+
+def known_regression(scenario: str, other_tag: str) -> bool:
+    return False
+
+
+REGRESSION_THRESHOLDS = {
+    "queries": None,
+    "qps": 1.2,
+    "max": None,
+    "min": None,
+    "avg": 1.2,
+    "p50": 1.2,
+    "p95": 1.3,
+    "p99": None,
+    "std": None,
+    "slope": None,
+}
 
 SERVICES = [
     Zookeeper(),
@@ -80,7 +100,7 @@ class Measurement:
 
 @dataclass
 class State:
-    measurements: collections.defaultdict[str, list[Measurement]]
+    measurements: defaultdict[str, list[Measurement]]
     load_phase_duration: int | None
     periodic_dists: dict[str, int]
 
@@ -469,13 +489,15 @@ class PgReadReplica(Scenario):
                       )
 
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
+                    DROP PUBLICATION IF EXISTS mz_source;
+                    DROP TABLE IF EXISTS t1 CASCADE;
                     ALTER USER postgres WITH replication;
                     CREATE TABLE t1 (f1 INTEGER);
                     ALTER TABLE t1 REPLICA IDENTITY FULL;
-                    CREATE PUBLICATION mz_source2 FOR ALL TABLES;
+                    CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-                    > CREATE SOURCE mz_source2
-                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2')
+                    > CREATE SOURCE mz_source
+                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
                       FOR ALL TABLES;
 
                     > CREATE MATERIALIZED VIEW mv_sum AS
@@ -529,13 +551,15 @@ class PgReadReplicaRTR(Scenario):
                       )
 
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
+                    DROP PUBLICATION IF EXISTS mz_source2;
+                    DROP TABLE IF EXISTS t2 CASCADE;
                     ALTER USER postgres WITH replication;
                     CREATE TABLE t2 (f1 INTEGER);
                     ALTER TABLE t2 REPLICA IDENTITY FULL;
-                    CREATE PUBLICATION mz_source3 FOR ALL TABLES;
+                    CREATE PUBLICATION mz_source2 FOR ALL TABLES;
 
-                    > CREATE SOURCE mz_source3
-                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source3')
+                    > CREATE SOURCE mz_source2
+                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2')
                       FOR ALL TABLES;
 
                     > CREATE MATERIALIZED VIEW mv_sum AS
@@ -545,7 +569,7 @@ class PgReadReplicaRTR(Scenario):
                     """
                 ),
                 LoadPhase(
-                    duration=360,
+                    duration=120,
                     actions=[
                         OpenLoop(
                             action=StandaloneQuery(
@@ -885,184 +909,6 @@ class InsertsSelects(Scenario):
         )
 
 
-# class ReadReplicaBenchmark(Scenario):
-#     """https://www.notion.so/materialize/Read-Replica-Benchmark-90b60e455ba648c3a8c9a53297d09492"""
-#
-#     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
-#         self.init(
-#             [
-#                 TdPhase(
-#                     """
-#                     > DROP SECRET IF EXISTS pgpass CASCADE
-#                     > CREATE SECRET pgpass AS 'postgres'
-#                     > CREATE CONNECTION pg TO POSTGRES (
-#                         HOST postgres,
-#                         DATABASE postgres,
-#                         USER postgres,
-#                         PASSWORD SECRET pgpass
-#                       )
-#
-#                     $ postgres-execute connection=postgres://postgres:postgres@postgres
-#                     ALTER USER postgres WITH replication;
-#                     CREATE TABLE customers (customer_id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, address VARCHAR(255), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-#                     ALTER TABLE customers REPLICA IDENTITY FULL;
-#                     CREATE TABLE accounts (account_id SERIAL PRIMARY KEY, customer_id INT REFERENCES customers(customer_id) ON DELETE CASCADE, account_type VARCHAR(50) NOT NULL, balance DECIMAL(18, 2) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-#                     ALTER TABLE accounts REPLICA IDENTITY FULL;
-#                     CREATE TABLE securities (security_id SERIAL PRIMARY KEY, ticker VARCHAR(10) NOT NULL UNIQUE, name VARCHAR(255), sector VARCHAR(50), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-#                     ALTER TABLE securities REPLICA IDENTITY FULL;
-#                     CREATE TABLE trades (trade_id SERIAL PRIMARY KEY, account_id INT REFERENCES accounts(account_id) ON DELETE CASCADE, security_id INT REFERENCES securities(security_id) ON DELETE CASCADE, trade_type VARCHAR(10) NOT NULL CHECK (trade_type IN ('buy', 'sell')), quantity INT NOT NULL, price DECIMAL(18, 4) NOT NULL, trade_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-#                     ALTER TABLE trades REPLICA IDENTITY FULL;
-#                     CREATE TABLE orders (order_id SERIAL PRIMARY KEY, account_id INT REFERENCES accounts(account_id) ON DELETE CASCADE, security_id INT REFERENCES securities(security_id) ON DELETE CASCADE, order_type VARCHAR(10) NOT NULL CHECK (order_type IN ('buy', 'sell')), quantity INT NOT NULL, limit_price DECIMAL(18, 4), status VARCHAR(10) NOT NULL CHECK (status IN ('pending', 'completed', 'canceled')), order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-#                     ALTER TABLE orders REPLICA IDENTITY FULL;
-#                     CREATE TABLE market_data (market_data_id SERIAL PRIMARY KEY, security_id INT REFERENCES securities(security_id) ON DELETE CASCADE, price DECIMAL(18, 4) NOT NULL, volume INT NOT NULL, market_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-#                     ALTER TABLE market_data REPLICA IDENTITY FULL;
-#                     CREATE PUBLICATION mz_source FOR ALL TABLES;
-#
-#                     > CREATE SOURCE mz_source
-#                       FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-#                       FOR ALL TABLES;
-#
-#                     > CREATE VIEW customer_portfolio AS
-#                       SELECT c.customer_id, c.name, a.account_id, s.ticker, s.name AS security_name,
-#                              SUM(t.quantity * t.price) AS total_value
-#                       FROM customers c
-#                       JOIN accounts a ON c.customer_id = a.customer_id
-#                       JOIN trades t ON a.account_id = t.account_id
-#                       JOIN securities s ON t.security_id = s.security_id
-#                       GROUP BY c.customer_id, c.name, a.account_id, s.ticker, s.name;
-#
-#                     > CREATE VIEW top_performers AS
-#                       WITH ranked_performers AS (
-#                           SELECT s.ticker, s.name, SUM(t.quantity) AS total_traded_volume,
-#                                  ROW_NUMBER() OVER (ORDER BY SUM(t.quantity) DESC) AS rank
-#                           FROM trades t
-#                           JOIN securities s ON t.security_id = s.security_id
-#                           GROUP BY s.ticker, s.name
-#                       )
-#                       SELECT ticker, name, total_traded_volume, rank
-#                       FROM ranked_performers
-#                       WHERE rank <= 10;
-#
-#                     > CREATE VIEW market_overview AS
-#                       SELECT s.sector, AVG(md.price) AS avg_price, SUM(md.volume) AS total_volume,
-#                              MAX(md.market_date) AS last_update
-#                       FROM securities s
-#                       LEFT JOIN market_data md ON s.security_id = md.security_id
-#                       GROUP BY s.sector
-#                       HAVING MAX(md.market_date) > NOW() - INTERVAL '5 minutes';
-#
-#                     > CREATE VIEW recent_large_trades AS
-#                       SELECT t.trade_id, a.account_id, s.ticker, t.quantity, t.price, t.trade_date
-#                       FROM trades t
-#                       JOIN accounts a ON t.account_id = a.account_id
-#                       JOIN securities s ON t.security_id = s.security_id
-#                       WHERE t.quantity > (SELECT AVG(quantity) FROM trades) * 5
-#                       AND t.trade_date > NOW() - INTERVAL '1 hour';
-#
-#                     > CREATE VIEW customer_order_book AS
-#                       SELECT c.customer_id, c.name, COUNT(o.order_id) AS open_orders,
-#                              SUM(CASE WHEN o.status = 'completed' THEN 1 ELSE 0 END) AS completed_orders
-#                       FROM customers c
-#                       JOIN accounts a ON c.customer_id = a.customer_id
-#                       JOIN orders o ON a.account_id = o.account_id
-#                       GROUP BY c.customer_id, c.name;
-#
-#                     > CREATE VIEW sector_performance AS
-#                       SELECT s.sector, AVG(t.price) AS avg_trade_price, COUNT(t.trade_id) AS trade_count,
-#                              SUM(t.quantity) AS total_volume
-#                       FROM trades t
-#                       JOIN securities s ON t.security_id = s.security_id
-#                       GROUP BY s.sector;
-#
-#                     > CREATE VIEW account_activity_summary AS
-#                       SELECT a.account_id, COUNT(t.trade_id) AS trade_count,
-#                              SUM(t.quantity * t.price) AS total_trade_value,
-#                              MAX(t.trade_date) AS last_trade_date
-#                       FROM accounts a
-#                       LEFT JOIN trades t ON a.account_id = t.account_id
-#                       GROUP BY a.account_id;
-#
-#                     > CREATE VIEW daily_market_movements AS
-#                       SELECT md.security_id, s.ticker, s.name,
-#                              md.price AS current_price,
-#                              LAG(md.price) OVER (PARTITION BY md.security_id ORDER BY md.market_date) AS previous_price,
-#                              (md.price - LAG(md.price) OVER (PARTITION BY md.security_id ORDER BY md.market_date)) AS price_change,
-#                              md.market_date
-#                       FROM market_data md
-#                       JOIN securities s ON md.security_id = s.security_id
-#                       WHERE md.market_date > NOW() - INTERVAL '1 day';
-#
-#                     > CREATE VIEW high_value_customers AS
-#                       SELECT c.customer_id, c.name, SUM(a.balance) AS total_balance
-#                       FROM customers c
-#                       JOIN accounts a ON c.customer_id = a.customer_id
-#                       GROUP BY c.customer_id, c.name
-#                       HAVING SUM(a.balance) > 1000000;
-#
-#                     > CREATE VIEW pending_orders_summary AS
-#                       SELECT s.ticker, s.name, COUNT(o.order_id) AS pending_order_count,
-#                              SUM(o.quantity) AS pending_volume,
-#                              AVG(o.limit_price) AS avg_limit_price
-#                       FROM orders o
-#                       JOIN securities s ON o.security_id = s.security_id
-#                       WHERE o.status = 'pending'
-#                       GROUP BY s.ticker, s.name;
-#
-#                     > CREATE VIEW trade_volume_by_hour AS
-#                       SELECT EXTRACT(HOUR FROM t.trade_date) AS trade_hour,
-#                              COUNT(t.trade_id) AS trade_count,
-#                              SUM(t.quantity) AS total_quantity
-#                       FROM trades t
-#                       GROUP BY EXTRACT(HOUR FROM t.trade_date);
-#
-#                     > CREATE VIEW top_securities_by_sector AS
-#                       WITH ranked_securities AS (
-#                           SELECT s.sector, s.ticker, s.name,
-#                                  SUM(t.quantity) AS total_volume,
-#                                  ROW_NUMBER() OVER (PARTITION BY s.sector ORDER BY SUM(t.quantity) DESC) AS sector_rank
-#                           FROM trades t
-#                           JOIN securities s ON t.security_id = s.security_id
-#                           GROUP BY s.sector, s.ticker, s.name
-#                       )
-#                       SELECT sector, ticker, name, total_volume, sector_rank
-#                       FROM ranked_securities
-#                       WHERE sector_rank <= 5;
-#
-#                     > CREATE VIEW recent_trades_by_account AS
-#                       SELECT a.account_id, s.ticker, t.quantity, t.price, t.trade_date
-#                       FROM trades t
-#                       JOIN accounts a ON t.account_id = a.account_id
-#                       JOIN securities s ON t.security_id = s.security_id
-#                       WHERE t.trade_date > NOW() - INTERVAL '1 day';
-#
-#                     > CREATE VIEW order_fulfillment_rates AS
-#                       SELECT c.customer_id, c.name,
-#                              COUNT(o.order_id) AS total_orders,
-#                              SUM(CASE WHEN o.status = 'completed' THEN 1 ELSE 0 END) AS fulfilled_orders,
-#                              (SUM(CASE WHEN o.status = 'completed' THEN 1 ELSE 0 END) * 100.0 / COUNT(o.order_id)) AS fulfillment_rate
-#                       FROM customers c
-#                       JOIN accounts a ON c.customer_id = a.customer_id
-#                       JOIN orders o ON a.account_id = o.account_id
-#                       GROUP BY c.customer_id, c.name;
-#
-#                     > CREATE VIEW sector_order_activity AS
-#                       SELECT s.sector, COUNT(o.order_id) AS order_count,
-#                              SUM(o.quantity) AS total_quantity,
-#                              AVG(o.limit_price) AS avg_limit_price
-#                       FROM orders o
-#                       JOIN securities s ON o.security_id = s.security_id
-#                       GROUP BY s.sector;
-#                     """
-#                 ),
-#                 # TODO: Inserts, Selects
-#                 LoadPhase(
-#                     duration=120,
-#                     actions=[],
-#                 ),
-#             ]
-#         )
-
-
 class Statistics:
     def __init__(self, times: list[float], durations: list[float]):
         assert len(times) == len(durations)
@@ -1087,36 +933,52 @@ class Statistics:
   p95: {self.p95:>7.2f}ms
   p99: {self.p99:>7.2f}ms
   std: {self.std:>7.2f}ms
-  slope: {self.slope:>7.2f}"""
+  slope: {self.slope:>5.4f}"""
+
+    def __dir__(self) -> list[str]:
+        return [
+            "queries",
+            "qps",
+            "max",
+            "min",
+            "avg",
+            "p50",
+            "p95",
+            "p99",
+            "std",
+            "slope",
+        ]
 
 
 def report(
     mz_string: str,
     scenario: Scenario,
-    measurements: collections.defaultdict[str, list[Measurement]],
+    measurements: dict[str, list[Measurement]],
     start_time: float,
     guarantees: bool,
-) -> list[TestFailureDetails]:
+    suffix: str,
+) -> tuple[dict[str, Statistics], list[TestFailureDetails]]:
     scenario_name = type(scenario).__name__
-    failures = []
+    stats: dict[str, Statistics] = {}
+    failures: list[TestFailureDetails] = []
     plt.figure(figsize=(10, 6))
     for key, m in measurements.items():
         times: list[float] = [x.timestamp - start_time for x in m]
         durations: list[float] = [x.duration * 1000 for x in m]
-        stats = Statistics(times, durations)
+        stats[key] = Statistics(times, durations)
         plt.scatter(times, durations, label=key, marker=MarkerStyle("+"))
-        print(f"Statistics for {key}:\n{stats}")
+        print(f"Statistics for {key}:\n{stats[key]}")
         if key in scenario.guarantees and guarantees:
             for stat, guarantee in scenario.guarantees[key].items():
-                duration = getattr(stats, stat)
-                less_than = stat == "qps"
+                duration = getattr(stats[key], stat)
+                less_than = less_than_is_regression(stat)
                 if duration < guarantee if less_than else duration > guarantee:
                     failure = f"Scenario {scenario_name} failed: {key}: {stat}: {duration:.2f} {'<' if less_than else '>'} {guarantee:.2f}"
                     print(failure)
                     failures.append(
                         TestFailureDetails(
                             message=failure,
-                            details=str(stats),
+                            details=str(stats[key]),
                             test_class_name_override=scenario_name,
                         )
                     )
@@ -1131,7 +993,7 @@ def report(
     plt.legend(loc="best")
     plt.grid(True)
     plt.ylim(bottom=0)
-    plot_path = f"plots/{scenario_name}.png"
+    plot_path = f"plots/{scenario_name}_{suffix}.png"
     plt.savefig(MZ_ROOT / plot_path, dpi=300)
     if buildkite.is_in_buildkite():
         buildkite.upload_artifact(plot_path, cwd=MZ_ROOT)
@@ -1144,70 +1006,19 @@ def report(
     else:
         print(f"Saving plot to {plot_path}")
 
-    return failures
+    return stats, failures
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.silent = True
-
-    parser.add_argument(
-        "--redpanda",
-        action="store_true",
-        help="run against Redpanda instead of the Confluent Platform",
-    )
-
-    parser.add_argument(
-        "--guarantees",
-        action="store_true",
-        default=True,
-        help="Check guarantees defined by test scenarios",
-    )
-
-    parser.add_argument(
-        "--size",
-        metavar="N",
-        type=int,
-        default=1,
-        help="default SIZE",
-    )
-
-    parser.add_argument(
-        "--scenario",
-        metavar="SCENARIO",
-        action="append",
-        type=str,
-        help="Scenario to run",
-    )
-
-    parser.add_argument(
-        "--load-phase-duration",
-        type=int,
-        help="Override durations of LoadPhases",
-    )
-
-    parser.add_argument(
-        "--periodic-dist",
-        nargs=2,
-        metavar=("action", "per_second"),
-        action="append",
-        help="Override periodic distribution for an action with specified name",
-    )
-
-    parser.add_argument("--mz-url", type=str, help="Remote Mz instance to run against")
-
-    args = parser.parse_args()
-
-    if args.scenario:
-        for scenario in args.scenario:
-            assert scenario in globals(), f"scenario {scenario} does not exist"
-        scenarios = [globals()[scenario] for scenario in args.scenario]
-    else:
-        scenarios = all_subclasses(Scenario)
-
-    service_names = ["materialized", "postgres", "mysql"] + (
-        ["redpanda"] if args.redpanda else ["zookeeper", "kafka", "schema-registry"]
-    )
-
+def run_once(
+    c: Composition,
+    scenarios: list[type[Scenario]],
+    service_names: list[str],
+    tag: str | None,
+    params: str | None,
+    args,
+    suffix: str,
+) -> tuple[dict[str, dict[str, Statistics]], list[TestFailureDetails]]:
+    stats: dict[str, dict[str, Statistics]] = {}
     failures: list[TestFailureDetails] = []
 
     if args.mz_url:
@@ -1215,7 +1026,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             Testdrive(
                 no_reset=True,
                 materialize_url=args.mz_url,
-                seed=1,
                 no_consistency_checks=True,
             )
         ):
@@ -1229,8 +1039,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             conn.close()
             mz_string = f"{mz_version} ({target.host})"
     else:
+        mz_image = f"materialize/materialized:{tag}" if tag else None
         with c.override(
             Materialized(
+                image=mz_image,
                 default_size=args.size,
                 soft_assertions=False,
                 external_cockroach=True,
@@ -1281,7 +1093,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenario_name = scenario_class.__name__
         print(f"--- Running scenario {scenario_name}")
         state = State(
-            measurements=collections.defaultdict(list),
+            measurements=defaultdict(list),
             load_phase_duration=args.load_phase_duration,
             periodic_dists={pd[0]: int(pd[1]) for pd in args.periodic_dist or []},
         )
@@ -1297,14 +1109,209 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             gc.collect()
             gc.enable()
         finally:
-            failures.extend(
-                report(
-                    mz_string, scenario, state.measurements, start_time, args.guarantees
+            new_stats, new_failures = report(
+                mz_string,
+                scenario,
+                state.measurements,
+                start_time,
+                args.guarantees,
+                suffix,
+            )
+            failures.extend(new_failures)
+            stats[scenario_name] = new_stats
+
+    if not args.mz_url:
+        c.kill("cockroach", "materialized", "testdrive")
+        c.rm("cockroach", "materialized", "testdrive")
+        c.rm_volumes("mzdata")
+
+    return stats, failures
+
+
+def less_than_is_regression(stat: str) -> bool:
+    return stat == "qps"
+
+
+def check_regressions(
+    this_stats: dict[str, dict[str, Statistics]],
+    other_stats: dict[str, dict[str, Statistics]],
+    other_tag: str,
+) -> list[TestFailureDetails]:
+    failures: list[TestFailureDetails] = []
+
+    assert len(this_stats) == len(other_stats)
+
+    for scenario in this_stats.keys():
+        has_failed = False
+        print(f"Comparing scenario {scenario}")
+        output_lines = [
+            f"{'QUERY':<40} | {'STAT':<7} | {'THIS':^12} | {'OTHER':^12} | {'CHANGE':^9} | {'THRESHOLD':^9} | {'REGRESSION?':^12}",
+            "-" * 118,
+        ]
+
+        for query in this_stats[scenario].keys():
+            for stat in dir(this_stats[scenario][query]):
+                this_value = getattr(this_stats[scenario][query], stat)
+                other_value = getattr(other_stats[scenario][query], stat)
+                less_than = less_than_is_regression(stat)
+                percentage = f"{(this_value / other_value - 1) * 100:.2f}%"
+                if REGRESSION_THRESHOLDS[stat] is None:
+                    regression = ""
+                elif (
+                    this_value < other_value / REGRESSION_THRESHOLDS[stat]
+                    if less_than
+                    else this_value > other_value * REGRESSION_THRESHOLDS[stat]
+                ):
+                    regression = "!!YES!!"
+                    if not known_regression(scenario, other_tag):
+                        has_failed = True
+                else:
+                    regression = "no"
+                threshold = (
+                    f"{((REGRESSION_THRESHOLDS[stat] - 1) * 100):.0f}%"
+                    if REGRESSION_THRESHOLDS[stat] is not None
+                    else ""
+                )
+                output_lines.append(
+                    f"{query[:40]:<40} | {stat:<7} | {this_value:>12.2f} | {other_value:>12.2f} | {percentage:>9} | {threshold:>9} | {regression:^12}"
+                )
+
+        print("\n".join(output_lines))
+        if has_failed:
+            failures.append(
+                TestFailureDetails(
+                    message=f"Scenario {scenario} regressed",
+                    details="\n".join(output_lines),
+                    test_class_name_override=scenario,
                 )
             )
+
+    return failures
+
+
+def resolve_tag(tag: str) -> str:
+    if tag == "common-ancestor":
+        # TODO: We probably will need overrides too
+        return resolve_ancestor_image_tag({})
+    return tag
+
+
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    c.silent = True
+
+    parser.add_argument(
+        "--redpanda",
+        action="store_true",
+        help="run against Redpanda instead of the Confluent Platform",
+    )
+
+    parser.add_argument(
+        "--guarantees",
+        action="store_true",
+        default=True,
+        help="Check guarantees defined by test scenarios",
+    )
+
+    parser.add_argument(
+        "--size",
+        metavar="N",
+        type=int,
+        default=1,
+        help="default SIZE",
+    )
+
+    parser.add_argument(
+        "--scenario",
+        metavar="SCENARIO",
+        action="append",
+        type=str,
+        help="Scenario to run",
+    )
+
+    parser.add_argument(
+        "--load-phase-duration",
+        type=int,
+        help="Override durations of LoadPhases",
+    )
+
+    parser.add_argument(
+        "--periodic-dist",
+        nargs=2,
+        metavar=("action", "per_second"),
+        action="append",
+        help="Override periodic distribution for an action with specified name",
+    )
+
+    parser.add_argument(
+        "--this-params",
+        metavar="PARAMS",
+        type=str,
+        default=os.getenv("THIS_PARAMS", None),
+        help="Semicolon-separated list of parameter=value pairs to apply to the 'THIS' Mz instance",
+    )
+
+    parser.add_argument(
+        "--other-tag",
+        metavar="TAG",
+        type=str,
+        default=None,
+        help="'Other' Materialize container tag to benchmark. If not provided, the last released Mz version will be used.",
+    )
+
+    parser.add_argument(
+        "--other-params",
+        metavar="PARAMS",
+        type=str,
+        default=os.getenv("OTHER_PARAMS", None),
+        help="Semicolon-separated list of parameter=value pairs to apply to the 'OTHER' Mz instance",
+    )
+
+    parser.add_argument("--mz-url", type=str, help="Remote Mz instance to run against")
+
+    args = parser.parse_args()
+
+    if args.scenario:
+        for scenario in args.scenario:
+            assert scenario in globals(), f"scenario {scenario} does not exist"
+        scenarios: list[type[Scenario]] = [
+            globals()[scenario] for scenario in args.scenario
+        ]
+    else:
+        scenarios = list(all_subclasses(Scenario))
+
+    service_names = ["materialized", "postgres", "mysql"] + (
+        ["redpanda"] if args.redpanda else ["zookeeper", "kafka", "schema-registry"]
+    )
+
+    this_stats, failures = run_once(
+        c,
+        scenarios,
+        service_names,
+        tag=None,
+        params=args.this_params,
+        args=args,
+        suffix="this",
+    )
+    if args.other_tag:
+        assert not args.mz_url, "Can't set both --mz-url and --other-tag"
+        tag = resolve_tag(args.other_tag)
+        print(f"--- Running against other tag for comparison: {tag}")
+        args.guarantees = False
+        other_stats, other_failures = run_once(
+            c,
+            scenarios,
+            service_names,
+            tag=tag,
+            params=args.other_params,
+            args=args,
+            suffix="other",
+        )
+        failures.extend(other_failures)
+        failures.extend(check_regressions(this_stats, other_stats, tag))
 
     if failures:
         raise FailedTestExecutionError(errors=failures)
 
-    # TODO: Choose an existing cluster name (for remote mz)
-    # TODO: For CI start comparing against older version
+
+# TODO: Choose an existing cluster name (for remote mz)
+# TODO: Measure Memory?
