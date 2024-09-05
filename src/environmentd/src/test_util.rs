@@ -19,7 +19,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fs, iter};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use futures::future::{BoxFuture, LocalBoxFuture};
 use futures::Future;
 use headers::{Header, HeaderMapExt};
@@ -366,14 +366,12 @@ impl Listeners {
                 format!("{cockroach_url}?options=--search_path=tsoracle_{seed}"),
             )
         };
+
+        let clusterd_name = "clusterd".to_string();
+        let clusterd_path = mz_build_tools::local_image_path(&clusterd_name)?;
         let metrics_registry = config.metrics_registry.unwrap_or_else(MetricsRegistry::new);
         let orchestrator = ProcessOrchestrator::new(ProcessOrchestratorConfig {
-            image_dir: env::current_exe()?
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .to_path_buf(),
+            images: BTreeMap::from([(clusterd_name, clusterd_path)]),
             suppress_output: false,
             environment_id: config.environment_id.to_string(),
             secrets_dir: data_directory.join("secrets"),
@@ -382,7 +380,8 @@ impl Listeners {
             tcp_proxy: None,
             scratch_directory: scratch_dir.path().to_path_buf(),
         })
-        .await?;
+        .await
+        .context("starting the process orchestrator")?;
         let orchestrator = Arc::new(orchestrator);
         // Messing with the clock causes persist to expire leases, causing hangs and
         // panics. Is it possible/desirable to put this back somehow?

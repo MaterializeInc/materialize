@@ -12,7 +12,8 @@ use std::time::Duration;
 use assert_cmd::Command;
 
 fn cmd() -> Command {
-    let mut cmd = Command::cargo_bin("environmentd").unwrap();
+    let path = mz_build_tools::local_image_path("environmentd").unwrap();
+    let mut cmd = Command::new(path);
     cmd.env_clear().timeout(Duration::from_secs(10));
     cmd
 }

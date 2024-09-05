@@ -34,7 +34,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
-use std::{env, fmt, ops, str, thread};
+use std::{fmt, ops, str, thread};
 
 use anyhow::{anyhow, bail};
 use bytes::BytesMut;
@@ -960,9 +960,12 @@ impl<'a> RunnerInner<'a> {
         };
 
         let secrets_dir = temp_dir.path().join("secrets");
+        let clusterd_name = "clusterd".to_string();
+        let clusterd_path = mz_build_tools::local_image_path(&clusterd_name)?;
+
         let orchestrator = Arc::new(
             ProcessOrchestrator::new(ProcessOrchestratorConfig {
-                image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
+                images: BTreeMap::from([(clusterd_name, clusterd_path)]),
                 suppress_output: false,
                 environment_id: environment_id.to_string(),
                 secrets_dir: secrets_dir.clone(),
