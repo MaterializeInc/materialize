@@ -117,6 +117,7 @@ class StandaloneQuery(Action):
 
     def _run(self, conns: queue.Queue):
         conn = self.conn_info.connect()
+        conn.autocommit = True
         with conn.cursor() as cur:
             if not self.strict_serializable:
                 cur.execute("SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'")
@@ -179,12 +180,12 @@ class Distribution:
 class Periodic(Distribution):
     """Run the action in each thread in one second, spread apart by the 1/per_second"""
 
-    def __init__(self, per_second: int):
+    def __init__(self, per_second: float):
         self.per_second = per_second
 
     def generate(self, duration: int) -> Iterator[float]:
         next_time = time.time()
-        for i in range(duration * self.per_second):
+        for i in range(int(duration * self.per_second)):
             yield next_time
             next_time += 1 / self.per_second
             sleep_until(next_time)
@@ -299,11 +300,6 @@ class LoadPhase(Phase):
         ]
         for thread in threads:
             thread.start()
-        for i in range(self.duration):
-            assert (
-                jobs.qsize() < 100
-            ), f"Too many jobs in queue, can't keep up: {jobs.qsize()}"
-            time.sleep(1)
         for thread in threads:
             thread.join()
 
@@ -436,7 +432,7 @@ class Kafka(Scenario):
                 ),
             ],
             guarantees={
-                "SELECT * FROM kafka_mv (standalone)": {"qps": 15, "max": 10000},
+                "SELECT * FROM kafka_mv (standalone)": {"qps": 15, "p99": 400},
             },
         )
 
@@ -496,7 +492,7 @@ class PgReadReplica(Scenario):
                 ),
             ],
             guarantees={
-                "SELECT * FROM mv_sum (standalone)": {"qps": 15, "max": 4000},
+                "SELECT * FROM mv_sum (standalone)": {"qps": 15, "p99": 400},
             },
         )
 
@@ -557,7 +553,7 @@ class PgReadReplicaRTR(Scenario):
                 # TODO(def-): Lower max when RTR becomes more performant
                 "SET REAL_TIME_RECENCY TO TRUE; SELECT * FROM mv_sum (standalone)": {
                     "qps": 50,
-                    "max": 5000,
+                    "p99": 5000,
                 },
             },
         )
@@ -619,7 +615,7 @@ class MySQLReadReplica(Scenario):
                 ),
             ],
             guarantees={
-                "SELECT * FROM mv_sum_mysql (standalone)": {"qps": 15, "max": 4000},
+                "SELECT * FROM mv_sum_mysql (standalone)": {"qps": 15, "p99": 400},
             },
         )
 
@@ -652,7 +648,7 @@ class OpenIndexedSelects(Scenario):
             ],
             conn_pool_size=100,
             guarantees={
-                "SELECT * FROM t4 (pooled)": {"qps": 200, "max": 150},
+                "SELECT * FROM t4 (pooled)": {"qps": 200, "p99": 100},
             },
         )
 
@@ -802,6 +798,70 @@ class StatementLogging(Scenario):
             guarantees={
                 "SELECT 1 (pooled)": {"avg": 5, "max": 200},
             },
+        )
+
+
+class InsertWhereNotExists(Scenario):
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        self.init(
+            [
+                TdPhase(
+                    """
+                    > CREATE TABLE insert_table (a int, b text);
+                    """
+                ),
+                LoadPhase(
+                    duration=120,
+                    actions=[
+                        OpenLoop(
+                            action=ReuseConnQuery(
+                                "INSERT INTO insert_table SELECT 1, '1' WHERE NOT EXISTS (SELECT 1 FROM insert_table WHERE a = 100);",
+                                conn_infos["materialized"],
+                                strict_serializable=False,
+                            ),
+                            dist=Periodic(per_second=5),
+                        )
+                    ],
+                ),
+            ],
+            conn_pool_size=100,
+            # TODO(def-): Bump per_second and add guarantees when #29371 is fixed
+        )
+
+
+class InsertsSelects(Scenario):
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        self.init(
+            [
+                TdPhase(
+                    """
+                    > CREATE TABLE insert_select_table (a int, b text);
+                    """
+                ),
+                LoadPhase(
+                    duration=120,
+                    actions=[
+                        OpenLoop(
+                            action=ReuseConnQuery(
+                                "INSERT INTO insert_select_table VALUES (1, '1');",
+                                conn_infos["materialized"],
+                                strict_serializable=False,
+                            ),
+                            dist=Periodic(per_second=0.1),
+                        ),
+                        OpenLoop(
+                            action=ReuseConnQuery(
+                                "SELECT min(a) FROM insert_select_table;",
+                                conn_infos["materialized"],
+                                strict_serializable=False,
+                            ),
+                            dist=Periodic(per_second=20),
+                        ),
+                    ],
+                ),
+            ],
+            conn_pool_size=100,
+            # TODO(def-): Add guarantees when #29371 is fixed
         )
 
 
@@ -1090,7 +1150,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--scenario", metavar="SCENARIO", type=str, help="Scenario to run."
+        "--scenario",
+        metavar="SCENARIO",
+        action="append",
+        type=str,
+        help="Scenario to run.",
     )
 
     parser.add_argument("--mz-url", type=str, help="Remote Mz instance to run against")
@@ -1098,8 +1162,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     if args.scenario:
-        assert args.scenario in globals(), f"scenario {args.scenario} does not exist"
-        scenarios = [globals()[args.scenario]]
+        for scenario in args.scenario:
+            assert scenario in globals(), f"scenario {scenario} does not exist"
+        scenarios = [globals()[scenario] for scenario in args.scenario]
     else:
         scenarios = all_subclasses(Scenario)
 
@@ -1198,7 +1263,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if failures:
         raise FailedTestExecutionError(errors=failures)
 
-    # TODO: Silence testdrive output
     # TODO: Allow parametrization of scenarios (--load-phase-duration, --parallelism, ...)
     # TODO: Linear regression slope as a measurement to make sure something doesn't get slower with time
     # TODO: Choose an existing cluster name (for remote mz)
