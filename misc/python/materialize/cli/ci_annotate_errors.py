@@ -46,7 +46,6 @@ from materialize.buildkite_insights.util.build_step_utils import (
 )
 from materialize.cli.mzcompose import JUNIT_ERROR_DETAILS_SEPARATOR
 from materialize.github import (
-    GROUP_REPO,
     KnownGitHubIssue,
     for_github_re,
     get_known_issues_from_github,
@@ -455,14 +454,7 @@ def annotate_logged_errors(
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
     buildkite_label: str = os.getenv("BUILDKITE_LABEL", "")
 
-    known_issues = []
-    issues_with_invalid_regex = []
-    for repo in GROUP_REPO.values():
-        (known_issues_repo, issues_with_invalid_regex_repo) = (
-            get_known_issues_from_github(repo)
-        )
-        known_issues.extend(known_issues_repo)
-        issues_with_invalid_regex.extend(issues_with_invalid_regex_repo)
+    (known_issues, issues_with_invalid_regex) = get_known_issues_from_github()
     unknown_errors: list[ObservedBaseError] = []
     unknown_errors.extend(issues_with_invalid_regex)
 

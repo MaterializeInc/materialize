@@ -20,7 +20,6 @@ from typing import IO
 import requests
 
 from materialize import buildkite, spawn
-from materialize.github import GROUP_REPO
 
 ISSUE_RE = re.compile(
     r"""
@@ -32,6 +31,13 @@ ISSUE_RE = re.compile(
     """,
     re.VERBOSE,
 )
+
+GROUP_REPO = {
+    "timelydataflow": "TimelyDataflow/timely-dataflow",
+    "materialize": "MaterializeInc/materialize",
+    "cloud": "MaterializeInc/cloud",
+    "incidentsandescalations": "MaterializeInc/incidents-and-escalations",
+}
 
 REFERENCE_RE = re.compile(
     r"""
