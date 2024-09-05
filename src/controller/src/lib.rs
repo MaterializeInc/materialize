@@ -402,8 +402,8 @@ where
         objects.retain(|id| {
             let frontier = self
                 .compute
-                .find_collection(*id)
-                .map(|s| s.write_frontier())
+                .collection_frontiers(*id, None)
+                .map(|f| f.write_frontier)
                 .expect("missing compute dependency");
             frontier.less_equal(&t)
         });
@@ -625,10 +625,10 @@ where
     }
 
     fn record_frontiers(&mut self) {
-        let compute_frontiers = self.compute.collection_frontiers();
+        let compute_frontiers = self.compute.collect_collection_frontiers();
         self.storage.record_frontiers(compute_frontiers);
 
-        let compute_replica_frontiers = self.compute.replica_write_frontiers();
+        let compute_replica_frontiers = self.compute.collect_replica_write_frontiers();
         self.storage
             .record_replica_frontiers(compute_replica_frontiers);
     }

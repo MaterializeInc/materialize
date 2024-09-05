@@ -528,14 +528,14 @@ impl crate::coord::Coordinator {
                 literal_constraints,
                 map_filter_project,
             )) => (
-                (idx_id, literal_constraints, timestamp, map_filter_project),
+                (literal_constraints, timestamp, map_filter_project),
                 None,
                 true,
                 PeekTarget::Index { id: idx_id },
                 StatementExecutionStrategy::FastPath,
             ),
             PeekPlan::FastPath(FastPathPlan::PeekPersist(coll_id, map_filter_project)) => {
-                let peek_command = (coll_id, None, timestamp, map_filter_project);
+                let peek_command = (None, timestamp, map_filter_project);
                 let metadata = self
                     .controller
                     .storage
@@ -584,12 +584,7 @@ impl crate::coord::Coordinator {
                     .permute(index_permutation, index_key.len() + index_thinned_arity);
                 let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
                 (
-                    (
-                        index_id, // transient identifier produced by `dataflow_plan`.
-                        None,
-                        timestamp,
-                        map_filter_project,
-                    ),
+                    (None, timestamp, map_filter_project),
                     Some(index_id),
                     false,
                     PeekTarget::Index { id: index_id },
@@ -630,20 +625,19 @@ impl crate::coord::Coordinator {
             .entry(conn_id)
             .or_default()
             .insert(uuid, compute_instance);
-        let (id, literal_constraints, timestamp, map_filter_project) = peek_command;
+        let (literal_constraints, timestamp, map_filter_project) = peek_command;
 
         self.controller
             .compute
             .peek(
                 compute_instance,
-                id,
+                peek_target,
                 literal_constraints,
                 uuid,
                 timestamp,
                 finishing.clone(),
                 map_filter_project,
                 target_replica,
-                peek_target,
             )
             .unwrap_or_terminate("cannot fail to peek");
         let duration_histogram = self.metrics.row_set_finishing_seconds();

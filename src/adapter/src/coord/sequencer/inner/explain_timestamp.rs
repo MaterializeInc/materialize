@@ -245,10 +245,10 @@ impl Coordinator {
             if let Some(compute_ids) = id_bundle.compute_ids.get(&cluster_id) {
                 let catalog = self.catalog();
                 for id in compute_ids {
-                    let state = self
+                    let frontiers = self
                         .controller
                         .compute
-                        .collection(cluster_id, *id)
+                        .collection_frontiers(*id, Some(cluster_id))
                         .expect("id does not exist");
                     let name = catalog
                         .try_get_entry(id)
@@ -261,8 +261,8 @@ impl Coordinator {
                         .unwrap_or_else(|| id.to_string());
                     sources.push(TimestampSource {
                         name: format!("{name} ({id}, compute)"),
-                        read_frontier: state.read_capability().elements().to_vec(),
-                        write_frontier: state.write_frontier().to_vec(),
+                        read_frontier: frontiers.read_frontier.to_vec(),
+                        write_frontier: frontiers.write_frontier.to_vec(),
                     });
                 }
             }

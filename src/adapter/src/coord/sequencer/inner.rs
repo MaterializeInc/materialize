@@ -1603,13 +1603,13 @@ impl Coordinator {
                                 !matches!(dependant_id, GlobalId::Transient(..)) &&
                                 // If the dependent object is also being dropped, then there is no
                                 // problem, so we don't want a notice.
-                                !ids_set.contains(&ObjectId::Item(**dependant_id))
+                                !ids_set.contains(&ObjectId::Item(*dependant_id))
                             })
                             .flat_map(|dependant_id| {
                                 // If we are not able to find a name for this ID it probably means
                                 // we have already dropped the compute collection, in which case we
                                 // can ignore it.
-                                humanizer.humanize_id(*dependant_id)
+                                humanizer.humanize_id(dependant_id)
                             })
                             .collect_vec();
                         if !dependants.is_empty() {

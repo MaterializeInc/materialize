@@ -884,13 +884,13 @@ impl Coordinator {
         let read_holds =
             Some(self.acquire_read_holds(&dataflow_import_id_bundle(&plan, mview.cluster_id)));
 
-        let collection = self
+        let frontiers = self
             .controller
             .compute
-            .collection(mview.cluster_id, gid)
+            .collection_frontiers(gid, Some(mview.cluster_id))
             .expect("materialized view exists");
 
-        let as_of = collection.read_frontier().to_owned();
+        let as_of = frontiers.read_frontier.to_owned();
 
         let until = mview
             .refresh_schedule

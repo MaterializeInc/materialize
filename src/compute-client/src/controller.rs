@@ -45,27 +45,23 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{soft_assert_or_log, soft_panic_or_log};
-use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
 use mz_storage_client::storage_collections::StorageCollections;
-use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::{AntichainRef, MutableAntichain};
-use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio::sync::mpsc;
+use timely::progress::frontier::AntichainRef;
+use timely::progress::{Antichain, Timestamp};
 use tokio::time::{self, MissedTickBehavior};
 use tracing::warn;
 use uuid::Uuid;
 
 use crate::controller::error::{
-    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError,
-    ReplicaDropError, SubscribeTargetError,
+    CollectionLookupError, CollectionUpdateError, DataflowCreationError, InstanceExists,
+    InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError, ReplicaDropError,
+    SubscribeTargetError,
 };
 use crate::controller::instance::Instance;
 use crate::controller::replica::ReplicaConfig;
@@ -294,37 +290,38 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         self.instances.get_mut(&id).ok_or(InstanceMissing(id))
     }
 
-    /// Return a read-only handle to the indicated compute instance.
-    pub fn instance_ref(
-        &self,
-        id: ComputeInstanceId,
-    ) -> Result<ComputeInstanceRef<T>, InstanceMissing> {
-        self.instance(id).map(|instance| ComputeInstanceRef {
-            instance_id: id,
-            instance,
-        })
-    }
-
-    /// Return a read-only handle to the indicated collection.
-    pub fn collection(
+    /// List the IDs of all collections in the identified compute instance.
+    pub fn collection_ids(
         &self,
         instance_id: ComputeInstanceId,
-        collection_id: GlobalId,
-    ) -> Result<&CollectionState<T>, CollectionLookupError> {
-        let collection = self.instance(instance_id)?.collection(collection_id)?;
-        Ok(collection)
+    ) -> Result<impl Iterator<Item = GlobalId> + '_, InstanceMissing> {
+        let instance = self.instance(instance_id)?;
+        let ids = instance.collections_iter().map(|(id, _)| id);
+        Ok(ids)
     }
 
-    /// Return a read-only handle to the indicated collection.
-    pub fn find_collection(
+    /// Return the frontiers of the indicated collection.
+    ///
+    /// If an `instance_id` is provided, the collection is assumed to be installed on that
+    /// instance. Otherwise all available instances are searched.
+    pub fn collection_frontiers(
         &self,
         collection_id: GlobalId,
-    ) -> Result<&CollectionState<T>, CollectionLookupError> {
-        self.instances
-            .values()
-            .flat_map(|i| i.collection(collection_id).ok())
-            .next()
-            .ok_or(CollectionLookupError::CollectionMissing(collection_id))
+        instance_id: Option<ComputeInstanceId>,
+    ) -> Result<CollectionFrontiers<T>, CollectionLookupError> {
+        let collection = match instance_id {
+            Some(id) => self.instance(id)?.collection(collection_id)?,
+            None => self
+                .instances
+                .values()
+                .find_map(|i| i.collection(collection_id).ok())
+                .ok_or(CollectionLookupError::CollectionMissing(collection_id))?,
+        };
+
+        Ok(CollectionFrontiers {
+            read_frontier: collection.read_frontier(),
+            write_frontier: collection.write_frontier(),
+        })
     }
 
     /// List compute collections that depend on the given collection.
@@ -332,7 +329,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         &self,
         instance_id: ComputeInstanceId,
         id: GlobalId,
-    ) -> Result<impl Iterator<Item = &GlobalId>, InstanceMissing> {
+    ) -> Result<impl Iterator<Item = GlobalId> + '_, InstanceMissing> {
         Ok(self
             .instance(instance_id)?
             .collection_reverse_dependencies(id))
@@ -406,7 +403,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// clearly intentional that they have no replicas.
     pub fn collections_hydrated_for_replicas(
         &self,
-        cluster: StorageInstanceId,
+        cluster: ComputeInstanceId,
         replicas: Vec<ReplicaId>,
         exclude_collections: &BTreeSet<GlobalId>,
     ) -> Result<bool, anyhow::Error> {
@@ -415,20 +412,20 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             .map_err(|e| e.into())
     }
 
-    /// Returns the read and write frontiers for each collection.
-    pub fn collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
+    /// Returns a map with the read and write frontiers of each collection.
+    pub fn collect_collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
         let collections = self.instances.values().flat_map(|i| i.collections_iter());
         collections
             .map(|(id, collection)| {
                 let since = collection.read_frontier().to_owned();
                 let upper = collection.write_frontier().to_owned();
-                (*id, (since, upper))
+                (id, (since, upper))
             })
             .collect()
     }
 
-    /// Returns the write frontier for each collection installed on each replica.
-    pub fn replica_write_frontiers(&self) -> BTreeMap<(GlobalId, ReplicaId), Antichain<T>> {
+    /// Returns a map with the write frontier of each collection installed on each replica.
+    pub fn collect_replica_write_frontiers(&self) -> BTreeMap<(GlobalId, ReplicaId), Antichain<T>> {
         self.instances
             .values()
             .flat_map(|i| i.replica_write_frontiers())
@@ -774,24 +771,22 @@ where
     pub fn peek(
         &mut self,
         instance_id: ComputeInstanceId,
-        collection_id: GlobalId,
+        peek_target: PeekTarget,
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
         timestamp: T,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
-        peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
         self.instance_mut(instance_id)?.peek(
-            collection_id,
+            peek_target,
             literal_constraints,
             uuid,
             timestamp,
             finishing,
             map_filter_project,
             target_replica,
-            peek_target,
         )?;
         Ok(())
     }
@@ -924,396 +919,10 @@ where
     }
 }
 
-/// A read-only handle to a compute instance.
-#[derive(Clone, Copy)]
-pub struct ComputeInstanceRef<'a, T: Timestamp> {
-    instance_id: ComputeInstanceId,
-    instance: &'a Instance<T>,
-}
-
-impl<T: ComputeControllerTimestamp> ComputeInstanceRef<'_, T> {
-    /// Return the ID of this compute instance.
-    pub fn instance_id(&self) -> ComputeInstanceId {
-        self.instance_id
-    }
-
-    /// Return a read-only handle to the indicated collection.
-    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
-        self.instance.collection(id)
-    }
-
-    /// Return an iterator over the installed collections.
-    pub fn collections(&self) -> impl Iterator<Item = (&GlobalId, &CollectionState<T>)> {
-        self.instance.collections_iter()
-    }
-}
-
-/// State maintained about individual compute collections.
-///
-/// A compute collection is either an index, or a storage sink, or a subscribe, exported by a
-/// compute dataflow.
-#[derive(Debug)]
-pub struct CollectionState<T: Timestamp> {
-    /// Whether this collection is a log collection.
-    ///
-    /// Log collections are special in that they are only maintained by a subset of all replicas.
-    log_collection: bool,
-    /// Whether this collection has been dropped by a controller client.
-    ///
-    /// The controller is allowed to remove the `CollectionState` for a collection only when
-    /// `dropped == true`. Otherwise, clients might still expect to be able to query information
-    /// about this collection.
-    dropped: bool,
-    /// Whether this collection has been scheduled, i.e., the controller has sent a `Schedule`
-    /// command for it.
-    scheduled: bool,
-
-    /// Accumulation of read capabilities for the collection.
-    ///
-    /// This accumulation contains the capabilities held by all [`ReadHold`]s given out for the
-    /// collection, including `implied_read_hold` and `warmup_read_hold`.
-    ///
-    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_changes`] and
-    /// [`Instance::acquire_read_hold`]. Nobody else should modify read capabilities directly.
-    /// Instead, collection users should manage read holds through [`ReadHold`] objects acquired
-    /// through [`Instance::acquire_read_hold`].
-    ///
-    /// TODO(teskje): Restructure the code to enforce the above in the type system.
-    read_capabilities: MutableAntichain<T>,
-    /// A read hold maintaining the implicit capability of the collection.
-    ///
-    /// This capability is kept to ensure that the collection remains readable according to its
-    /// `read_policy`. It also ensures that read holds on the collection's dependencies are kept at
-    /// some time not greater than the collection's `write_frontier`, guaranteeing that the
-    /// collection's next outputs can always be computed without skipping times.
-    implied_read_hold: ReadHold<T>,
-    /// A read hold held to enable dataflow warmup.
-    ///
-    /// Dataflow warmup is an optimization that allows dataflows to immediately start hydrating
-    /// even when their next output time (as implied by the `write_frontier`) is in the future.
-    /// By installing a read capability derived from the write frontiers of the collection's
-    /// inputs, we ensure that the as-of of new dataflows installed for the collection is at a time
-    /// that is immediately available, so hydration can begin immediately too.
-    warmup_read_hold: ReadHold<T>,
-    /// The policy to use to downgrade `self.implied_read_hold`.
-    ///
-    /// If `None`, the collection is a write-only collection (i.e. a sink). For write-only
-    /// collections, the `implied_read_hold` is only required for maintaining read holds on the
-    /// inputs, so we can immediately downgrade it to the `write_frontier`.
-    read_policy: Option<ReadPolicy<T>>,
-
-    /// Storage identifiers on which this collection depends, and read holds this collection
-    /// requires on them.
-    storage_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
-    /// Compute identifiers on which this collection depends, and read holds this collection
-    /// requires on them.
-    compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
-
-    /// The write frontier of this collection.
-    write_frontier: Antichain<T>,
-
-    /// Introspection state associated with this collection.
-    collection_introspection: CollectionIntrospection<T>,
-}
-
-impl<T: Timestamp> CollectionState<T> {
-    /// Reports the current read capability.
-    pub fn read_capability(&self) -> &Antichain<T> {
-        self.implied_read_hold.since()
-    }
-
-    /// Reports the current read frontier.
-    pub fn read_frontier(&self) -> AntichainRef<T> {
-        self.read_capabilities.frontier()
-    }
-
-    /// Reports the current write frontier.
-    pub fn write_frontier(&self) -> AntichainRef<T> {
-        self.write_frontier.borrow()
-    }
-
-    fn storage_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.storage_dependencies.keys().copied()
-    }
-
-    fn compute_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.compute_dependencies.keys().copied()
-    }
-
-    /// Reports the IDs of the dependencies of this collection.
-    fn dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.compute_dependency_ids()
-            .chain(self.storage_dependency_ids())
-    }
-}
-
-impl<T: ComputeControllerTimestamp> CollectionState<T> {
-    /// Creates a new collection state, with an initial read policy valid from `since`.
-    pub(crate) fn new(
-        collection_id: GlobalId,
-        as_of: Antichain<T>,
-        storage_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
-        compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        initial_as_of: Option<Antichain<T>>,
-        refresh_schedule: Option<RefreshSchedule>,
-    ) -> Self {
-        // A collection is not readable before the `as_of`.
-        let since = as_of.clone();
-        // A collection won't produce updates for times before the `as_of`.
-        let upper = as_of;
-
-        // Initialize all read capabilities to the `since`.
-        let implied_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx.clone());
-        let warmup_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx);
-
-        let mut read_capabilities = MutableAntichain::new();
-        read_capabilities.update_iter(
-            implied_read_hold
-                .since()
-                .iter()
-                .map(|time| (time.clone(), 1)),
-        );
-        read_capabilities.update_iter(
-            warmup_read_hold
-                .since()
-                .iter()
-                .map(|time| (time.clone(), 1)),
-        );
-
-        Self {
-            log_collection: false,
-            dropped: false,
-            scheduled: false,
-            read_capabilities,
-            implied_read_hold,
-            warmup_read_hold,
-            read_policy: Some(ReadPolicy::ValidFrom(since)),
-            storage_dependencies,
-            compute_dependencies,
-            write_frontier: upper.clone(),
-            collection_introspection: CollectionIntrospection::new(
-                collection_id,
-                introspection_tx,
-                initial_as_of,
-                refresh_schedule,
-                upper,
-            ),
-        }
-    }
-
-    /// Creates a new collection state for a log collection.
-    pub(crate) fn new_log_collection(
-        id: GlobalId,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-    ) -> Self {
-        let since = Antichain::from_elem(timely::progress::Timestamp::minimum());
-        let mut state = Self::new(
-            id,
-            since,
-            Default::default(),
-            Default::default(),
-            read_holds_tx,
-            introspection_tx,
-            None,
-            None,
-        );
-        state.log_collection = true;
-        // Log collections are created and scheduled implicitly as part of replica initialization.
-        state.scheduled = true;
-        state
-    }
-}
-
-/// Manages certain introspection relations associated with a collection. Upon creation, it adds
-/// rows to introspection relations. When dropped, it retracts its managed rows.
-///
-/// TODO: `ComputeDependencies` could be moved under this.
-#[derive(Debug)]
-struct CollectionIntrospection<T> {
-    /// The ID of the compute collection.
-    collection_id: GlobalId,
-    /// A channel through which introspection updates are delivered.
-    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-    /// Introspection state for `mz_materialized_view_refreshes`.
-    /// `Some` if it is a REFRESH MV.
-    refresh_introspection_state: Option<RefreshIntrospectionState<T>>,
-}
-
-impl<T> CollectionIntrospection<T> {
-    fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
-        let result = self.introspection_tx.send((introspection_type, updates));
-
-        if result.is_err() {
-            // The global controller holds on to the `introspection_rx`. So when we get here that
-            // probably means that the controller was dropped and the process is shutting down, in
-            // which case we don't care about introspection updates anymore.
-            tracing::info!(
-                ?introspection_type,
-                "discarding introspection update because the receiver disconnected"
-            );
-        }
-    }
-}
-
-impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
-    pub fn new(
-        collection_id: GlobalId,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        initial_as_of: Option<Antichain<T>>,
-        refresh_schedule: Option<RefreshSchedule>,
-        upper: Antichain<T>,
-    ) -> CollectionIntrospection<T> {
-        let refresh_introspection_state = match (refresh_schedule, initial_as_of) {
-            (Some(refresh_schedule), Some(initial_as_of)) => Some(RefreshIntrospectionState::new(
-                refresh_schedule,
-                initial_as_of,
-                upper,
-            )),
-            (Some(_refresh_schedule), None) => {
-                soft_panic_or_log!("if we have a refresh_schedule, then it's an MV, so we should also have an initial_as_of");
-                None
-            }
-            _ => None,
-        };
-        let self_ = CollectionIntrospection {
-            collection_id,
-            introspection_tx,
-            refresh_introspection_state,
-        };
-
-        if let Some(refresh_introspection_state) = self_.refresh_introspection_state.as_ref() {
-            let insertion = refresh_introspection_state.row_for_collection(collection_id);
-            self_.send(
-                IntrospectionType::ComputeMaterializedViewRefreshes,
-                vec![(insertion, 1)],
-            );
-        }
-
-        self_
-    }
-
-    /// Should be called whenever the write frontier of the collection advances. It updates the
-    /// state that should be recorded in introspection relations, and sends it through the
-    /// `introspection_tx` channel.
-    pub fn frontier_update(&mut self, write_frontier: &Antichain<T>) {
-        if let Some(refresh_introspection_state) = &mut self.refresh_introspection_state {
-            // Old row to retract based on old state.
-            let retraction = refresh_introspection_state.row_for_collection(self.collection_id);
-            // Update state.
-            refresh_introspection_state.frontier_update(write_frontier);
-            // New row to insert based on new state.
-            let insertion = refresh_introspection_state.row_for_collection(self.collection_id);
-            // Send changes.
-            self.send(
-                IntrospectionType::ComputeMaterializedViewRefreshes,
-                vec![(retraction, -1), (insertion, 1)],
-            );
-        }
-    }
-}
-
-impl<T> Drop for CollectionIntrospection<T> {
-    fn drop(&mut self) {
-        self.refresh_introspection_state
-            .as_ref()
-            .map(|refresh_introspection_state| {
-                let retraction = refresh_introspection_state.row_for_collection(self.collection_id);
-                self.send(
-                    IntrospectionType::ComputeMaterializedViewRefreshes,
-                    vec![(retraction, -1)],
-                );
-            });
-    }
-}
-
-/// Information needed to compute introspection updates for a REFRESH materialized view when the
-/// write frontier advances.
-#[derive(Debug)]
-struct RefreshIntrospectionState<T> {
-    // Immutable properties of the MV
-    refresh_schedule: RefreshSchedule,
-    initial_as_of: Antichain<T>,
-    // Refresh state
-    next_refresh: Datum<'static>,           // Null or an MzTimestamp
-    last_completed_refresh: Datum<'static>, // Null or an MzTimestamp
-}
-
-impl<T> RefreshIntrospectionState<T> {
-    /// Return a `Row` reflecting the current refresh introspection state.
-    pub fn row_for_collection(&self, collection_id: GlobalId) -> Row {
-        Row::pack_slice(&[
-            Datum::String(&collection_id.to_string()),
-            self.last_completed_refresh,
-            self.next_refresh,
-        ])
-    }
-}
-
-impl<T: ComputeControllerTimestamp> RefreshIntrospectionState<T> {
-    /// Construct a new [`RefreshIntrospectionState`], and apply an initial `frontier_update()` at
-    /// the `upper`.
-    pub fn new(
-        refresh_schedule: RefreshSchedule,
-        initial_as_of: Antichain<T>,
-        upper: Antichain<T>,
-    ) -> RefreshIntrospectionState<T> {
-        let mut self_ = RefreshIntrospectionState {
-            refresh_schedule: refresh_schedule.clone(),
-            initial_as_of: initial_as_of.clone(),
-            next_refresh: Datum::Null,
-            last_completed_refresh: Datum::Null,
-        };
-        self_.frontier_update(&upper);
-        self_
-    }
-
-    /// Should be called whenever the write frontier of the collection advances. It updates the
-    /// state that should be recorded in introspection relations, but doesn't send the updates yet.
-    pub fn frontier_update(&mut self, write_frontier: &Antichain<T>) {
-        if write_frontier.is_empty() {
-            self.last_completed_refresh =
-                if let Some(last_refresh) = self.refresh_schedule.last_refresh() {
-                    last_refresh.into()
-                } else {
-                    // If there is no last refresh, then we have a `REFRESH EVERY`, in which case
-                    // the saturating roundup puts a refresh at the maximum possible timestamp.
-                    T::maximum().into()
-                };
-            self.next_refresh = Datum::Null;
-        } else {
-            if timely::PartialOrder::less_equal(write_frontier, &self.initial_as_of) {
-                // We are before the first refresh.
-                self.last_completed_refresh = Datum::Null;
-                let initial_as_of = self.initial_as_of.as_option().expect(
-                    "initial_as_of can't be [], because then there would be no refreshes at all",
-                );
-                let first_refresh = initial_as_of
-                    .round_up(&self.refresh_schedule)
-                    .expect("sequencing makes sure that REFRESH MVs always have a first refresh");
-                soft_assert_or_log!(
-                    first_refresh == *initial_as_of,
-                    "initial_as_of should be set to the first refresh"
-                );
-                self.next_refresh = first_refresh.into();
-            } else {
-                // The first refresh has already happened.
-                let write_frontier = write_frontier.as_option().expect("checked above");
-                self.last_completed_refresh = write_frontier
-                    .round_down_minus_1(&self.refresh_schedule)
-                    .map_or_else(
-                        || {
-                            soft_panic_or_log!(
-                                "rounding down should have returned the first refresh or later"
-                            );
-                            Datum::Null
-                        },
-                        |last_completed_refresh| last_completed_refresh.into(),
-                    );
-                self.next_refresh = write_frontier.clone().into();
-            }
-        }
-    }
+/// The frontiers of a compute collection.
+pub struct CollectionFrontiers<'a, T> {
+    /// The read frontier.
+    pub read_frontier: AntichainRef<'a, T>,
+    /// The write frontier.
+    pub write_frontier: AntichainRef<'a, T>,
 }
