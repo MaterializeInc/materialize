@@ -546,7 +546,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             return;
         };
 
-        collection.hydration_state.operator_hydrated(
+        collection.introspection.operator_hydrated(
             status.lir_id,
             status.worker_id,
             status.hydrated,
@@ -2455,9 +2455,10 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         input_read_holds: Vec<ReadHold<T>>,
     ) {
         let metrics = self.metrics.for_collection(id);
-        let hydration_state = HydrationState::new(self.id, id, self.introspection_tx.clone());
+        let introspection =
+            ReplicaCollectionIntrospection::new(self.id, id, self.introspection_tx.clone());
         let mut state =
-            ReplicaCollectionState::new(metrics, as_of, hydration_state, input_read_holds);
+            ReplicaCollectionState::new(metrics, as_of, introspection, input_read_holds);
 
         // We need to consider the edge case where the as-of is the empty frontier. Such an as-of
         // is not useful for indexes, because they wouldn't be readable. For write-only
@@ -2559,8 +2560,10 @@ struct ReplicaCollectionState<T: Timestamp> {
     created_at: Instant,
     /// As-of frontier with which this collection was installed on the replica.
     as_of: Antichain<T>,
-    /// Tracks hydration state for this collection.
-    hydration_state: HydrationState,
+    /// Whether the collection is hydrated.
+    hydrated: bool,
+    /// Tracks introspection state for this collection.
+    introspection: ReplicaCollectionIntrospection,
     /// Read holds on storage inputs to this collection.
     ///
     /// These read holds are kept to ensure that the replica is able to read from storage inputs at
@@ -2573,7 +2576,7 @@ impl<T: Timestamp> ReplicaCollectionState<T> {
     fn new(
         metrics: Option<ReplicaCollectionMetrics>,
         as_of: Antichain<T>,
-        hydration_state: HydrationState,
+        introspection: ReplicaCollectionIntrospection,
         input_read_holds: Vec<ReadHold<T>>,
     ) -> Self {
         Self {
@@ -2583,14 +2586,15 @@ impl<T: Timestamp> ReplicaCollectionState<T> {
             metrics,
             created_at: Instant::now(),
             as_of,
-            hydration_state,
+            hydrated: false,
+            introspection,
             input_read_holds,
         }
     }
 
     /// Returns whether this collection is hydrated.
     fn hydrated(&self) -> bool {
-        self.hydration_state.hydrated
+        self.hydrated
     }
 
     /// Marks the collection as hydrated and updates metrics and introspection accordingly.
@@ -2600,7 +2604,7 @@ impl<T: Timestamp> ReplicaCollectionState<T> {
             metrics.initial_output_duration_seconds.set(duration);
         }
 
-        self.hydration_state.hydrated = true;
+        self.hydrated = true;
     }
 
     /// Updates the replica write frontier of this collection.
@@ -2665,16 +2669,14 @@ impl<T: Timestamp> ReplicaCollectionState<T> {
     }
 }
 
-/// Maintains both global and operator-level hydration introspection for a given replica and
-/// collection, and ensures that reported introspection data is retracted when the flag is dropped.
+/// Maintains the introspection state for a given replica and collection, and ensures that reported
+/// introspection data is retracted when the collection is dropped.
 #[derive(Debug)]
-struct HydrationState {
+struct ReplicaCollectionIntrospection {
     /// The ID of the replica.
     replica_id: ReplicaId,
     /// The ID of the compute collection.
     collection_id: GlobalId,
-    /// Whether the collection is hydrated.
-    hydrated: bool,
     /// Operator-level hydration state.
     /// (lir_id, worker_id) -> hydrated
     operators: BTreeMap<(LirId, usize), bool>,
@@ -2682,7 +2684,7 @@ struct HydrationState {
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
 }
 
-impl HydrationState {
+impl ReplicaCollectionIntrospection {
     /// Create a new `HydrationState` and initialize introspection.
     fn new(
         replica_id: ReplicaId,
@@ -2692,7 +2694,6 @@ impl HydrationState {
         Self {
             replica_id,
             collection_id,
-            hydrated: false,
             operators: Default::default(),
             introspection_tx,
         }
@@ -2700,9 +2701,9 @@ impl HydrationState {
 
     /// Update the given (lir_id, worker_id) pair as hydrated.
     fn operator_hydrated(&mut self, lir_id: LirId, worker_id: usize, hydrated: bool) {
-        let retraction = self.row_for_operator(lir_id, worker_id);
+        let retraction = self.operator_hydration_row(lir_id, worker_id);
         self.operators.insert((lir_id, worker_id), hydrated);
-        let insertion = self.row_for_operator(lir_id, worker_id);
+        let insertion = self.operator_hydration_row(lir_id, worker_id);
 
         if retraction == insertion {
             return; // no change
@@ -2719,7 +2720,7 @@ impl HydrationState {
     /// Return a `Row` reflecting the current hydration status of the identified operator.
     ///
     /// Returns `None` if the identified operator is not tracked.
-    fn row_for_operator(&self, lir_id: LirId, worker_id: usize) -> Option<Row> {
+    fn operator_hydration_row(&self, lir_id: LirId, worker_id: usize) -> Option<Row> {
         self.operators.get(&(lir_id, worker_id)).map(|hydrated| {
             Row::pack_slice(&[
                 Datum::String(&self.collection_id.to_string()),
@@ -2746,13 +2747,13 @@ impl HydrationState {
     }
 }
 
-impl Drop for HydrationState {
+impl Drop for ReplicaCollectionIntrospection {
     fn drop(&mut self) {
-        // Retract operator-level hydration status.
+        // Retract operator hydration status.
         let operators: Vec<_> = self.operators.keys().collect();
         let updates: Vec<_> = operators
             .into_iter()
-            .flat_map(|(lir_id, worker_id)| self.row_for_operator(*lir_id, *worker_id))
+            .flat_map(|(lir_id, worker_id)| self.operator_hydration_row(*lir_id, *worker_id))
             .map(|r| (r, -1))
             .collect();
         if !updates.is_empty() {
