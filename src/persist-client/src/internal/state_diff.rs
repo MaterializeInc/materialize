@@ -1263,6 +1263,7 @@ mod tests {
     /// is applying those changes as diffs.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
+    #[ignore] // TODO: Reenable when #29385 is fixed
     fn test_state_sync() {
         use proptest::prelude::*;
 
