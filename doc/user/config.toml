@@ -3,8 +3,11 @@ title = "Materialize Documentation"
 pygmentsCodeFences = true
 pygmentsUseClasses = true
 
+
 [params]
 repo = "//github.com/MaterializeInc/materialize"
+bannerMessage = "Register for the upcoming (2024-Oct-03) workshop: Operational Data Store vs. Read Replicas."
+bannerLink="https://materialize.com/events/operational-data-store-vs-read-replica/?utm_medium=docs-banner&utm_source=documentation&utm_campaign=FY25_Q3_Webinar_Hosted_-Operational-Data-Store-vs.-Read-Replica&utm_term=&utm_content="
 
 [frontmatter]
 publishDate = ["publishDate"]
