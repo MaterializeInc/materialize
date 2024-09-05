@@ -961,11 +961,13 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of clusters in the catalog.
     /// DO NOT call this function in a loop, use [`Self::remove_clusters`] instead.
     pub fn remove_cluster(&mut self, id: ClusterId) -> Result<(), CatalogError> {
-        let deleted = self.clusters.delete(|k, _v| k.id == id, self.op_id);
-        if deleted.is_empty() {
+        let deleted = self
+            .clusters
+            .delete_by_key(ClusterKey { id }, self.op_id)
+            .is_some();
+        if deleted {
             Err(SqlCatalogError::UnknownCluster(id.to_string()).into())
         } else {
-            assert_eq!(deleted.len(), 1);
             // Cascade delete introspection sources and cluster replicas.
             //
             // TODO(benesch): this doesn't seem right. Cascade deletions should
@@ -1022,11 +1024,13 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of cluster replicas in the catalog.
     /// DO NOT call this function in a loop, use [`Self::remove_cluster_replicas`] instead.
     pub fn remove_cluster_replica(&mut self, id: ReplicaId) -> Result<(), CatalogError> {
-        let deleted = self.cluster_replicas.delete(|k, _v| k.id == id, self.op_id);
-        if deleted.len() == 1 {
+        let deleted = self
+            .cluster_replicas
+            .delete_by_key(ClusterReplicaKey { id }, self.op_id)
+            .is_some();
+        if deleted {
             Ok(())
         } else {
-            assert!(deleted.is_empty());
             Err(SqlCatalogError::UnknownClusterReplica(id.to_string()).into())
         }
     }
@@ -1086,10 +1090,8 @@ impl<'a> Transaction<'a> {
             return Ok(());
         }
 
-        let n = self
-            .items
-            .delete(|k, _v| ids.contains(&k.gid), self.op_id)
-            .len();
+        let ks: Vec<_> = ids.clone().into_iter().map(|gid| ItemKey { gid }).collect();
+        let n = self.items.delete_by_keys(ks, self.op_id).len();
         if n == ids.len() {
             Ok(())
         } else {
@@ -1113,19 +1115,17 @@ impl<'a> Transaction<'a> {
             return Ok(());
         }
 
-        let n = self
-            .system_gid_mapping
-            .delete(
-                |k, _v| {
-                    descriptions.contains(&SystemObjectDescription {
-                        schema_name: k.schema_name.clone(),
-                        object_type: k.object_type.clone(),
-                        object_name: k.object_name.clone(),
-                    })
-                },
-                self.op_id,
-            )
-            .len();
+        let ks: Vec<_> = descriptions
+            .clone()
+            .into_iter()
+            .map(|desc| GidMappingKey {
+                schema_name: desc.schema_name,
+                object_type: desc.object_type,
+                object_name: desc.object_name,
+            })
+            .collect();
+        let n = self.system_gid_mapping.delete_by_keys(ks, self.op_id).len();
+
         if n == descriptions.len() {
             Ok(())
         } else {
@@ -1163,12 +1163,14 @@ impl<'a> Transaction<'a> {
             return Ok(());
         }
 
+        let ks: Vec<_> = introspection_source_indexes
+            .clone()
+            .into_iter()
+            .map(|(cluster_id, name)| ClusterIntrospectionSourceIndexKey { cluster_id, name })
+            .collect();
         let n = self
             .introspection_sources
-            .delete(
-                |k, _v| introspection_source_indexes.contains(&(k.cluster_id, k.name.clone())),
-                self.op_id,
-            )
+            .delete_by_keys(ks, self.op_id)
             .len();
         if n == introspection_source_indexes.len() {
             Ok(())
@@ -1193,22 +1195,10 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
     pub fn update_item(&mut self, id: GlobalId, item: Item) -> Result<(), CatalogError> {
-        let n = self.items.update(
-            |k, v| {
-                if k.gid == id {
-                    let item = item.clone();
-                    // Schema IDs cannot change.
-                    assert_eq!(item.schema_id, v.schema_id);
-                    let (_, new_value) = item.into_key_value();
-                    Some(new_value)
-                } else {
-                    None
-                }
-            },
-            self.op_id,
-        )?;
-        assert!(n <= 1);
-        if n == 1 {
+        let updated =
+            self.items
+                .update_by_key(ItemKey { gid: id }, item.into_key_value().1, self.op_id)?;
+        if updated {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
@@ -1227,24 +1217,17 @@ impl<'a> Transaction<'a> {
             return Ok(());
         }
 
-        let n = self.items.update(
-            |k, v| {
-                if let Some(item) = items.get(&k.gid) {
-                    // Schema IDs cannot change.
-                    assert_eq!(item.schema_id, v.schema_id);
-                    let (_, new_value) = item.clone().into_key_value();
-                    Some(new_value)
-                } else {
-                    None
-                }
-            },
-            self.op_id,
-        )?;
+        let update_ids: BTreeSet<_> = items.keys().cloned().collect();
+        let kvs: Vec<_> = items
+            .clone()
+            .into_iter()
+            .map(|(gid, item)| (ItemKey { gid }, item.into_key_value().1))
+            .collect();
+        let n = self.items.update_by_keys(kvs, self.op_id)?;
         let n = usize::try_from(n).expect("Must be positive and fit in usize");
-        if n == items.len() {
+        if n == update_ids.len() {
             Ok(())
         } else {
-            let update_ids: BTreeSet<_> = items.into_keys().collect();
             let item_ids: BTreeSet<_> = self.items.items().keys().map(|k| k.gid).collect();
             let mut unknown = update_ids.difference(&item_ids);
             Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
@@ -1259,20 +1242,10 @@ impl<'a> Transaction<'a> {
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
     pub fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), CatalogError> {
-        let n = self.roles.update(
-            move |k, _v| {
-                if k.id == id {
-                    let role = role.clone();
-                    let (_, new_value) = role.into_key_value();
-                    Some(new_value)
-                } else {
-                    None
-                }
-            },
-            self.op_id,
-        )?;
-        assert!(n <= 1);
-        if n == 1 {
+        let updated =
+            self.roles
+                .update_by_key(RoleKey { id }, role.into_key_value().1, self.op_id)?;
+        if updated {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
@@ -1291,23 +1264,17 @@ impl<'a> Transaction<'a> {
             return Ok(());
         }
 
-        let n = self.roles.update(
-            |k, _v| {
-                if let Some(role) = roles.get(&k.id) {
-                    let (_, new_role) = role.clone().into_key_value();
-                    Some(new_role)
-                } else {
-                    None
-                }
-            },
-            self.op_id,
-        )?;
+        let update_role_ids: BTreeSet<_> = roles.keys().cloned().collect();
+        let kvs: Vec<_> = roles
+            .into_iter()
+            .map(|(id, role)| (RoleKey { id }, role.into_key_value().1))
+            .collect();
+        let n = self.roles.update_by_keys(kvs, self.op_id)?;
         let n = usize::try_from(n).expect("Must be positive and fit in usize");
 
-        if n == roles.len() {
+        if n == update_role_ids.len() {
             Ok(())
         } else {
-            let update_role_ids: BTreeSet<_> = roles.into_keys().collect();
             let role_ids: BTreeSet<_> = self.roles.items().keys().map(|k| k.id).collect();
             let mut unknown = update_role_ids.difference(&role_ids);
             Err(SqlCatalogError::UnknownRole(unknown.join(", ")).into())
@@ -1353,19 +1320,12 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of clusters in the catalog.
     /// DO NOT call this function in a loop.
     pub fn update_cluster(&mut self, id: ClusterId, cluster: Cluster) -> Result<(), CatalogError> {
-        let n = self.clusters.update(
-            |k, _v| {
-                if k.id == id {
-                    let (_, new_value) = cluster.clone().into_key_value();
-                    Some(new_value)
-                } else {
-                    None
-                }
-            },
+        let updated = self.clusters.update_by_key(
+            ClusterKey { id },
+            cluster.into_key_value().1,
             self.op_id,
         )?;
-        assert!(n <= 1);
-        if n == 1 {
+        if updated {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownCluster(id.to_string()).into())
@@ -1383,19 +1343,12 @@ impl<'a> Transaction<'a> {
         replica_id: ReplicaId,
         replica: ClusterReplica,
     ) -> Result<(), CatalogError> {
-        let n = self.cluster_replicas.update(
-            |k, _v| {
-                if k.id == replica_id {
-                    let (_, new_value) = replica.clone().into_key_value();
-                    Some(new_value)
-                } else {
-                    None
-                }
-            },
+        let updated = self.cluster_replicas.update_by_key(
+            ClusterReplicaKey { id: replica_id },
+            replica.into_key_value().1,
             self.op_id,
         )?;
-        assert!(n <= 1);
-        if n == 1 {
+        if updated {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownClusterReplica(replica_id.to_string()).into())
@@ -1413,19 +1366,12 @@ impl<'a> Transaction<'a> {
         id: DatabaseId,
         database: Database,
     ) -> Result<(), CatalogError> {
-        let n = self.databases.update(
-            |k, _v| {
-                if id == k.id {
-                    let (_, new_value) = database.clone().into_key_value();
-                    Some(new_value)
-                } else {
-                    None
-                }
-            },
+        let updated = self.databases.update_by_key(
+            DatabaseKey { id },
+            database.into_key_value().1,
             self.op_id,
         )?;
-        assert!(n <= 1);
-        if n == 1 {
+        if updated {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownDatabase(id.to_string()).into())
@@ -1443,20 +1389,12 @@ impl<'a> Transaction<'a> {
         schema_id: SchemaId,
         schema: Schema,
     ) -> Result<(), CatalogError> {
-        let n = self.schemas.update(
-            |k, _v| {
-                if schema_id == k.id {
-                    let schema = schema.clone();
-                    let (_, new_value) = schema.clone().into_key_value();
-                    Some(new_value)
-                } else {
-                    None
-                }
-            },
+        let updated = self.schemas.update_by_key(
+            SchemaKey { id: schema_id },
+            schema.into_key_value().1,
             self.op_id,
         )?;
-        assert!(n <= 1);
-        if n == 1 {
+        if updated {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownSchema(schema_id.to_string()).into())
@@ -2196,11 +2134,12 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
     }
 
     fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ShardId)> {
+        let ks: Vec<_> = ids
+            .into_iter()
+            .map(|id| StorageCollectionMetadataKey { id })
+            .collect();
         self.storage_collection_metadata
-            .delete(
-                |StorageCollectionMetadataKey { id }, _| ids.contains(id),
-                self.op_id,
-            )
+            .delete_by_keys(ks, self.op_id)
             .into_iter()
             .map(
                 |(
@@ -2237,10 +2176,11 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
     }
 
     fn mark_shards_as_finalized(&mut self, shards: BTreeSet<ShardId>) {
-        let _ = self.unfinalized_shards.delete(
-            |UnfinalizedShardKey { shard }, _| shards.contains(shard),
-            self.op_id,
-        );
+        let ks: Vec<_> = shards
+            .into_iter()
+            .map(|shard| UnfinalizedShardKey { shard })
+            .collect();
+        let _ = self.unfinalized_shards.delete_by_keys(ks, self.op_id);
     }
 
     fn get_txn_wal_shard(&self) -> Option<ShardId> {
@@ -2604,6 +2544,9 @@ where
     /// entries.
     ///
     /// Returns an error if the uniqueness check failed.
+    ///
+    /// Prefer using [`Self::update_by_key`] or [`Self::update_by_keys`], which generally have
+    /// better performance.
     fn update<F: Fn(&K, &V) -> Option<V>>(
         &mut self,
         f: F,
@@ -2637,6 +2580,51 @@ where
         } else {
             Ok(changed)
         }
+    }
+
+    /// Updates `k`, `v` pair if `k` already exists in `self`.
+    ///
+    /// Returns `true` if `k` was updated, `false` otherwise.
+    /// Returns an error if the uniqueness check failed.
+    fn update_by_key(&mut self, k: K, v: V, ts: Timestamp) -> Result<bool, DurableCatalogError> {
+        if let Some(cur_v) = self.get(&k) {
+            if v != cur_v {
+                self.set(k, Some(v), ts)?;
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Updates k, v pairs. Keys that don't already exist in `self` are ignored.
+    ///
+    /// Returns the number of changed entries.
+    /// Returns an error if the uniqueness check failed.
+    fn update_by_keys(
+        &mut self,
+        kvs: impl IntoIterator<Item = (K, V)>,
+        ts: Timestamp,
+    ) -> Result<Diff, DurableCatalogError> {
+        let kvs: Vec<_> = kvs
+            .into_iter()
+            .filter_map(|(k, v)| match self.get(&k) {
+                // Record if updating this entry would be a no-op.
+                Some(cur_v) => Some((cur_v == v, k, v)),
+                None => None,
+            })
+            .collect();
+        let changed = kvs.len();
+        let changed =
+            Diff::try_from(changed).map_err(|e| DurableCatalogError::Internal(e.to_string()))?;
+        let kvs = kvs
+            .into_iter()
+            // Filter out no-ops to save some work.
+            .filter(|(no_op, _, _)| !no_op)
+            .map(|(_, k, v)| (k, Some(v)))
+            .collect();
+        self.set_many(kvs, ts)?;
+        Ok(changed)
     }
 
     /// Set the value for a key. Returns the previous entry if the key existed,
@@ -2701,6 +2689,10 @@ where
         kvs: BTreeMap<K, Option<V>>,
         ts: Timestamp,
     ) -> Result<BTreeMap<K, Option<V>>, DurableCatalogError> {
+        if kvs.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
         let mut prevs = BTreeMap::new();
         let mut restores = BTreeMap::new();
 
@@ -2758,6 +2750,9 @@ where
 
     /// Deletes items for which `f` returns true. Returns the keys and values of
     /// the deleted entries.
+    ///
+    /// Prefer using [`Self::delete_by_key`] or [`Self::delete_by_keys`], which generally have
+    /// better performance.
     fn delete<F: Fn(&K, &V) -> bool>(&mut self, f: F, ts: Timestamp) -> Vec<(K, V)> {
         let mut deleted = Vec::new();
         self.for_values_mut(|p, k, v| {
@@ -2773,12 +2768,35 @@ where
         soft_assert_no_log!(self.verify().is_ok());
         deleted
     }
+
+    /// Deletes item with key `k`.
+    ///
+    /// Returns the value of the deleted entry, if it existed.
+    fn delete_by_key(&mut self, k: K, ts: Timestamp) -> Option<V> {
+        self.set(k, None, ts)
+            .expect("deleting an entry cannot violate uniqueness")
+    }
+
+    /// Deletes items with key in `ks`.
+    ///
+    /// Returns the keys and values of the deleted entries.
+    fn delete_by_keys(&mut self, ks: impl IntoIterator<Item = K>, ts: Timestamp) -> Vec<(K, V)> {
+        let kvs = ks.into_iter().map(|k| (k, None)).collect();
+        let prevs = self
+            .set_many(kvs, ts)
+            .expect("deleting entries cannot violate uniqueness");
+        prevs
+            .into_iter()
+            .filter_map(|(k, v)| v.map(|v| (k, v)))
+            .collect()
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use mz_ore::assert_none;
 
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::PersistClient;
@@ -3028,7 +3046,6 @@ mod tests {
                 0,
             )
             .unwrap_err();
-
         table_txn
             .set_many(
                 BTreeMap::from([
@@ -3079,6 +3096,184 @@ mod tests {
             .unwrap();
         let pending = table_txn.pending::<Vec<u8>, String>();
         assert!(pending.is_empty());
+        commit(&mut table, pending);
+        assert_eq!(
+            table,
+            BTreeMap::from([
+                (1i64.to_le_bytes().to_vec(), "v6".to_string()),
+                (42i64.to_le_bytes().to_vec(), "v7".to_string())
+            ])
+        );
+
+        // Test `update_by_key`
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        // Uniqueness violation.
+        table_txn
+            .update_by_key(1i64.to_le_bytes().to_vec(), "v7".to_string(), 0)
+            .unwrap_err();
+        assert!(table_txn
+            .update_by_key(1i64.to_le_bytes().to_vec(), "v8".to_string(), 1)
+            .unwrap());
+        assert!(!table_txn
+            .update_by_key(5i64.to_le_bytes().to_vec(), "v8".to_string(), 2)
+            .unwrap());
+        let pending = table_txn.pending();
+        assert_eq!(
+            pending,
+            vec![
+                (1i64.to_le_bytes().to_vec(), "v6".to_string(), -1),
+                (1i64.to_le_bytes().to_vec(), "v8".to_string(), 1),
+            ]
+        );
+        commit(&mut table, pending);
+        assert_eq!(
+            table,
+            BTreeMap::from([
+                (1i64.to_le_bytes().to_vec(), "v8".to_string()),
+                (42i64.to_le_bytes().to_vec(), "v7".to_string())
+            ])
+        );
+
+        // Duplicate `update_by_key`.
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        assert!(table_txn
+            .update_by_key(1i64.to_le_bytes().to_vec(), "v8".to_string(), 0)
+            .unwrap());
+        let pending = table_txn.pending::<Vec<u8>, String>();
+        assert!(pending.is_empty());
+        commit(&mut table, pending);
+        assert_eq!(
+            table,
+            BTreeMap::from([
+                (1i64.to_le_bytes().to_vec(), "v8".to_string()),
+                (42i64.to_le_bytes().to_vec(), "v7".to_string())
+            ])
+        );
+
+        // Test `update_by_keys`
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        // Uniqueness violation.
+        table_txn
+            .update_by_keys(
+                [
+                    (1i64.to_le_bytes().to_vec(), "v7".to_string()),
+                    (5i64.to_le_bytes().to_vec(), "v7".to_string()),
+                ],
+                0,
+            )
+            .unwrap_err();
+        let n = table_txn
+            .update_by_keys(
+                [
+                    (1i64.to_le_bytes().to_vec(), "v9".to_string()),
+                    (5i64.to_le_bytes().to_vec(), "v7".to_string()),
+                ],
+                1,
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        let n = table_txn
+            .update_by_keys(
+                [
+                    (15i64.to_le_bytes().to_vec(), "v9".to_string()),
+                    (5i64.to_le_bytes().to_vec(), "v7".to_string()),
+                ],
+                2,
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+        let pending = table_txn.pending();
+        assert_eq!(
+            pending,
+            vec![
+                (1i64.to_le_bytes().to_vec(), "v8".to_string(), -1),
+                (1i64.to_le_bytes().to_vec(), "v9".to_string(), 1),
+            ]
+        );
+        commit(&mut table, pending);
+        assert_eq!(
+            table,
+            BTreeMap::from([
+                (1i64.to_le_bytes().to_vec(), "v9".to_string()),
+                (42i64.to_le_bytes().to_vec(), "v7".to_string())
+            ])
+        );
+
+        // Duplicate `update_by_keys`.
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let n = table_txn
+            .update_by_keys(
+                [
+                    (1i64.to_le_bytes().to_vec(), "v9".to_string()),
+                    (42i64.to_le_bytes().to_vec(), "v7".to_string()),
+                ],
+                0,
+            )
+            .unwrap();
+        assert_eq!(n, 2);
+        let pending = table_txn.pending::<Vec<u8>, String>();
+        assert!(pending.is_empty());
+        commit(&mut table, pending);
+        assert_eq!(
+            table,
+            BTreeMap::from([
+                (1i64.to_le_bytes().to_vec(), "v9".to_string()),
+                (42i64.to_le_bytes().to_vec(), "v7".to_string())
+            ])
+        );
+
+        // Test `delete_by_key`
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let prev = table_txn.delete_by_key(1i64.to_le_bytes().to_vec(), 0);
+        assert_eq!(prev, Some("v9".to_string()));
+        let prev = table_txn.delete_by_key(5i64.to_le_bytes().to_vec(), 1);
+        assert_none!(prev);
+        let prev = table_txn.delete_by_key(1i64.to_le_bytes().to_vec(), 2);
+        assert_none!(prev);
+        let pending = table_txn.pending();
+        assert_eq!(
+            pending,
+            vec![(1i64.to_le_bytes().to_vec(), "v9".to_string(), -1),]
+        );
+        commit(&mut table, pending);
+        assert_eq!(
+            table,
+            BTreeMap::from([(42i64.to_le_bytes().to_vec(), "v7".to_string())])
+        );
+
+        // Test `delete_by_keys`
+        let mut table_txn =
+            TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
+        let prevs = table_txn.delete_by_keys(
+            [42i64.to_le_bytes().to_vec(), 55i64.to_le_bytes().to_vec()],
+            0,
+        );
+        assert_eq!(
+            prevs,
+            vec![(42i64.to_le_bytes().to_vec(), "v7".to_string())]
+        );
+        let prevs = table_txn.delete_by_keys(
+            [42i64.to_le_bytes().to_vec(), 55i64.to_le_bytes().to_vec()],
+            1,
+        );
+        assert_eq!(prevs, vec![]);
+        let prevs = table_txn.delete_by_keys(
+            [10i64.to_le_bytes().to_vec(), 55i64.to_le_bytes().to_vec()],
+            2,
+        );
+        assert_eq!(prevs, vec![]);
+        let pending = table_txn.pending();
+        assert_eq!(
+            pending,
+            vec![(42i64.to_le_bytes().to_vec(), "v7".to_string(), -1),]
+        );
+        commit(&mut table, pending);
+        assert_eq!(table, BTreeMap::new());
     }
 
     #[mz_ore::test(tokio::test)]
