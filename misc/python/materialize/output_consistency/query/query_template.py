@@ -270,7 +270,7 @@ class QueryTemplate:
             else:
                 row_index_string = ", ".join(
                     str(index)
-                    for index in self.row_selection.get_row_indices(data_source)
+                    for index in sorted(self.row_selection.get_row_indices(data_source))
                 )
 
             row_filter_clauses.append(
