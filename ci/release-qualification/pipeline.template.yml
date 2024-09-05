@@ -143,7 +143,6 @@ steps:
             # Runs out of disk
             args: [--scenario=BackupAndRestoreLarge, --actions=500000]
 
-
     - id: zippy-kafka-parallel-insert
       label: "Longer Zippy Kafka Parallel Insert"
       depends_on: build-aarch64
@@ -157,19 +156,39 @@ steps:
             # TODO(def-) Increase number of actions when #24250 is fixed
             args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=50000, --max-execution-time=4h]
 
-  - id: feature-benchmark-scale-plus-one
-    label: "Feature benchmark against 'common-ancestor' with --scale=+1 %N"
-    depends_on: build-aarch64
-    timeout_in_minutes: 2880
-    parallelism: 8
-    agents:
-      # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
-      queue: linux-aarch64-medium
-      # queue: hetzner-aarch64-16cpu-32gb
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: feature-benchmark
-          args: [--other-tag=common-ancestor, --scale=+1]
+  - group: Benchmarks
+    key: benchmark
+    steps:
+      - id: feature-benchmark-scale-plus-one
+        label: "Feature benchmark against 'common-ancestor' with --scale=+1 %N"
+        depends_on: build-aarch64
+        timeout_in_minutes: 2880
+        parallelism: 8
+        agents:
+          # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
+          queue: linux-aarch64-medium
+          # queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: feature-benchmark
+              args: [--other-tag=common-ancestor, --scale=+1]
+
+      - id: long-parallel-benchmark
+        label: "Long Parallel Benchmark"
+        depends_on: build-aarch64
+        timeout_in_minutes: 1200
+        agents:
+          # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
+          queue: linux-aarch64-medium
+          # queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-benchmark
+              args:
+                - --other-tag
+                - common-ancestor
+                - --load-phase-duration
+                - 1200
 
   - group: SQLsmith
     key: sqlsmith
