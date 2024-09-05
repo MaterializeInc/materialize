@@ -805,6 +805,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
         match apply_compaction_lenient(metrics, batches, &res.output) {
             Ok(batches) => {
                 let mut new_trace = Trace::default();
+                new_trace.roundtrip_structure = trace.roundtrip_structure;
                 new_trace.downgrade_since(trace.since());
                 for batch in batches {
                     // Ignore merge_reqs because whichever process generated
@@ -854,6 +855,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
             // we can try to apply our diffs on top of these new (potentially) merged
             // batches.
             let mut reconstructed_spine = Trace::default();
+            reconstructed_spine.roundtrip_structure = trace.roundtrip_structure;
             trace.map_batches(|b| {
                 // Ignore merge_reqs because whichever process generated this
                 // diff is assigned the work.
@@ -868,6 +870,7 @@ fn apply_diffs_spine<T: Timestamp + Lattice>(
     };
 
     let mut new_trace = Trace::default();
+    new_trace.roundtrip_structure = trace.roundtrip_structure;
     new_trace.downgrade_since(trace.since());
     for (batch, ()) in batches {
         // Ignore merge_reqs because whichever process generated this diff is
@@ -1263,7 +1266,6 @@ mod tests {
     /// is applying those changes as diffs.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
-    #[ignore] // TODO: Reenable when #29385 is fixed
     fn test_state_sync() {
         use proptest::prelude::*;
 
