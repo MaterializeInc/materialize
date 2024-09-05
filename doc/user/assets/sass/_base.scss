@@ -9,7 +9,7 @@ $rem-scale: 0.625;
 }
 
 :root {
-    --nav-height: #{rem(6.5)};
+    --nav-height: #{rem(6.5)}; // Changes to height requires changes to partials/toc.html since custom scroll logic implementation
 
     --h1: #{rem(4.8)};
     --h2: #{rem(2.8)};

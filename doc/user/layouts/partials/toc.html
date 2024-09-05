@@ -51,15 +51,19 @@
   /// page's scroll boundaries. This makes it possible to distinguish headings
   /// that would otherwise all require scrolling to the very end of the
   /// viewport.
+
+  /// The header now has a fixed position. The _base.scss defines header height.
+
   function headingOffsets() {
     const SLOP = 100;
     const headings = $(".content h2, .content h3");
     let offsets = headings.toArray().map((h) => ({
       id: h.id,
-      offset: h.offsetTop,
+      offset: h.offsetTop - 65,
     }));
     const cutoff = $(document).height() - $(window).height() - SLOP;
     const firstBad = offsets.findIndex((o) => o.offset > cutoff);
+
     if (firstBad === -1 || firstBad === offsets.length - 1) return offsets;
     const allotment = SLOP / (offsets.length - firstBad);
     for (var i = firstBad; i < offsets.length; i++)
@@ -71,14 +75,10 @@
   $(window).scroll(() => {
     const scroll = $(window).scrollTop();
     const offsets = headingOffsets();
-    let activeId = offsets[offsets.length - 1].id;
-    for (let i = 0; i < offsets.length; i++) {
+    let activeId = scroll == 0 ? null : offsets[offsets.length - 1].id;
+    for (let i = 0; i < offsets.length && scroll > 0 ; i++) {
       if (offsets[i].offset > scroll) {
-        if (i > 0) {
-          activeId = offsets[i - 1].id;
-        } else {
-          activeId = null;
-        }
+        activeId = offsets[i].id;
         break;
       }
     }
@@ -92,7 +92,7 @@
     const id = window.location.hash.substring(1);
     const offsets = headingOffsets();
     const offset = offsets.find((o) => o.id == id);
-    if (offset) $(window).scrollTop(offset.offset + 1);
+    if (offset) $(window).scrollTop(offset.offset - 10);
     else $(window).trigger("scroll");
   });
 
