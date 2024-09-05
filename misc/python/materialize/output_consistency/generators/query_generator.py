@@ -284,69 +284,13 @@ class QueryGenerator:
             if storage_layout == ValueStorageLayout.ANY:
                 storage_layout = ValueStorageLayout.VERTICAL
 
-            data_source, additional_data_sources = self._select_sources(storage_layout)
-            all_expressions = [expression]
-            self._assign_random_sources(
-                [data_source] + as_data_sources(additional_data_sources),
-                all_expressions,
-            )
-
-            row_selection = self._select_rows(
-                storage_layout, [data_source] + as_data_sources(additional_data_sources)
-            )
-
-            ignore_verdict = self.ignore_filter.shall_ignore_expression(
-                expression, row_selection
-            )
-            if isinstance(ignore_verdict, YesIgnore):
-                test_summary.count_ignored_select_expressions = (
-                    test_summary.count_ignored_select_expressions + 1
-                )
-                self._log_skipped_expression(
-                    test_summary, expression, ignore_verdict.reason
-                )
-                continue
-
-            contains_aggregation = expression.is_aggregate
-
-            if self.randomized_picker.random_boolean(
-                probability.NO_SOURCE_MINIMIZATION
-            ):
-                # do not minimize sources to catch errors like #29110
-                pass
-            else:
-                # remove sources that are not used by the expression
-                data_source, additional_data_sources = self.minimize_sources(
-                    data_source, additional_data_sources, all_expressions
-                )
-                row_selection.trim_to_minimized_sources(
-                    [data_source] + as_data_sources(additional_data_sources)
-                )
-
-            uses_joins = len(additional_data_sources) > 0
-
-            queries.append(
-                QueryTemplate(
+            queries.extend(
+                self._create_multi_column_queries(
+                    test_summary,
+                    [expression],
                     expression.is_expect_error,
-                    all_expressions,
-                    None,
                     storage_layout,
-                    data_source,
-                    contains_aggregation,
-                    row_selection,
-                    offset=self._generate_offset(
-                        storage_layout,
-                        data_source,
-                        uses_joins=uses_joins,
-                        contains_aggregations=contains_aggregation,
-                    ),
-                    limit=self._generate_limit(
-                        storage_layout,
-                        data_source,
-                        uses_joins=uses_joins,
-                        contains_aggregations=contains_aggregation,
-                    ),
-                    additional_data_sources=additional_data_sources,
+                    expression.is_aggregate,
                 )
             )
 
