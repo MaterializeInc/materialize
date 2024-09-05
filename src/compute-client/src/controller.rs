@@ -847,10 +847,7 @@ where
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn record_introspection_updates(
-        &mut self,
-        storage: &mut dyn StorageController<Timestamp = T>,
-    ) {
+    fn record_introspection_updates(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
         // We could record the contents of `introspection_rx` directly here, but to reduce the
         // pressure on persist we spend some effort consolidating first.
         let mut updates_by_type = BTreeMap::new();
@@ -868,20 +865,20 @@ where
         for (type_, updates) in updates_by_type {
             if !updates.is_empty() {
                 let op = StorageWriteOp::Append { updates };
-                storage.update_introspection_collection(type_, op).await;
+                storage.update_introspection_collection(type_, op);
             }
         }
     }
 
     /// Processes the work queued by [`ComputeController::ready`].
     #[mz_ore::instrument(level = "debug")]
-    pub async fn process(
+    pub fn process(
         &mut self,
         storage: &mut dyn StorageController<Timestamp = T>,
     ) -> Option<ComputeControllerResponse<T>> {
         // Perform periodic maintenance work.
         if self.maintenance_scheduled {
-            self.maintain(storage).await;
+            self.maintain(storage);
             self.maintenance_ticker.reset();
             self.maintenance_scheduled = false;
         }
@@ -912,7 +909,7 @@ where
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn maintain(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
+    fn maintain(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
         // Perform instance maintenance work.
         for instance in self.instances.values_mut() {
             instance.maintain();
@@ -923,7 +920,7 @@ where
         // It's beneficial to do this as the last maintenance step because previous steps can cause
         // dropping of state, which can can cause introspection retractions, which lower the volume
         // of data we have to record.
-        self.record_introspection_updates(storage).await;
+        self.record_introspection_updates(storage);
     }
 }
 

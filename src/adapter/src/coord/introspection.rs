@@ -325,7 +325,7 @@ impl Coordinator {
     ///  * dropping its compute collection
     ///  * retracting any rows previously omitted by it from its corresponding storage-managed
     ///    collection
-    pub(super) async fn drop_introspection_subscribes(&mut self, replica_id: ReplicaId) {
+    pub(super) fn drop_introspection_subscribes(&mut self, replica_id: ReplicaId) {
         let to_drop: Vec<_> = self
             .introspection_subscribes
             .iter()
@@ -334,11 +334,11 @@ impl Coordinator {
             .collect();
 
         for id in to_drop {
-            self.drop_introspection_subscribe(id).await;
+            self.drop_introspection_subscribe(id);
         }
     }
 
-    async fn drop_introspection_subscribe(&mut self, id: GlobalId) {
+    fn drop_introspection_subscribe(&mut self, id: GlobalId) {
         let Some(subscribe) = self.introspection_subscribes.remove(&id) else {
             soft_panic_or_log!("attempt to remove unknown introspection subscribe (id={id})");
             return;
@@ -359,13 +359,10 @@ impl Coordinator {
             .compute
             .drop_collections(subscribe.cluster_id, vec![id]);
 
-        self.controller
-            .storage
-            .update_introspection_collection(
-                subscribe.spec.introspection_type,
-                subscribe.delete_write_op(),
-            )
-            .await;
+        self.controller.storage.update_introspection_collection(
+            subscribe.spec.introspection_type,
+            subscribe.delete_write_op(),
+        );
     }
 
     async fn reinstall_introspection_subscribe(&mut self, id: GlobalId) {
@@ -461,19 +458,15 @@ impl Coordinator {
         if let Some(op) = subscribe.deferred_write.take() {
             self.controller
                 .storage
-                .update_introspection_collection(subscribe.spec.introspection_type, op)
-                .await;
+                .update_introspection_collection(subscribe.spec.introspection_type, op);
         }
 
-        self.controller
-            .storage
-            .update_introspection_collection(
-                subscribe.spec.introspection_type,
-                StorageWriteOp::Append {
-                    updates: new_updates,
-                },
-            )
-            .await;
+        self.controller.storage.update_introspection_collection(
+            subscribe.spec.introspection_type,
+            StorageWriteOp::Append {
+                updates: new_updates,
+            },
+        );
     }
 }
 

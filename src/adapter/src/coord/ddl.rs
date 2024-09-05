@@ -647,7 +647,7 @@ impl Coordinator {
             if !cluster_replicas_to_drop.is_empty() {
                 fail::fail_point!("after_catalog_drop_replica");
                 for (cluster_id, replica_id) in cluster_replicas_to_drop {
-                    self.drop_replica(cluster_id, replica_id).await;
+                    self.drop_replica(cluster_id, replica_id);
                 }
             }
             if !clusters_to_drop.is_empty() {
@@ -792,7 +792,7 @@ impl Coordinator {
         Ok(builtin_update_notify)
     }
 
-    async fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
+    fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         if let Some(Some(ReplicaMetadata { metrics })) =
             self.transient_replica_metadata.insert(replica_id, None)
         {
@@ -811,7 +811,7 @@ impl Coordinator {
             self.builtin_table_update().background(updates);
         }
 
-        self.drop_introspection_subscribes(replica_id).await;
+        self.drop_introspection_subscribes(replica_id);
 
         self.controller
             .drop_replica(cluster_id, replica_id)

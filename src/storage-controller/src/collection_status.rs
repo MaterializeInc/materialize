@@ -58,11 +58,7 @@ where
         self.previous_statuses.extend(previous_statuses)
     }
 
-    pub(super) async fn append_updates(
-        &mut self,
-        updates: Vec<StatusUpdate>,
-        type_: IntrospectionType,
-    ) {
+    pub(super) fn append_updates(&mut self, updates: Vec<StatusUpdate>, type_: IntrospectionType) {
         let source_status_history_id = *self
             .introspection_ids
             .lock()
@@ -84,14 +80,12 @@ where
             .extend(new.iter().map(|r| (r.id, r.status)));
 
         if !new.is_empty() {
-            self.collection_manager
-                .blind_write(
-                    source_status_history_id,
-                    new.into_iter()
-                        .map(|update| (Row::from(update), 1))
-                        .collect(),
-                )
-                .await;
+            self.collection_manager.blind_write(
+                source_status_history_id,
+                new.into_iter()
+                    .map(|update| (Row::from(update), 1))
+                    .collect(),
+            );
         }
     }
 }
