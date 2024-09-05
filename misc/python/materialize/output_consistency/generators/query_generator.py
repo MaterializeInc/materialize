@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from collections.abc import Sequence
 
 from materialize.output_consistency.common import probability
 from materialize.output_consistency.common.configuration import (
@@ -43,6 +42,7 @@ from materialize.output_consistency.input_data.test_input_data import (
 )
 from materialize.output_consistency.query.additional_data_source import (
     AdditionalDataSource,
+    as_data_sources,
 )
 from materialize.output_consistency.query.data_source import (
     DataSource,
@@ -213,13 +213,13 @@ class QueryGenerator:
 
             data_source, additional_data_sources = self._select_sources(storage_layout)
             self._assign_random_sources(
-                [data_source] + additional_data_sources,
+                [data_source] + as_data_sources(additional_data_sources),
                 expressions,
                 contains_aggregations,
             )
 
             row_selection = self._select_rows(
-                storage_layout, [data_source] + additional_data_sources
+                storage_layout, [data_source] + as_data_sources(additional_data_sources)
             )
 
             expressions = self._remove_known_inconsistencies(
@@ -240,7 +240,7 @@ class QueryGenerator:
                     data_source, additional_data_sources, expressions
                 )
                 row_selection.trim_to_minimized_sources(
-                    [data_source] + additional_data_sources
+                    [data_source] + as_data_sources(additional_data_sources)
                 )
 
             uses_joins = len(additional_data_sources) > 0
@@ -287,11 +287,12 @@ class QueryGenerator:
             data_source, additional_data_sources = self._select_sources(storage_layout)
             all_expressions = [expression]
             self._assign_random_sources(
-                [data_source] + additional_data_sources, all_expressions
+                [data_source] + as_data_sources(additional_data_sources),
+                all_expressions,
             )
 
             row_selection = self._select_rows(
-                storage_layout, [data_source] + additional_data_sources
+                storage_layout, [data_source] + as_data_sources(additional_data_sources)
             )
 
             ignore_verdict = self.ignore_filter.shall_ignore_expression(
@@ -319,7 +320,7 @@ class QueryGenerator:
                     data_source, additional_data_sources, all_expressions
                 )
                 row_selection.trim_to_minimized_sources(
-                    [data_source] + additional_data_sources
+                    [data_source] + as_data_sources(additional_data_sources)
                 )
 
             uses_joins = len(additional_data_sources) > 0
@@ -409,7 +410,7 @@ class QueryGenerator:
 
     def _assign_random_sources(
         self,
-        all_data_sources: Sequence[DataSource],
+        all_data_sources: list[DataSource],
         expressions: list[Expression],
         force: bool = False,
     ) -> None:
@@ -457,10 +458,7 @@ class QueryGenerator:
                 return data_source, []
 
             return (
-                DataSource(
-                    additional_data_sources[0].table_index,
-                    additional_data_sources[0].custom_db_object_name,
-                ),
+                additional_data_sources[0].data_source,
                 additional_data_sources[1:],
             )
 
@@ -478,7 +476,7 @@ class QueryGenerator:
         for i in range(1, self.config.vertical_join_tables):
             if self.randomized_picker.random_boolean(0.3):
                 additional_source = AdditionalDataSource(
-                    table_index=i,
+                    data_source=DataSource(table_index=i),
                     join_operator=self.randomized_picker.random_join_operator(),
                     join_constraint=TRUE_EXPRESSION,
                 )
@@ -603,7 +601,7 @@ class QueryGenerator:
         self,
         storage_layout: ValueStorageLayout,
         data_source: DataSource,
-        joined_source: DataSource,
+        joined_source: AdditionalDataSource,
     ) -> Expression:
         assert (
             storage_layout == ValueStorageLayout.VERTICAL
@@ -644,7 +642,7 @@ class QueryGenerator:
                 storage_layout, random_types_with_values_2
             )
             self._assign_source(data_source, expression1)
-            self._assign_source(joined_source, expression2)
+            self._assign_source(joined_source.data_source, expression2)
             return self.expression_generator.generate_equals_expression(
                 expression1, expression2
             )
@@ -655,7 +653,7 @@ class QueryGenerator:
             leaf_expression = self.expression_generator.generate_leaf_expression(
                 storage_layout, [random_type_with_values]
             )
-            self._assign_source(joined_source, leaf_expression)
+            self._assign_source(joined_source.data_source, leaf_expression)
             is_null_expression = ExpressionWithArgs(
                 operation=IS_NULL_OPERATION,
                 args=[leaf_expression],
@@ -676,7 +674,7 @@ class QueryGenerator:
             if expression is None:
                 expression = TRUE_EXPRESSION
             else:
-                self._assign_source(joined_source, expression)
+                self._assign_source(joined_source.data_source, expression)
             return expression
         else:
             raise RuntimeError(f"Unexpected join target: {join_target}")

@@ -30,6 +30,7 @@ from materialize.output_consistency.expression.expression_characteristics import
 )
 from materialize.output_consistency.query.additional_data_source import (
     AdditionalDataSource,
+    as_data_sources,
 )
 from materialize.output_consistency.query.data_source import (
     DataSource,
@@ -76,7 +77,7 @@ class QueryTemplate:
 
     def get_all_data_sources(self) -> list[DataSource]:
         all_data_sources = [self.data_source]
-        all_data_sources.extend(self.additional_data_sources)
+        all_data_sources.extend(as_data_sources(self.additional_data_sources))
         return all_data_sources
 
     def get_all_expressions(
@@ -224,14 +225,14 @@ class QueryTemplate:
     ) -> str:
         db_object_name_to_join = strategy.get_db_object_name(
             self.storage_layout,
-            data_source=additional_data_source_to_join,
+            data_source=additional_data_source_to_join.data_source,
             override_base_name=override_db_object_base_name,
         )
 
         join_operator_sql = additional_data_source_to_join.join_operator.to_sql()
 
         return (
-            f"{join_operator_sql} {db_object_name_to_join} {additional_data_source_to_join.alias()}"
+            f"{join_operator_sql} {db_object_name_to_join} {additional_data_source_to_join.data_source.alias()}"
             f"{space_separator}ON {additional_data_source_to_join.join_constraint.to_sql(sql_adjuster, True, True)}"
         )
 
