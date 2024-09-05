@@ -226,34 +226,20 @@ class QueryExecutionManager:
         # However, it is also possible that the where condition was invalid.
         # This is ignored as of now.
         arg_split_index = int(args_count / 2)
-        query1_args = original_query_template.select_expressions[arg_split_index:]
-        query2_args = original_query_template.select_expressions[:arg_split_index]
+        query1_select_expressions = original_query_template.select_expressions[
+            arg_split_index:
+        ]
+        query2_select_expressions = original_query_template.select_expressions[
+            :arg_split_index
+        ]
 
-        new_query_template1 = QueryTemplate(
+        new_query_template1 = original_query_template.clone(
             False,
-            query1_args,
-            original_query_template.where_expression,
-            original_query_template.storage_layout,
-            original_query_template.data_source,
-            original_query_template.contains_aggregations,
-            original_query_template.row_selection,
-            original_query_template.offset,
-            original_query_template.limit,
-            # keep the original data sources
-            additional_data_sources=original_query_template.additional_data_sources,
+            query1_select_expressions,
         )
-        new_query_template2 = QueryTemplate(
+        new_query_template2 = original_query_template.clone(
             False,
-            query2_args,
-            original_query_template.where_expression,
-            original_query_template.storage_layout,
-            original_query_template.data_source,
-            original_query_template.contains_aggregations,
-            original_query_template.row_selection,
-            original_query_template.offset,
-            original_query_template.limit,
-            # keep the original data sources
-            additional_data_sources=original_query_template.additional_data_sources,
+            query2_select_expressions,
         )
         query_id_prefix = f"{query_id}."
 

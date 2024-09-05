@@ -14,6 +14,13 @@ from materialize.output_consistency.query.join import JoinOperator
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
-class AdditionalDataSource(DataSource):
+class AdditionalSource:
+    data_source: DataSource
     join_operator: JoinOperator
     join_constraint: Expression
+
+
+def as_data_sources(
+    additional_sources: list[AdditionalSource],
+) -> list[DataSource]:
+    return [additional_source.data_source for additional_source in additional_sources]
