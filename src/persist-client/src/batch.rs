@@ -1232,9 +1232,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                 .min_by_key(|i| ord.at(*i))
                                 .expect("non-empty batch")
                         };
-                        ArrayBound::new(Arc::clone(&ext.key), min_key)
-                            .to_proto_lower(cfg.structured_key_lower_len)
-                            .map(|proto| LazyProto::from(&proto))
+                        let lower = ArrayBound::new(Arc::clone(&ext.key), min_key)
+                            .to_proto_lower(cfg.structured_key_lower_len);
+                        if lower.is_none() {
+                            batch_metrics.key_lower_too_big.inc()
+                        }
+                        lower.map(|proto| LazyProto::from(&proto))
                     })
                 } else {
                     None

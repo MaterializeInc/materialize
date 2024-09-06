@@ -705,6 +705,7 @@ pub struct BatchWriteMetrics {
     pub(crate) goodbytes: IntCounter,
     pub(crate) seconds: Counter,
     pub(crate) write_stalls: IntCounter,
+    pub(crate) key_lower_too_big: IntCounter,
 
     pub(crate) step_stats: Counter,
     pub(crate) step_part_writing: Counter,
@@ -730,6 +731,13 @@ impl BatchWriteMetrics {
                 name: format!("mz_persist_{}_write_stall_count", name),
                 help: format!(
                     "count of {} writes stalling to await max outstanding reqs",
+                    name
+                ),
+            )),
+            key_lower_too_big: registry.register(metric!(
+                name: format!("mz_persist_{}_key_lower_too_big", name),
+                help: format!(
+                    "count of {} writes that were unable to write a key lower, because the size threshold was too low",
                     name
                 ),
             )),
