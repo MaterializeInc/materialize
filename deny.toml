@@ -226,6 +226,8 @@ ignore = [
     "RUSTSEC-2021-0153",
     # abomonation transmutes &T to and from &[u8] without sufficient constraints
     "RUSTSEC-2021-0120",
+    # proc-macro-error is unmaintained, possible alternative: proc-macro-error2
+    "RUSTSEC-2024-0370",
 ]
 
 # Must be manually kept in sync with about.toml.
