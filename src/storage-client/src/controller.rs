@@ -699,33 +699,10 @@ pub trait StorageController: Debug {
         -> Result<serde_json::Value, anyhow::Error>;
 
     /// Records the current read and write frontiers of all known storage objects.
-    ///
-    /// The provided `external_frontiers` are merged with the frontiers known to
-    /// the storage controller. If `external_frontiers` contains entries with
-    /// object IDs that are known to storage controller, the storage
-    /// controller's frontiers take precedence. The rationale is that the
-    /// storage controller should be the authority on frontiers of storage
-    /// objects, not the caller of this method.
-    fn record_frontiers(
-        &mut self,
-        external_frontiers: BTreeMap<
-            GlobalId,
-            (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
-        >,
-    );
+    fn record_frontiers(&mut self);
 
     /// Records the current per-replica write frontiers of all known storage objects.
-    ///
-    /// The provided `external_frontiers` are merged with the frontiers known to
-    /// the storage controller. If `external_frontiers` contains entries with
-    /// object IDs that are known to storage controller, the storage
-    /// controller's frontiers take precedence. The rationale is that the
-    /// storage controller should be the authority on frontiers of storage
-    /// objects, not the caller of this method.
-    fn record_replica_frontiers(
-        &mut self,
-        external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
-    );
+    fn record_replica_frontiers(&mut self);
 
     /// Records append-only updates for the given introspection type.
     ///

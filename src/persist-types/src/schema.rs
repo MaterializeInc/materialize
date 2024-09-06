@@ -11,8 +11,8 @@
 
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, StructArray};
-use arrow::datatypes::{DataType, Field, Fields, SchemaBuilder};
+use arrow::array::{new_null_array, Array, AsArray, ListArray, StructArray};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields, SchemaBuilder};
 use itertools::Itertools;
 
 /// Returns a function to migrate arrow data encoded by `old` to be the same
@@ -51,7 +51,7 @@ impl Migration {
 pub(crate) enum ArrayMigration {
     NoOp,
     Struct(Vec<StructArrayMigration>),
-    // TODO: Map -> List
+    List(FieldRef, Box<ArrayMigration>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -80,6 +80,7 @@ impl ArrayMigration {
         match self {
             NoOp => false,
             Struct(xs) => xs.iter().any(|x| x.contains_drop()),
+            List(_f, x) => x.contains_drop(),
         }
     }
 
@@ -113,6 +114,19 @@ impl ArrayMigration {
                     migration.migrate(len, &mut fields, &mut arrays);
                 }
                 Arc::new(StructArray::new(fields, arrays, nulls))
+            }
+            List(field, entry_migration) => {
+                let list_array: ListArray = if let Some(list_array) = array.as_list_opt() {
+                    list_array.clone()
+                } else if let Some(map_array) = array.as_map_opt() {
+                    map_array.clone().into()
+                } else {
+                    panic!("expected list-like array; got {:?}", array.data_type())
+                };
+
+                let (_field, offsets, entries, nulls) = list_array.into_parts();
+                let entries = entry_migration.migrate(entries);
+                Arc::new(ListArray::new(Arc::clone(field), offsets, entries, nulls))
             }
         }
     }
@@ -199,7 +213,24 @@ fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<ArrayMigrat
         (FixedSizeBinary(_), _) => None,
         (Struct(o), Struct(n)) => backward_compatible_struct(o, n),
         (Struct(_), _) => None,
-        (List(o), List(n)) => (o == n).then_some(NoOp),
+        (List(o), List(n)) | (Map(o, _), List(n)) => {
+            // The list migration can proceed if the entry types are compatible and the
+            // field metadata is compatible. (In practice, this requires making sure that
+            // nullable fields don't become non-nullable.)
+            if o.is_nullable() && !n.is_nullable() {
+                None
+            } else {
+                let nested = backward_compatible_typ(o.data_type(), n.data_type())?;
+                let migration =
+                    if matches!(old, DataType::List(_)) && o == n && nested == ArrayMigration::NoOp
+                    {
+                        ArrayMigration::NoOp
+                    } else {
+                        ArrayMigration::List(Arc::clone(n), nested.into())
+                    };
+                Some(migration)
+            }
+        }
         (List(_), _) => None,
         (Map(o, _), Map(n, _)) => (o == n).then_some(NoOp),
         (Map(_, _), _) => None,
@@ -332,6 +363,7 @@ mod tests {
                 assert_eq!(new.data_type(), migrated.data_type());
             }
         }
+
         fn struct_(fields: impl IntoIterator<Item = (&'static str, DataType, bool)>) -> DataType {
             let fields = fields
                 .into_iter()
@@ -460,6 +492,51 @@ mod tests {
         // Regression test for migrating a RelationDesc with no columns
         // (which gets encoded as a NullArray) to a RelationDesc with one
         // nullable column.
-        testcase(Null, struct_([("a", Boolean, true)]), Some(false))
+        testcase(Null, struct_([("a", Boolean, true)]), Some(false));
+
+        // Test that we can migrate the old maparray columns to listarrays if the contents match.
+        testcase(
+            Map(
+                Field::new_struct(
+                    "map_entries",
+                    vec![
+                        Field::new("keys", Utf8, false),
+                        Field::new("values", Boolean, true),
+                    ],
+                    false,
+                )
+                .into(),
+                true,
+            ),
+            List(
+                Field::new_struct(
+                    "map_entries",
+                    vec![
+                        Field::new("keys", Utf8, false),
+                        Field::new("values", Boolean, true),
+                    ],
+                    false,
+                )
+                .into(),
+            ),
+            Some(false),
+        );
+
+        // Recursively migrate list contents
+        testcase(
+            List(Field::new_struct("entries", vec![Field::new("keys", Utf8, false)], true).into()),
+            List(
+                Field::new_struct(
+                    "entries",
+                    vec![
+                        Field::new("keys", Utf8, false),
+                        Field::new("values", Boolean, true),
+                    ],
+                    true,
+                )
+                .into(),
+            ),
+            Some(false),
+        );
     }
 }

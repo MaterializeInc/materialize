@@ -2057,14 +2057,8 @@ where
         Ok(json_state)
     }
 
-    fn record_frontiers(
-        &mut self,
-        external_frontiers: BTreeMap<
-            GlobalId,
-            (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
-        >,
-    ) {
-        let mut frontiers = external_frontiers;
+    fn record_frontiers(&mut self) {
+        let mut frontiers = BTreeMap::new();
 
         // Enrich `frontiers` with storage frontiers.
         for CollectionFrontiers {
@@ -2117,11 +2111,8 @@ where
         self.collection_manager.differential_append(id, updates);
     }
 
-    fn record_replica_frontiers(
-        &mut self,
-        external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
-    ) {
-        let mut frontiers = external_frontiers;
+    fn record_replica_frontiers(&mut self) {
+        let mut frontiers = BTreeMap::new();
 
         // Enrich `frontiers` with storage frontiers.
         let mut uppers: BTreeMap<GlobalId, Antichain<Self::Timestamp>> = self

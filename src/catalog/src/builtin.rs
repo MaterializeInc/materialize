@@ -2220,6 +2220,7 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         )
         .with_column("create_sql", ScalarType::String.nullable(true))
         .with_column("redacted_create_sql", ScalarType::String.nullable(true))
+        .with_column("source_id", ScalarType::String.nullable(true))
         .with_key(vec![0])
         .with_key(vec![1])
         .finish(),

@@ -3648,7 +3648,7 @@ impl Coordinator {
                     .filter_map(|subsource| {
                         catalog
                             .get_entry(subsource)
-                            .source_export_details()
+                            .subsource_details()
                             .map(|(_id, reference, _details)| reference)
                     })
                     .collect();

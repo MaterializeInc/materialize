@@ -1198,7 +1198,7 @@ class Repository:
         )
         parser.add_argument(
             "--bazel",
-            default=ui.env_is_truthy("CI_BUILD_WITH_BAZEL", "1"),
+            default=ui.env_is_truthy("CI_BUILD_WITH_BAZEL"),
             action="store_true",
         )
         parser.add_argument(

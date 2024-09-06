@@ -13,16 +13,20 @@
 // Ditto for Log* and the Log. The others are used internally in these top-level
 // structs.
 
+use arrow::array::{Array, ArrayRef};
+use arrow::datatypes::DataType;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use bytes::BufMut;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
-use mz_persist_types::columnar::codec_to_schema2;
+use mz_persist_types::columnar::{codec_to_schema2, data_type};
 use mz_persist_types::parquet::EncodingConfig;
+use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64};
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
@@ -31,6 +35,7 @@ use prost::Message;
 use serde::Serialize;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
+use tracing::error;
 
 use crate::error::Error;
 use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
@@ -230,7 +235,36 @@ impl BlobTraceUpdates {
                 // Recurse at most once, since this data is now structured.
                 self.get_or_make_structured::<K, V>(key_schema, val_schema)
             }
-            BlobTraceUpdates::Both(_, structured) => structured,
+            BlobTraceUpdates::Both(_, structured) => {
+                // If the types don't match, attempt to migrate the array to the new type.
+                // We expect this to succeed, since this should only be called with backwards-
+                // compatible schemas... but if it fails we only log, and let some higher-level
+                // code signal the error if it cares.
+                let migrate = |array: &mut ArrayRef, to_type: DataType| {
+                    let from_type = array.data_type().clone();
+                    if from_type != to_type {
+                        if let Some(migration) = backward_compatible(&from_type, &to_type) {
+                            *array = migration.migrate(Arc::clone(array));
+                        } else {
+                            error!(
+                                ?from_type,
+                                ?to_type,
+                                "failed to migrate array type; backwards-incompatible schema migration?"
+                            );
+                        }
+                    }
+                };
+                migrate(
+                    &mut structured.key,
+                    data_type::<K>(key_schema).expect("valid key schema"),
+                );
+                migrate(
+                    &mut structured.val,
+                    data_type::<V>(val_schema).expect("valid value schema"),
+                );
+
+                structured
+            }
         }
     }
 }

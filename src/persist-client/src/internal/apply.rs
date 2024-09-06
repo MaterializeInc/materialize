@@ -272,7 +272,7 @@ where
                 state
                     .collections
                     .trace
-                    .fueled_merge_reqs_before_ms(u64::MAX)
+                    .fueled_merge_reqs_before_ms(u64::MAX, None)
                     .collect()
             })
     }

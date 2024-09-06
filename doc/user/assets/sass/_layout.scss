@@ -503,3 +503,13 @@ body.dark {
         }
     }
 }
+
+.banner {
+    background-color: var(--tip);
+
+    padding: 5px;
+    text-align: center;
+    a {
+        color: var(--link);
+    }
+}

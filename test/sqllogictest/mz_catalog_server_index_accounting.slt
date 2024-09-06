@@ -708,6 +708,7 @@ mz_tables  owner_id
 mz_tables  privileges
 mz_tables  redacted_create_sql
 mz_tables  schema_id
+mz_tables  source_id
 mz_type_pg_metadata  id
 mz_type_pg_metadata  typinput
 mz_type_pg_metadata  typreceive

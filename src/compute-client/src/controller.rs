@@ -53,7 +53,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::AntichainRef;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::warn;
 use uuid::Uuid;
@@ -142,7 +142,7 @@ impl ComputeReplicaLogging {
 }
 
 /// A controller for the compute layer.
-pub struct ComputeController<T: Timestamp> {
+pub struct ComputeController<T: ComputeControllerTimestamp> {
     instances: BTreeMap<ComputeInstanceId, Instance<T>>,
     /// A map from an instance ID to an arbitrary string that describes the
     /// class of the workload that compute instance is running (e.g.,
@@ -410,26 +410,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         let i = self.instance(cluster)?;
         i.collections_hydrated_on_replicas(Some(replicas), exclude_collections)
             .map_err(|e| e.into())
-    }
-
-    /// Returns a map with the read and write frontiers of each collection.
-    pub fn collect_collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
-        let collections = self.instances.values().flat_map(|i| i.collections_iter());
-        collections
-            .map(|(id, collection)| {
-                let since = collection.read_frontier().to_owned();
-                let upper = collection.write_frontier().to_owned();
-                (id, (since, upper))
-            })
-            .collect()
-    }
-
-    /// Returns a map with the write frontier of each collection installed on each replica.
-    pub fn collect_replica_write_frontiers(&self) -> BTreeMap<(GlobalId, ReplicaId), Antichain<T>> {
-        self.instances
-            .values()
-            .flat_map(|i| i.replica_write_frontiers())
-            .collect()
     }
 
     /// Returns the state of the [`ComputeController`] formatted as JSON.

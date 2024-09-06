@@ -134,8 +134,8 @@ impl PartialBatchKey {
         PartialBatchKey(format!("{}/{}", version, part_id))
     }
 
-    pub fn split(&self) -> (WriterKey, PartId) {
-        split_batch_key(&self.0).expect("valid partial batch key")
+    pub fn split(&self) -> Option<(WriterKey, PartId)> {
+        split_batch_key(&self.0).ok()
     }
 
     pub fn complete(&self, shard_id: &ShardId) -> BlobKey {

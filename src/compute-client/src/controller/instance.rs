@@ -157,7 +157,7 @@ pub(super) enum SubscribeTargetError {
 }
 
 /// The state we keep for a compute instance.
-pub(super) struct Instance<T: Timestamp> {
+pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
     /// A handle providing access to storage collections.
@@ -292,19 +292,26 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
         replica_input_read_holds: Vec<ReadHold<T>>,
         write_only: bool,
+        storage_sink: bool,
         initial_as_of: Option<Antichain<T>>,
         refresh_schedule: Option<RefreshSchedule>,
     ) {
         // Add global collection state.
+        let introspection = CollectionIntrospection::new(
+            id,
+            self.introspection_tx.clone(),
+            as_of.clone(),
+            storage_sink,
+            initial_as_of,
+            refresh_schedule,
+        );
         let mut state = CollectionState::new(
             id,
             as_of.clone(),
             storage_dependencies,
             compute_dependencies,
             self.read_holds_tx.clone(),
-            self.introspection_tx.clone(),
-            initial_as_of,
-            refresh_schedule,
+            introspection,
         );
         // If the collection is write-only, clear its read policy to reflect that.
         if write_only {
@@ -335,19 +342,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
         // Remove global collection state.
         self.collections.remove(&id);
-    }
-
-    /// Returns the write frontier for each collection installed on each replica.
-    pub fn replica_write_frontiers(
-        &self,
-    ) -> impl Iterator<Item = ((GlobalId, ReplicaId), Antichain<T>)> + '_ {
-        self.replicas.iter().flat_map(|(replica_id, replica)| {
-            let collections = replica.collections.iter();
-            collections.map(|(collection_id, collection)| {
-                let frontier = collection.write_frontier.clone();
-                ((*collection_id, *replica_id), frontier)
-            })
-        })
     }
 
     fn add_replica_state(
@@ -434,6 +428,31 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             let targeting = subscribe.target_replica == Some(replica_id);
             targeting.then_some(*id)
         })
+    }
+
+    /// Update introspection with the current collection frontiers.
+    ///
+    /// We could also do this directly in response to frontier changes, but doing it periodically
+    /// lets us avoid emitting some introspection updates that can be consolidated (e.g. a write
+    /// frontier updated immediately followed by a read frontier update).
+    ///
+    /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
+    /// per second during normal operation.
+    fn update_frontier_introspection(&mut self) {
+        for collection in self.collections.values_mut() {
+            collection.introspection.observe_frontiers(
+                collection.read_capabilities.frontier(),
+                collection.write_frontier.borrow(),
+            );
+        }
+
+        for replica in self.replicas.values_mut() {
+            for collection in replica.collections.values_mut() {
+                collection
+                    .introspection
+                    .observe_frontier(&collection.write_frontier);
+            }
+        }
     }
 
     /// Refresh the controller state metrics for this instance.
@@ -530,7 +549,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             return;
         };
 
-        collection.hydration_state.operator_hydrated(
+        collection.introspection.operator_hydrated(
             status.lir_id,
             status.worker_id,
             status.hydrated,
@@ -1167,6 +1186,7 @@ where
         // Install collection state for each of the exports.
         for export_id in dataflow.export_ids() {
             let write_only = dataflow.sink_exports.contains_key(&export_id);
+            let storage_sink = dataflow.persist_sink_ids().any(|id| id == export_id);
             self.add_collection(
                 export_id,
                 as_of.clone(),
@@ -1174,6 +1194,7 @@ where
                 compute_dependencies.clone(),
                 replica_input_read_holds.clone(),
                 write_only,
+                storage_sink,
                 dataflow.initial_storage_as_of.clone(),
                 dataflow.refresh_schedule.clone(),
             );
@@ -1571,11 +1592,7 @@ where
         };
         let _ = collection.implied_read_hold.try_downgrade(new_since);
 
-        // Report the frontier advancement internally and externally.
-        collection
-            .collection_introspection
-            .frontier_update(&new_frontier);
-
+        // Report the frontier advancement.
         self.deliver_response(ComputeControllerResponse::FrontierUpper {
             id,
             upper: new_frontier,
@@ -1984,6 +2001,7 @@ where
         self.apply_read_hold_changes();
         self.schedule_collections();
         self.cleanup_collections();
+        self.update_frontier_introspection();
         self.refresh_state_metrics();
     }
 }
@@ -1993,7 +2011,7 @@ where
 /// A compute collection is either an index, or a storage sink, or a subscribe, exported by a
 /// compute dataflow.
 #[derive(Debug)]
-pub(super) struct CollectionState<T: Timestamp> {
+pub(super) struct CollectionState<T: ComputeControllerTimestamp> {
     /// Whether this collection is a log collection.
     ///
     /// Log collections are special in that they are only maintained by a subset of all replicas.
@@ -2053,46 +2071,18 @@ pub(super) struct CollectionState<T: Timestamp> {
     write_frontier: Antichain<T>,
 
     /// Introspection state associated with this collection.
-    collection_introspection: CollectionIntrospection<T>,
-}
-
-impl<T: Timestamp> CollectionState<T> {
-    /// Reports the current read frontier.
-    pub fn read_frontier(&self) -> AntichainRef<T> {
-        self.read_capabilities.frontier()
-    }
-
-    /// Reports the current write frontier.
-    pub fn write_frontier(&self) -> AntichainRef<T> {
-        self.write_frontier.borrow()
-    }
-
-    fn storage_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.storage_dependencies.keys().copied()
-    }
-
-    fn compute_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.compute_dependencies.keys().copied()
-    }
-
-    /// Reports the IDs of the dependencies of this collection.
-    fn dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.compute_dependency_ids()
-            .chain(self.storage_dependency_ids())
-    }
+    introspection: CollectionIntrospection<T>,
 }
 
 impl<T: ComputeControllerTimestamp> CollectionState<T> {
     /// Creates a new collection state, with an initial read policy valid from `since`.
-    pub(crate) fn new(
+    fn new(
         collection_id: GlobalId,
         as_of: Antichain<T>,
         storage_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
         compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
         read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        initial_as_of: Option<Antichain<T>>,
-        refresh_schedule: Option<RefreshSchedule>,
+        introspection: CollectionIntrospection<T>,
     ) -> Self {
         // A collection is not readable before the `as_of`.
         let since = as_of.clone();
@@ -2127,14 +2117,8 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             read_policy: Some(ReadPolicy::ValidFrom(since)),
             storage_dependencies,
             compute_dependencies,
-            write_frontier: upper.clone(),
-            collection_introspection: CollectionIntrospection::new(
-                collection_id,
-                introspection_tx,
-                initial_as_of,
-                refresh_schedule,
-                upper,
-            ),
+            write_frontier: upper,
+            introspection,
         }
     }
 
@@ -2145,20 +2129,44 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
         let since = Antichain::from_elem(timely::progress::Timestamp::minimum());
+        let introspection =
+            CollectionIntrospection::new(id, introspection_tx, since.clone(), false, None, None);
         let mut state = Self::new(
             id,
             since,
             Default::default(),
             Default::default(),
             read_holds_tx,
-            introspection_tx,
-            None,
-            None,
+            introspection,
         );
         state.log_collection = true;
         // Log collections are created and scheduled implicitly as part of replica initialization.
         state.scheduled = true;
         state
+    }
+
+    /// Reports the current read frontier.
+    pub fn read_frontier(&self) -> AntichainRef<T> {
+        self.read_capabilities.frontier()
+    }
+
+    /// Reports the current write frontier.
+    pub fn write_frontier(&self) -> AntichainRef<T> {
+        self.write_frontier.borrow()
+    }
+
+    fn storage_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.storage_dependencies.keys().copied()
+    }
+
+    fn compute_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.compute_dependencies.keys().copied()
+    }
+
+    /// Reports the IDs of the dependencies of this collection.
+    fn dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.compute_dependency_ids()
+            .chain(self.storage_dependency_ids())
     }
 }
 
@@ -2167,17 +2175,124 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
 ///
 /// TODO: `ComputeDependencies` could be moved under this.
 #[derive(Debug)]
-struct CollectionIntrospection<T> {
+struct CollectionIntrospection<T: ComputeControllerTimestamp> {
     /// The ID of the compute collection.
     collection_id: GlobalId,
     /// A channel through which introspection updates are delivered.
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-    /// Introspection state for `mz_materialized_view_refreshes`.
-    /// `Some` if it is a REFRESH MV.
-    refresh_introspection_state: Option<RefreshIntrospectionState<T>>,
+    /// Introspection state for `IntrospectionType::Frontiers`.
+    ///
+    /// `Some` if the collection does _not_ sink into a storage collection (i.e. is not an MV). If
+    /// the collection sinks into storage, the storage controller reports its frontiers instead.
+    frontiers: Option<FrontiersIntrospectionState<T>>,
+    /// Introspection state for `IntrospectionType::ComputeMaterializedViewRefreshes`.
+    ///
+    /// `Some` if the collection is a REFRESH MV.
+    refresh: Option<RefreshIntrospectionState<T>>,
 }
 
-impl<T> CollectionIntrospection<T> {
+impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
+    fn new(
+        collection_id: GlobalId,
+        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        as_of: Antichain<T>,
+        storage_sink: bool,
+        initial_as_of: Option<Antichain<T>>,
+        refresh_schedule: Option<RefreshSchedule>,
+    ) -> Self {
+        let refresh =
+            match (refresh_schedule, initial_as_of) {
+                (Some(refresh_schedule), Some(initial_as_of)) => Some(
+                    RefreshIntrospectionState::new(refresh_schedule, initial_as_of, as_of.borrow()),
+                ),
+                (refresh_schedule, _) => {
+                    // If we have a `refresh_schedule`, then the collection is a MV, so we should also have
+                    // an `initial_as_of`.
+                    soft_assert_or_log!(
+                        refresh_schedule.is_none(),
+                        "`refresh_schedule` without an `initial_as_of`: {collection_id}"
+                    );
+                    None
+                }
+            };
+        let frontiers = (!storage_sink).then(|| FrontiersIntrospectionState::new(as_of));
+
+        let self_ = Self {
+            collection_id,
+            introspection_tx,
+            frontiers,
+            refresh,
+        };
+
+        self_.report_initial_state();
+        self_
+    }
+
+    /// Reports the initial introspection state.
+    fn report_initial_state(&self) {
+        if let Some(frontiers) = &self.frontiers {
+            let row = frontiers.row_for_collection(self.collection_id);
+            let updates = vec![(row, 1)];
+            self.send(IntrospectionType::Frontiers, updates);
+        }
+
+        if let Some(refresh) = &self.refresh {
+            let row = refresh.row_for_collection(self.collection_id);
+            let updates = vec![(row, 1)];
+            self.send(IntrospectionType::ComputeMaterializedViewRefreshes, updates);
+        }
+    }
+
+    /// Observe the given current collection frontiers and update the introspection state as
+    /// necessary.
+    fn observe_frontiers(
+        &mut self,
+        read_frontier: AntichainRef<T>,
+        write_frontier: AntichainRef<T>,
+    ) {
+        self.update_frontier_introspection(read_frontier, write_frontier);
+        self.update_refresh_introspection(write_frontier);
+    }
+
+    fn update_frontier_introspection(
+        &mut self,
+        read_frontier: AntichainRef<T>,
+        write_frontier: AntichainRef<T>,
+    ) {
+        let Some(frontiers) = &mut self.frontiers else {
+            return;
+        };
+
+        if frontiers.read_frontier.borrow() == read_frontier
+            && frontiers.write_frontier.borrow() == write_frontier
+        {
+            return; // no change
+        };
+
+        let retraction = frontiers.row_for_collection(self.collection_id);
+        frontiers.update(read_frontier, write_frontier);
+        let insertion = frontiers.row_for_collection(self.collection_id);
+        let updates = vec![(retraction, -1), (insertion, 1)];
+        self.send(IntrospectionType::Frontiers, updates);
+    }
+
+    fn update_refresh_introspection(&mut self, write_frontier: AntichainRef<T>) {
+        let Some(refresh) = &mut self.refresh else {
+            return;
+        };
+
+        let retraction = refresh.row_for_collection(self.collection_id);
+        refresh.frontier_update(write_frontier);
+        let insertion = refresh.row_for_collection(self.collection_id);
+
+        if retraction == insertion {
+            return; // no change
+        }
+
+        let updates = vec![(retraction, -1), (insertion, 1)];
+        self.send(IntrospectionType::ComputeMaterializedViewRefreshes, updates);
+    }
+
     fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
         let result = self.introspection_tx.send((introspection_type, updates));
 
@@ -2193,74 +2308,63 @@ impl<T> CollectionIntrospection<T> {
     }
 }
 
-impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
-    fn new(
-        collection_id: GlobalId,
-        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        initial_as_of: Option<Antichain<T>>,
-        refresh_schedule: Option<RefreshSchedule>,
-        upper: Antichain<T>,
-    ) -> CollectionIntrospection<T> {
-        let refresh_introspection_state = match (refresh_schedule, initial_as_of) {
-            (Some(refresh_schedule), Some(initial_as_of)) => Some(RefreshIntrospectionState::new(
-                refresh_schedule,
-                initial_as_of,
-                upper,
-            )),
-            (Some(_refresh_schedule), None) => {
-                soft_panic_or_log!("if we have a refresh_schedule, then it's an MV, so we should also have an initial_as_of");
-                None
-            }
-            _ => None,
-        };
-        let self_ = CollectionIntrospection {
-            collection_id,
-            introspection_tx,
-            refresh_introspection_state,
-        };
-
-        if let Some(refresh_introspection_state) = self_.refresh_introspection_state.as_ref() {
-            let insertion = refresh_introspection_state.row_for_collection(collection_id);
-            self_.send(
-                IntrospectionType::ComputeMaterializedViewRefreshes,
-                vec![(insertion, 1)],
-            );
+impl<T: ComputeControllerTimestamp> Drop for CollectionIntrospection<T> {
+    fn drop(&mut self) {
+        // Retract collection frontiers.
+        if let Some(frontiers) = &self.frontiers {
+            let row = frontiers.row_for_collection(self.collection_id);
+            let updates = vec![(row, -1)];
+            self.send(IntrospectionType::Frontiers, updates);
         }
 
-        self_
-    }
-
-    /// Should be called whenever the write frontier of the collection advances. It updates the
-    /// state that should be recorded in introspection relations, and sends it through the
-    /// `introspection_tx` channel.
-    fn frontier_update(&mut self, write_frontier: &Antichain<T>) {
-        if let Some(refresh_introspection_state) = &mut self.refresh_introspection_state {
-            // Old row to retract based on old state.
-            let retraction = refresh_introspection_state.row_for_collection(self.collection_id);
-            // Update state.
-            refresh_introspection_state.frontier_update(write_frontier);
-            // New row to insert based on new state.
-            let insertion = refresh_introspection_state.row_for_collection(self.collection_id);
-            // Send changes.
-            self.send(
-                IntrospectionType::ComputeMaterializedViewRefreshes,
-                vec![(retraction, -1), (insertion, 1)],
-            );
+        // Retract MV refresh state.
+        if let Some(refresh) = &self.refresh {
+            let retraction = refresh.row_for_collection(self.collection_id);
+            let updates = vec![(retraction, -1)];
+            self.send(IntrospectionType::ComputeMaterializedViewRefreshes, updates);
         }
     }
 }
 
-impl<T> Drop for CollectionIntrospection<T> {
-    fn drop(&mut self) {
-        self.refresh_introspection_state
-            .as_ref()
-            .map(|refresh_introspection_state| {
-                let retraction = refresh_introspection_state.row_for_collection(self.collection_id);
-                self.send(
-                    IntrospectionType::ComputeMaterializedViewRefreshes,
-                    vec![(retraction, -1)],
-                );
-            });
+#[derive(Debug)]
+struct FrontiersIntrospectionState<T> {
+    read_frontier: Antichain<T>,
+    write_frontier: Antichain<T>,
+}
+
+impl<T: ComputeControllerTimestamp> FrontiersIntrospectionState<T> {
+    fn new(as_of: Antichain<T>) -> Self {
+        Self {
+            read_frontier: as_of.clone(),
+            write_frontier: as_of,
+        }
+    }
+
+    /// Return a `Row` reflecting the current collection frontiers.
+    fn row_for_collection(&self, collection_id: GlobalId) -> Row {
+        let read_frontier = self
+            .read_frontier
+            .as_option()
+            .map_or(Datum::Null, |ts| ts.clone().into());
+        let write_frontier = self
+            .write_frontier
+            .as_option()
+            .map_or(Datum::Null, |ts| ts.clone().into());
+        Row::pack_slice(&[
+            Datum::String(&collection_id.to_string()),
+            read_frontier,
+            write_frontier,
+        ])
+    }
+
+    /// Update the introspection state with the given new frontiers.
+    fn update(&mut self, read_frontier: AntichainRef<T>, write_frontier: AntichainRef<T>) {
+        if read_frontier != self.read_frontier.borrow() {
+            self.read_frontier = read_frontier.to_owned();
+        }
+        if write_frontier != self.write_frontier.borrow() {
+            self.write_frontier = write_frontier.to_owned();
+        }
     }
 }
 
@@ -2293,21 +2397,21 @@ impl<T: ComputeControllerTimestamp> RefreshIntrospectionState<T> {
     fn new(
         refresh_schedule: RefreshSchedule,
         initial_as_of: Antichain<T>,
-        upper: Antichain<T>,
-    ) -> RefreshIntrospectionState<T> {
-        let mut self_ = RefreshIntrospectionState {
+        upper: AntichainRef<T>,
+    ) -> Self {
+        let mut self_ = Self {
             refresh_schedule: refresh_schedule.clone(),
             initial_as_of: initial_as_of.clone(),
             next_refresh: Datum::Null,
             last_completed_refresh: Datum::Null,
         };
-        self_.frontier_update(&upper);
+        self_.frontier_update(upper);
         self_
     }
 
     /// Should be called whenever the write frontier of the collection advances. It updates the
     /// state that should be recorded in introspection relations, but doesn't send the updates yet.
-    fn frontier_update(&mut self, write_frontier: &Antichain<T>) {
+    fn frontier_update(&mut self, write_frontier: AntichainRef<T>) {
         if write_frontier.is_empty() {
             self.last_completed_refresh =
                 if let Some(last_refresh) = self.refresh_schedule.last_refresh() {
@@ -2319,7 +2423,7 @@ impl<T: ComputeControllerTimestamp> RefreshIntrospectionState<T> {
                 };
             self.next_refresh = Datum::Null;
         } else {
-            if timely::PartialOrder::less_equal(write_frontier, &self.initial_as_of) {
+            if PartialOrder::less_equal(&write_frontier, &self.initial_as_of.borrow()) {
                 // We are before the first refresh.
                 self.last_completed_refresh = Datum::Null;
                 let initial_as_of = self.initial_as_of.as_option().expect(
@@ -2390,7 +2494,7 @@ impl<T: ComputeControllerTimestamp> ActiveSubscribe<T> {
 
 /// State maintained about individual replicas.
 #[derive(Debug)]
-pub struct ReplicaState<T: Timestamp> {
+pub struct ReplicaState<T: ComputeControllerTimestamp> {
     /// The ID of the replica.
     id: ReplicaId,
     /// Client for the running replica task.
@@ -2438,9 +2542,14 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         input_read_holds: Vec<ReadHold<T>>,
     ) {
         let metrics = self.metrics.for_collection(id);
-        let hydration_state = HydrationState::new(self.id, id, self.introspection_tx.clone());
+        let introspection = ReplicaCollectionIntrospection::new(
+            self.id,
+            id,
+            self.introspection_tx.clone(),
+            as_of.clone(),
+        );
         let mut state =
-            ReplicaCollectionState::new(metrics, as_of, hydration_state, input_read_holds);
+            ReplicaCollectionState::new(metrics, as_of, introspection, input_read_holds);
 
         // We need to consider the edge case where the as-of is the empty frontier. Such an as-of
         // is not useful for indexes, because they wouldn't be readable. For write-only
@@ -2520,7 +2629,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
 }
 
 #[derive(Debug)]
-struct ReplicaCollectionState<T: Timestamp> {
+struct ReplicaCollectionState<T: ComputeControllerTimestamp> {
     /// The replica write frontier of this collection.
     ///
     /// See [`FrontiersResponse::write_frontier`].
@@ -2542,8 +2651,10 @@ struct ReplicaCollectionState<T: Timestamp> {
     created_at: Instant,
     /// As-of frontier with which this collection was installed on the replica.
     as_of: Antichain<T>,
-    /// Tracks hydration state for this collection.
-    hydration_state: HydrationState,
+    /// Whether the collection is hydrated.
+    hydrated: bool,
+    /// Tracks introspection state for this collection.
+    introspection: ReplicaCollectionIntrospection<T>,
     /// Read holds on storage inputs to this collection.
     ///
     /// These read holds are kept to ensure that the replica is able to read from storage inputs at
@@ -2552,11 +2663,11 @@ struct ReplicaCollectionState<T: Timestamp> {
     input_read_holds: Vec<ReadHold<T>>,
 }
 
-impl<T: Timestamp> ReplicaCollectionState<T> {
+impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
     fn new(
         metrics: Option<ReplicaCollectionMetrics>,
         as_of: Antichain<T>,
-        hydration_state: HydrationState,
+        introspection: ReplicaCollectionIntrospection<T>,
         input_read_holds: Vec<ReadHold<T>>,
     ) -> Self {
         Self {
@@ -2566,14 +2677,15 @@ impl<T: Timestamp> ReplicaCollectionState<T> {
             metrics,
             created_at: Instant::now(),
             as_of,
-            hydration_state,
+            hydrated: false,
+            introspection,
             input_read_holds,
         }
     }
 
     /// Returns whether this collection is hydrated.
     fn hydrated(&self) -> bool {
-        self.hydration_state.hydrated
+        self.hydrated
     }
 
     /// Marks the collection as hydrated and updates metrics and introspection accordingly.
@@ -2583,7 +2695,7 @@ impl<T: Timestamp> ReplicaCollectionState<T> {
             metrics.initial_output_duration_seconds.set(duration);
         }
 
-        self.hydration_state.hydrated = true;
+        self.hydrated = true;
     }
 
     /// Updates the replica write frontier of this collection.
@@ -2648,44 +2760,55 @@ impl<T: Timestamp> ReplicaCollectionState<T> {
     }
 }
 
-/// Maintains both global and operator-level hydration introspection for a given replica and
-/// collection, and ensures that reported introspection data is retracted when the flag is dropped.
+/// Maintains the introspection state for a given replica and collection, and ensures that reported
+/// introspection data is retracted when the collection is dropped.
 #[derive(Debug)]
-struct HydrationState {
+struct ReplicaCollectionIntrospection<T: ComputeControllerTimestamp> {
     /// The ID of the replica.
     replica_id: ReplicaId,
     /// The ID of the compute collection.
     collection_id: GlobalId,
-    /// Whether the collection is hydrated.
-    hydrated: bool,
     /// Operator-level hydration state.
     /// (lir_id, worker_id) -> hydrated
     operators: BTreeMap<(LirId, usize), bool>,
+    /// The collection's reported replica write frontier.
+    write_frontier: Antichain<T>,
     /// A channel through which introspection updates are delivered.
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
 }
 
-impl HydrationState {
+impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
     /// Create a new `HydrationState` and initialize introspection.
     fn new(
         replica_id: ReplicaId,
         collection_id: GlobalId,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        as_of: Antichain<T>,
     ) -> Self {
-        Self {
+        let self_ = Self {
             replica_id,
             collection_id,
-            hydrated: false,
             operators: Default::default(),
+            write_frontier: as_of,
             introspection_tx,
-        }
+        };
+
+        self_.report_initial_state();
+        self_
+    }
+
+    /// Reports the initial introspection state.
+    fn report_initial_state(&self) {
+        let row = self.write_frontier_row();
+        let updates = vec![(row, 1)];
+        self.send(IntrospectionType::ReplicaFrontiers, updates);
     }
 
     /// Update the given (lir_id, worker_id) pair as hydrated.
     fn operator_hydrated(&mut self, lir_id: LirId, worker_id: usize, hydrated: bool) {
-        let retraction = self.row_for_operator(lir_id, worker_id);
+        let retraction = self.operator_hydration_row(lir_id, worker_id);
         self.operators.insert((lir_id, worker_id), hydrated);
-        let insertion = self.row_for_operator(lir_id, worker_id);
+        let insertion = self.operator_hydration_row(lir_id, worker_id);
 
         if retraction == insertion {
             return; // no change
@@ -2702,7 +2825,7 @@ impl HydrationState {
     /// Return a `Row` reflecting the current hydration status of the identified operator.
     ///
     /// Returns `None` if the identified operator is not tracked.
-    fn row_for_operator(&self, lir_id: LirId, worker_id: usize) -> Option<Row> {
+    fn operator_hydration_row(&self, lir_id: LirId, worker_id: usize) -> Option<Row> {
         self.operators.get(&(lir_id, worker_id)).map(|hydrated| {
             Row::pack_slice(&[
                 Datum::String(&self.collection_id.to_string()),
@@ -2712,6 +2835,33 @@ impl HydrationState {
                 Datum::from(*hydrated),
             ])
         })
+    }
+
+    /// Observe the given current write frontier and update the introspection state as necessary.
+    fn observe_frontier(&mut self, write_frontier: &Antichain<T>) {
+        if self.write_frontier == *write_frontier {
+            return; // no change
+        }
+
+        let retraction = self.write_frontier_row();
+        self.write_frontier.clone_from(write_frontier);
+        let insertion = self.write_frontier_row();
+
+        let updates = vec![(retraction, -1), (insertion, 1)];
+        self.send(IntrospectionType::ReplicaFrontiers, updates);
+    }
+
+    /// Return a `Row` reflecting the current replica write frontier.
+    fn write_frontier_row(&self) -> Row {
+        let write_frontier = self
+            .write_frontier
+            .as_option()
+            .map_or(Datum::Null, |ts| ts.clone().into());
+        Row::pack_slice(&[
+            Datum::String(&self.collection_id.to_string()),
+            Datum::String(&self.replica_id.to_string()),
+            write_frontier,
+        ])
     }
 
     fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
@@ -2729,17 +2879,22 @@ impl HydrationState {
     }
 }
 
-impl Drop for HydrationState {
+impl<T: ComputeControllerTimestamp> Drop for ReplicaCollectionIntrospection<T> {
     fn drop(&mut self) {
-        // Retract operator-level hydration status.
+        // Retract operator hydration status.
         let operators: Vec<_> = self.operators.keys().collect();
         let updates: Vec<_> = operators
             .into_iter()
-            .flat_map(|(lir_id, worker_id)| self.row_for_operator(*lir_id, *worker_id))
+            .flat_map(|(lir_id, worker_id)| self.operator_hydration_row(*lir_id, *worker_id))
             .map(|r| (r, -1))
             .collect();
         if !updates.is_empty() {
-            self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates)
+            self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates);
         }
+
+        // Retract the write frontier.
+        let row = self.write_frontier_row();
+        let updates = vec![(row, -1)];
+        self.send(IntrospectionType::ReplicaFrontiers, updates);
     }
 }
