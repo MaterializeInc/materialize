@@ -665,6 +665,18 @@ mz_type_pg_metadata
 BASE TABLE
 materialize
 mz_internal
+mz_wallclock_global_lag_history
+VIEW
+materialize
+mz_internal
+mz_wallclock_global_lag_recent_history
+VIEW
+materialize
+mz_internal
+mz_wallclock_lag_history
+SOURCE
+materialize
+mz_internal
 mz_webhook_sources
 BASE TABLE
 materialize

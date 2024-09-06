@@ -584,6 +584,7 @@ mz_sql_text                                  source  <null>     ""
 mz_statement_execution_history               source  <null>     ""
 mz_statement_lifecycle_history               source  <null>     ""
 mz_storage_shards                            source  <null>     ""
+mz_wallclock_lag_history                     source  <null>     ""
 
 > SHOW TABLES FROM mz_internal
 name                                     comment
@@ -675,6 +676,8 @@ mz_source_statuses                       ""
 mz_sql_text_redacted                     ""
 mz_aws_privatelink_connection_statuses   ""
 mz_statement_execution_history_redacted  ""
+mz_wallclock_global_lag_history          ""
+mz_wallclock_global_lag_recent_history   ""
 pg_class_all_databases                   ""
 pg_type_all_databases                    ""
 pg_namespace_all_databases               ""
@@ -777,7 +780,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-237
+238
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

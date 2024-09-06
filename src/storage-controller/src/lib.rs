@@ -62,7 +62,9 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
-use mz_storage_types::dyncfgs::REPLICA_METRICS_HISTORY_RETENTION_INTERVAL;
+use mz_storage_types::dyncfgs::{
+    REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
+};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
@@ -2858,7 +2860,8 @@ where
             | IntrospectionType::SinkStatusHistory
             | IntrospectionType::PrivatelinkConnectionStatusHistory
             | IntrospectionType::ReplicaStatusHistory
-            | IntrospectionType::ReplicaMetricsHistory => {
+            | IntrospectionType::ReplicaMetricsHistory
+            | IntrospectionType::WallclockLagHistory => {
                 if !self.read_only {
                     self.prepare_introspection_collection(
                         id,
@@ -2951,16 +2954,15 @@ where
                 // Differential collections start with an empty
                 // desired state. No need to manually reset.
             }
-            IntrospectionType::ReplicaMetricsHistory => {
+            IntrospectionType::ReplicaMetricsHistory | IntrospectionType::WallclockLagHistory => {
                 let write_handle = write_handle.expect("filled in by caller");
                 let result = self
-                    .partially_truncate_metrics_history(
-                        IntrospectionType::ReplicaMetricsHistory,
-                        write_handle,
-                    )
+                    .partially_truncate_metrics_history(introspection_type, write_handle)
                     .await;
                 if let Err(error) = result {
-                    soft_panic_or_log!("error truncating replica metrics history: {error}");
+                    soft_panic_or_log!(
+                        "error truncating metrics history: {error} (type={introspection_type:?})"
+                    );
                 }
             }
             IntrospectionType::StorageSourceStatistics => {
@@ -3312,6 +3314,13 @@ where
             IntrospectionType::ReplicaMetricsHistory => (
                 REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(self.config.config_set()),
                 collection_status::REPLICA_METRICS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("occurred_at"))
+                    .expect("schema has not changed")
+                    .0,
+            ),
+            IntrospectionType::WallclockLagHistory => (
+                WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(self.config.config_set()),
+                collection_status::WALLCLOCK_LAG_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
                     .0,

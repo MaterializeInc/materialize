@@ -165,3 +165,15 @@ pub static REPLICA_METRICS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(
         )
         .finish()
 });
+
+pub static WALLCLOCK_LAG_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    RelationDesc::builder()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(true))
+        .with_column("lag", ScalarType::Interval.nullable(false))
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .finish()
+});

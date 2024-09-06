@@ -64,6 +64,13 @@ pub const REPLICA_METRICS_HISTORY_RETENTION_INTERVAL: Config<Duration> = Config:
     "The interval of time to keep when truncating the replica metrics history.",
 );
 
+/// The interval of time to keep when truncating the wallclock lag history.
+pub const WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL: Config<Duration> = Config::new(
+    "wallclock_lag_history_retention_interval",
+    Duration::from_secs(60 * 60 * 24 * 30), // 30 days
+    "The interval of time to keep when truncating the wallclock lag history.",
+);
+
 // Kafka
 
 /// Rules for enriching the `client.id` property of Kafka clients with
@@ -221,6 +228,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SUSPENDABLE_SOURCES)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
+        .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_POLL_MAX_WAIT)
         .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)

@@ -365,6 +365,7 @@ mz_tables_ind                                               mz_tables           
 mz_types_ind                                                mz_types                                     mz_catalog_server    {schema_id}                                 ""
 mz_recent_sql_text_ind                                      mz_recent_sql_text                           mz_catalog_server    {sql_hash}                                  ""
 mz_views_ind                                                mz_views                                     mz_catalog_server    {schema_id}                                 ""
+mz_wallclock_global_lag_recent_history_ind                  mz_wallclock_global_lag_recent_history       mz_catalog_server    {object_id}                                 ""
 mz_webhook_sources_ind                                      mz_webhook_sources                           mz_catalog_server    {id}                                        ""
 pg_attrdef_all_databases_ind                                pg_attrdef_all_databases                     mz_catalog_server    {oid,adrelid,adnum,adbin,adsrc}             ""
 pg_attribute_all_databases_ind                              pg_attribute_all_databases                   mz_catalog_server    {attrelid,attname,atttypid,attlen,attnum,atttypmod,attnotnull,atthasdef,attidentity,attgenerated,attisdropped,attcollation,database_name,pg_type_database_name}    ""
