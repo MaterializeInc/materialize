@@ -1,4 +1,5 @@
 <nav class="nav" role="navigation" aria-label="Navigation" id="top">
+  {{ partial "banner.html" . }}
   <div role="menubar" class="nav-container row">
     <div class="nav-logo">
       <a href="https://materialize.com/" role="menuitem">
@@ -78,7 +79,6 @@
       </div>
     </div>
   </div>
-  {{ partial "banner.html" . }}
 </nav>
 <!-- <header class="flex_wrap">
   <a href="{{.Site.BaseURL}}" class="primary gradient_text">
