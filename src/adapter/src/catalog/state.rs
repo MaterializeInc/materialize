@@ -902,9 +902,9 @@ impl CatalogState {
 
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
-                    raw_expr,
+                    raw_expr: raw_expr.into(),
                     desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
-                    optimized_expr,
+                    optimized_expr: optimized_expr.into(),
                     conn_id: None,
                     resolved_ids,
                 })
@@ -931,8 +931,8 @@ impl CatalogState {
 
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
-                    raw_expr,
-                    optimized_expr,
+                    raw_expr: raw_expr.into(),
+                    optimized_expr: optimized_expr.into(),
                     desc,
                     resolved_ids,
                     cluster_id: materialized_view.cluster_id,

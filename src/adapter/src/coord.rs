@@ -2601,7 +2601,8 @@ impl Coordinator {
                         );
 
                         // MIR ⇒ MIR optimization (global)
-                        let global_mir_plan = optimizer.optimize(mv.optimized_expr.clone())?;
+                        let global_mir_plan =
+                            optimizer.optimize(mv.optimized_expr.as_ref().clone())?;
                         let optimized_plan = global_mir_plan.df_desc().clone();
 
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
