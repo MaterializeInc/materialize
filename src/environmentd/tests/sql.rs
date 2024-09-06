@@ -1760,9 +1760,14 @@ async fn test_timeline_read_holds() {
 
     let view_name = "v_hold";
     let source_name = "source_hold";
-    let (pg_client, cleanup_fn) =
-        test_util::create_postgres_source_with_table(&mz_client, view_name, "(a INT)", source_name)
-            .await;
+    let (pg_client, cleanup_fn) = test_util::create_postgres_source_with_table(
+        &server,
+        &mz_client,
+        view_name,
+        "(a INT)",
+        source_name,
+    )
+    .await;
 
     // Create user table in Materialize.
     mz_client
@@ -1836,6 +1841,7 @@ async fn test_session_linearizability(isolation_level: &str) {
     let pg_table_name = "v_lin";
     let pg_source_name = "source_lin";
     let (pg_client, cleanup_fn) = test_util::create_postgres_source_with_table(
+        &server,
         &mz_client,
         pg_table_name,
         "(a INT)",

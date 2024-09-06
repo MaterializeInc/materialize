@@ -1051,6 +1051,7 @@ pub async fn get_explain_timestamp_determination(
 /// WARNING: If multiple tests use this, and the tests are run in parallel, then make sure the test
 /// use different postgres tables.
 pub async fn create_postgres_source_with_table<'a>(
+    server: &TestServer,
     mz_client: &Client,
     table_name: &str,
     table_schema: &str,
@@ -1059,6 +1060,10 @@ pub async fn create_postgres_source_with_table<'a>(
     Client,
     impl FnOnce(&'a Client, &'a Client) -> LocalBoxFuture<'a, ()>,
 ) {
+    server
+        .enable_feature_flags(&["enable_create_table_from_source"])
+        .await;
+
     let postgres_url = env::var("POSTGRES_URL")
         .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))
         .unwrap();
@@ -1138,8 +1143,15 @@ pub async fn create_postgres_source_with_table<'a>(
             "CREATE SOURCE {source_name}
             FROM POSTGRES
             CONNECTION pgconn
-            (PUBLICATION '{source_name}')
-            FOR TABLES ({table_name});"
+            (PUBLICATION '{source_name}')"
+        ))
+        .await
+        .unwrap();
+    mz_client
+        .batch_execute(&format!(
+            "CREATE TABLE {table_name}
+            FROM SOURCE {source_name}
+            (REFERENCE {table_name});"
         ))
         .await
         .unwrap();
