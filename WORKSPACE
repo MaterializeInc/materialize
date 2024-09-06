@@ -246,6 +246,10 @@ llvm_toolchain(
         "linux-x86_64": "@linux_sysroot-x86_64//:sysroot",
         "linux-aarch64": "@linux_sysroot-aarch64//:sysroot",
     },
+    stdlib = {
+        "linux-x86_64": "stdc++",
+        "linux-aarch64": "stdc++",
+    },
     urls = {
         "darwin-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/darwin_aarch64.tar.zst".format(LLVM_VERSION)],
         "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-1/linux_aarch64.tar.zst".format(LLVM_VERSION)],
