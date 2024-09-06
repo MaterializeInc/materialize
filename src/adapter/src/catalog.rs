@@ -144,8 +144,8 @@ impl Clone for Catalog {
 
 #[derive(Default, Debug, Clone)]
 pub struct CatalogPlans {
-    optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
-    physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_types::plan::Plan>>,
+    optimized_plan_by_id: BTreeMap<GlobalId, Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+    physical_plan_by_id: BTreeMap<GlobalId, Arc<DataflowDescription<mz_compute_types::plan::Plan>>>,
     dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo<Arc<OptimizerNotice>>>,
     notices_by_dep_id: BTreeMap<GlobalId, SmallVec<[Arc<OptimizerNotice>; 4]>>,
 }
@@ -158,7 +158,7 @@ impl Catalog {
         id: GlobalId,
         plan: DataflowDescription<OptimizedMirRelationExpr>,
     ) {
-        self.plans.optimized_plan_by_id.insert(id, plan);
+        self.plans.optimized_plan_by_id.insert(id, plan.into());
     }
 
     /// Set the optimized plan for the item identified by `id`.
@@ -168,7 +168,7 @@ impl Catalog {
         id: GlobalId,
         plan: DataflowDescription<mz_compute_types::plan::Plan>,
     ) {
-        self.plans.physical_plan_by_id.insert(id, plan);
+        self.plans.physical_plan_by_id.insert(id, plan.into());
     }
 
     /// Try to get the optimized plan for the item identified by `id`.
@@ -177,7 +177,7 @@ impl Catalog {
         &self,
         id: &GlobalId,
     ) -> Option<&DataflowDescription<OptimizedMirRelationExpr>> {
-        self.plans.optimized_plan_by_id.get(id)
+        self.plans.optimized_plan_by_id.get(id).map(AsRef::as_ref)
     }
 
     /// Try to get the optimized plan for the item identified by `id`.
@@ -186,7 +186,7 @@ impl Catalog {
         &self,
         id: &GlobalId,
     ) -> Option<&DataflowDescription<mz_compute_types::plan::Plan>> {
-        self.plans.physical_plan_by_id.get(id)
+        self.plans.physical_plan_by_id.get(id).map(AsRef::as_ref)
     }
 
     /// Set the `DataflowMetainfo` for the item identified by `id`.

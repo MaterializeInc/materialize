@@ -945,7 +945,7 @@ impl CatalogState {
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
                 on: index.on,
-                keys: index.keys,
+                keys: index.keys.into(),
                 conn_id: None,
                 resolved_ids,
                 cluster_id: index.cluster_id,

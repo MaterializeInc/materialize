@@ -1438,7 +1438,7 @@ mod builtin_migration_tests {
                     CatalogItem::Index(Index {
                         create_sql: format!("CREATE INDEX idx ON materialize.public.{on} (a)"),
                         on: on_id,
-                        keys: Vec::new(),
+                        keys: Default::default(),
                         conn_id: None,
                         resolved_ids: ResolvedIds(BTreeSet::from_iter([on_id])),
                         cluster_id: ClusterId::User(1),

@@ -900,7 +900,7 @@ pub struct MaterializedView {
 pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
-    pub keys: Vec<MirScalarExpr>,
+    pub keys: Arc<[MirScalarExpr]>,
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,

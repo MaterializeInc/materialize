@@ -94,16 +94,8 @@ pub struct Index {
 }
 
 impl Index {
-    pub fn new(
-        name: &QualifiedItemName,
-        on: &GlobalId,
-        keys: &Vec<mz_expr::MirScalarExpr>,
-    ) -> Self {
-        Self {
-            name: name.clone(),
-            on: on.clone(),
-            keys: keys.clone(),
-        }
+    pub fn new(name: QualifiedItemName, on: GlobalId, keys: Vec<mz_expr::MirScalarExpr>) -> Self {
+        Self { name, on, keys }
     }
 }
 
@@ -204,11 +196,11 @@ impl Optimize<Index> for Optimizer {
         // currently optimizing.
         for (index_id, idx) in df_builder
             .indexes_on(index.on)
-            .filter(|(_id, idx)| idx.keys == index.keys)
+            .filter(|(_id, idx)| idx.keys.as_ref() == &index.keys)
         {
             df_meta.push_optimizer_notice_dedup(IndexAlreadyExists {
                 index_id,
-                index_key: idx.keys.clone(),
+                index_key: idx.keys.to_vec(),
                 index_on_id: idx.on,
                 exported_index_id: self.exported_index_id,
             });
