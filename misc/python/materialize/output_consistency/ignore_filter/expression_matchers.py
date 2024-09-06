@@ -123,7 +123,10 @@ def matches_recursively(
 ) -> bool:
     if isinstance(expression, ExpressionWithArgs):
         for arg_expression in expression.args:
-            return matches_recursively(arg_expression, matcher)
+            is_match = matches_recursively(arg_expression, matcher)
+            if is_match:
+                return True
+
     return matcher(expression)
 
 
