@@ -19,11 +19,11 @@ RUN apt-get update \
         ca-certificates \
         curl \
         llvm \
-        postgresql-client-14 \
+        postgresql-client-16 \
         tini \
         ssh \
-    && groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize \
+    && groupadd --system --gid=888 materialize \
+    && useradd --system --gid=888 --uid=888 --create-home materialize \
     && mkdir /mzdata \
     && mkdir /cockroach-data \
     && mkdir /scratch \

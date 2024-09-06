@@ -13,8 +13,8 @@ RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
         ca-certificates \
         tini \
-    && groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize
+    && groupadd --system --gid=888 materialize \
+    && useradd --system --gid=888 --uid=888 --create-home materialize
 
 COPY mz-frontegg-mock /usr/local/bin/
 
