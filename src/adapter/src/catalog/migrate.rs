@@ -26,7 +26,7 @@ use prost::Message;
 use semver::Version;
 use tracing::info;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::catalog::open::into_consolidatable_updates;
+use crate::catalog::open::into_consolidatable_updates_startup;
 use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
 
 async fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
@@ -132,9 +132,9 @@ pub(crate) async fn migrate(
     // Load items into catalog. We make sure to consolidate the old updates with the new updates to
     // avoid trying to apply unmigrated items.
     let commit_ts = tx.commit_ts();
-    let mut item_updates = into_consolidatable_updates(item_updates, commit_ts);
+    let mut item_updates = into_consolidatable_updates_startup(item_updates, commit_ts);
     let op_item_updates = tx.get_and_commit_op_updates();
-    let op_item_updates = into_consolidatable_updates(op_item_updates, commit_ts);
+    let op_item_updates = into_consolidatable_updates_startup(op_item_updates, commit_ts);
     item_updates.extend(op_item_updates);
     differential_dataflow::consolidation::consolidate_updates(&mut item_updates);
     let item_updates = item_updates

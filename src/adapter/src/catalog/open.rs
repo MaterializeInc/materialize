@@ -318,7 +318,7 @@ impl Catalog {
         // Make life easier by consolidating all updates, so that we end up with only positive
         // diffs.
         let commit_ts = txn.commit_ts();
-        let mut updates = into_consolidatable_updates(updates, commit_ts);
+        let mut updates = into_consolidatable_updates_startup(updates, commit_ts);
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
         soft_assert_no_log!(
             updates.iter().all(|(_, _, diff)| *diff == 1),
@@ -1305,7 +1305,9 @@ impl BuiltinBootstrapClusterSizes {
 /// [`mz_catalog::memory::objects::StateUpdateKind`] into an [`BootstrapStateUpdateKind`], which is
 /// identical to [`mz_catalog::memory::objects::StateUpdateKind`] except it doesn't have a
 /// temporary item variant and does implement [`std::cmp::Ord`].
-pub(crate) fn into_consolidatable_updates(
+///
+/// WARNING: Do not call outside of startup.
+pub(crate) fn into_consolidatable_updates_startup(
     updates: Vec<StateUpdate>,
     ts: Timestamp,
 ) -> Vec<(BootstrapStateUpdateKind, Timestamp, Diff)> {
