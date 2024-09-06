@@ -1163,12 +1163,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 matches_x_and_y,
                 x=partial(matches_fun_by_name, function_name_in_lower_case="pg_typeof"),
                 y=partial(
-                    matches_recursively,
-                    matcher=partial(
-                        matches_any_expression_arg,
-                        arg_matcher=partial(
-                            matches_fun_by_name, function_name_in_lower_case="pg_typeof"
-                        ),
+                    matches_any_expression_arg,
+                    arg_matcher=partial(
+                        matches_fun_by_name, function_name_in_lower_case="pg_typeof"
                     ),
                 ),
             ),
