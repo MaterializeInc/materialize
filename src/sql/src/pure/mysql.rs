@@ -72,7 +72,7 @@ pub fn generate_create_subsource_statements(
             columns,
             constraints,
             text_columns,
-            ignore_columns,
+            exclude_columns,
             details,
             external_reference,
         } = generate_source_export_statement_values(scx, purified_export)?;
@@ -97,10 +97,10 @@ pub fn generate_create_subsource_statements(
             });
         }
 
-        if let Some(ignore_columns) = ignore_columns {
+        if let Some(exclude_columns) = exclude_columns {
             with_options.push(CreateSubsourceOption {
-                name: CreateSubsourceOptionName::IgnoreColumns,
-                value: Some(WithOptionValue::Sequence(ignore_columns)),
+                name: CreateSubsourceOptionName::ExcludeColumns,
+                value: Some(WithOptionValue::Sequence(exclude_columns)),
             });
         }
 
@@ -123,7 +123,7 @@ pub(super) struct MySqlExportStatementValues {
     pub(super) columns: Vec<ColumnDef<Aug>>,
     pub(super) constraints: Vec<TableConstraint<Aug>>,
     pub(super) text_columns: Option<Vec<WithOptionValue<Aug>>>,
-    pub(super) ignore_columns: Option<Vec<WithOptionValue<Aug>>>,
+    pub(super) exclude_columns: Option<Vec<WithOptionValue<Aug>>>,
     pub(super) details: SourceExportStatementDetails,
     pub(super) external_reference: UnresolvedItemName,
 }
@@ -135,7 +135,7 @@ pub(super) fn generate_source_export_statement_values(
     let PurifiedExportDetails::MySql {
         table,
         text_columns,
-        ignore_columns,
+        exclude_columns,
         initial_gtid_set,
     } = purified_export.details
     else {
@@ -205,7 +205,7 @@ pub(super) fn generate_source_export_statement_values(
             .collect()
     });
 
-    let ignore_columns = ignore_columns.map(|mut columns| {
+    let exclude_columns = exclude_columns.map(|mut columns| {
         columns.sort();
         columns
             .into_iter()
@@ -216,7 +216,7 @@ pub(super) fn generate_source_export_statement_values(
         columns,
         constraints,
         text_columns,
-        ignore_columns,
+        exclude_columns,
         details,
         external_reference: purified_export.external_reference,
     })
@@ -324,14 +324,14 @@ pub(super) async fn validate_requested_references_privileges(
 pub(super) struct PurifiedSourceExports {
     /// map of source export names to the details of the export
     pub(super) source_exports: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
-    // NOTE(roshan): The text columns and ignore columns are already part of their
+    // NOTE(roshan): The text columns and exclude columns are already part of their
     // appropriate `source_exports` above, but these are returned to allow
     // round-tripping a `CREATE SOURCE` statement while we still allow creating
     // implicit subsources from `CREATE SOURCE`. Remove once
     // fully deprecating that feature and forcing users to use explicit
     // `CREATE TABLE .. FROM SOURCE` statements.
     pub(super) normalized_text_columns: Vec<WithOptionValue<Aug>>,
-    pub(super) normalized_ignore_columns: Vec<WithOptionValue<Aug>>,
+    pub(super) normalized_exclude_columns: Vec<WithOptionValue<Aug>>,
 }
 
 // Purify the requested external references, returning a set of purified
@@ -341,7 +341,7 @@ pub(super) async fn purify_source_exports(
     conn: &mut mz_mysql_util::MySqlConn,
     external_references: &Option<ExternalReferences>,
     text_columns: Vec<UnresolvedItemName>,
-    ignore_columns: Vec<UnresolvedItemName>,
+    exclude_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
     reference_policy: &SourceReferencePolicy,
@@ -376,13 +376,14 @@ pub(super) async fn purify_source_exports(
             return Ok(PurifiedSourceExports {
                 source_exports: BTreeMap::new(),
                 normalized_text_columns: vec![],
-                normalized_ignore_columns: vec![],
+                normalized_exclude_columns: vec![],
             });
         }
     };
 
     let text_cols_map = map_column_refs(&text_columns, MySqlConfigOptionName::TextColumns)?;
-    let ignore_cols_map = map_column_refs(&ignore_columns, MySqlConfigOptionName::IgnoreColumns)?;
+    let exclude_columns_map =
+        map_column_refs(&exclude_columns, MySqlConfigOptionName::ExcludeColumns)?;
 
     // Retrieve schemas for all requested tables
     // NOTE: mysql will only expose the schemas of tables we have at least one privilege on
@@ -391,15 +392,15 @@ pub(super) async fn purify_source_exports(
     let raw_tables = mz_mysql_util::schema_info(conn.deref_mut(), &table_schema_request).await?;
 
     // Convert the raw tables into a format that we can use to generate source exports
-    // using any applicable text_columns and ignore_columns.
+    // using any applicable text_columns and exclude_columns.
     let mut tables = Vec::with_capacity(raw_tables.len());
     for table in raw_tables.into_iter() {
         let table_ref = table.table_ref();
         // we are cloning the BTreeSet<&str> so we can avoid a borrow on `table` here
         let text_cols = text_cols_map.get(&table_ref).map(|s| s.clone());
-        let ignore_cols = ignore_cols_map.get(&table_ref).map(|s| s.clone());
+        let exclude_columns = exclude_columns_map.get(&table_ref).map(|s| s.clone());
         let parsed_table = table
-            .to_desc(text_cols.as_ref(), ignore_cols.as_ref())
+            .to_desc(text_cols.as_ref(), exclude_columns.as_ref())
             .map_err(|err| match err {
                 mz_mysql_util::MySqlError::UnsupportedDataTypes { columns } => {
                     PlanError::from(MySqlSourcePurificationError::UnrecognizedTypes {
@@ -515,7 +516,7 @@ pub(super) async fn purify_source_exports(
                                 .map(|c| Ident::new(*c).expect("validated above"))
                                 .collect()
                         }),
-                        ignore_columns: ignore_cols_map.get(&table_ref).map(|cols| {
+                        exclude_columns: exclude_columns_map.get(&table_ref).map(|cols| {
                             cols.iter()
                                 .map(|c| Ident::new(*c).expect("validated above"))
                                 .collect()
@@ -531,8 +532,8 @@ pub(super) async fn purify_source_exports(
         source_exports,
         // Normalize column options and remove unused column references.
         normalized_text_columns: normalize_column_refs(text_columns, &reference_resolver, &tables)?,
-        normalized_ignore_columns: normalize_column_refs(
-            ignore_columns,
+        normalized_exclude_columns: normalize_column_refs(
+            exclude_columns,
             &reference_resolver,
             &tables,
         )?,

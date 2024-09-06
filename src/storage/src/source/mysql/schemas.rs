@@ -60,7 +60,7 @@ where
                                 output.text_columns.iter().map(|s| s.as_str()),
                             )),
                             Some(&BTreeSet::from_iter(
-                                output.ignore_columns.iter().map(|s| s.as_str()),
+                                output.exclude_columns.iter().map(|s| s.as_str()),
                             )),
                         );
                         match new_desc {

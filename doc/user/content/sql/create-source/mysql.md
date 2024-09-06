@@ -50,7 +50,7 @@ _src_name_  | The name for the source.
 
 Field                                | Value                           | Description
 -------------------------------------|---------------------------------|-------------------------------------
-`IGNORE COLUMNS`                     | A list of fully-qualified names | Ignore specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
+{{< if-unreleased "v0.117" >}}`IGNORE COLUMNS`{{< /if-unreleased >}} {{< if-released "v0.117" >}}`EXCLUDE COLUMNS`{{< /if-released >}} | A list of fully-qualified names | Exclude specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
 `TEXT COLUMNS`                       | A list of fully-qualified names | Decode data as `text` for specific columns that contain MySQL types that are [unsupported in Materialize](#supported-types).
 
 ## Features
@@ -256,9 +256,17 @@ following types:
 <li><code>year</code></li>
 </ul>
 
+{{< if-unreleased "v0.117" >}}
 The specified columns will be treated as `text`, and will thus not offer the
 expected MySQL type features. For any unsupported data types not listed above,
 use the [`IGNORE COLUMNS`](#ignoring-columns) option.
+{{< /if-unreleased >}}
+
+{{< if-released "v0.117" >}}
+The specified columns will be treated as `text`, and will thus not offer the
+expected MySQL type features. For any unsupported data types not listed above,
+use the [`EXCLUDE COLUMNS`](#excluding-columns) option.
+{{< /if-released >}}
 
 ##### Truncation
 
@@ -372,6 +380,7 @@ CREATE SOURCE mz_source
   FOR ALL TABLES;
 ```
 
+{{< if-unreleased "v0.117" >}}
 #### Ignoring columns
 
 MySQL doesn't provide a way to filter out columns from the replication stream.
@@ -385,6 +394,23 @@ CREATE SOURCE mz_source
   )
   FOR ALL TABLES;
 ```
+{{< /if-unreleased >}}
+
+{{< if-released "v0.117" >}}
+#### Excluding columns
+
+MySQL doesn't provide a way to filter out columns from the replication stream.
+To exclude specific upstream columns from being ingested, use the `EXCLUDE
+COLUMNS` option.
+
+```mzsql
+CREATE SOURCE mz_source
+  FROM MYSQL CONNECTION mysql_connection (
+    EXCLUDE COLUMNS (mydb.table_1.column_to_ignore)
+  )
+  FOR ALL TABLES;
+```
+{{< /if-released >}}
 
 ### Handling errors and schema changes
 

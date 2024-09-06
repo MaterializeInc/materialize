@@ -395,27 +395,27 @@ detail:the following columns are referenced but not added: public.table_f.f2
 
 
 #
-# Can add tables with ignore columns
+# Can add tables with exclude columns
 #
-! ALTER SOURCE mz_source ADD SUBSOURCE public.table_f WITH (IGNORE COLUMNS [public.table_f.f2, public.table_f.f2]);
-contains: invalid IGNORE COLUMNS option value: unexpected multiple references to public.table_f.f2
+! ALTER SOURCE mz_source ADD SUBSOURCE public.table_f WITH (EXCLUDE COLUMNS [public.table_f.f2, public.table_f.f2]);
+contains: invalid EXCLUDE COLUMNS option value: unexpected multiple references to public.table_f.f2
 
-> ALTER SOURCE mz_source ADD SUBSOURCE public.table_f WITH (IGNORE COLUMNS [public.table_f.f2]);
+> ALTER SOURCE mz_source ADD SUBSOURCE public.table_f WITH (EXCLUDE COLUMNS [public.table_f.f2]);
 
 > SELECT * FROM table_f
 1
 2
 3
 
-> SELECT regexp_match(create_sql, 'IGNORE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+> SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\""
 
-> ALTER SOURCE mz_source ADD SUBSOURCE public.table_i WITH (IGNORE COLUMNS [public.table_i.f2]);
+> ALTER SOURCE mz_source ADD SUBSOURCE public.table_i WITH (EXCLUDE COLUMNS [public.table_i.f2]);
 
-> SELECT regexp_match(create_sql, 'IGNORE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+> SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\", \"public\".\"table_i\".\"f2\""
 
-> SELECT regexp_match(create_sql, 'IGNORE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+> SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
 "\"f2\""
 
 > SELECT * FROM table_i
@@ -424,28 +424,28 @@ contains: invalid IGNORE COLUMNS option value: unexpected multiple references to
 
 > DROP SOURCE table_f, table_i;
 
-> SELECT regexp_match(create_sql, 'IGNORE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+> SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 <null>
 
-! ALTER SOURCE mz_source ADD SUBSOURCE public.table_e WITH (IGNORE COLUMNS (public.table_z.a));
+! ALTER SOURCE mz_source ADD SUBSOURCE public.table_e WITH (EXCLUDE COLUMNS (public.table_z.a));
 contains:Reference to columns not currently being added
 
-! ALTER SOURCE mz_source ADD SUBSOURCE public.table_e WITH (IGNORE COLUMNS [public.table_f.f2]);
+! ALTER SOURCE mz_source ADD SUBSOURCE public.table_e WITH (EXCLUDE COLUMNS [public.table_f.f2]);
 contains:Reference to columns not currently being added
 detail:the following columns are referenced but not added: public.table_f.f2
 
-# Test adding ignore cols w/o original IGNORE COLUMNS
+# Test adding exclude cols w/o original EXCLUDE COLUMNS
 
-> CREATE SOURCE "mz_source_wo_init_ignore_cols"
+> CREATE SOURCE "mz_source_wo_init_exclude_cols"
   FROM MYSQL CONNECTION mysql_conn
   FOR TABLES (public.table_a AS t_a2);
 
-> SELECT regexp_match(create_sql, 'IGNORE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_ignore_cols);
+> SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_exclude_cols);
 <null>
 
-> ALTER SOURCE mz_source_wo_init_ignore_cols ADD SUBSOURCE public.table_f AS t_f2 WITH (IGNORE COLUMNS [public.table_f.f2]);
+> ALTER SOURCE mz_source_wo_init_exclude_cols ADD SUBSOURCE public.table_f AS t_f2 WITH (EXCLUDE COLUMNS [public.table_f.f2]);
 
-> SELECT regexp_match(create_sql, 'IGNORE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_ignore_cols);
+> SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_exclude_cols);
 "\"public\".\"table_f\".\"f2\""
 
 # Add a table after having created the source

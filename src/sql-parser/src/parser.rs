@@ -2731,47 +2731,49 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_subsource_option(&mut self) -> Result<CreateSubsourceOption<Raw>, ParserError> {
-        let option =
-            match self.expect_one_of_keywords(&[EXTERNAL, PROGRESS, TEXT, IGNORE, DETAILS])? {
-                EXTERNAL => {
-                    self.expect_keyword(REFERENCE)?;
-                    CreateSubsourceOption {
-                        name: CreateSubsourceOptionName::ExternalReference,
-                        value: self.parse_optional_option_value()?,
-                    }
-                }
-                PROGRESS => CreateSubsourceOption {
-                    name: CreateSubsourceOptionName::Progress,
+        let option = match self
+            .expect_one_of_keywords(&[EXTERNAL, PROGRESS, TEXT, EXCLUDE, IGNORE, DETAILS])?
+        {
+            EXTERNAL => {
+                self.expect_keyword(REFERENCE)?;
+                CreateSubsourceOption {
+                    name: CreateSubsourceOptionName::ExternalReference,
                     value: self.parse_optional_option_value()?,
-                },
-                ref keyword @ (TEXT | IGNORE) => {
-                    self.expect_keyword(COLUMNS)?;
-
-                    let _ = self.consume_token(&Token::Eq);
-
-                    let value =
-                        self.parse_option_sequence(Parser::parse_identifier)?
-                            .map(|inner| {
-                                WithOptionValue::Sequence(
-                                    inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
-                                )
-                            });
-
-                    CreateSubsourceOption {
-                        name: match *keyword {
-                            TEXT => CreateSubsourceOptionName::TextColumns,
-                            IGNORE => CreateSubsourceOptionName::IgnoreColumns,
-                            _ => unreachable!(),
-                        },
-                        value,
-                    }
                 }
-                DETAILS => CreateSubsourceOption {
-                    name: CreateSubsourceOptionName::Details,
-                    value: self.parse_optional_option_value()?,
-                },
-                _ => unreachable!(),
-            };
+            }
+            PROGRESS => CreateSubsourceOption {
+                name: CreateSubsourceOptionName::Progress,
+                value: self.parse_optional_option_value()?,
+            },
+            ref keyword @ (TEXT | EXCLUDE | IGNORE) => {
+                self.expect_keyword(COLUMNS)?;
+
+                let _ = self.consume_token(&Token::Eq);
+
+                let value = self
+                    .parse_option_sequence(Parser::parse_identifier)?
+                    .map(|inner| {
+                        WithOptionValue::Sequence(
+                            inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
+                        )
+                    });
+
+                CreateSubsourceOption {
+                    name: match *keyword {
+                        TEXT => CreateSubsourceOptionName::TextColumns,
+                        // IGNORE is historical syntax for this option.
+                        EXCLUDE | IGNORE => CreateSubsourceOptionName::ExcludeColumns,
+                        _ => unreachable!(),
+                    },
+                    value,
+                }
+            }
+            DETAILS => CreateSubsourceOption {
+                name: CreateSubsourceOptionName::Details,
+                value: self.parse_optional_option_value()?,
+            },
+            _ => unreachable!(),
+        };
         Ok(option)
     }
 
@@ -3321,7 +3323,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_mysql_connection_option(&mut self) -> Result<MySqlConfigOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[DETAILS, TEXT, IGNORE])? {
+        match self.expect_one_of_keywords(&[DETAILS, TEXT, EXCLUDE, IGNORE])? {
             DETAILS => Ok(MySqlConfigOption {
                 name: MySqlConfigOptionName::Details,
                 value: self.parse_optional_option_value()?,
@@ -3347,7 +3349,8 @@ impl<'a> Parser<'a> {
                     value,
                 })
             }
-            IGNORE => {
+            // IGNORE is historical syntax for the option.
+            EXCLUDE | IGNORE => {
                 self.expect_keyword(COLUMNS)?;
 
                 let _ = self.consume_token(&Token::Eq);
@@ -3364,7 +3367,7 @@ impl<'a> Parser<'a> {
                     });
 
                 Ok(MySqlConfigOption {
-                    name: MySqlConfigOptionName::IgnoreColumns,
+                    name: MySqlConfigOptionName::ExcludeColumns,
                     value,
                 })
             }
@@ -4429,8 +4432,8 @@ impl<'a> Parser<'a> {
     fn parse_table_from_source_option(
         &mut self,
     ) -> Result<TableFromSourceOption<Raw>, ParserError> {
-        let option = match self.expect_one_of_keywords(&[TEXT, IGNORE, DETAILS])? {
-            ref keyword @ (TEXT | IGNORE) => {
+        let option = match self.expect_one_of_keywords(&[TEXT, EXCLUDE, IGNORE, DETAILS])? {
+            ref keyword @ (TEXT | IGNORE | EXCLUDE) => {
                 self.expect_keyword(COLUMNS)?;
 
                 let _ = self.consume_token(&Token::Eq);
@@ -4446,7 +4449,8 @@ impl<'a> Parser<'a> {
                 TableFromSourceOption {
                     name: match *keyword {
                         TEXT => TableFromSourceOptionName::TextColumns,
-                        IGNORE => TableFromSourceOptionName::IgnoreColumns,
+                        // IGNORE is historical syntax for this option.
+                        EXCLUDE | IGNORE => TableFromSourceOptionName::ExcludeColumns,
                         _ => unreachable!(),
                     },
                     value,
@@ -5091,8 +5095,8 @@ impl<'a> Parser<'a> {
     fn parse_alter_source_add_subsource_option(
         &mut self,
     ) -> Result<AlterSourceAddSubsourceOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[TEXT, IGNORE])? {
-            ref keyword @ (TEXT | IGNORE) => {
+        match self.expect_one_of_keywords(&[TEXT, EXCLUDE, IGNORE])? {
+            ref keyword @ (TEXT | EXCLUDE | IGNORE) => {
                 self.expect_keyword(COLUMNS)?;
 
                 let _ = self.consume_token(&Token::Eq);
@@ -5111,7 +5115,8 @@ impl<'a> Parser<'a> {
                 Ok(AlterSourceAddSubsourceOption {
                     name: match *keyword {
                         TEXT => AlterSourceAddSubsourceOptionName::TextColumns,
-                        IGNORE => AlterSourceAddSubsourceOptionName::IgnoreColumns,
+                        // IGNORE is historical syntax for this option.
+                        EXCLUDE | IGNORE => AlterSourceAddSubsourceOptionName::ExcludeColumns,
                         _ => unreachable!(),
                     },
                     value,

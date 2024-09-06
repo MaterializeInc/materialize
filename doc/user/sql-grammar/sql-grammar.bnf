@@ -232,6 +232,7 @@ create_source_mysql ::=
   'FROM' 'MYSQL' 'CONNECTION' connection_name
   ( ( '(' 'TEXT COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? )? )
       ( ( ',' 'IGNORE COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? ')' )? )
+      ( ( ',' 'EXCLUDE COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? ')' )? )
   ('FOR ALL TABLES'
     | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')'
     | 'FOR SCHEMAS' '(' schema_name (',' schema_name )* ')'

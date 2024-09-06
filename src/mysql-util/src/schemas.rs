@@ -90,14 +90,14 @@ impl MySqlTableSchema {
     }
 
     /// Convert the raw table schema to our MySqlTableDesc representation
-    /// using any provided text_columns and ignore_columns
+    /// using any provided text_columns and exclude_columns
     pub fn to_desc(
         self,
         text_columns: Option<&BTreeSet<&str>>,
-        ignore_columns: Option<&BTreeSet<&str>>,
+        exclude_columns: Option<&BTreeSet<&str>>,
     ) -> Result<MySqlTableDesc, MySqlError> {
-        // Verify there are no duplicates in text_columns and ignore_columns
-        match (&text_columns, &ignore_columns) {
+        // Verify there are no duplicates in text_columns and exclude_columns
+        match (&text_columns, &exclude_columns) {
             (Some(text_cols), Some(ignore_cols)) => {
                 let intersection: Vec<_> = text_cols.intersection(ignore_cols).collect();
                 if !intersection.is_empty() {
@@ -133,7 +133,7 @@ impl MySqlTableSchema {
             }
 
             // If this column is ignored, use None for the column type to signal that it should be.
-            if let Some(ignore_cols) = &ignore_columns {
+            if let Some(ignore_cols) = &exclude_columns {
                 if ignore_cols.contains(&info.column_name.as_str()) {
                     columns.push(MySqlColumnDesc {
                         name: info.column_name,

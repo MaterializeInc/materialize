@@ -550,16 +550,23 @@ CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source"
 parse-statement
 CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (IGNORE COLUMNS (public.foo.bar)) FOR ALL TABLES;
 ----
-CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (IGNORE COLUMNS = (public.foo.bar)) FOR ALL TABLES
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (EXCLUDE COLUMNS = (public.foo.bar)) FOR ALL TABLES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: MySql { connection: Name(UnresolvedItemName([Ident("mysqlconn")])), options: [MySqlConfigOption { name: IgnoreColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("bar")]))])) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: Some(All), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: MySql { connection: Name(UnresolvedItemName([Ident("mysqlconn")])), options: [MySqlConfigOption { name: ExcludeColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("bar")]))])) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: Some(All), progress_subsource: None })
 
 parse-statement
-CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (IGNORE COLUMNS (public.foo.bar), TEXT COLUMNS (public.foo.baz)) FOR ALL TABLES;
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (EXCLUDE COLUMNS (public.foo.bar)) FOR ALL TABLES;
 ----
-CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (IGNORE COLUMNS = (public.foo.bar), TEXT COLUMNS = (public.foo.baz)) FOR ALL TABLES
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (EXCLUDE COLUMNS = (public.foo.bar)) FOR ALL TABLES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: MySql { connection: Name(UnresolvedItemName([Ident("mysqlconn")])), options: [MySqlConfigOption { name: IgnoreColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("bar")]))])) }, MySqlConfigOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("baz")]))])) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: Some(All), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: MySql { connection: Name(UnresolvedItemName([Ident("mysqlconn")])), options: [MySqlConfigOption { name: ExcludeColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("bar")]))])) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: Some(All), progress_subsource: None })
+
+parse-statement
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (EXCLUDE COLUMNS (public.foo.bar), TEXT COLUMNS (public.foo.baz)) FOR ALL TABLES;
+----
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (EXCLUDE COLUMNS = (public.foo.bar), TEXT COLUMNS = (public.foo.baz)) FOR ALL TABLES
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: MySql { connection: Name(UnresolvedItemName([Ident("mysqlconn")])), options: [MySqlConfigOption { name: ExcludeColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("bar")]))])) }, MySqlConfigOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("baz")]))])) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: Some(All), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red');
@@ -576,11 +583,11 @@ CREATE SOURCE psychic FROM YUGABYTE CONNECTION pgconn (PUBLICATION = 'red')
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Yugabyte { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
 
 parse-statement
-CREATE SUBSOURCE mz_subsource (c int) OF SOURCE public.foo.mz_source WITH (EXTERNAL REFERENCE = public.foo.bar, IGNORE COLUMNS (bar), TEXT COLUMNS (baz, foobar), DETAILS = 'details');
+CREATE SUBSOURCE mz_subsource (c int) OF SOURCE public.foo.mz_source WITH (EXTERNAL REFERENCE = public.foo.bar, EXCLUDE COLUMNS (bar), TEXT COLUMNS (baz, foobar), DETAILS = 'details');
 ----
-CREATE SUBSOURCE mz_subsource (c int4) OF SOURCE public.foo.mz_source WITH (EXTERNAL REFERENCE = public.foo.bar, IGNORE COLUMNS = (bar), TEXT COLUMNS = (baz, foobar), DETAILS = 'details')
+CREATE SUBSOURCE mz_subsource (c int4) OF SOURCE public.foo.mz_source WITH (EXTERNAL REFERENCE = public.foo.bar, EXCLUDE COLUMNS = (bar), TEXT COLUMNS = (baz, foobar), DETAILS = 'details')
 =>
-CreateSubsource(CreateSubsourceStatement { name: UnresolvedItemName([Ident("mz_subsource")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], of_source: Some(Name(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("mz_source")]))), constraints: [], if_not_exists: false, with_options: [CreateSubsourceOption { name: ExternalReference, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("bar")]))) }, CreateSubsourceOption { name: IgnoreColumns, value: Some(Sequence([Ident(Ident("bar"))])) }, CreateSubsourceOption { name: TextColumns, value: Some(Sequence([Ident(Ident("baz")), Ident(Ident("foobar"))])) }, CreateSubsourceOption { name: Details, value: Some(Value(String("details"))) }] })
+CreateSubsource(CreateSubsourceStatement { name: UnresolvedItemName([Ident("mz_subsource")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], of_source: Some(Name(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("mz_source")]))), constraints: [], if_not_exists: false, with_options: [CreateSubsourceOption { name: ExternalReference, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("bar")]))) }, CreateSubsourceOption { name: ExcludeColumns, value: Some(Sequence([Ident(Ident("bar"))])) }, CreateSubsourceOption { name: TextColumns, value: Some(Sequence([Ident(Ident("baz")), Ident(Ident("foobar"))])) }, CreateSubsourceOption { name: Details, value: Some(Value(String("details"))) }] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic', PROGRESS GROUP ID PREFIX 'prefix', COMPRESSION TYPE = gzip, TOPIC METADATA REFRESH INTERVAL = '1s', PARTITION BY = 1 + 2) FORMAT BYTES
@@ -1570,7 +1577,7 @@ AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")])
 parse-statement
 ALTER SOURCE IF EXISTS n ADD SUBSOURCE a, b.c, c, d.e WITH ()
 ----
-error: Expected one of TEXT or IGNORE, found right parenthesis
+error: Expected one of TEXT or EXCLUDE or IGNORE, found right parenthesis
 ALTER SOURCE IF EXISTS n ADD SUBSOURCE a, b.c, c, d.e WITH ()
                                                             ^
 

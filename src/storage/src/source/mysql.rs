@@ -144,7 +144,7 @@ impl SourceRender for MySqlSourceConnection {
                 output_index: *ingestion_output,
                 desc,
                 text_columns: details.text_columns.clone(),
-                ignore_columns: details.ignore_columns.clone(),
+                exclude_columns: details.exclude_columns.clone(),
                 initial_gtid_set: gtid_set_frontier(&initial_gtid_set).expect("invalid gtid set"),
                 resume_upper,
             });
@@ -225,7 +225,7 @@ struct SourceOutputInfo {
     table_name: MySqlTableName,
     desc: MySqlTableDesc,
     text_columns: Vec<String>,
-    ignore_columns: Vec<String>,
+    exclude_columns: Vec<String>,
     initial_gtid_set: Antichain<GtidPartition>,
     resume_upper: Antichain<GtidPartition>,
 }

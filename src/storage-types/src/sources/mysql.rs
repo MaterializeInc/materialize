@@ -240,7 +240,7 @@ pub struct MySqlSourceExportDetails {
     #[proptest(strategy = "any_gtidset()")]
     pub initial_gtid_set: String,
     pub text_columns: Vec<String>,
-    pub ignore_columns: Vec<String>,
+    pub exclude_columns: Vec<String>,
 }
 
 impl RustType<ProtoMySqlSourceExportDetails> for MySqlSourceExportDetails {
@@ -249,7 +249,7 @@ impl RustType<ProtoMySqlSourceExportDetails> for MySqlSourceExportDetails {
             table: Some(self.table.into_proto()),
             initial_gtid_set: self.initial_gtid_set.clone(),
             text_columns: self.text_columns.clone(),
-            ignore_columns: self.ignore_columns.clone(),
+            exclude_columns: self.exclude_columns.clone(),
         }
     }
 
@@ -260,7 +260,7 @@ impl RustType<ProtoMySqlSourceExportDetails> for MySqlSourceExportDetails {
                 .into_rust_if_some("ProtoMySqlSourceExportDetails::table")?,
             initial_gtid_set: proto.initial_gtid_set,
             text_columns: proto.text_columns,
-            ignore_columns: proto.ignore_columns,
+            exclude_columns: proto.exclude_columns,
         })
     }
 }
@@ -277,7 +277,7 @@ impl AlterCompatible for MySqlSourceExportDetails {
             table: _,
             initial_gtid_set: _,
             text_columns: _,
-            ignore_columns: _,
+            exclude_columns: _,
         } = self;
         Ok(())
     }
