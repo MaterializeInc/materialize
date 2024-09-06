@@ -628,18 +628,6 @@ Trace {
             (
                 (
                     ConfigKey {
-                        key: "deploy_generation",
-                    },
-                    ConfigValue {
-                        value: 0,
-                    },
-                ),
-                2,
-                1,
-            ),
-            (
-                (
-                    ConfigKey {
                         key: "system_config_synced",
                     },
                     ConfigValue {
