@@ -104,6 +104,7 @@ filegroup(
         "src/internal/service.proto",
         "src/internal/state.proto",
         "//src/persist:all_protos",
+        "//src/persist-types:all_protos",
         "//src/proto:all_protos",
     ],
 )
