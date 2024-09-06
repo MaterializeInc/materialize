@@ -10,7 +10,7 @@
 //! Code for iterating through one or more parts, including streaming consolidation.
 
 use anyhow::anyhow;
-use arrow::array::{Array, AsArray};
+use arrow::array::{make_array, Array, ArrayData, AsArray};
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -30,8 +30,9 @@ use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredEx
 use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
 use mz_persist::metrics::ColumnarMetrics;
-use mz_persist_types::arrow::{ArrayIdx, ArrayOrd};
+use mz_persist_types::arrow::{ArrayBound, ArrayIdx, ArrayOrd};
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::RustType;
 use semver::Version;
 use timely::progress::Timestamp;
 use tracing::{debug_span, Instrument};
@@ -56,6 +57,7 @@ pub(crate) struct FetchData<T> {
     run_meta: RunMeta,
     part_desc: Description<T>,
     part: BatchPart<T>,
+    structured_lower: Option<ArrayBound>,
 }
 
 pub(crate) trait RowSort<T, D> {
@@ -212,15 +214,15 @@ impl<K: Codec, V: Codec, T, D> StructuredSort<K, V, T, D> {
 
 impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSort<K, V, T, D> {
     type Updates = StructuredUpdates;
-    type KV<'a> = (ArrayIdx<'a>, ArrayIdx<'a>);
+    type KV<'a> = (ArrayIdx<'a>, Option<ArrayIdx<'a>>);
 
     fn desired_sort(data: &FetchData<T>) -> bool {
         data.run_meta.order == Some(RunOrder::Structured)
     }
 
-    fn kv_lower(_data: &FetchData<T>) -> Option<Self::KV<'_>> {
-        // TODO: add structured lower to blob metadata.
-        None
+    fn kv_lower(data: &FetchData<T>) -> Option<Self::KV<'_>> {
+        let key_idx = data.structured_lower.as_ref().map(|l| l.get())?;
+        Some((key_idx, None))
     }
 
     fn updates_from_blob(&self, mut updates: BlobTraceUpdates) -> Self::Updates {
@@ -242,7 +244,7 @@ impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSor
     fn get(updates: &Self::Updates, index: usize) -> Option<(Self::KV<'_>, T, D)> {
         let (_, t, d) = updates.data.records().get(index)?;
         Some((
-            (updates.key_ord.at(index), updates.val_ord.at(index)),
+            (updates.key_ord.at(index), Some(updates.val_ord.at(index))),
             T::decode(t),
             D::decode(d),
         ))
@@ -477,10 +479,24 @@ where
             .into_iter()
             .map(|part| {
                 let bytes = part.encoded_size_bytes();
+                let structured_lower = match &part {
+                    BatchPart::Hollow(part) => {
+                        // Attempt to obtain the key lower, failing open if we can't obtain
+                        // it for any reason.
+                        part.structured_key_lower
+                            .as_ref()
+                            .and_then(|lazy| lazy.decode().ok())
+                            .and_then(|data| ArrayData::from_proto(data).ok())
+                            .filter(|data| data.is_empty())
+                            .map(|data| ArrayBound::new(make_array(data), 0))
+                    }
+                    BatchPart::Inline { .. } => None,
+                };
                 let c_part = ConsolidationPart::Queued {
                     data: FetchData {
                         run_meta: run_meta.clone(),
                         part_desc: desc.clone(),
+                        structured_lower,
                         part,
                     },
                     task: None,

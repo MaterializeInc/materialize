@@ -1655,7 +1655,7 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::ArrayData;
+    use arrow::array::{make_array, ArrayData};
     use arrow::compute::SortOptions;
     use arrow::datatypes::ArrowNativeType;
     use arrow::row::SortField;
@@ -1663,7 +1663,7 @@ mod tests {
     use mz_ore::collections::CollectionExt;
     use mz_persist::indexed::columnar::arrow::realloc_array;
     use mz_persist::metrics::ColumnarMetrics;
-    use mz_persist_types::arrow::ArrayOrd;
+    use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
     use mz_persist_types::columnar::{codec_to_schema2, schema2_to_codec};
     use mz_proto::{ProtoType, RustType};
     use proptest::prelude::*;
@@ -1806,9 +1806,28 @@ mod tests {
         let ord = ArrayOrd::new(&col);
         let mut indices = (0..u64::usize_as(col.len())).collect::<Vec<_>>();
         indices.sort_by_key(|i| ord.at(i.as_usize()));
-        let ord_col =
-            ::arrow::compute::take(&col, &UInt64Array::from(indices), None).expect("takeable");
+        let indices = UInt64Array::from(indices);
+        let ord_col = ::arrow::compute::take(&col, &indices, None).expect("takeable");
         assert_eq!(row_col.as_ref(), ord_col.as_ref());
+
+        // Check that our lower bounds work as expected.
+        if !ord_col.is_empty() {
+            let min_idx = indices.values()[0].as_usize();
+            let lower_bound = ArrayBound::new(ord_col, min_idx);
+            let max_encoded_len = 1000;
+            if let Some(proto) = lower_bound.to_proto_lower(max_encoded_len) {
+                assert!(
+                    proto.encoded_len() <= max_encoded_len,
+                    "should respect the max len"
+                );
+                let array_data = proto.into_rust().expect("valid array");
+                let new_lower_bound = ArrayBound::new(make_array(array_data), 0);
+                assert!(
+                    new_lower_bound.get() <= lower_bound.get(),
+                    "proto-roundtripped bound should be <= the original"
+                );
+            }
+        }
     }
 
     #[mz_ore::test]

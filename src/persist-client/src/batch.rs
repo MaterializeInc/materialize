@@ -34,6 +34,7 @@ use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
+use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
 use mz_persist_types::parquet::{CompressionFormat, EncodingConfig};
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
@@ -49,7 +50,7 @@ use tracing::{debug_span, trace_span, warn, Instrument};
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::MiB;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, Schemas};
+use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
@@ -1165,7 +1166,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let metrics_ = Arc::clone(&metrics);
         let schema_id = schemas.id;
 
-        let (stats, (buf, encode_time)) = isolated_runtime
+        let (stats, structured_key_lower, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
                 // Only encode our updates in a structured format if required, it's expensive.
                 let stats = 'collect_stats: {
@@ -1212,13 +1213,35 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     }
                 };
 
+                let structured_key_lower = if true {
+                    updates.updates.structured().and_then(|ext| {
+                        let min_key = if cfg.expected_order == RunOrder::Structured {
+                            0
+                        } else {
+                            let ord = ArrayOrd::new(ext.key.as_ref());
+                            (0..ext.key.len())
+                                .min_by_key(|i| ord.at(*i))
+                                .expect("non-empty batch")
+                        };
+                        ArrayBound::new(Arc::clone(&ext.key), min_key)
+                            .to_proto_lower(500)
+                            .map(|proto| LazyProto::from(&proto))
+                    })
+                } else {
+                    None
+                };
+
                 let encode_start = Instant::now();
                 let mut buf = Vec::new();
                 updates.encode(&mut buf, &metrics_.columnar, &cfg.encoding_config);
 
                 // Drop batch as soon as we can to reclaim its memory.
                 drop(updates);
-                (stats, (Bytes::from(buf), encode_start.elapsed()))
+                (
+                    stats,
+                    structured_key_lower,
+                    (Bytes::from(buf), encode_start.elapsed()),
+                )
             })
             .instrument(debug_span!("batch::encode_part"))
             .await
@@ -1265,7 +1288,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             key: partial_key,
             encoded_size_bytes: payload_len,
             key_lower,
-            structured_key_lower: None,
+            structured_key_lower,
             stats,
             ts_rewrite,
             diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
