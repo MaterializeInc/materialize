@@ -13,6 +13,7 @@ mostly find panics and unexpected errors. See zippy for a sequential randomized
 tests which can verify correctness.
 """
 
+import os
 import random
 
 import requests
@@ -124,6 +125,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             c,
             sanity_restart,
         )
+        # Don't wait for potentially hanging threads that we are ignoring
+        os._exit(0)
         # TODO: Only ignore errors that will be handled by parallel-workload, not others
         # except Exception:
         #     print("--- Execution of parallel-workload failed")
