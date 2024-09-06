@@ -961,6 +961,11 @@ fn add_new_remove_old_builtin_items_migration(
         match system_object_mappings.remove(&desc) {
             Some(system_object_mapping) => {
                 if system_object_mapping.unique_identifier.fingerprint != fingerprint {
+                    // `mz_storage_usage_by_shard` cannot be migrated for multiple reasons. Firstly,
+                    // it was cause the table to be truncated because the contents are not also
+                    // stored in the durable catalog. Secondly, we prune `mz_storage_usage_by_shard`
+                    // of old events in the background on startup. The correctness of that pruning
+                    // relies on there being no other retractions to `mz_storage_usage_by_shard`.
                     assert_ne!(
                         *MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
                         system_object_mapping.description,
