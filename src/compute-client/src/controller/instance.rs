@@ -22,7 +22,9 @@ use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection, PersistSinkConnection,
+};
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
@@ -1136,6 +1138,11 @@ where
         let mut compute_dependencies = BTreeMap::new();
 
         for &id in dataflow.source_imports.keys() {
+            // TODO(ct): Hack because we can use our output as an input.
+            if dataflow.sink_exports.contains_key(&id) {
+                continue;
+            }
+
             let mut read_hold = self
                 .storage_collections
                 .acquire_read_holds(vec![id])?
@@ -1220,7 +1227,17 @@ where
                     ComputeSinkConnection::Persist(conn)
                 }
                 ComputeSinkConnection::ContinualTask(conn) => {
-                    todo!("WIP {:?}", conn);
+                    let output_metadata = self
+                        .storage_collections
+                        .collection_metadata(conn.output_id)
+                        .map_err(|_| DataflowCreationError::CollectionMissing(id))?
+                        .clone();
+                    let conn = ContinualTaskConnection {
+                        input_id: conn.input_id,
+                        output_id: conn.output_id,
+                        output_metadata,
+                    };
+                    ComputeSinkConnection::ContinualTask(conn)
                 }
                 ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
                 ComputeSinkConnection::CopyToS3Oneshot(conn) => {

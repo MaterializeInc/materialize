@@ -60,6 +60,7 @@ where
         start_signal: StartSignal,
         mut ok_collection: Collection<G, Row, Diff>,
         mut err_collection: Collection<G, DataflowError, Diff>,
+        _: Option<Collection<G, (), Diff>>,
     ) -> Option<Rc<dyn Any>> {
         // Attach a probe reporting the compute frontier.
         // The `apply_refresh` operator can round up frontiers, making it impossible to accurately

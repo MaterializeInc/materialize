@@ -45,6 +45,7 @@ where
         _start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
+        _: Option<Collection<G, (), Diff>>,
     ) -> Option<Rc<dyn Any>> {
         // An encapsulation of the copy to response protocol.
         // Used to send rows and errors if this fails.

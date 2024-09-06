@@ -48,6 +48,9 @@ message ProtoPersistSinkConnection {
 }
 
 message ProtoContinualTaskConnection {
+    mz_repr.global_id.ProtoGlobalId input_id = 1;
+    mz_storage_types.controller.ProtoCollectionMetadata output_metadata = 2;
+    mz_repr.global_id.ProtoGlobalId output_id = 3;
 }
 
 message ProtoCopyToS3OneshotSinkConnection {

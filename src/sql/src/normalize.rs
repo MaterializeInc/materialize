@@ -21,12 +21,13 @@ use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectionStatement, CreateContinualTaskStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateSecretStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateSubsourceStatement, CreateTableFromSourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement,
-    CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement,
-    TableFactor, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
+    ContinualTaskStmt, CreateConnectionStatement, CreateContinualTaskStatement,
+    CreateIndexStatement, CreateMaterializedViewStatement, CreateSecretStatement,
+    CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
+    CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
+    CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior,
+    MutRecBlock, Op, Query, Statement, TableFactor, UnresolvedItemName, UnresolvedSchemaName,
+    Value, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -414,12 +415,23 @@ pub fn create_statement(
 
         Statement::CreateContinualTask(CreateContinualTaskStatement {
             name,
-            columns,
-            input,
+            // WIP do we need to normalize columns and input?
+            columns: _,
+            input: _,
             stmts,
-            in_cluster,
+            in_cluster: _,
         }) => {
-            todo!("WIP {:?}", (name, columns, input, stmts, in_cluster));
+            *name = allocate_name(name)?;
+            for stmt in stmts {
+                let mut normalizer = QueryNormalizer::new();
+                match stmt {
+                    ContinualTaskStmt::Delete(stmt) => normalizer.visit_delete_statement_mut(stmt),
+                    ContinualTaskStmt::Insert(stmt) => normalizer.visit_insert_statement_mut(stmt),
+                }
+                if let Some(err) = normalizer.err {
+                    return Err(err);
+                }
+            }
         }
 
         Statement::CreateIndex(CreateIndexStatement {

@@ -256,15 +256,33 @@ impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMe
 #[allow(missing_docs)] // WIP
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContinualTaskConnection<S> {
-    _phantom: std::marker::PhantomData<S>,
+    pub input_id: GlobalId,
+    pub output_metadata: S,
+    // TODO(ct): This can be removed once we actually render this under the
+    // correct id.
+    pub output_id: GlobalId,
 }
 
 impl RustType<ProtoContinualTaskConnection> for ContinualTaskConnection<CollectionMetadata> {
     fn into_proto(&self) -> ProtoContinualTaskConnection {
-        todo!("WIP");
+        ProtoContinualTaskConnection {
+            input_id: Some(self.input_id.into_proto()),
+            output_metadata: Some(self.output_metadata.into_proto()),
+            output_id: Some(self.output_id.into_proto()),
+        }
     }
 
     fn from_proto(proto: ProtoContinualTaskConnection) -> Result<Self, TryFromProtoError> {
-        todo!("WIP {:?}", proto);
+        Ok(ContinualTaskConnection {
+            input_id: proto
+                .input_id
+                .into_rust_if_some("ProtoContinualTaskConnection::input_id")?,
+            output_metadata: proto
+                .output_metadata
+                .into_rust_if_some("ProtoContinualTaskConnection::output_metadata")?,
+            output_id: proto
+                .output_id
+                .into_rust_if_some("ProtoContinualTaskConnection::output_id")?,
+        })
     }
 }

@@ -150,6 +150,7 @@ use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::{
     ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
+use crate::sink::continual_task::ContinualTaskCtx;
 use crate::typedefs::{ErrSpine, KeyBatcher};
 
 pub mod context;
@@ -202,6 +203,10 @@ pub fn build_compute_dataflow<A: Allocate>(
     let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+        // TODO(ct): This should be a config of the source instead, but at least try
+        // to contain the hacks.
+        let mut ct_ctx = ContinualTaskCtx::new(&dataflow);
+
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird
@@ -217,23 +222,40 @@ pub fn build_compute_dataflow<A: Allocate>(
                             .expect("Linear operators should always be valid")
                     });
 
-                    // Note: For correctness, we require that sources only emit times advanced by
-                    // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) = persist_source::persist_source(
+                    let maybe_ct_source = ct_ctx.render_source(
                         inner,
                         *source_id,
-                        Arc::clone(&compute_state.persist_clients),
-                        &compute_state.txns_ctx,
-                        &compute_state.worker_config,
-                        source.storage_metadata.clone(),
-                        dataflow.as_of.clone(),
-                        SnapshotMode::Include,
-                        dataflow.until.clone(),
+                        &source.storage_metadata,
+                        &compute_state,
                         mfp.as_mut(),
-                        compute_state.dataflow_max_inflight_bytes(),
-                        start_signal.clone(),
-                        |error| panic!("compute_import: {error}"),
+                        &start_signal,
                     );
+                    let maybe_ct_source = maybe_ct_source.map(|(ct_times, ok, err, tokens)| {
+                        // TODO(ct): Ideally this would be encapsulated by ContinualTaskCtx, but the
+                        // types are tricky.
+                        ct_ctx.ct_times.push(ct_times.leave_region().leave_region());
+                        (ok, err, tokens)
+                    });
+
+                    // Note: For correctness, we require that sources only emit times advanced by
+                    // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
+                    let (mut ok_stream, err_stream, token) = maybe_ct_source.unwrap_or_else(|| {
+                        persist_source::persist_source(
+                            inner,
+                            *source_id,
+                            Arc::clone(&compute_state.persist_clients),
+                            &compute_state.txns_ctx,
+                            &compute_state.worker_config,
+                            source.storage_metadata.clone(),
+                            dataflow.as_of.clone(),
+                            SnapshotMode::Include,
+                            dataflow.until.clone(),
+                            mfp.as_mut(),
+                            compute_state.dataflow_max_inflight_bytes(),
+                            start_signal.clone(),
+                            |error| panic!("compute_import: {error}"),
+                        )
+                    });
 
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
@@ -333,6 +355,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         sink_id,
                         &sink,
                         start_signal.clone(),
+                        ct_ctx.input_times(),
                     );
                 }
             });
@@ -396,6 +419,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         sink_id,
                         &sink,
                         start_signal.clone(),
+                        ct_ctx.input_times(),
                     );
                 }
             });

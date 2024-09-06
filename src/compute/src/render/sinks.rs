@@ -47,6 +47,7 @@ where
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         start_signal: StartSignal,
+        ct_times: Option<Collection<G, (), Diff>>,
     ) {
         soft_assert_or_log!(
             sink.non_null_assertions.is_strictly_sorted(),
@@ -57,7 +58,7 @@ where
         let mut needed_tokens = Vec::new();
         for dep_id in dependency_ids {
             if let Some(token) = tokens.get(&dep_id) {
-                needed_tokens.push(Rc::clone(token))
+                needed_tokens.push(Rc::clone(token));
             }
         }
 
@@ -143,6 +144,7 @@ where
                     start_signal,
                     ok_collection.enter_region(inner),
                     err_collection.enter_region(inner),
+                    ct_times.map(|x| x.enter_region(inner)),
                 );
 
                 if let Some(sink_token) = sink_token {
@@ -169,6 +171,8 @@ where
         start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
+        // WIP figure out a better way to smuggle this in
+        ct_times: Option<Collection<G, (), Diff>>,
     ) -> Option<Rc<dyn Any>>;
 }
 

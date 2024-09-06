@@ -702,7 +702,14 @@ pub struct CreateMaterializedViewPlan {
 }
 
 #[derive(Debug, Clone)]
-pub struct CreateContinualTaskPlan {}
+pub struct CreateContinualTaskPlan {
+    pub name: QualifiedItemName,
+    pub desc: RelationDesc,
+    // TODO(ct): Multiple inputs.
+    pub input_id: GlobalId,
+    pub continual_task: MaterializedView,
+    // TODO(ct): replace, drop_ids, if_not_exists
+}
 
 #[derive(Debug, Clone)]
 pub struct CreateIndexPlan {

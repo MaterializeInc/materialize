@@ -360,6 +360,11 @@ impl Catalog {
         }
         policies
     }
+
+    /// WIP
+    pub fn hack_add_ct(&mut self, id: GlobalId, entry: CatalogEntry) {
+        self.state.entry_by_id.insert(id, entry);
+    }
 }
 
 #[derive(Debug)]

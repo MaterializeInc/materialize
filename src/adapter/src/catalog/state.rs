@@ -38,6 +38,7 @@ use mz_controller::clusters::{
     UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -946,7 +947,31 @@ impl CatalogState {
                     initial_as_of,
                 })
             }
-            Plan::CreateContinualTask(CreateContinualTaskPlan {}) => todo!("WIP"),
+            Plan::CreateContinualTask(CreateContinualTaskPlan {
+                desc,
+                continual_task,
+                ..
+            }) => {
+                // TODO(ct): Figure out how to make this survive restarts. The
+                // expr we saved still had the LocalId placeholders for the
+                // output, but we don't have access to the real Id here.
+                let optimized_expr = OptimizedMirRelationExpr::declare_optimized(
+                    mz_expr::MirRelationExpr::constant(Vec::new(), desc.typ().clone()),
+                );
+                // TODO(ct): CatalogItem::ContinualTask
+                CatalogItem::MaterializedView(MaterializedView {
+                    create_sql: continual_task.create_sql,
+                    raw_expr: continual_task.expr.clone(),
+                    optimized_expr,
+                    desc,
+                    resolved_ids,
+                    cluster_id: continual_task.cluster_id,
+                    non_null_assertions: continual_task.non_null_assertions,
+                    custom_logical_compaction_window: continual_task.compaction_window,
+                    refresh_schedule: continual_task.refresh_schedule,
+                    initial_as_of: continual_task.as_of.map(Antichain::from_elem),
+                })
+            }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
                 on: index.on,
