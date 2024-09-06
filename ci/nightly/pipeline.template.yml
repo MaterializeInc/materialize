@@ -174,7 +174,7 @@ steps:
               composition: parallel-benchmark
               args:
                 - --other-tag
-                - common-ancestor
+                - v0.117.0-dev.0--pr.gf61e07fd8479ee27d11a0c47f692012dd1b4fafa
 
   - group: Kafka
     key: kafka
