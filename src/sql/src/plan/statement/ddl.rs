@@ -22,7 +22,7 @@ use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_
 use mz_controller_types::{
     is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
 };
-use mz_expr::{CollectionPlan, UnmaterializableFunc};
+use mz_expr::{CollectionPlan, LocalId, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
@@ -124,7 +124,9 @@ use crate::names::{
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
-use crate::plan::query::{plan_expr, scalar_type_from_catalog, ExprContext, QueryLifetime};
+use crate::plan::query::{
+    plan_expr, scalar_type_from_catalog, scalar_type_from_sql, CteDesc, ExprContext, QueryLifetime,
+};
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
@@ -139,15 +141,16 @@ use crate::plan::{
     AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan,
     ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
     CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, Index, Ingestion,
-    MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig,
-    Secret, Sink, Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
-    WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan,
+    CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
+    DropOwnedPlan, FullItemName, Index, Ingestion, MaterializedView, Params, Plan,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
+    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation,
 };
-use crate::session::vars;
+use crate::session::vars::{self, ENABLE_CREATE_CONTINUAL_TASK};
 use crate::session::vars::{
     ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS, ENABLE_KAFKA_SINK_PARTITION_BY,
     ENABLE_REFRESH_EVERY_MVS,
@@ -2715,10 +2718,176 @@ generate_extracted_config!(
 
 pub fn plan_create_continual_task(
     scx: &StatementContext,
-    stmt: CreateContinualTaskStatement<Aug>,
+    mut stmt: CreateContinualTaskStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    todo!("WIP {:?}", (scx, stmt, params));
+    scx.require_feature_flag(&ENABLE_CREATE_CONTINUAL_TASK)?;
+    let cluster_id = match &stmt.in_cluster {
+        None => scx.catalog.resolve_cluster(None)?.id(),
+        Some(in_cluster) => in_cluster.id,
+    };
+    stmt.in_cluster = Some(ResolvedClusterName {
+        id: cluster_id,
+        print_name: None,
+    });
+
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateContinualTask(stmt.clone()))?;
+
+    let partial_name = normalize::unresolved_item_name(stmt.name)?;
+    let name = scx.allocate_qualified_name(partial_name.clone())?;
+    let desc = {
+        let mut desc_columns = Vec::with_capacity(stmt.columns.capacity());
+        for col in stmt.columns.iter() {
+            desc_columns.push((
+                normalize::column_name(col.name.clone()),
+                ColumnType {
+                    scalar_type: scalar_type_from_sql(scx, &col.data_type)?,
+                    nullable: true,
+                },
+            ));
+        }
+        RelationDesc::from_names_and_types(desc_columns)
+    };
+    let input = scx.get_item_by_resolved_name(&stmt.input)?;
+
+    let mut qcx = QueryContext::root(scx, QueryLifetime::MaterializedView);
+    qcx.ctes.insert(
+        LocalId::new(0),
+        CteDesc {
+            name: name.item.clone(),
+            desc: desc.clone(),
+        },
+    );
+
+    let mut exprs = Vec::new();
+    for stmt in &stmt.stmts {
+        let query = continual_task_query(&name, stmt).ok_or_else(|| sql_err!("TODO(ct)"))?;
+        let query::PlannedRootQuery {
+            mut expr,
+            desc: desc_query,
+            finishing,
+            scope: _,
+        } = query::plan_ct_query(&mut qcx, query)?;
+        // We get back a trivial finishing, see comment in `plan_view`.
+        assert!(finishing.is_trivial(expr.arity()));
+        // TODO(ct): Is this right?
+        expr.bind_parameters(params)?;
+        // TODO(ct): Make this error message more closely match the various ones
+        // given for INSERT/DELETE.
+        if desc_query.iter_types().ne(desc.iter_types()) {
+            sql_bail!(
+                "CONTINUAL TASK query columns did not match: {:?} vs {:?}",
+                desc_query.iter().collect::<Vec<_>>(),
+                desc.iter().collect::<Vec<_>>()
+            );
+        }
+        match stmt {
+            ast::ContinualTaskStmt::Insert(_) => exprs.push(expr),
+            ast::ContinualTaskStmt::Delete(_) => exprs.push(expr.negate()),
+        }
+    }
+    // TODO(ct): Collect things by output and assert that there is only one (or
+    // support multiple outputs).
+    let expr = exprs
+        .into_iter()
+        .reduce(|acc, expr| acc.union(expr))
+        .ok_or_else(|| sql_err!("TODO(ct)"))?;
+
+    let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
+    if let Some(dup) = column_names.iter().duplicates().next() {
+        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+    }
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    // For PostgreSQL compatibility, we need to prevent creating this when there
+    // is an existing object *or* type of the same name.
+    if let Ok(item) = scx.catalog.resolve_item_or_type(&partial_name) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    Ok(Plan::CreateContinualTask(CreateContinualTaskPlan {
+        name,
+        desc,
+        input_id: input.id(),
+        continual_task: MaterializedView {
+            create_sql,
+            expr,
+            column_names,
+            cluster_id,
+            non_null_assertions: Vec::new(),
+            compaction_window: None,
+            refresh_schedule: None,
+            as_of: None,
+        },
+    }))
+}
+
+fn continual_task_query<'a>(
+    ct_name: &QualifiedItemName,
+    stmt: &'a ast::ContinualTaskStmt<Aug>,
+) -> Option<ast::Query<Aug>> {
+    match stmt {
+        ast::ContinualTaskStmt::Insert(ast::InsertStatement {
+            table_name: _,
+            columns,
+            source,
+            returning,
+        }) => {
+            if !columns.is_empty() || !returning.is_empty() {
+                return None;
+            }
+            match source {
+                ast::InsertSource::Query(query) => Some(query.clone()),
+                ast::InsertSource::DefaultValues => None,
+            }
+        }
+        ast::ContinualTaskStmt::Delete(ast::DeleteStatement {
+            table_name: _,
+            alias,
+            using,
+            selection,
+        }) => {
+            if !using.is_empty() {
+                return None;
+            }
+            // Construct a `SELECT *` with the `DELETE` selection as a `WHERE`.
+            let from = ast::TableWithJoins {
+                relation: ast::TableFactor::Table {
+                    // TODO(ct): Huge hack.
+                    name: ResolvedItemName::Cte {
+                        id: LocalId::new(0),
+                        name: ct_name.item.clone(),
+                    },
+                    alias: alias.clone(),
+                },
+                joins: Vec::new(),
+            };
+            let select = ast::Select {
+                from: vec![from],
+                selection: selection.clone(),
+                distinct: None,
+                projection: vec![ast::SelectItem::Wildcard],
+                group_by: Vec::new(),
+                having: None,
+                options: Vec::new(),
+            };
+            let query = ast::Query {
+                ctes: ast::CteBlock::Simple(Vec::new()),
+                body: ast::SetExpr::Select(Box::new(select)),
+                order_by: Vec::new(),
+                limit: None,
+                offset: None,
+            };
+            // Then negate it to turn it into retractions (after planning it).
+            Some(query)
+        }
+    }
 }
 
 pub fn describe_create_sink(

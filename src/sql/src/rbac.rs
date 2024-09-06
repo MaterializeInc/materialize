@@ -600,7 +600,27 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
-        Plan::CreateContinualTask(plan::CreateContinualTaskPlan {}) => todo!("WIP"),
+        Plan::CreateContinualTask(plan::CreateContinualTaskPlan {
+            name,
+            desc: _,
+            input_id: _,
+            continual_task,
+        }) => RbacRequirements {
+            privileges: vec![
+                (
+                    SystemObjectId::Object(name.qualifiers.clone().into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+                (
+                    SystemObjectId::Object(continual_task.cluster_id.into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+            ],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::CreateIndex(plan::CreateIndexPlan {
             name,
             index,

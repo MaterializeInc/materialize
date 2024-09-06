@@ -3587,6 +3587,7 @@ impl<'a> Parser<'a> {
         let name = self.parse_item_name()?;
         self.expect_token(&Token::LParen)?;
         let columns = self.parse_comma_separated(|parser| {
+            // TODO(ct): NOT NULL, etc.
             Ok(CteMutRecColumnDef {
                 name: parser.parse_identifier()?,
                 data_type: parser.parse_data_type()?,

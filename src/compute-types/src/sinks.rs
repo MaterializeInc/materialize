@@ -120,6 +120,10 @@ pub enum ComputeSinkConnection<S: 'static = ()> {
     /// TODO(#25239): Add documentation.
     Persist(PersistSinkConnection<S>),
     /// TODO(#25239): Add documentation.
+    ///
+    /// TODO(ct): This also writes to persist, but with different behavior
+    /// (conflict resolution, only at input times, etc). It might be time to
+    /// rename PersistSink to something that reflects the differences.
     ContinualTask(ContinualTaskConnection<S>),
     /// A compute sink to do a oneshot copy to s3.
     CopyToS3Oneshot(CopyToS3OneshotSinkConnection),
@@ -253,18 +257,34 @@ impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMe
     }
 }
 
-#[allow(missing_docs)] // WIP
+/// TODO(ct): Add documentation.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContinualTaskConnection<S> {
-    _phantom: std::marker::PhantomData<S>,
+    /// TODO(#25239): Add documentation.
+    //
+    // TODO(ct): This can be removed once we render the "input" sources without
+    // the hack.
+    pub input_id: GlobalId,
+    /// TODO(ct): Add documentation.
+    pub storage_metadata: S,
 }
 
 impl RustType<ProtoContinualTaskConnection> for ContinualTaskConnection<CollectionMetadata> {
     fn into_proto(&self) -> ProtoContinualTaskConnection {
-        todo!("WIP");
+        ProtoContinualTaskConnection {
+            input_id: Some(self.input_id.into_proto()),
+            storage_metadata: Some(self.storage_metadata.into_proto()),
+        }
     }
 
     fn from_proto(proto: ProtoContinualTaskConnection) -> Result<Self, TryFromProtoError> {
-        todo!("WIP {:?}", proto);
+        Ok(ContinualTaskConnection {
+            input_id: proto
+                .input_id
+                .into_rust_if_some("ProtoContinualTaskConnection::input_id")?,
+            storage_metadata: proto
+                .storage_metadata
+                .into_rust_if_some("ProtoContinualTaskConnection::output_metadata")?,
+        })
     }
 }

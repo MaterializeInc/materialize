@@ -22,7 +22,9 @@ use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection, PersistSinkConnection,
+};
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
 use mz_dyncfg::ConfigSet;
@@ -1290,7 +1292,16 @@ where
                     ComputeSinkConnection::Persist(conn)
                 }
                 ComputeSinkConnection::ContinualTask(conn) => {
-                    todo!("WIP {:?}", conn);
+                    let metadata = self
+                        .storage_collections
+                        .collection_metadata(id)
+                        .map_err(|_| DataflowCreationError::CollectionMissing(id))?
+                        .clone();
+                    let conn = ContinualTaskConnection {
+                        input_id: conn.input_id,
+                        storage_metadata: metadata,
+                    };
+                    ComputeSinkConnection::ContinualTask(conn)
                 }
                 ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
                 ComputeSinkConnection::CopyToS3Oneshot(conn) => {
