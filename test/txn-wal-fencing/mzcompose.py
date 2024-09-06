@@ -239,6 +239,7 @@ def run_workload(c: Composition, workload: Workload) -> None:
             "unable to confirm leadership" in mz_first_log.stdout
             or "unexpected fence epoch" in mz_first_log.stdout
             or "fenced by new catalog upper" in mz_first_log.stdout
+            or "fenced by envd" in mz_first_log.stdout
         )
 
         print("+++ Verifying committed transactions ...")

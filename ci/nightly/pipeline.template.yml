@@ -1271,7 +1271,7 @@ steps:
           composition: retain-history
 
   - id: data-ingest
-    label: "Data Ingest"
+    label: "Data Ingest %N"
     depends_on: build-aarch64
     timeout_in_minutes: 90
     parallelism: 2
@@ -1472,7 +1472,7 @@ steps:
     sanitizer: skip
 
   - id: txn-wal-fencing
-    label: Txn-wal fencing
+    label: Txn-wal fencing %N
     depends_on: build-aarch64
     timeout_in_minutes: 120
     parallelism: 2
