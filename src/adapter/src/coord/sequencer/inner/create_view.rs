@@ -212,7 +212,7 @@ impl Coordinator {
 
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
-                view.raw_expr.clone(),
+                view.raw_expr.as_ref().clone(),
                 format,
                 &config,
                 &features,
@@ -397,9 +397,9 @@ impl Coordinator {
                 name: name.clone(),
                 item: CatalogItem::View(View {
                     create_sql: create_sql.clone(),
-                    raw_expr,
+                    raw_expr: raw_expr.into(),
                     desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
-                    optimized_expr,
+                    optimized_expr: optimized_expr.into(),
                     conn_id: if temporary {
                         Some(session.conn_id().clone())
                     } else {

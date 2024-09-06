@@ -254,7 +254,7 @@ impl Coordinator {
 
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
-                view.raw_expr.clone(),
+                view.raw_expr.as_ref().clone(),
                 format,
                 &config,
                 &features,
@@ -623,8 +623,8 @@ impl Coordinator {
                 name: name.clone(),
                 item: CatalogItem::MaterializedView(MaterializedView {
                     create_sql,
-                    raw_expr,
-                    optimized_expr: local_mir_plan.expr(),
+                    raw_expr: raw_expr.into(),
+                    optimized_expr: local_mir_plan.expr().into(),
                     desc: global_lir_plan.desc().clone(),
                     resolved_ids,
                     cluster_id,

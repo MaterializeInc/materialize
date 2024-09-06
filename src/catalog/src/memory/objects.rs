@@ -14,7 +14,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
@@ -872,8 +872,8 @@ impl Sink {
 #[derive(Debug, Clone, Serialize)]
 pub struct View {
     pub create_sql: String,
-    pub raw_expr: HirRelationExpr,
-    pub optimized_expr: OptimizedMirRelationExpr,
+    pub raw_expr: Arc<HirRelationExpr>,
+    pub optimized_expr: Arc<OptimizedMirRelationExpr>,
     pub desc: RelationDesc,
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
@@ -882,8 +882,8 @@ pub struct View {
 #[derive(Debug, Clone, Serialize)]
 pub struct MaterializedView {
     pub create_sql: String,
-    pub raw_expr: HirRelationExpr,
-    pub optimized_expr: OptimizedMirRelationExpr,
+    pub raw_expr: Arc<HirRelationExpr>,
+    pub optimized_expr: Arc<OptimizedMirRelationExpr>,
     pub desc: RelationDesc,
     pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,
@@ -900,7 +900,7 @@ pub struct MaterializedView {
 pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
-    pub keys: Vec<MirScalarExpr>,
+    pub keys: Arc<[MirScalarExpr]>,
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,
