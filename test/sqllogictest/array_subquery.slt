@@ -144,7 +144,7 @@ SELECT ARRAY(SELECT ARRAY[customer.first_name] FROM customer)
 query T
 SELECT ARRAY(WITH usps AS (SELECT 42) SELECT customer.first_name FROM customer)
 ----
-{bob,alice,charlie}
+{alice,bob,charlie}
 
 query T
 SELECT ARRAY(WITH usps AS (SELECT 42) SELECT * FROM usps)

@@ -2031,12 +2031,12 @@ SELECT jsonb_agg(a) FROM (select a from t1 where a IS NOT NULL)
 query T
 SELECT jsonb_agg(a) FROM t1
 ----
-[null,1,2,3]
+[1,2,3,null]
 
 query T
 SELECT jsonb_agg(a::text::jsonb) FROM t1
 ----
-[null,1,2,3]
+[1,2,3,null]
 
 query T
 SELECT jsonb_agg(a) FILTER (WHERE a IS NOT NULL) FROM t1
@@ -2060,7 +2060,7 @@ SELECT jsonb_agg((a, b)) FROM t2
 query TTT
 SELECT jsonb_agg((a, b)), jsonb_agg(a), jsonb_agg(b) FROM t2
 ----
-[{"f1":null,"f2":"2020-01-02"},{"f1":1,"f2":"2020-01-01"}]  [null,1]  ["2020-01-01","2020-01-02"]
+[{"f1":null,"f2":"2020-01-02"},{"f1":1,"f2":"2020-01-01"}]  [1,null]  ["2020-01-01","2020-01-02"]
 
 # jsonb_object_agg
 

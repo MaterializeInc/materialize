@@ -308,10 +308,8 @@ where
     let mut left_datum_vec = mz_repr::DatumVec::new();
     let mut right_datum_vec = mz_repr::DatumVec::new();
     let mut sort_by = |left: &(_, Row), right: &(_, Row)| {
-        let left = &left.1;
-        let right = &right.1;
-        let left_datums = left_datum_vec.borrow_with(left);
-        let right_datums = right_datum_vec.borrow_with(right);
+        let left_datums = left_datum_vec.borrow_with(&left.1);
+        let right_datums = right_datum_vec.borrow_with(&right.1);
         compare_columns(order_by, &left_datums, &right_datums, || left.cmp(right))
     };
     rows.sort_by(&mut sort_by);
