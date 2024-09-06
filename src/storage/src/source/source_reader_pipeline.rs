@@ -26,12 +26,9 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
-use std::future::Future;
 use std::hash::{Hash, Hasher};
-use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
@@ -62,7 +59,7 @@ use mz_timely_util::reclock::reclock;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
-use timely::dataflow::operators::capture::Event;
+use timely::dataflow::operators::capture::{Event, EventPusher};
 use timely::dataflow::operators::core::Map as _;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Inspect, Leave, Partition};
@@ -72,7 +69,7 @@ use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, PartialOrder};
-use tokio::sync::Semaphore;
+use tokio::sync::{watch, Semaphore};
 use tokio_stream::wrappers::WatchStream;
 use tracing::{info, trace};
 
@@ -80,7 +77,7 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::metrics::source::SourceMetrics;
 use crate::metrics::StorageMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockFollower, ReclockOperator};
-use crate::source::types::{SourceMessage, SourceOutput, SourceRender, StackedCollection};
+use crate::source::types::{Probe, SourceMessage, SourceOutput, SourceRender, StackedCollection};
 use crate::statistics::SourceStatistics;
 
 /// Shared configuration information for all source types. This is used in the
@@ -182,12 +179,9 @@ where
 
     let mut tokens = vec![];
 
-    let (source_upper_tx, source_upper_rx) = config.metrics.get_instrumented_source_channel(
-        config.id,
-        config.worker_id,
-        config.worker_count,
-        "source_upper",
-    );
+    let (ingested_upper_tx, ingested_upper_rx) =
+        watch::channel(MutableAntichain::new_bottom(C::Time::minimum()));
+    let (_probed_upper_tx, probed_upper_rx) = watch::channel(None);
 
     let source_metrics = Arc::new(
         config
@@ -197,8 +191,13 @@ where
 
     let timestamp_desc = source_connection.timestamp_desc();
 
-    let (remap_collection, remap_token) =
-        remap_operator(scope, config.clone(), source_upper_rx, timestamp_desc);
+    let (remap_collection, remap_token) = remap_operator(
+        scope,
+        config.clone(),
+        probed_upper_rx,
+        ingested_upper_rx,
+        timestamp_desc,
+    );
     // Need to broadcast the remap changes to all workers.
     let remap_collection = remap_collection.inner.broadcast().as_collection();
     tokens.push(remap_token);
@@ -242,9 +241,8 @@ where
                     ((*output, result), from_time.clone(), *diff)
                 })
                 .capture_into(PusherCapture(reclock_pusher));
-            // The use of an _unbounded_ queue here is justified as it matches the unbounded
-            // buffers that lie between ordinary timely operators.
-            source_upper.capture_into(UnboundedTokioCapture(source_upper_tx));
+
+            source_upper.capture_into(FrontierCapture(ingested_upper_tx));
 
             (streams, health_stream.leave(), source_tokens)
         })
@@ -279,7 +277,7 @@ where
             // The use of an _unbounded_ queue here is justified as it matches the unbounded
             // buffers that lie between ordinary timely operators.
             source.inner.capture_into(UnboundedTokioCapture(source_tx));
-            source_upper.capture_into(UnboundedTokioCapture(source_upper_tx));
+            source_upper.capture_into(FrontierCapture(ingested_upper_tx));
 
             (streams, health_stream.leave(), source_tokens)
         })
@@ -288,6 +286,19 @@ where
     tokens.extend(source_tokens);
 
     (streams, health, tokens)
+}
+
+pub struct FrontierCapture<T>(watch::Sender<MutableAntichain<T>>);
+
+impl<T: Timestamp> EventPusher<T, Vec<Infallible>> for FrontierCapture<T> {
+    fn push(&mut self, event: Event<T, Vec<Infallible>>) {
+        match event {
+            Event::Progress(changes) => self.0.send_modify(|frontier| {
+                frontier.update_iter(changes);
+            }),
+            Event::Messages(_, _) => unreachable!(),
+        }
+    }
 }
 
 /// Renders the source dataflow fragment from the given [SourceConnection]. This returns a
@@ -407,67 +418,21 @@ where
     )
 }
 
-struct RemapClock {
-    now: NowFn,
-    tick_interval_ms: u64,
-    upper: Antichain<mz_repr::Timestamp>,
-    sleep: Pin<Box<tokio::time::Sleep>>,
-}
-
-impl RemapClock {
-    fn new(now: NowFn, tick_interval: Duration) -> Self {
-        Self {
-            now,
-            tick_interval_ms: tick_interval.as_millis().try_into().expect("huge duration"),
-            upper: Antichain::from_elem(Timestamp::minimum()),
-            sleep: Box::pin(tokio::time::sleep_until(tokio::time::Instant::now())),
-        }
-    }
-}
-
-impl futures::Stream for RemapClock {
-    type Item = (mz_repr::Timestamp, Antichain<mz_repr::Timestamp>);
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        loop {
-            futures::ready!(self.sleep.as_mut().poll(cx));
-            let now = (self.now)();
-            let mut new_ts = now - now % self.tick_interval_ms;
-            if (now % self.tick_interval_ms) != 0 {
-                new_ts += self.tick_interval_ms;
-            }
-            let new_ts: mz_repr::Timestamp = new_ts.try_into().expect("must fit");
-
-            if self.upper.less_equal(&new_ts) {
-                self.upper = Antichain::from_elem(new_ts.step_forward());
-                return Poll::Ready(Some((new_ts, self.upper.clone())));
-            } else {
-                let upper_ts = self.upper.as_option().expect("no more timestamps to mint");
-                let upper: u64 = upper_ts.into();
-                let deadline = tokio::time::Instant::now()
-                    .checked_add(Duration::from_millis(upper - now))
-                    .unwrap();
-                self.sleep.as_mut().reset(deadline);
-            }
-        }
-    }
-}
-
 /// Mints new contents for the remap shard based on summaries about the source
 /// upper it receives from the raw reader operators.
 ///
 /// Only one worker will be active and write to the remap shard. All source
 /// upper summaries will be exchanged to it.
-fn remap_operator<G, FromTime, M>(
+fn remap_operator<G, FromTime>(
     scope: &G,
     config: RawSourceCreationConfig,
-    mut source_upper_rx: InstrumentedUnboundedReceiver<Event<FromTime, Vec<Infallible>>, M>,
+    mut probed_upper: watch::Receiver<Option<Probe<FromTime>>>,
+    mut ingested_upper: watch::Receiver<MutableAntichain<FromTime>>,
     remap_relation_desc: RelationDesc,
 ) -> (Collection<G, FromTime, Diff>, PressOnDropButton)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
-    M: InstrumentedChannelMetric + 'static,
 {
     let RawSourceCreationConfig {
         name,
@@ -481,7 +446,7 @@ where
         resume_uppers: _,
         source_resume_uppers: _,
         metrics: _,
-        now,
+        now: now_fn,
         persist_clients,
         source_statistics: _,
         shared_remap_upper,
@@ -520,19 +485,19 @@ where
             remap_collection_id,
         )
         .await
-        .unwrap_or_else(|e| panic!("Failed to create remap handle for source {}: {}", name, e.display_with_causes()));
-        let clock = RemapClock::new(now.clone(), timestamp_interval);
-        let (mut timestamper, mut initial_batch) = ReclockOperator::new(remap_handle, clock).await;
-
-        let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to create remap handle for source {}: {}",
+                name,
+                e.display_with_causes()
+            )
+        });
+        let (mut timestamper, mut initial_batch) = ReclockOperator::new(remap_handle).await;
 
         // Emit initial snapshot of the remap_shard, bootstrapping
         // downstream reclock operators.
         trace!(
-            "timely-{worker_id} remap({id}) emitting remap snapshot: \
-                source_upper={} \
-                trace_updates={:?}",
-            source_upper.pretty(),
+            "timely-{worker_id} remap({id}) emitting remap snapshot: trace_updates={:?}",
             &initial_batch.updates
         );
 
@@ -544,59 +509,69 @@ where
         let mut ticker = tokio::time::interval(timestamp_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        let reclock_to_latest = dyncfgs::STORAGE_RECLOCK_TO_LATEST.get(&config.config.config_set());
+
+        let mut prev_probe: Option<Probe<FromTime>> = None;
+        let timestamp_interval_ms: u64 = timestamp_interval
+            .as_millis()
+            .try_into()
+            .expect("huge duration");
+
         while !cap_set.is_empty() {
-            // AsyncInputHandle::next is cancel safe
-            tokio::select! {
-                // We only take this branch of the source upper frontier is not the minimum
-                // frontier. This makes it so the first binding corresponds to the snapshot of the
-                // source, and because the first binding always maps to the minimum *target*
-                // frontier we guarantee that the source will never appear empty.
-                _ = ticker.tick(), if *source_upper.frontier() != [FromTime::minimum()] => {
-                    let mut remap_trace_batch = timestamper.mint(source_upper.frontier()).await;
+            // If we are reclocking to the latest offset then we only mint bindings after a
+            // successful probe. Otherwise we fall back to the earlier behavior where we just
+            // record the ingested frontier.
+            let (binding_ts, cur_source_upper) = if reclock_to_latest {
+                let new_probe = probed_upper
+                    .wait_for(|new_probe| match (&prev_probe, new_probe) {
+                        (None, Some(_)) => true,
+                        (Some(prev), Some(new)) => prev.probe_ts < new.probe_ts,
+                        _ => false,
+                    })
+                    .await
+                    .unwrap();
+                prev_probe = (*new_probe).clone();
+                let probe = prev_probe.clone().unwrap();
+                (probe.probe_ts, probe.upstream_frontier)
+            } else {
+                ticker.tick().await;
+                // We only proceed if the source upper frontier is not the minimum frontier. This
+                // makes it so the first binding corresponds to the snapshot of the source, and
+                // because the first binding always maps to the minimum *target* frontier we
+                // guarantee that the source will never appear empty.
+                let ingested_upper = ingested_upper
+                    .wait_for(|f| *f.frontier() != [FromTime::minimum()])
+                    .await
+                    .unwrap()
+                    .frontier()
+                    .to_owned();
 
-                    trace!(
-                        "timely-{worker_id} remap({id}) minted new bindings: \
-                        updates={:?} \
-                        source_upper={} \
-                        trace_upper={}",
-                        &remap_trace_batch.updates,
-                        source_upper.pretty(),
-                        remap_trace_batch.upper.pretty()
-                    );
-
-                    let cap = cap_set.delayed(cap_set.first().unwrap());
-                    remap_output.give_container(&cap, &mut remap_trace_batch.updates);
-
-                    // If the last remap trace closed the input, we no longer
-                    // need to (or can) advance the timestamper.
-                    if remap_trace_batch.upper.is_empty() {
-                        return;
-                    }
-
-                    cap_set.downgrade(remap_trace_batch.upper);
-
-                    let mut remap_trace_batch = timestamper.advance().await;
-
-                    let cap = cap_set.delayed(cap_set.first().unwrap());
-                    remap_output.give_container(&cap, &mut remap_trace_batch.updates);
-
-                    cap_set.downgrade(remap_trace_batch.upper);
+                let now = (now_fn)();
+                let mut binding_ts = now - now % timestamp_interval_ms;
+                if (now % timestamp_interval_ms) != 0 {
+                    binding_ts += timestamp_interval_ms;
                 }
-                Some(event) = source_upper_rx.recv() => {
-                    let head = std::iter::once(event);
-                    let tail = std::iter::from_fn(|| source_upper_rx.try_recv().ok());
-                    let progress = head.chain(tail).flat_map(|event| match event {
-                        Event::Progress(progress) => progress,
-                        Event::Messages(_, _) => unreachable!(),
-                    });
-                    source_upper.update_iter(progress);
-                    if source_upper.is_empty() {
-                        info!(%id, "timely-{worker_id} remap({id}) received source upper: {}", source_upper.pretty());
-                    } else {
-                        trace!("timely-{worker_id} remap({id}) received source upper: {}", source_upper.pretty());
-                    }
-                }
-            }
+                (binding_ts.try_into().expect("must fit"), ingested_upper)
+            };
+            let new_into_upper = Antichain::from_elem(binding_ts.step_forward());
+
+            let mut remap_trace_batch = timestamper
+                .mint(binding_ts, new_into_upper, cur_source_upper.borrow())
+                .await;
+
+            trace!(
+                "timely-{worker_id} remap({id}) minted new bindings: \
+                updates={:?} \
+                source_upper={} \
+                trace_upper={}",
+                &remap_trace_batch.updates,
+                cur_source_upper.pretty(),
+                remap_trace_batch.upper.pretty()
+            );
+
+            let cap = cap_set.delayed(cap_set.first().unwrap());
+            remap_output.give_container(&cap, &mut remap_trace_batch.updates);
+            cap_set.downgrade(remap_trace_batch.upper);
         }
     });
 
@@ -1021,7 +996,7 @@ where
     G::Timestamp: Lattice + TotalOrder,
     FromTime: SourceTimestamp,
 {
-    let (tx, rx) = tokio::sync::watch::channel(Antichain::from_elem(FromTime::minimum()));
+    let (tx, rx) = watch::channel(Antichain::from_elem(FromTime::minimum()));
     let scope = bindings.scope().clone();
 
     let name = format!("ReclockCommitUpper({id})");

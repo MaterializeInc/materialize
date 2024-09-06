@@ -113,6 +113,15 @@ pub struct SourceMessage {
     pub metadata: Row,
 }
 
+/// The result of probing an upstream system for its write frontier.
+#[derive(Debug, Clone)]
+pub struct Probe<T> {
+    /// The timestamp at which this probe was initiated.
+    pub probe_ts: mz_repr::Timestamp,
+    /// The frontier obtain from the upstream system.
+    pub upstream_frontier: Antichain<T>,
+}
+
 mod columnation {
     use columnation::{Columnation, Region};
     use mz_repr::Row;

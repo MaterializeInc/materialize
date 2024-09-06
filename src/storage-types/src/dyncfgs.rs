@@ -205,6 +205,14 @@ pub const STORAGE_USE_RECLOCK_V2: Config<bool> = Config::new(
     "Whether to use the new reclock implementation.",
 );
 
+/// Whether to mint reclock bindings based on the latest probed frontier or the currently ingested
+/// frontier.
+pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
+    "storage_reclock_to_latest",
+    false,
+    "Whether to mint reclock bindings based on the latest probed offset or the latest ingested offset."
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -227,4 +235,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
         .add(&STORAGE_USE_RECLOCK_V2)
+        .add(&STORAGE_RECLOCK_TO_LATEST)
 }
