@@ -217,8 +217,8 @@ impl<'a> DataflowBuilder<'a> {
                         dataflow.import_source(*id, source.desc.typ().clone(), monotonic);
                     }
                     CatalogItem::View(view) => {
-                        let expr = view.optimized_expr.clone();
-                        self.import_view_into_dataflow(id, &expr, dataflow, features)?;
+                        let expr = view.optimized_expr.as_ref();
+                        self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
                     CatalogItem::MaterializedView(mview) => {
                         dataflow.import_source(*id, mview.desc.typ().clone(), monotonic);
