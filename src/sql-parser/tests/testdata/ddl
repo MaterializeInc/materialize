@@ -253,7 +253,7 @@ CREATE TABLE t (c int4, d int4) FROM SOURCE foo (REFERENCE bar)
 ----
 CREATE TABLE t (c int4, d int4) FROM SOURCE foo (REFERENCE = bar)
 =>
-CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("d"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: UnresolvedItemName([Ident("bar")]), with_options: [], include_metadata: [], format: None, envelope: None })
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("d"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("bar")])), with_options: [], include_metadata: [], format: None, envelope: None })
 
 parse-statement
 CREATE TABLE t (c, d) FROM SOURCE foo (REFERENCE bar)
@@ -265,23 +265,30 @@ CREATE TABLE t (c, d) FROM SOURCE foo (REFERENCE bar)
 parse-statement
 CREATE TABLE t FROM SOURCE foo
 ----
-error: Expected left parenthesis, found EOF
 CREATE TABLE t FROM SOURCE foo
-                              ^
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: None, with_options: [], include_metadata: [], format: None, envelope: None })
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (OPTION)
+----
+error: Expected REFERENCE, found identifier "option"
+CREATE TABLE t FROM SOURCE foo (OPTION)
+                                ^
 
 parse-statement
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz)
 ----
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz)
 =>
-CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: UnresolvedItemName([Ident("baz")]), with_options: [], include_metadata: [], format: None, envelope: None })
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [], include_metadata: [], format: None, envelope: None })
 
 parse-statement
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE UPSERT
 ----
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE UPSERT
 =>
-CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: UnresolvedItemName([Ident("baz")]), with_options: [], include_metadata: [], format: Some(Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, seed: Some(CsrSeedProtobuf { key: Some(CsrSeedProtobufSchema { schema: "{\"some\": \"seed\"}", message_name: "Batch" }), value: CsrSeedProtobufSchema { schema: "123", message_name: "M" } }) } }))), envelope: Some(Upsert { value_decode_err_policy: [] }) })
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [], include_metadata: [], format: Some(Bare(Protobuf(Csr { csr_connection: CsrConnectionProtobuf { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, seed: Some(CsrSeedProtobuf { key: Some(CsrSeedProtobufSchema { schema: "{\"some\": \"seed\"}", message_name: "Batch" }), value: CsrSeedProtobufSchema { schema: "123", message_name: "M" } }) } }))), envelope: Some(Upsert { value_decode_err_policy: [] }) })
 
 parse-statement
 CREATE DATABASE IF EXISTS foo

@@ -1560,7 +1560,7 @@ pub struct CreateTableFromSourceStatement<T: AstInfo> {
     pub constraints: Vec<TableConstraint<T>>,
     pub if_not_exists: bool,
     pub source: T::ItemName,
-    pub external_reference: UnresolvedItemName,
+    pub external_reference: Option<UnresolvedItemName>,
     pub with_options: Vec<TableFromSourceOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: Option<FormatSpecifier<T>>,
@@ -1598,9 +1598,11 @@ impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
         }
         f.write_str(" FROM SOURCE ");
         f.write_node(source);
-        f.write_str(" (REFERENCE = ");
-        f.write_node(external_reference);
-        f.write_str(")");
+        if let Some(external_reference) = external_reference {
+            f.write_str(" (REFERENCE = ");
+            f.write_node(external_reference);
+            f.write_str(")");
+        }
 
         if let Some(format) = &format {
             f.write_node(format);

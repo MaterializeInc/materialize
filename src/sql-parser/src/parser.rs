@@ -4398,11 +4398,16 @@ impl<'a> Parser<'a> {
         self.expect_keywords(&[FROM, SOURCE])?;
 
         let source = self.parse_raw_name()?;
-        self.expect_token(&Token::LParen)?;
-        self.expect_keyword(REFERENCE)?;
-        let _ = self.consume_token(&Token::Eq);
-        let external_reference = self.parse_item_name()?;
-        self.expect_token(&Token::RParen)?;
+
+        let external_reference = if self.consume_token(&Token::LParen) {
+            self.expect_keyword(REFERENCE)?;
+            let _ = self.consume_token(&Token::Eq);
+            let external_reference = self.parse_item_name()?;
+            self.expect_token(&Token::RParen)?;
+            Some(external_reference)
+        } else {
+            None
+        };
 
         let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
             Some(KEY) => {
