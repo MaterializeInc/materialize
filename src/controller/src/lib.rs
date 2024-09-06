@@ -711,6 +711,7 @@ where
             envd_epoch,
             read_only,
             config.metrics_registry.clone(),
+            config.now.clone(),
             Arc::new(wallclock_lag),
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
