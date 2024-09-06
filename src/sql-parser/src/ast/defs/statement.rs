@@ -29,10 +29,11 @@ use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
 use crate::ast::{
     AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, CreateConnectionOption,
     CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceOption,
-    CreateSourceOptionName, DeferredItemName, Expr, Format, FormatSpecifier, Ident, IntervalValue,
-    KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope, SourceEnvelope,
-    SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint, TableWithJoins,
-    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    CreateSourceOptionName, CteMutRecColumnDef, DeferredItemName, Expr, Format, FormatSpecifier,
+    Ident, IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope,
+    SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
+    TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -54,6 +55,7 @@ pub enum Statement<T: AstInfo> {
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateMaterializedView(CreateMaterializedViewStatement<T>),
+    CreateContinualTask(CreateContinualTaskStatement<T>),
     CreateTable(CreateTableStatement<T>),
     CreateTableFromSource(CreateTableFromSourceStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
@@ -127,6 +129,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateMaterializedView(stmt) => f.write_node(stmt),
+            Statement::CreateContinualTask(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateTableFromSource(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
@@ -203,6 +206,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateSink => "create_sink",
         StatementKind::CreateView => "create_view",
         StatementKind::CreateMaterializedView => "create_materialized_view",
+        StatementKind::CreateContinualTask => "create_continual_task",
         StatementKind::CreateTable => "create_table",
         StatementKind::CreateTableFromSource => "create_table_from_source",
         StatementKind::CreateIndex => "create_index",
@@ -1388,6 +1392,58 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
     }
 }
 impl_display_t!(CreateMaterializedViewStatement);
+
+/// `CREATE CONTINUAL TASK`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateContinualTaskStatement<T: AstInfo> {
+    pub name: UnresolvedItemName,
+    pub columns: Vec<CteMutRecColumnDef<T>>,
+    pub in_cluster: Option<T::ClusterName>,
+
+    // The thing we get input diffs from
+    pub input: T::ItemName,
+
+    // The txn to execute on each set of diffs
+    pub stmts: Vec<ContinualTaskStmt<T>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ContinualTaskStmt<T: AstInfo> {
+    Delete(DeleteStatement<T>),
+    Insert(InsertStatement<T>),
+    // TODO(ct): Update/upsert?
+}
+
+impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE CONTINUAL TASK ");
+        f.write_node(&self.name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.columns));
+        f.write_str(")");
+
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str(" IN CLUSTER ");
+            f.write_node(cluster);
+        }
+
+        f.write_str(" ON INPUT ");
+        f.write_node(&self.input);
+
+        f.write_str(" AS (");
+        for (idx, stmt) in self.stmts.iter().enumerate() {
+            if idx > 0 {
+                f.write_str("; ");
+            }
+            match stmt {
+                ContinualTaskStmt::Delete(stmt) => f.write_node(stmt),
+                ContinualTaskStmt::Insert(stmt) => f.write_node(stmt),
+            }
+        }
+        f.write_str(")");
+    }
+}
+impl_display_t!(CreateContinualTaskStatement);
 
 /// `ALTER SET CLUSTER`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

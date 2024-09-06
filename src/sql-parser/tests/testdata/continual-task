@@ -1,0 +1,40 @@
+# Copyright 2020 sqlparser-rs contributors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# This file is derived from the sqlparser-rs project, available at
+# https://github.com/andygrove/sqlparser-rs. It was incorporated
+# directly into Materialize on December 21, 2019.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+parse-statement
+CREATE CONTINUAL TASK foo (key int, val int) ON INPUT append_only AS (
+    DELETE FROM output WHERE key IN (SELECT key FROM inserts);
+    INSERT INTO output SELECT key, max(value) FROM inserts GROUP BY key;
+);
+----
+CREATE CONTINUAL TASK foo (key int4, val int4) ON INPUT append_only AS (DELETE FROM output WHERE key IN (SELECT key FROM inserts); INSERT INTO output SELECT key, max(value) FROM inserts GROUP BY key)
+=>
+CreateContinualTask(CreateContinualTaskStatement { name: UnresolvedItemName([Ident("foo")]), columns: [CteMutRecColumnDef { name: Ident("key"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, CteMutRecColumnDef { name: Ident("val"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }], in_cluster: None, input: Name(UnresolvedItemName([Ident("append_only")])), stmts: [Delete(DeleteStatement { table_name: Name(UnresolvedItemName([Ident("output")])), alias: None, using: [], selection: Some(InSubquery { expr: Identifier([Ident("key")]), subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("key")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("inserts")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, negated: false }) }), Insert(InsertStatement { table_name: Name(UnresolvedItemName([Ident("output")])), columns: [], source: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("key")]), alias: None }, Expr { expr: Function(Function { name: Name(UnresolvedItemName([Ident("max")])), args: Args { args: [Identifier([Ident("value")])], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("inserts")])), alias: None }, joins: [] }], selection: None, group_by: [Identifier([Ident("key")])], having: None, options: [] }), order_by: [], limit: None, offset: None }), returning: [] })] })
+
+# WIP Update this based on the real thing saved to the catalog
+parse-statement
+CREATE CONTINUAL TASK "materialize"."public"."foo" (key int, val int) IN CLUSTER [u1] ON INPUT [u1 AS "materialize"."public"."big"] AS (
+    DELETE FROM [u3 AS "materialize"."public"."output"] WHERE false;
+    INSERT INTO [u3 AS "materialize"."public"."output"] SELECT "b"."key", "s"."val" FROM [u1 AS "materialize"."public"."big"] AS "b" JOIN [u2 AS "materialize"."public"."small"] AS "s" ON "b"."key" = "s"."key";
+);
+----
+CREATE CONTINUAL TASK materialize.public.foo (key int4, val int4) IN CLUSTER [u1] ON INPUT [u1 AS materialize.public.big] AS (DELETE FROM [u3 AS materialize.public.output] WHERE false; INSERT INTO [u3 AS materialize.public.output] SELECT b.key, s.val FROM [u1 AS materialize.public.big] AS b JOIN [u2 AS materialize.public.small] AS s ON b.key = s.key)
+=>
+CreateContinualTask(CreateContinualTaskStatement { name: UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("foo")]), columns: [CteMutRecColumnDef { name: Ident("key"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, CteMutRecColumnDef { name: Ident("val"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }], in_cluster: Some(Resolved("u1")), input: Id("u1", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("big")])), stmts: [Delete(DeleteStatement { table_name: Id("u3", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("output")])), alias: None, using: [], selection: Some(Value(Boolean(false))) }), Insert(InsertStatement { table_name: Id("u3", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("output")])), columns: [], source: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("b"), Ident("key")]), alias: None }, Expr { expr: Identifier([Ident("s"), Ident("val")]), alias: None }], from: [TableWithJoins { relation: Table { name: Id("u1", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("big")])), alias: Some(TableAlias { name: Ident("b"), columns: [], strict: false }) }, joins: [Join { relation: Table { name: Id("u2", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("small")])), alias: Some(TableAlias { name: Ident("s"), columns: [], strict: false }) }, join_operator: Inner(On(Op { op: Op { namespace: None, op: "=" }, expr1: Identifier([Ident("b"), Ident("key")]), expr2: Some(Identifier([Ident("s"), Ident("key")])) })) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), returning: [] })] })

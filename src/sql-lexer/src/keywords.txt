@@ -95,6 +95,7 @@ Confluent
 Connection
 Connections
 Constraint
+Continual
 Copy
 Count
 Counter
@@ -421,6 +422,7 @@ System
 Table
 Tables
 Tail
+Task
 Temp
 Temporary
 Text
