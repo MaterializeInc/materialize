@@ -1413,14 +1413,14 @@ mod builtin_migration_tests {
                                 column_types: Vec::new(),
                                 keys: Vec::new(),
                             },
-                        ),
+                        ).into(),
                         optimized_expr: OptimizedMirRelationExpr(MirRelationExpr::Constant {
                             rows: Ok(Vec::new()),
                             typ: RelationType {
                                 column_types: Vec::new(),
                                 keys: Vec::new(),
                             },
-                        }),
+                        }).into(),
                         desc: RelationDesc::builder()
                             .with_column("a", ScalarType::Int32.nullable(true))
                             .with_key(vec![0])
