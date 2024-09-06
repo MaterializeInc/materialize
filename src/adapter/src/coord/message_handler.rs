@@ -326,7 +326,10 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn storage_usage_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
-        self.builtin_table_update().execute(expired).await.await
+        let fut = self.builtin_table_update().execute(expired).await;
+        task::spawn(|| "storage_usage_pruning_apply", async move {
+            fut.await;
+        });
     }
 
     pub async fn schedule_storage_usage_collection(&self) {

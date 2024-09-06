@@ -3330,7 +3330,7 @@ impl Coordinator {
         let read_ts = self.get_local_read_ts().await;
         let current_contents_fut = self.controller.storage.snapshot(id, read_ts);
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        spawn(|| "storage usage prune", async move {
+        spawn(|| "storage_usage_prune", async move {
             let mut current_contents = current_contents_fut
                 .await
                 .unwrap_or_terminate("cannot fail to fetch snapshot");
