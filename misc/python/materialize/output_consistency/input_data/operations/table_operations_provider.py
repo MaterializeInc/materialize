@@ -9,6 +9,9 @@
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.input_data.operations.string_operations_provider import (
+    TAG_REGEX,
+)
 from materialize.output_consistency.input_data.params.array_operation_param import (
     ArrayOperationParam,
 )
@@ -138,6 +141,7 @@ TABLE_OPERATION_TYPES.append(
         ],
         StringReturnTypeSpec(),
         is_table_function=True,
+        tags={TAG_REGEX},
     ),
 )
 
@@ -147,6 +151,7 @@ TABLE_OPERATION_TYPES.append(
         [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_OPTIONAL_PARAM],
         StringReturnTypeSpec(),
         is_table_function=True,
+        tags={TAG_REGEX},
     ),
 )
 
