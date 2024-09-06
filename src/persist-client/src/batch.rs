@@ -353,6 +353,7 @@ pub struct BatchBuilderConfig {
     pub(crate) encoding_config: EncodingConfig,
     pub(crate) record_run_meta: bool,
     pub(crate) expected_order: RunOrder,
+    pub(crate) structured_key_lower_len: usize,
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
@@ -402,6 +403,13 @@ pub(crate) const STRUCTURED_ORDER: Config<bool> = Config::new(
     "persist_batch_structured_order",
     false,
     "If enabled, output compaction batches in structured-data order.",
+);
+
+pub(crate) const STRUCTURED_KEY_LOWER_LEN: Config<usize> = Config::new(
+    "persist_batch_structured_key_lower_len",
+    0,
+    "The maximum size in proto bytes of any structured key-lower metadata to preserve. \
+    (If we're unable to fit the lower in budget, or the budget is zero, no metadata is kept.)",
 );
 
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
@@ -473,6 +481,7 @@ impl BatchBuilderConfig {
             },
             record_run_meta,
             expected_order,
+            structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
         }
     }
 
@@ -1213,7 +1222,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     }
                 };
 
-                let structured_key_lower = if true {
+                let structured_key_lower = if cfg.structured_key_lower_len > 0 {
                     updates.updates.structured().and_then(|ext| {
                         let min_key = if cfg.expected_order == RunOrder::Structured {
                             0
@@ -1224,7 +1233,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                 .expect("non-empty batch")
                         };
                         ArrayBound::new(Arc::clone(&ext.key), min_key)
-                            .to_proto_lower(500)
+                            .to_proto_lower(cfg.structured_key_lower_len)
                             .map(|proto| LazyProto::from(&proto))
                     })
                 } else {
