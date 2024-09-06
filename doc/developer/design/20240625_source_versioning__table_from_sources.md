@@ -401,7 +401,7 @@ statements will be migrated to `CREATE TABLE .. FROM WEBHOOK` statements, and
 the under-the-hood logic will remain the same for webhook sources.
 
 In the future, we can refactor webhook objects in the codebase to resemble
-tables more-so than source objects.
+tables more closely than source objects.
 
 ### Migration of source statements and collections
 
@@ -411,20 +411,31 @@ is to preserve the names associated with each collection even if the statement t
 identifies each collection is updated. The migration would do the following:
 
 -   For existing sources where the primary relation has the data (e.g. Kafka sources):
+    -   Assuming the existing source object is named `<source>` with id `u123`
     -   Generate a new `CREATE TABLE` statement that is tied to the current primary collection
-        and name it `<source>`
+        and name it `<source>`, but use a new id for this object
     -   Change the `CREATE SOURCE` statement to point to the current progress collection and
-        change the source name to `<source>_progress`
+        change the source name to `<source>_progress` but keep the id `u123`
     -   Drop the existing `CREATE SUBSOURCE <source>_progress` statement since this will no
         longer have a collection to own
 -   For existing multi-output sources (e.g. Postgres & MySQL sources):
-    -   Convert subsources to `CREATE TABLE` statements with the same name
+    -   Convert subsources to `CREATE TABLE` statements, each using the same name and id
     -   Change the `CREATE SOURCE` statement to point to the current progress collection and
-        change the source name to `<source>_progress`
+        change the source name to `<source>_progress` but keep the same id
     -   Drop the existing `CREATE SUBSOURCE <source>_progress` statement since this will no
         longer have a collection to own
     -   Drop the existing top-level collection tied to the source, since this is already
         unused and will no longer be owned by any statement
+
+One important caveat is that the error shard of the primary collection currently contains
+errors for the source as a whole. Since the progress collection doesn't contain any errors
+we will need to combine the error shard of the main collection with the data shard of
+the progress collection when we implement the migration of the top-level source object
+to point to the progress collection.
+
+The reason behind preserving the id of each statement even while we change the names is
+to allow tools such as `terraform` to maintain their state about each object, since our
+terraform provider uses each statement id to uniquely identify resources in terraform state.
 
 ### Exposing available upstream references to users
 
