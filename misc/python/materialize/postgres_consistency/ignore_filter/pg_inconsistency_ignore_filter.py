@@ -281,6 +281,15 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 if regex_flag.value == "g":
                     return YesIgnore("Strange Postgres behavior (see PR 26526)")
 
+        if db_function.function_name_in_lower_case == "regexp_split_to_table":
+            if expression.count_args() == 3:
+                regex_flag = expression.args[2]
+                assert isinstance(regex_flag, EnumConstant)
+                if regex_flag.value == "i":
+                    return YesIgnore(
+                        "#29413: regexp_split_to_table: difference with case-insensitivity flag"
+                    )
+
         if db_function.function_name_in_lower_case == "nullif":
             type_arg0 = expression.args[0].try_resolve_exact_data_type()
             type_arg1 = expression.args[1].try_resolve_exact_data_type()
