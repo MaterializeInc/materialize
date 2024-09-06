@@ -246,7 +246,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     StorageUsageSchedule,
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsageReferenced),
-
+    StorageUsagePrune(Vec<BuiltinTableUpdate>),
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -348,6 +348,7 @@ impl Message {
             Message::StorageUsageSchedule => "storage_usage_schedule",
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
+            Message::StorageUsagePrune(_) => "storage_usage_prune",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
@@ -3319,47 +3320,49 @@ impl Coordinator {
     /// timestamp and then writing at whatever the current write timestamp is (instead of
     /// `read_ts + 1`) relies on the fact that there are no outstanding writes during startup.
     ///
-    /// In practice, this method is always safe to call because group commit has builtin fencing,
-    /// and we never commit retractions to [`MZ_STORAGE_USAGE_BY_SHARD`] outside of this method. So
-    /// we don't have to worry about double retractions. Still, better safe than sorry.
+    /// Group commit, which this method uses to write the retractions, has builtin fencing, and we
+    /// never commit retractions to [`MZ_STORAGE_USAGE_BY_SHARD`] outside of this method, which is
+    /// only called once during startup. So we don't have to worry about double/invalid retractions.
     async fn prune_storage_usage_events_on_startup(&mut self, retention_period: Duration) {
         let id = self
             .catalog()
             .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD);
         let read_ts = self.get_local_read_ts().await;
-        let mut current_contents = self
-            .controller
-            .storage
-            .snapshot(id, read_ts.clone())
-            .await
-            .unwrap_or_terminate("cannot fail to fetch snapshot");
-        differential_dataflow::consolidation::consolidate(&mut current_contents);
+        let current_contents_fut = self.controller.storage.snapshot(id, read_ts);
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        spawn(|| "storage_usage_prune", async move {
+            let mut current_contents = current_contents_fut
+                .await
+                .unwrap_or_terminate("cannot fail to fetch snapshot");
+            differential_dataflow::consolidation::consolidate(&mut current_contents);
 
-        let cutoff_ts = u128::from(read_ts).saturating_sub(retention_period.as_millis());
-        let mut expired = Vec::new();
-        for (row, diff) in current_contents {
-            assert_eq!(
-                diff, 1,
-                "consolidated contents should not contain retractions: ({row:#?}, {diff:#?})"
-            );
-            // This logic relies on the definition of `mz_storage_usage_by_shard` not changing.
-            let collection_timestamp = row
-                .unpack()
-                .get(3)
-                .expect("definition of mz_storage_by_shard changed")
-                .unwrap_timestamptz();
-            let collection_timestamp = collection_timestamp.timestamp_millis();
-            let collection_timestamp: u128 = collection_timestamp
-                .try_into()
-                .expect("all collections happen after Jan 1 1970");
-            if collection_timestamp < cutoff_ts {
-                debug!("pruning storage event {row:?}");
-                let builtin_update = BuiltinTableUpdate { id, row, diff: -1 };
-                expired.push(builtin_update);
+            let cutoff_ts = u128::from(read_ts).saturating_sub(retention_period.as_millis());
+            let mut expired = Vec::new();
+            for (row, diff) in current_contents {
+                assert_eq!(
+                    diff, 1,
+                    "consolidated contents should not contain retractions: ({row:#?}, {diff:#?})"
+                );
+                // This logic relies on the definition of `mz_storage_usage_by_shard` not changing.
+                let collection_timestamp = row
+                    .unpack()
+                    .get(3)
+                    .expect("definition of mz_storage_by_shard changed")
+                    .unwrap_timestamptz();
+                let collection_timestamp = collection_timestamp.timestamp_millis();
+                let collection_timestamp: u128 = collection_timestamp
+                    .try_into()
+                    .expect("all collections happen after Jan 1 1970");
+                if collection_timestamp < cutoff_ts {
+                    debug!("pruning storage event {row:?}");
+                    let builtin_update = BuiltinTableUpdate { id, row, diff: -1 };
+                    expired.push(builtin_update);
+                }
             }
-        }
 
-        self.builtin_table_update().execute(expired).await.await;
+            // main thread has shut down.
+            let _ = internal_cmd_tx.send(Message::StorageUsagePrune(expired));
+        });
     }
 }
 

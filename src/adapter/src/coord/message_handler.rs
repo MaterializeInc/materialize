@@ -37,7 +37,7 @@ use tracing::{event, info_span, warn, Instrument, Level};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::Op;
+use crate::catalog::{BuiltinTableUpdate, Op};
 use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::{
@@ -128,6 +128,9 @@ impl Coordinator {
             }
             Message::StorageUsageUpdate(sizes) => {
                 self.storage_usage_update(sizes).boxed_local().await;
+            }
+            Message::StorageUsagePrune(expired) => {
+                self.storage_usage_prune(expired).boxed_local().await;
             }
             Message::RetireExecute {
                 otel_ctx,
@@ -319,6 +322,14 @@ impl Coordinator {
             }
             Err(err) => tracing::warn!("Failed to update storage metrics: {:?}", err),
         }
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn storage_usage_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
+        let fut = self.builtin_table_update().execute(expired).await;
+        task::spawn(|| "storage_usage_pruning_apply", async move {
+            fut.await;
+        });
     }
 
     pub async fn schedule_storage_usage_collection(&self) {
