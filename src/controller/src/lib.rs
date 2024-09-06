@@ -26,6 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 use std::num::NonZeroI64;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::future::BoxFuture;
 use mz_build_info::BuildInfo;
@@ -63,7 +64,6 @@ use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use serde::Serialize;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc;
-use tokio::time::{self, Duration, Interval, MissedTickBehavior};
 use uuid::Uuid;
 
 pub mod clusters;
@@ -140,8 +140,6 @@ enum Readiness<T> {
     Compute,
     /// A batch of metric data is ready.
     Metrics((ReplicaId, Vec<ServiceProcessMetrics>)),
-    /// Frontiers are ready for recording.
-    Frontiers,
     /// An internally-generated message is ready to be returned.
     Internal(ControllerResponse<T>),
 }
@@ -173,8 +171,6 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
     metrics_tx: mpsc::UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
     /// Receiver for the channel over which replica metrics are sent.
     metrics_rx: mpsc::UnboundedReceiver<(ReplicaId, Vec<ServiceProcessMetrics>)>,
-    /// Periodic notification to record frontiers.
-    frontiers_ticker: Interval,
     /// A function providing the current wallclock time.
     now: NowFn,
 
@@ -247,7 +243,6 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             metrics_tasks: _,
             metrics_tx: _,
             metrics_rx: _,
-            frontiers_ticker: _,
             now: _,
             persist_pubsub_url: _,
             secrets_args: _,
@@ -375,9 +370,6 @@ where
                     }
                     Some(metrics) = self.metrics_rx.recv() => {
                         self.readiness = Readiness::Metrics(metrics);
-                    }
-                    _ = self.frontiers_ticker.tick() => {
-                        self.readiness = Readiness::Frontiers;
                     }
                 }
             }
@@ -536,10 +528,6 @@ where
             Readiness::Storage => self.process_storage_response(storage_metadata),
             Readiness::Compute => self.process_compute_response(),
             Readiness::Metrics((id, metrics)) => self.process_replica_metrics(id, metrics),
-            Readiness::Frontiers => {
-                self.record_frontiers();
-                Ok(None)
-            }
             Readiness::Internal(message) => Ok(Some(message)),
         }
     }
@@ -622,13 +610,6 @@ where
 
         self.storage
             .append_introspection_updates(IntrospectionType::ReplicaMetricsHistory, updates);
-    }
-
-    fn record_frontiers(&mut self) {
-        // TODO(teskje): There is no need for the global `Controller` to be what's ticking the
-        // frontier recording. We should do this inside the storage controller instead.
-        self.storage.record_frontiers();
-        self.storage.record_replica_frontiers();
     }
 
     /// Determine the "real-time recency" timestamp for all `ids`.
@@ -734,9 +715,6 @@ where
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
-        let mut frontiers_ticker = time::interval(Duration::from_secs(1));
-        frontiers_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
         let mut this = Self {
             storage: Box::new(storage_controller),
             storage_collections: collections_ctl,
@@ -753,7 +731,6 @@ where
             metrics_tasks: BTreeMap::new(),
             metrics_tx,
             metrics_rx,
-            frontiers_ticker,
             now: config.now,
             persist_pubsub_url: config.persist_pubsub_url,
             secrets_args: config.secrets_args,
