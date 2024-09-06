@@ -147,7 +147,7 @@ enum Readiness<T> {
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
-pub struct Controller<T: Timestamp = mz_repr::Timestamp> {
+pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
     pub storage: Box<dyn StorageController<Timestamp = T>>,
     pub storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     pub compute: ComputeController<T>,
@@ -625,12 +625,10 @@ where
     }
 
     fn record_frontiers(&mut self) {
-        let compute_frontiers = self.compute.collect_collection_frontiers();
-        self.storage.record_frontiers(compute_frontiers);
-
-        let compute_replica_frontiers = self.compute.collect_replica_write_frontiers();
-        self.storage
-            .record_replica_frontiers(compute_replica_frontiers);
+        // TODO(teskje): There is no need for the global `Controller` to be what's ticking the
+        // frontier recording. We should do this inside the storage controller instead.
+        self.storage.record_frontiers();
+        self.storage.record_replica_frontiers();
     }
 
     /// Determine the "real-time recency" timestamp for all `ids`.
