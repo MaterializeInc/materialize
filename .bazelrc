@@ -61,6 +61,8 @@ common --experimental_remote_cache_compression_threshold=2097152
 common --experimental_remote_merkle_tree_cache
 # Number of merkle trees to memoize (default 1000).
 common --experimental_remote_merkle_tree_cache_size=5000
+# Don't make the user wait for uploading artifacts to complete, finish it in the background.
+common --bes_upload_mode=fully_async
 # Tells `xz` to use all available cores.
 action_env=XZ_OPT=-T0
 
@@ -70,6 +72,7 @@ action_env=XZ_OPT=-T0
 build:debug --cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG"
 build:debug --host_cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG"
 build:debug --@rules_rust//:extra_rustc_flag="-Csplit-debuginfo=unpacked"
+
 
 # Common Build Configuration
 build --linkopt="-Wl,-O2"

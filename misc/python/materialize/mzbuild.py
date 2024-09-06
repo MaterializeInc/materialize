@@ -268,6 +268,11 @@ class CargoPreImage(PreImage):
         }
         if self.rd.bazel:
             inputs |= {".bazelrc", "WORKSPACE"}
+            # Bazel has some rules and additive files that aren't directly
+            # associated with a crate, but can change how it's built.
+            additive_path = self.rd.root / "misc" / "bazel"
+            additive_files = ["BUILD.bazel", "*.bzl"]
+            inputs |= set(git.expand_globs(additive_path, *additive_files))
         return inputs
 
     def extra(self) -> str:
