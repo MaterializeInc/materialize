@@ -12,6 +12,9 @@
 
 MZFROM ubuntu-base
 
+RUN groupadd --system --gid=999 materialize \
+    && useradd --system --gid=999 --uid=999 --create-home materialize
+
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
         ca-certificates \
@@ -19,8 +22,6 @@ RUN apt-get update \
         llvm \
         tini \
         ssh \
-    && groupadd --system --gid=888 materialize \
-    && useradd --system --gid=888 --uid=888 --create-home materialize \
     && mkdir /scratch \
     && chown materialize /scratch \
     && mkdir /mzdata \
