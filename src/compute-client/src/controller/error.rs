@@ -128,16 +128,19 @@ impl From<instance::ReplicaMissing> for ReplicaDropError {
 /// Errors arising during dataflow creation.
 #[derive(Error, Debug)]
 pub enum DataflowCreationError {
-    /// TODO(#25239): Add documentation.
+    /// The given instance does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(#25239): Add documentation.
+    /// One of the imported collections does not exist.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
-    /// TODO(#25239): Add documentation.
+    /// The targeted replica does not exist.
+    #[error("replica does not exist: {0}")]
+    ReplicaMissing(ReplicaId),
+    /// The dataflow definition has doesn't have an `as_of` set.
     #[error("dataflow definition lacks an as_of value")]
     MissingAsOf,
-    /// TODO(#25239): Add documentation.
+    /// One of the imported collections has a read frontier greater than the dataflow `as_of`.
     #[error("dataflow has an as_of not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
     /// We skip dataflow creation for empty `as_of`s, which would be a problem for a SUBSCRIBE,
@@ -161,6 +164,7 @@ impl From<instance::DataflowCreationError> for DataflowCreationError {
         use instance::DataflowCreationError::*;
         match error {
             CollectionMissing(id) => Self::CollectionMissing(id),
+            ReplicaMissing(id) => Self::ReplicaMissing(id),
             MissingAsOf => Self::MissingAsOf,
             SinceViolation(id) => Self::SinceViolation(id),
             EmptyAsOfForSubscribe => Self::EmptyAsOfForSubscribe,
@@ -252,40 +256,6 @@ impl From<instance::ReadPolicyError> for ReadPolicyError {
         match error {
             CollectionMissing(id) => Self::CollectionMissing(id),
             WriteOnlyCollection(id) => Self::WriteOnlyCollection(id),
-        }
-    }
-}
-
-/// Errors arising during subscribe target assignment.
-#[derive(Error, Debug)]
-pub enum SubscribeTargetError {
-    /// TODO(#25239): Add documentation.
-    #[error("instance does not exist: {0}")]
-    InstanceMissing(ComputeInstanceId),
-    /// TODO(#25239): Add documentation.
-    #[error("subscribe does not exist: {0}")]
-    SubscribeMissing(GlobalId),
-    /// TODO(#25239): Add documentation.
-    #[error("replica does not exist: {0}")]
-    ReplicaMissing(ReplicaId),
-    /// TODO(#25239): Add documentation.
-    #[error("subscribe has already produced output")]
-    SubscribeAlreadyStarted,
-}
-
-impl From<InstanceMissing> for SubscribeTargetError {
-    fn from(error: InstanceMissing) -> Self {
-        Self::InstanceMissing(error.0)
-    }
-}
-
-impl From<instance::SubscribeTargetError> for SubscribeTargetError {
-    fn from(error: instance::SubscribeTargetError) -> Self {
-        use instance::SubscribeTargetError::*;
-        match error {
-            SubscribeMissing(id) => Self::SubscribeMissing(id),
-            ReplicaMissing(id) => Self::ReplicaMissing(id),
-            SubscribeAlreadyStarted => Self::SubscribeAlreadyStarted,
         }
     }
 }

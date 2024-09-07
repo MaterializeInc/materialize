@@ -568,7 +568,7 @@ impl crate::coord::Coordinator {
                 // Very important: actually create the dataflow (here, so we can destructure).
                 self.controller
                     .compute
-                    .create_dataflow(compute_instance, dataflow)
+                    .create_dataflow(compute_instance, dataflow, None)
                     .unwrap_or_terminate("cannot fail to create dataflows");
                 self.initialize_compute_read_policies(
                     output_ids,

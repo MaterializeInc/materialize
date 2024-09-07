@@ -12,7 +12,6 @@ use std::fmt::Debug;
 use mz_catalog::durable::{DurableCatalogError, FenceError};
 use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, ReadPolicyError,
-    SubscribeTargetError,
 };
 use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -396,6 +395,7 @@ impl ShouldTerminateGracefully for DataflowCreationError {
             DataflowCreationError::SinceViolation(_)
             | DataflowCreationError::InstanceMissing(_)
             | DataflowCreationError::CollectionMissing(_)
+            | DataflowCreationError::ReplicaMissing(_)
             | DataflowCreationError::MissingAsOf
             | DataflowCreationError::EmptyAsOfForSubscribe
             | DataflowCreationError::EmptyAsOfForCopyTo => false,
@@ -429,17 +429,6 @@ impl ShouldTerminateGracefully for ReadPolicyError {
             ReadPolicyError::InstanceMissing(_)
             | ReadPolicyError::CollectionMissing(_)
             | ReadPolicyError::WriteOnlyCollection(_) => false,
-        }
-    }
-}
-
-impl ShouldTerminateGracefully for SubscribeTargetError {
-    fn should_terminate_gracefully(&self) -> bool {
-        match self {
-            SubscribeTargetError::InstanceMissing(_)
-            | SubscribeTargetError::SubscribeMissing(_)
-            | SubscribeTargetError::ReplicaMissing(_)
-            | SubscribeTargetError::SubscribeAlreadyStarted => false,
         }
     }
 }

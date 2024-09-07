@@ -61,7 +61,6 @@ use uuid::Uuid;
 use crate::controller::error::{
     CollectionLookupError, CollectionUpdateError, DataflowCreationError, InstanceExists,
     InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError, ReplicaDropError,
-    SubscribeTargetError,
 };
 use crate::controller::instance::Instance;
 use crate::controller::replica::ReplicaConfig;
@@ -664,21 +663,6 @@ where
         }
     }
 
-    /// Assign a target replica to the identified subscribe.
-    ///
-    /// If a subscribe has a target replica assigned, only subscribe responses
-    /// sent by that replica are considered.
-    pub fn set_subscribe_target_replica(
-        &mut self,
-        instance_id: ComputeInstanceId,
-        subscribe_id: GlobalId,
-        target_replica: ReplicaId,
-    ) -> Result<(), SubscribeTargetError> {
-        self.instance_mut(instance_id)?
-            .set_subscribe_target_replica(subscribe_id, target_replica)?;
-        Ok(())
-    }
-
     /// Adds replicas of an instance.
     pub fn add_replica_to_instance(
         &mut self,
@@ -730,8 +714,10 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        subscribe_target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
-        self.instance_mut(instance_id)?.create_dataflow(dataflow)?;
+        self.instance_mut(instance_id)?
+            .create_dataflow(dataflow, subscribe_target_replica)?;
         Ok(())
     }
 

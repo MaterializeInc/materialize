@@ -297,12 +297,8 @@ impl Coordinator {
         // dataflow for it.
         let response = if self.introspection_subscribes.contains_key(&subscribe_id) {
             let (df_desc, _df_meta) = global_lir_plan.unapply();
-            self.ship_dataflow(df_desc, cluster_id).await;
-
-            self.controller
-                .compute
-                .set_subscribe_target_replica(cluster_id, subscribe_id, replica_id)
-                .expect("cannot fail");
+            self.ship_dataflow(df_desc, cluster_id, Some(replica_id))
+                .await;
 
             Ok(StageResult::Response(
                 ExecuteResponse::CreatedIntrospectionSubscribe,
