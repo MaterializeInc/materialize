@@ -147,11 +147,11 @@ materialize ""
 
 # ...and also in `\l`
 $ psql-execute command="\l"
-\                             List of databases
-    Name     |    Owner    | Encoding | Collate | Ctype | Access privileges
--------------+-------------+----------+---------+-------+-------------------
- d           | materialize | UTF8     | C       | C     |
- materialize | mz_system   | UTF8     | C       | C     |
+\                                                   List of databases
+    Name     |    Owner    | Encoding | Locale Provider | Collate | Ctype | ICU Locale | ICU Rules | Access privileges
+-------------+-------------+----------+-----------------+---------+-------+------------+-----------+-------------------
+ d           | materialize | UTF8     | libc            | C       | C     |            |           |
+ materialize | mz_system   | UTF8     | libc            | C       | C     |            |           |
 
 
 

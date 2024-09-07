@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:lunar-20230731 as crosstool
+FROM ubuntu:noble-20240801 as crosstool
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -37,7 +37,6 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     libncurses-dev \
     libstdc++6 \
     libstdc++-13-dev \
-    libtinfo5 \
     libtool-bin \
     llvm \
     make \
@@ -55,9 +54,8 @@ RUN gpg --import crosstool.asc \
     && rm crosstool.asc \
     && echo "trusted-key 09f6dd5f1f30ef2e" >> ~/.gnupg/gpg.conf \
     && mkdir crosstool \
-    # TODO(teske): Remove the CT_ZLIB_VERSION workaround below when we upgrade crosstools. \
-    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.25.0.tar.xz > crosstool.tar.xz \
-    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.25.0.tar.xz.sig > crosstool.sig \
+    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.26.0.tar.xz > crosstool.tar.xz \
+    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.26.0.tar.xz.sig > crosstool.sig \
     && gpg --verify crosstool.sig crosstool.tar.xz \
     && tar -xf crosstool.tar.xz -C crosstool --strip-components=1 \
     && rm crosstool.sig crosstool.tar.xz \
@@ -68,14 +66,12 @@ COPY crosstool-$ARCH_GCC.defconfig ./
 
 RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
     && rm crosstool-$ARCH_GCC.defconfig \
-    # https://github.com/crosstool-ng/crosstool-ng/issues/1832 \
-    && sed -i 's/CT_ZLIB_VERSION="1.2.12"/CT_ZLIB_VERSION="1.3.1"/g' .config \
     && ct-ng build
 
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:lunar-20230731
+FROM ubuntu:noble-20240801
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -108,7 +104,6 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     libclang-common-15-dev \
     libclang-dev \
     libclang-rt-15-dev \
-    libtinfo5 \
     libpq-dev \
     lld \
     llvm \

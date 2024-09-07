@@ -14,16 +14,17 @@ FROM cockroachdb/cockroach:v24.2.0 AS crdb
 
 MZFROM ubuntu-base
 
+RUN groupadd --system --gid=999 materialize \
+    && useradd --system --gid=999 --uid=999 --create-home materialize
+
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
         ca-certificates \
         curl \
         llvm \
-        postgresql-client-14 \
+        postgresql-client-16 \
         tini \
         ssh \
-    && groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize \
     && mkdir /mzdata \
     && mkdir /cockroach-data \
     && mkdir /scratch \
