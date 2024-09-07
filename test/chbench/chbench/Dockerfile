@@ -53,7 +53,7 @@ RUN ls build
 
 MZFROM ubuntu-base
 
-RUN apt-get update && apt-get install -y libconfig++9v5 libmysqlclient21 libpqxx-6.4 unixodbc
+RUN apt-get update && apt-get install -y libconfig++9v5 libmysqlclient21 libpqxx-7.8 unixodbc
 
 COPY odbc.ini /etc/odbc.ini
 COPY mz-default-postgres.cfg /etc/chbenchmark/mz-default-postgres.cfg
