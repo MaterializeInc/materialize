@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::stream::FuturesUnordered;
@@ -44,7 +44,7 @@ use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
 use thiserror::Error;
-use timely::progress::frontier::{AntichainRef, MutableAntichain};
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc;
@@ -179,7 +179,7 @@ where
         id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
-        arranged_logs: BTreeMap<LogVariant, GlobalId>,
+        arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
         now: NowFn,
@@ -351,6 +351,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         &mut self,
         id: GlobalId,
         as_of: Antichain<T>,
+        shared: SharedCollectionState<T>,
         storage_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
         compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
         replica_input_read_holds: Vec<ReadHold<T>>,
@@ -371,6 +372,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let mut state = CollectionState::new(
             id,
             as_of.clone(),
+            shared,
             storage_dependencies,
             compute_dependencies,
             self.read_holds_tx.clone(),
@@ -503,10 +505,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// per second during normal operation.
     fn update_frontier_introspection(&mut self) {
         for collection in self.collections.values_mut() {
-            collection.introspection.observe_frontiers(
-                collection.read_capabilities.frontier(),
-                collection.write_frontier.borrow(),
-            );
+            collection
+                .introspection
+                .observe_frontiers(&collection.read_frontier(), &collection.write_frontier());
         }
 
         for replica in self.replicas.values_mut() {
@@ -737,7 +738,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .collections_iter()
             .filter(|(id, collection)| {
                 collection.dropped
-                    && collection.read_capabilities.is_empty()
+                    && collection.shared.lock_read_capabilities(|c| c.is_empty())
                     && self
                         .replicas
                         .values()
@@ -842,7 +843,7 @@ where
     pub fn new(
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
-        arranged_logs: BTreeMap<LogVariant, GlobalId>,
+        arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
         now: NowFn,
@@ -854,17 +855,19 @@ where
     ) -> Self {
         let (read_holds_tx, read_holds_rx) = mpsc::unbounded_channel();
 
-        let collections = arranged_logs
-            .iter()
-            .map(|(_, id)| {
-                let state = CollectionState::new_log_collection(
-                    id.clone(),
-                    read_holds_tx.clone(),
-                    introspection_tx.clone(),
-                );
-                (*id, state)
-            })
-            .collect();
+        let mut collections = BTreeMap::new();
+        let mut log_sources = BTreeMap::new();
+        for (log, id, shared) in arranged_logs {
+            let collection = CollectionState::new_log_collection(
+                id,
+                shared,
+                read_holds_tx.clone(),
+                introspection_tx.clone(),
+            );
+            collections.insert(id, collection);
+            log_sources.insert(log, id);
+        }
+
         let history = ComputeCommandHistory::new(metrics.for_history());
 
         Self {
@@ -874,7 +877,7 @@ where
             read_only: true,
             replicas: Default::default(),
             collections,
-            log_sources: arranged_logs,
+            log_sources,
             peeks: Default::default(),
             subscribes: Default::default(),
             copy_tos: Default::default(),
@@ -1148,6 +1151,7 @@ where
         &mut self,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
         subscribe_target_replica: Option<ReplicaId>,
+        mut shared_collection_state: BTreeMap<GlobalId, SharedCollectionState<T>>,
     ) -> Result<(), DataflowCreationError> {
         if let Some(replica_id) = subscribe_target_replica {
             if !self.replica_exists(replica_id) {
@@ -1206,11 +1210,15 @@ where
 
         // Install collection state for each of the exports.
         for export_id in dataflow.export_ids() {
+            let shared = shared_collection_state
+                .remove(&export_id)
+                .unwrap_or_else(|| SharedCollectionState::new(as_of.clone()));
             let write_only = dataflow.sink_exports.contains_key(&export_id);
             let storage_sink = dataflow.persist_sink_ids().any(|id| id == export_id);
             self.add_collection(
                 export_id,
                 as_of.clone(),
+                shared,
                 storage_dependencies.clone(),
                 compute_dependencies.clone(),
                 replica_input_read_holds.clone(),
@@ -1391,18 +1399,18 @@ where
             // `as_of` has been sealed.
             let compute_frontiers = collection.compute_dependency_ids().map(|id| {
                 let dep = &self.expect_collection(id);
-                &dep.write_frontier
+                dep.write_frontier()
             });
 
             let storage_frontiers = self
                 .storage_collections
                 .collections_frontiers(collection.storage_dependency_ids().collect())
                 .expect("must exist");
-            let storage_frontiers = storage_frontiers.iter().map(|f| &f.write_frontier);
+            let storage_frontiers = storage_frontiers.into_iter().map(|f| f.write_frontier);
 
             let ready = compute_frontiers
                 .chain(storage_frontiers)
-                .all(|frontier| PartialOrder::less_than(&as_of, &frontier.borrow()));
+                .all(|frontier| PartialOrder::less_than(&as_of, &frontier));
 
             ready
         };
@@ -1551,7 +1559,7 @@ where
 
         for (id, new_policy) in policies {
             let collection = self.expect_collection_mut(id);
-            let new_since = new_policy.frontier(collection.write_frontier.borrow());
+            let new_since = new_policy.frontier(collection.write_frontier().borrow());
             let _ = collection.implied_read_hold.try_downgrade(new_since);
             collection.read_policy = Some(new_policy);
         }
@@ -1571,11 +1579,11 @@ where
         // at the implied capability.
 
         let collection = self.collection_mut(id)?;
-        let since = collection.read_capabilities.frontier().to_owned();
-
-        collection
-            .read_capabilities
-            .update_iter(since.iter().map(|t| (t.clone(), 1)));
+        let since = collection.shared.lock_read_capabilities(|caps| {
+            let since = caps.frontier().to_owned();
+            caps.update_iter(since.iter().map(|t| (t.clone(), 1)));
+            since
+        });
 
         let hold = ReadHold::new(id, since, self.read_holds_tx.clone());
         Ok(hold)
@@ -1604,11 +1612,17 @@ where
     fn maybe_update_global_write_frontier(&mut self, id: GlobalId, new_frontier: Antichain<T>) {
         let collection = self.expect_collection_mut(id);
 
-        if !PartialOrder::less_than(&collection.write_frontier, &new_frontier) {
-            return; // frontier has not advanced
-        }
+        let advanced = collection.shared.lock_write_frontier(|f| {
+            let advanced = PartialOrder::less_than(f, &new_frontier);
+            if advanced {
+                f.clone_from(&new_frontier);
+            }
+            advanced
+        });
 
-        collection.write_frontier.clone_from(&new_frontier);
+        if !advanced {
+            return;
+        }
 
         // Relax the implied read hold according to the read policy.
         let new_since = match &collection.read_policy {
@@ -1663,33 +1677,35 @@ where
                     continue;
                 };
 
-                // Sanity check to prevent corrupted `read_capabilities`, which can cause hard-to-debug
-                // issues (usually stuck read frontiers).
-                let read_frontier = collection.read_capabilities.frontier();
-                for (time, diff) in update.iter() {
-                    let count = collection.read_capabilities.count_for(time) + diff;
-                    assert!(
-                        count >= 0,
-                        "invalid read capabilities update: negative capability \
-                     (id={id:?}, read_capabilities={:?}, update={update:?})",
-                        collection.read_capabilities,
-                    );
-                    assert!(
-                        count == 0 || read_frontier.less_equal(time),
-                        "invalid read capabilities update: frontier regression \
-                     (id={id:?}, read_capabilities={:?}, update={update:?})",
-                        collection.read_capabilities,
-                    );
-                }
+                let new_since = collection.shared.lock_read_capabilities(|caps| {
+                    // Sanity check to prevent corrupted `read_capabilities`, which can cause hard-to-debug
+                    // issues (usually stuck read frontiers).
+                    let read_frontier = caps.frontier();
+                    for (time, diff) in update.iter() {
+                        let count = caps.count_for(time) + diff;
+                        assert!(
+                            count >= 0,
+                            "invalid read capabilities update: negative capability \
+                     (id={id:?}, read_capabilities={caps:?}, update={update:?})",
+                        );
+                        assert!(
+                            count == 0 || read_frontier.less_equal(time),
+                            "invalid read capabilities update: frontier regression \
+                     (id={id:?}, read_capabilities={caps:?}, update={update:?})",
+                        );
+                    }
 
-                // Apply read capability updates and learn about resulting changes to the read
-                // frontier.
-                let changes = collection.read_capabilities.update_iter(update.drain());
-                if changes.count() == 0 {
+                    // Apply read capability updates and learn about resulting changes to the read
+                    // frontier.
+                    let changes = caps.update_iter(update.drain());
+
+                    let changed = changes.count() > 0;
+                    changed.then(|| caps.frontier().to_owned())
+                });
+
+                let Some(new_since) = new_since else {
                     continue; // read frontier did not change
-                }
-
-                let new_since = collection.read_frontier().to_owned();
+                };
 
                 // Propagate read frontier update to dependencies.
                 for read_hold in collection.compute_dependencies.values_mut() {
@@ -1987,14 +2003,16 @@ where
             // For write-only collections that have advanced to the empty frontier, we can drop the
             // warmup capability entirely. There is no reason why we would need to hydrate those
             // collections again, so being able to warm them up is not useful.
-            if collection.read_policy.is_none() && collection.write_frontier.is_empty() {
+            if collection.read_policy.is_none()
+                && collection.shared.lock_write_frontier(|f| f.is_empty())
+            {
                 new_capabilities.insert(*id, Antichain::new());
                 continue;
             }
 
             let compute_frontiers = collection.compute_dependency_ids().flat_map(|dep_id| {
                 let collection = self.collections.get(&dep_id);
-                collection.map(|c| c.write_frontier.clone())
+                collection.map(|c| c.write_frontier())
             });
 
             let existing_storage_dependencies = collection
@@ -2061,18 +2079,9 @@ pub(super) struct CollectionState<T: ComputeControllerTimestamp> {
     /// command for it.
     scheduled: bool,
 
-    /// Accumulation of read capabilities for the collection.
-    ///
-    /// This accumulation contains the capabilities held by all [`ReadHold`]s given out for the
-    /// collection, including `implied_read_hold` and `warmup_read_hold`.
-    ///
-    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_changes`] and
-    /// [`Instance::acquire_read_hold`]. Nobody else should modify read capabilities directly.
-    /// Instead, collection users should manage read holds through [`ReadHold`] objects acquired
-    /// through [`Instance::acquire_read_hold`].
-    ///
-    /// TODO(teskje): Restructure the code to enforce the above in the type system.
-    read_capabilities: MutableAntichain<T>,
+    /// State shared with the `ComputeController`.
+    shared: SharedCollectionState<T>,
+
     /// A read hold maintaining the implicit capability of the collection.
     ///
     /// This capability is kept to ensure that the collection remains readable according to its
@@ -2102,9 +2111,6 @@ pub(super) struct CollectionState<T: ComputeControllerTimestamp> {
     /// requires on them.
     compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
 
-    /// The write frontier of this collection.
-    write_frontier: Antichain<T>,
-
     /// Introspection state associated with this collection.
     introspection: CollectionIntrospection<T>,
 }
@@ -2114,6 +2120,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
     fn new(
         collection_id: GlobalId,
         as_of: Antichain<T>,
+        shared: SharedCollectionState<T>,
         storage_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
         compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
         read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
@@ -2124,35 +2131,31 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         // A collection won't produce updates for times before the `as_of`.
         let upper = as_of;
 
-        // Initialize all read capabilities to the `since`.
+        // Ensure that the provided `shared` is valid for the given `as_of`.
+        assert!(shared.lock_read_capabilities(|c| c.frontier() == since.borrow()));
+        assert!(shared.lock_write_frontier(|f| f == &upper));
+
+        // Initialize collection read holds.
+        // Note that the implied read hold was already added to the `read_capabilities` when
+        // `shared` was created, so we only need to add the warmup read hold here.
         let implied_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx.clone());
         let warmup_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx);
 
-        let mut read_capabilities = MutableAntichain::new();
-        read_capabilities.update_iter(
-            implied_read_hold
-                .since()
-                .iter()
-                .map(|time| (time.clone(), 1)),
-        );
-        read_capabilities.update_iter(
-            warmup_read_hold
-                .since()
-                .iter()
-                .map(|time| (time.clone(), 1)),
-        );
+        let updates = warmup_read_hold.since().iter().map(|t| (t.clone(), 1));
+        shared.lock_read_capabilities(|c| {
+            c.update_iter(updates);
+        });
 
         Self {
             log_collection: false,
             dropped: false,
             scheduled: false,
-            read_capabilities,
+            shared,
             implied_read_hold,
             warmup_read_hold,
             read_policy: Some(ReadPolicy::ValidFrom(since)),
             storage_dependencies,
             compute_dependencies,
-            write_frontier: upper,
             introspection,
         }
     }
@@ -2160,15 +2163,17 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
     /// Creates a new collection state for a log collection.
     pub(crate) fn new_log_collection(
         id: GlobalId,
+        shared: SharedCollectionState<T>,
         read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
-        let since = Antichain::from_elem(timely::progress::Timestamp::minimum());
+        let since = Antichain::from_elem(T::minimum());
         let introspection =
             CollectionIntrospection::new(id, introspection_tx, since.clone(), false, None, None);
         let mut state = Self::new(
             id,
             since,
+            shared,
             Default::default(),
             Default::default(),
             read_holds_tx,
@@ -2181,13 +2186,14 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
     }
 
     /// Reports the current read frontier.
-    pub fn read_frontier(&self) -> AntichainRef<T> {
-        self.read_capabilities.frontier()
+    pub fn read_frontier(&self) -> Antichain<T> {
+        self.shared
+            .lock_read_capabilities(|c| c.frontier().to_owned())
     }
 
     /// Reports the current write frontier.
-    pub fn write_frontier(&self) -> AntichainRef<T> {
-        self.write_frontier.borrow()
+    pub fn write_frontier(&self) -> Antichain<T> {
+        self.shared.lock_write_frontier(|f| f.clone())
     }
 
     fn storage_dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
@@ -2202,6 +2208,70 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
     fn dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
         self.compute_dependency_ids()
             .chain(self.storage_dependency_ids())
+    }
+}
+
+/// Collection state shared with the `ComputeController`.
+///
+/// Having this allows certain controller APIs, such as `ComputeController::collection_frontiers`
+/// and `ComputeController::acquire_read_hold` to be non-`async`. This comes at the cost of
+/// complexity (by introducing shared mutable state) and performance (by introducing locking). We
+/// should aim to reduce the amount of shared state over time, rather than expand it.
+///
+/// Note that [`SharedCollectionState`]s are initialized by the `ComputeController` prior to the
+/// collection's creation in the [`Instance`]. This is to allow compute clients to query frontiers
+/// and take new read holds immediately, without having to wait for the [`Instance`] to update.
+#[derive(Clone, Debug)]
+pub(super) struct SharedCollectionState<T> {
+    /// Accumulation of read capabilities for the collection.
+    ///
+    /// This accumulation contains the capabilities held by all [`ReadHold`]s given out for the
+    /// collection, including `implied_read_hold` and `warmup_read_hold`.
+    ///
+    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_changes`] and
+    /// `ComputeController::acquire_read_hold`. Nobody else should modify read capabilities
+    /// directly. Instead, collection users should manage read holds through [`ReadHold`] objects
+    /// acquired through `ComputeController::acquire_read_hold`.
+    ///
+    /// TODO(teskje): Restructure the code to enforce the above in the type system.
+    read_capabilities: Arc<Mutex<MutableAntichain<T>>>,
+    /// The write frontier of this collection.
+    write_frontier: Arc<Mutex<Antichain<T>>>,
+}
+
+impl<T: Timestamp> SharedCollectionState<T> {
+    pub fn new(as_of: Antichain<T>) -> Self {
+        // A collection is not readable before the `as_of`.
+        let since = as_of.clone();
+        // A collection won't produce updates for times before the `as_of`.
+        let upper = as_of;
+
+        // Initialize read capabilities to the `since`.
+        // The is the implied read capability. The corresponding [`ReadHold`] is created in
+        // [`CollectionState::new`].
+        let mut read_capabilities = MutableAntichain::new();
+        read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
+
+        Self {
+            read_capabilities: Arc::new(Mutex::new(read_capabilities)),
+            write_frontier: Arc::new(Mutex::new(upper)),
+        }
+    }
+
+    pub fn lock_read_capabilities<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut MutableAntichain<T>) -> R,
+    {
+        let mut caps = self.read_capabilities.lock().expect("poisoned");
+        f(&mut *caps)
+    }
+
+    pub fn lock_write_frontier<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Antichain<T>) -> R,
+    {
+        let mut frontier = self.write_frontier.lock().expect("poisoned");
+        f(&mut *frontier)
     }
 }
 
@@ -2238,7 +2308,7 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
         let refresh =
             match (refresh_schedule, initial_as_of) {
                 (Some(refresh_schedule), Some(initial_as_of)) => Some(
-                    RefreshIntrospectionState::new(refresh_schedule, initial_as_of, as_of.borrow()),
+                    RefreshIntrospectionState::new(refresh_schedule, initial_as_of, &as_of),
                 ),
                 (refresh_schedule, _) => {
                     // If we have a `refresh_schedule`, then the collection is a MV, so we should also have
@@ -2280,26 +2350,21 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
 
     /// Observe the given current collection frontiers and update the introspection state as
     /// necessary.
-    fn observe_frontiers(
-        &mut self,
-        read_frontier: AntichainRef<T>,
-        write_frontier: AntichainRef<T>,
-    ) {
+    fn observe_frontiers(&mut self, read_frontier: &Antichain<T>, write_frontier: &Antichain<T>) {
         self.update_frontier_introspection(read_frontier, write_frontier);
         self.update_refresh_introspection(write_frontier);
     }
 
     fn update_frontier_introspection(
         &mut self,
-        read_frontier: AntichainRef<T>,
-        write_frontier: AntichainRef<T>,
+        read_frontier: &Antichain<T>,
+        write_frontier: &Antichain<T>,
     ) {
         let Some(frontiers) = &mut self.frontiers else {
             return;
         };
 
-        if frontiers.read_frontier.borrow() == read_frontier
-            && frontiers.write_frontier.borrow() == write_frontier
+        if &frontiers.read_frontier == read_frontier && &frontiers.write_frontier == write_frontier
         {
             return; // no change
         };
@@ -2311,7 +2376,7 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
         self.send(IntrospectionType::Frontiers, updates);
     }
 
-    fn update_refresh_introspection(&mut self, write_frontier: AntichainRef<T>) {
+    fn update_refresh_introspection(&mut self, write_frontier: &Antichain<T>) {
         let Some(refresh) = &mut self.refresh else {
             return;
         };
@@ -2393,12 +2458,12 @@ impl<T: ComputeControllerTimestamp> FrontiersIntrospectionState<T> {
     }
 
     /// Update the introspection state with the given new frontiers.
-    fn update(&mut self, read_frontier: AntichainRef<T>, write_frontier: AntichainRef<T>) {
-        if read_frontier != self.read_frontier.borrow() {
-            self.read_frontier = read_frontier.to_owned();
+    fn update(&mut self, read_frontier: &Antichain<T>, write_frontier: &Antichain<T>) {
+        if read_frontier != &self.read_frontier {
+            self.read_frontier.clone_from(read_frontier);
         }
-        if write_frontier != self.write_frontier.borrow() {
-            self.write_frontier = write_frontier.to_owned();
+        if write_frontier != &self.write_frontier {
+            self.write_frontier.clone_from(write_frontier);
         }
     }
 }
@@ -2432,7 +2497,7 @@ impl<T: ComputeControllerTimestamp> RefreshIntrospectionState<T> {
     fn new(
         refresh_schedule: RefreshSchedule,
         initial_as_of: Antichain<T>,
-        upper: AntichainRef<T>,
+        upper: &Antichain<T>,
     ) -> Self {
         let mut self_ = Self {
             refresh_schedule: refresh_schedule.clone(),
@@ -2446,7 +2511,7 @@ impl<T: ComputeControllerTimestamp> RefreshIntrospectionState<T> {
 
     /// Should be called whenever the write frontier of the collection advances. It updates the
     /// state that should be recorded in introspection relations, but doesn't send the updates yet.
-    fn frontier_update(&mut self, write_frontier: AntichainRef<T>) {
+    fn frontier_update(&mut self, write_frontier: &Antichain<T>) {
         if write_frontier.is_empty() {
             self.last_completed_refresh =
                 if let Some(last_refresh) = self.refresh_schedule.last_refresh() {
@@ -2458,7 +2523,7 @@ impl<T: ComputeControllerTimestamp> RefreshIntrospectionState<T> {
                 };
             self.next_refresh = Datum::Null;
         } else {
-            if PartialOrder::less_equal(&write_frontier, &self.initial_as_of.borrow()) {
+            if PartialOrder::less_equal(write_frontier, &self.initial_as_of) {
                 // We are before the first refresh.
                 self.last_completed_refresh = Datum::Null;
                 let initial_as_of = self.initial_as_of.as_option().expect(

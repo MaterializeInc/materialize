@@ -52,7 +52,7 @@ use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
 use uuid::Uuid;
@@ -62,7 +62,7 @@ use crate::controller::error::{
     InstanceExists, InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError,
     ReplicaDropError,
 };
-use crate::controller::instance::Instance;
+use crate::controller::instance::{Instance, SharedCollectionState};
 use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
@@ -310,32 +310,21 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     ///
     /// If an `instance_id` is provided, the collection is assumed to be installed on that
     /// instance. Otherwise all available instances are searched.
-    pub async fn collection_frontiers(
+    pub fn collection_frontiers(
         &self,
         collection_id: GlobalId,
         instance_id: Option<ComputeInstanceId>,
     ) -> Result<CollectionFrontiers<T>, CollectionLookupError> {
-        let mut pending: FuturesUnordered<_> = self
-            .instances
-            .iter()
-            .filter(|(id, _)| instance_id.map_or(true, |i| i == **id))
-            .map(|(_, instance)| {
-                instance.call_sync(move |i| {
-                    i.collection(collection_id).map(|c| CollectionFrontiers {
-                        read_frontier: c.read_frontier().to_owned(),
-                        write_frontier: c.write_frontier().to_owned(),
-                    })
-                })
-            })
-            .collect();
+        let collection = match instance_id {
+            Some(id) => self.instance(id)?.collection(collection_id)?,
+            None => self
+                .instances
+                .values()
+                .find_map(|i| i.collections.get(&collection_id))
+                .ok_or(CollectionMissing(collection_id))?,
+        };
 
-        while let Some(x) = pending.next().await {
-            if let Ok(frontiers) = x {
-                return Ok(frontiers);
-            }
-        }
-
-        Err(CollectionLookupError::CollectionMissing(collection_id))
+        Ok(collection.frontiers())
     }
 
     /// List compute collections that depend on the given collection.
@@ -496,11 +485,20 @@ where
             return Err(InstanceExists(id));
         }
 
+        let mut collections = BTreeMap::new();
+        let mut logs = Vec::with_capacity(arranged_logs.len());
+        for (&log, &id) in &arranged_logs {
+            let collection = Collection::new_log();
+            let shared = collection.shared.clone();
+            collections.insert(id, collection);
+            logs.push((log, id, shared));
+        }
+
         let client = instance::Client::spawn(
             id,
             self.build_info,
             Arc::clone(&self.storage_collections),
-            arranged_logs,
+            logs,
             self.envd_epoch,
             self.metrics.for_instance(id),
             self.now.clone(),
@@ -509,7 +507,9 @@ where
             self.response_tx.clone(),
             self.introspection_tx.clone(),
         );
-        self.instances.insert(id, InstanceState::new(client));
+
+        self.instances
+            .insert(id, InstanceState::new(client, collections));
 
         self.instance_workload_classes
             .lock()
@@ -715,18 +715,28 @@ where
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
         subscribe_target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
+        use DataflowCreationError::*;
+
         let instance = self.instance_mut(instance_id)?;
 
+        let as_of = dataflow.as_of.as_ref().ok_or(MissingAsOf)?;
+
+        let mut shared_collection_state = BTreeMap::new();
         for id in dataflow.export_ids() {
+            let shared = SharedCollectionState::new(as_of.clone());
             let collection = Collection {
                 write_only: dataflow.sink_exports.contains_key(&id),
                 compute_dependencies: dataflow.imported_index_ids().collect(),
+                shared: shared.clone(),
             };
             instance.collections.insert(id, collection);
+            shared_collection_state.insert(id, shared);
         }
 
         self.instance(instance_id)?
-            .call_sync(move |i| i.create_dataflow(dataflow, subscribe_target_replica))
+            .call_sync(move |i| {
+                i.create_dataflow(dataflow, subscribe_target_replica, shared_collection_state)
+            })
             .await?;
         Ok(())
     }
@@ -930,19 +940,19 @@ where
 struct InstanceState<T: ComputeControllerTimestamp> {
     client: instance::Client<T>,
     replicas: BTreeSet<ReplicaId>,
-    collections: BTreeMap<GlobalId, Collection>,
+    collections: BTreeMap<GlobalId, Collection<T>>,
 }
 
 impl<T: ComputeControllerTimestamp> InstanceState<T> {
-    fn new(client: instance::Client<T>) -> Self {
+    fn new(client: instance::Client<T>, collections: BTreeMap<GlobalId, Collection<T>>) -> Self {
         Self {
             client,
             replicas: Default::default(),
-            collections: Default::default(),
+            collections,
         }
     }
 
-    fn collection(&self, id: GlobalId) -> Result<&Collection, CollectionMissing> {
+    fn collection(&self, id: GlobalId) -> Result<&Collection<T>, CollectionMissing> {
         self.collections.get(&id).ok_or(CollectionMissing(id))
     }
 
@@ -969,15 +979,48 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
 }
 
 #[derive(Debug)]
-struct Collection {
+struct Collection<T> {
     write_only: bool,
     compute_dependencies: BTreeSet<GlobalId>,
+    shared: SharedCollectionState<T>,
+}
+
+impl<T: Timestamp> Collection<T> {
+    fn new_log() -> Self {
+        let as_of = Antichain::from_elem(T::minimum());
+        Self {
+            write_only: false,
+            compute_dependencies: Default::default(),
+            shared: SharedCollectionState::new(as_of),
+        }
+    }
+
+    fn frontiers(&self) -> CollectionFrontiers<T> {
+        let read_frontier = self
+            .shared
+            .lock_read_capabilities(|c| c.frontier().to_owned());
+        let write_frontier = self.shared.lock_write_frontier(|f| f.clone());
+        CollectionFrontiers {
+            read_frontier,
+            write_frontier,
+        }
+    }
 }
 
 /// The frontiers of a compute collection.
+#[derive(Clone, Debug)]
 pub struct CollectionFrontiers<T> {
     /// The read frontier.
     pub read_frontier: Antichain<T>,
     /// The write frontier.
     pub write_frontier: Antichain<T>,
+}
+
+impl<T: Timestamp> Default for CollectionFrontiers<T> {
+    fn default() -> Self {
+        Self {
+            read_frontier: Antichain::from_elem(T::minimum()),
+            write_frontier: Antichain::from_elem(T::minimum()),
+        }
+    }
 }
