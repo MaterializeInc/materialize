@@ -79,26 +79,11 @@ pub enum ReplicaCreationError {
     /// TODO(materialize#25239): Add documentation.
     #[error("replica exists already: {0}")]
     ReplicaExists(ReplicaId),
-    /// TODO(materialize#25239): Add documentation.
-    #[error("collection does not exist: {0}")]
-    CollectionMissing(GlobalId),
 }
 
 impl From<InstanceMissing> for ReplicaCreationError {
     fn from(error: InstanceMissing) -> Self {
         Self::InstanceMissing(error.0)
-    }
-}
-
-impl From<instance::ReplicaExists> for ReplicaCreationError {
-    fn from(error: instance::ReplicaExists) -> Self {
-        Self::ReplicaExists(error.0)
-    }
-}
-
-impl From<CollectionMissing> for ReplicaCreationError {
-    fn from(error: CollectionMissing) -> Self {
-        Self::CollectionMissing(error.0)
     }
 }
 
@@ -116,12 +101,6 @@ pub enum ReplicaDropError {
 impl From<InstanceMissing> for ReplicaDropError {
     fn from(error: InstanceMissing) -> Self {
         Self::InstanceMissing(error.0)
-    }
-}
-
-impl From<instance::ReplicaMissing> for ReplicaDropError {
-    fn from(error: instance::ReplicaMissing) -> Self {
-        Self::ReplicaMissing(error.0)
     }
 }
 
@@ -250,13 +229,9 @@ impl From<InstanceMissing> for ReadPolicyError {
     }
 }
 
-impl From<instance::ReadPolicyError> for ReadPolicyError {
-    fn from(error: instance::ReadPolicyError) -> Self {
-        use instance::ReadPolicyError::*;
-        match error {
-            CollectionMissing(id) => Self::CollectionMissing(id),
-            WriteOnlyCollection(id) => Self::WriteOnlyCollection(id),
-        }
+impl From<CollectionMissing> for ReadPolicyError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
     }
 }
 

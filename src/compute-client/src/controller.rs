@@ -58,8 +58,9 @@ use tokio::time::{self, MissedTickBehavior};
 use uuid::Uuid;
 
 use crate::controller::error::{
-    CollectionLookupError, CollectionUpdateError, DataflowCreationError, InstanceExists,
-    InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError, ReplicaDropError,
+    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
+    InstanceExists, InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError,
+    ReplicaDropError,
 };
 use crate::controller::instance::Instance;
 use crate::controller::replica::ReplicaConfig;
@@ -296,14 +297,12 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     }
 
     /// List the IDs of all collections in the identified compute instance.
-    pub async fn collection_ids(
+    pub fn collection_ids(
         &self,
         instance_id: ComputeInstanceId,
-    ) -> Result<BTreeSet<GlobalId>, InstanceMissing> {
+    ) -> Result<impl Iterator<Item = GlobalId> + '_, InstanceMissing> {
         let instance = self.instance(instance_id)?;
-        let ids = instance
-            .call_sync(|i| i.collections_iter().map(|(id, _)| id).collect())
-            .await;
+        let ids = instance.collections.keys().copied();
         Ok(ids)
     }
 
@@ -340,16 +339,16 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     }
 
     /// List compute collections that depend on the given collection.
-    pub async fn collection_reverse_dependencies(
+    pub fn collection_reverse_dependencies(
         &self,
         instance_id: ComputeInstanceId,
         id: GlobalId,
-    ) -> Result<BTreeSet<GlobalId>, InstanceMissing> {
+    ) -> Result<impl Iterator<Item = GlobalId> + '_, InstanceMissing> {
         let instance = self.instance(instance_id)?;
-        let rdeps = instance
-            .call_sync(move |i| i.collection_reverse_dependencies(id).collect())
-            .await;
-        Ok(rdeps)
+        let collections = instance.collections.iter();
+        let ids = collections
+            .filter_map(move |(cid, c)| c.compute_dependencies.contains(&id).then_some(*cid));
+        Ok(ids)
     }
 
     /// Set the `arrangement_exert_proportionality` value to be passed to new replicas.
@@ -510,7 +509,7 @@ where
             self.response_tx.clone(),
             self.introspection_tx.clone(),
         );
-        self.instances.insert(id, InstanceState { client });
+        self.instances.insert(id, InstanceState::new(client));
 
         self.instance_workload_classes
             .lock()
@@ -637,13 +636,22 @@ where
     }
 
     /// Adds replicas of an instance.
-    pub async fn add_replica_to_instance(
+    pub fn add_replica_to_instance(
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
         config: ComputeReplicaConfig,
     ) -> Result<(), ReplicaCreationError> {
+        use ReplicaCreationError::*;
+
+        let instance = self.instance(instance_id)?;
+
+        // Validation
+        if instance.replicas.contains(&replica_id) {
+            return Err(ReplicaExists(replica_id));
+        }
+
         let (enable_logging, interval) = match config.logging.interval {
             Some(interval) => (true, interval),
             None => (false, Duration::from_secs(1)),
@@ -661,21 +669,36 @@ where
             grpc_client: self.config.grpc_client.clone(),
         };
 
-        self.instance(instance_id)?
-            .call_sync(move |i| i.add_replica(replica_id, replica_config))
-            .await?;
+        let instance = self.instance_mut(instance_id).expect("validated");
+        instance.replicas.insert(replica_id);
+
+        instance.call(move |i| {
+            i.add_replica(replica_id, replica_config)
+                .expect("validated")
+        });
+
         Ok(())
     }
 
     /// Removes a replica from an instance, including its service in the orchestrator.
-    pub async fn drop_replica(
+    pub fn drop_replica(
         &mut self,
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
     ) -> Result<(), ReplicaDropError> {
-        self.instance(instance_id)?
-            .call_sync(move |i| i.remove_replica(replica_id))
-            .await?;
+        use ReplicaDropError::*;
+
+        let instance = self.instance_mut(instance_id)?;
+
+        // Validation
+        if !instance.replicas.contains(&replica_id) {
+            return Err(ReplicaMissing(replica_id));
+        }
+
+        instance.replicas.remove(&replica_id);
+
+        instance.call(move |i| i.remove_replica(replica_id).expect("validated"));
+
         Ok(())
     }
 
@@ -692,6 +715,16 @@ where
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
         subscribe_target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
+        let instance = self.instance_mut(instance_id)?;
+
+        for id in dataflow.export_ids() {
+            let collection = Collection {
+                write_only: dataflow.sink_exports.contains_key(&id),
+                compute_dependencies: dataflow.imported_index_ids().collect(),
+            };
+            instance.collections.insert(id, collection);
+        }
+
         self.instance(instance_id)?
             .call_sync(move |i| i.create_dataflow(dataflow, subscribe_target_replica))
             .await?;
@@ -700,14 +733,24 @@ where
 
     /// Drop the read capability for the given collections and allow their resources to be
     /// reclaimed.
-    pub async fn drop_collections(
+    pub fn drop_collections(
         &mut self,
         instance_id: ComputeInstanceId,
         collection_ids: Vec<GlobalId>,
     ) -> Result<(), CollectionUpdateError> {
-        self.instance(instance_id)?
-            .call_sync(move |i| i.drop_collections(collection_ids))
-            .await?;
+        let instance = self.instance_mut(instance_id)?;
+
+        // Validation
+        for id in &collection_ids {
+            instance.collection(*id)?;
+        }
+
+        for id in &collection_ids {
+            instance.collections.remove(id);
+        }
+
+        instance.call(|i| i.drop_collections(collection_ids).expect("validated"));
+
         Ok(())
     }
 
@@ -769,14 +812,26 @@ where
     ///
     /// It is an error to attempt to set a read policy for a collection that is not readable in the
     /// context of compute. At this time, only indexes are readable compute collections.
-    pub async fn set_read_policy(
+    pub fn set_read_policy(
         &mut self,
         instance_id: ComputeInstanceId,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
     ) -> Result<(), ReadPolicyError> {
+        use ReadPolicyError::*;
+
+        let instance = self.instance(instance_id)?;
+
+        // Validation
+        for (id, _) in &policies {
+            let collection = instance.collection(*id)?;
+            if collection.write_only {
+                return Err(WriteOnlyCollection(*id));
+            }
+        }
+
         self.instance(instance_id)?
-            .call_sync(|i| i.set_read_policy(policies))
-            .await?;
+            .call(|i| i.set_read_policy(policies).expect("validated"));
+
         Ok(())
     }
 
@@ -786,10 +841,15 @@ where
         instance_id: ComputeInstanceId,
         collection_id: GlobalId,
     ) -> Result<ReadHold<T>, CollectionUpdateError> {
-        let hold = self
-            .instance(instance_id)?
-            .call_sync(move |i| i.acquire_read_hold(collection_id))
-            .await?;
+        let instance = self.instance(instance_id)?;
+
+        // Validation
+        instance.collection(collection_id)?;
+
+        let hold = instance
+            .call_sync(move |i| i.acquire_read_hold(collection_id).expect("validated"))
+            .await;
+
         Ok(hold)
     }
 
@@ -869,9 +929,23 @@ where
 #[derive(Debug)]
 struct InstanceState<T: ComputeControllerTimestamp> {
     client: instance::Client<T>,
+    replicas: BTreeSet<ReplicaId>,
+    collections: BTreeMap<GlobalId, Collection>,
 }
 
 impl<T: ComputeControllerTimestamp> InstanceState<T> {
+    fn new(client: instance::Client<T>) -> Self {
+        Self {
+            client,
+            replicas: Default::default(),
+            collections: Default::default(),
+        }
+    }
+
+    fn collection(&self, id: GlobalId) -> Result<&Collection, CollectionMissing> {
+        self.collections.get(&id).ok_or(CollectionMissing(id))
+    }
+
     pub fn call<F>(&self, f: F)
     where
         F: FnOnce(&mut Instance<T>) + Send + 'static,
@@ -892,6 +966,12 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
 
         rx.await.expect("instance not dropped")
     }
+}
+
+#[derive(Debug)]
+struct Collection {
+    write_only: bool,
+    compute_dependencies: BTreeSet<GlobalId>,
 }
 
 /// The frontiers of a compute collection.

@@ -751,20 +751,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         }
     }
 
-    /// List compute collections that depend on the given collection.
-    pub fn collection_reverse_dependencies(
-        &self,
-        id: GlobalId,
-    ) -> impl Iterator<Item = GlobalId> + '_ {
-        self.collections_iter().filter_map(move |(id2, state)| {
-            if state.compute_dependencies.contains_key(&id) {
-                Some(id2)
-            } else {
-                None
-            }
-        })
-    }
-
     /// Returns the state of the [`Instance`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
