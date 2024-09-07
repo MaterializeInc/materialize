@@ -164,7 +164,7 @@ steps:
       - id: parallel-benchmark
         label: "Parallel Benchmark"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         agents:
           # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
           queue: linux-aarch64-medium
@@ -172,6 +172,9 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-benchmark
+              args:
+                - --other-tag
+                - common-ancestor
 
   - group: Kafka
     key: kafka
