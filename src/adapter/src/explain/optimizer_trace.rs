@@ -16,7 +16,7 @@ use mz_catalog::memory::objects::Cluster;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::explain::ExplainContext;
-use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing, StatisticsOracle};
 use mz_ore::collections::CollectionExt;
 use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
 use mz_repr::explain::{
@@ -134,6 +134,7 @@ impl OptimizerTrace {
         config: &ExplainConfig,
         features: &OptimizerFeatures,
         humanizer: &dyn ExprHumanizer,
+        cardinality_stats: &StatisticsOracle,
         row_set_finishing: Option<RowSetFinishing>,
         target_cluster: Option<&Cluster>,
         dataflow_metainfo: DataflowMetainfo,
@@ -147,6 +148,7 @@ impl OptimizerTrace {
                 config,
                 features,
                 humanizer,
+                cardinality_stats,
                 row_set_finishing.clone(),
                 target_cluster.map(|c| c.name.as_str()),
                 dataflow_metainfo.clone(),
@@ -303,6 +305,7 @@ impl OptimizerTrace {
         self,
         features: &OptimizerFeatures,
         humanizer: &dyn ExprHumanizer,
+        cardinality_stats: &StatisticsOracle,
         row_set_finishing: Option<RowSetFinishing>,
         target_cluster: Option<&Cluster>,
         dataflow_metainfo: DataflowMetainfo,
@@ -314,6 +317,7 @@ impl OptimizerTrace {
                 &ExplainConfig::default(),
                 features,
                 humanizer,
+                cardinality_stats,
                 row_set_finishing,
                 target_cluster,
                 dataflow_metainfo,
@@ -337,11 +341,16 @@ impl OptimizerTrace {
         config: &ExplainConfig,
         features: &OptimizerFeatures,
         humanizer: &dyn ExprHumanizer,
+        cardinality_stats: &StatisticsOracle,
         row_set_finishing: Option<RowSetFinishing>,
         target_cluster: Option<&str>,
         dataflow_metainfo: DataflowMetainfo,
     ) -> Result<TraceEntries<String>, ExplainError> {
         let mut results = vec![];
+
+        if config.cardinality {
+            eprintln!("MGREE running collect_all with cardinality = true but no stats :(")
+        }
 
         // First, create an ExplainContext without `used_indexes`. We'll use this to, e.g., collect
         // HIR plans.
@@ -349,7 +358,7 @@ impl OptimizerTrace {
             config,
             features,
             humanizer,
-            cardinality_stats: Default::default(), // empty stats
+            cardinality_stats,
             used_indexes: Default::default(),
             finishing: row_set_finishing.clone(),
             duration: Default::default(),
@@ -372,7 +381,7 @@ impl OptimizerTrace {
             config,
             features,
             humanizer,
-            cardinality_stats: Default::default(), // empty stats
+            cardinality_stats,
             used_indexes: Default::default(),
             finishing: row_set_finishing,
             duration: Default::default(),

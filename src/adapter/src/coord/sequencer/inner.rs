@@ -23,6 +23,7 @@ use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::ReplicaId;
+use mz_expr::StatisticsOracle;
 use mz_expr::{
     CollectionPlan, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
@@ -48,6 +49,7 @@ use mz_sql::names::{
 };
 use mz_sql::plan::StatementContext;
 use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
+use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::sinks::StorageSinkDesc;
 use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -87,7 +89,6 @@ use mz_storage_types::stats::RelationPartStats;
 use mz_storage_types::AlterCompatible;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
-use mz_transform::EmptyStatisticsOracle;
 use timely::progress::Antichain;
 use tokio::sync::{oneshot, watch, OwnedMutexGuard};
 use tracing::{warn, Instrument, Span};
@@ -109,7 +110,7 @@ use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
-use crate::{guard_write_critical_section, PeekResponseUnary, ReadHolds};
+use crate::{guard_write_critical_section, PeekResponseUnary, ReadHolds, TimestampProvider};
 
 mod cluster;
 mod create_index;
@@ -2293,15 +2294,15 @@ impl Coordinator {
                 }
             },
             plan::Explainee::View(_) => {
-                let result = self.explain_view(&ctx, plan);
+                let result = self.explain_view(&ctx, plan).await;
                 ctx.retire(result);
             }
             plan::Explainee::MaterializedView(_) => {
-                let result = self.explain_materialized_view(&ctx, plan);
+                let result = self.explain_materialized_view(&ctx, plan).await;
                 ctx.retire(result);
             }
             plan::Explainee::Index(_) => {
-                let result = self.explain_index(&ctx, plan);
+                let result = self.explain_index(&ctx, plan).await;
                 ctx.retire(result);
             }
             plan::Explainee::ReplanView(_) => {
@@ -4439,57 +4440,92 @@ impl Coordinator {
     }
 }
 
-#[derive(Debug)]
-struct CachedStatisticsOracle {
-    cache: BTreeMap<GlobalId, usize>,
-}
+async fn new_statistics_oracle<T: TimelyTimestamp>(
+    ids: &BTreeSet<GlobalId>,
+    as_of: &Antichain<T>,
+    storage: &dyn mz_storage_client::controller::StorageController<Timestamp = T>,
+) -> Result<StatisticsOracle, StorageError<T>> {
+    let mut cache = BTreeMap::new();
 
-impl CachedStatisticsOracle {
-    pub async fn new<T: TimelyTimestamp>(
-        ids: &BTreeSet<GlobalId>,
-        as_of: &Antichain<T>,
-        storage: &dyn mz_storage_client::controller::StorageController<Timestamp = T>,
-    ) -> Result<Self, StorageError<T>> {
-        let mut cache = BTreeMap::new();
+    for id in ids {
+        let stats = storage.snapshot_stats(*id, as_of.clone()).await;
 
-        for id in ids {
-            let stats = storage.snapshot_stats(*id, as_of.clone()).await;
-
-            match stats {
-                Ok(stats) => {
-                    cache.insert(*id, stats.num_updates);
-                }
-                Err(StorageError::IdentifierMissing(id)) => {
-                    ::tracing::debug!("no statistics for {id}")
-                }
-                Err(e) => return Err(e),
+        match stats {
+            Ok(stats) => {
+                cache.insert(*id, stats.num_updates);
             }
+            Err(StorageError::IdentifierMissing(id)) => {
+                eprintln!("MGREE no statistics for {id}");
+                ::tracing::debug!("no statistics for {id}")
+            }
+            Err(e) => return Err(e),
         }
-
-        Ok(Self { cache })
-    }
-}
-
-impl mz_transform::StatisticsOracle for CachedStatisticsOracle {
-    fn cardinality_estimate(&self, id: GlobalId) -> Option<usize> {
-        self.cache.get(&id).map(|estimate| *estimate)
     }
 
-    fn as_map(&self) -> BTreeMap<GlobalId, usize> {
-        self.cache.clone()
-    }
+    Ok(StatisticsOracle::from(cache))
 }
 
 impl Coordinator {
+    pub(super) async fn statistics_oracle_for_id(
+        &mut self,
+        ctx: &ExecuteContext,
+        cluster_id: StorageInstanceId,
+        id: GlobalId,
+    ) -> StatisticsOracle {
+        let timeline_context = self.get_timeline_context(id);
+        let stats_when = &plan::QueryWhen::Immediately;
+
+        let id_bundle = self
+            .dataflow_builder(cluster_id)
+            .sufficient_collections(std::iter::once(&id));
+
+        let ts = match self.determine_timestamp_for(
+            &ctx.session,
+            &id_bundle,
+            stats_when,
+            cluster_id,
+            &timeline_context,
+            None,
+            None,
+            &mz_sql::session::vars::IsolationLevel::Serializable,
+        ) {
+            Ok((ts, _read_holds)) => ts,
+            Err(e) => {
+                eprintln!("MGREE cardinality stats could not determine timestamp: {e}");
+                return StatisticsOracle::default();
+            }
+        };
+
+        let source_ids = self.catalog().get_entry(&id).uses();
+
+        eprintln!(
+            "MGREE stats_ts.respond_immediately = {}",
+            ts.respond_immediately()
+        );
+        let timestamp_context = ts.timestamp_context;
+
+        self.statistics_oracle(
+            &ctx.session,
+            &source_ids,
+            &timestamp_context.antichain(),
+            true,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("MGREE cardinality stats failed: {e}");
+            StatisticsOracle::default()
+        })
+    }
+
     pub(super) async fn statistics_oracle(
         &self,
         session: &Session,
         source_ids: &BTreeSet<GlobalId>,
         query_as_of: &Antichain<Timestamp>,
         is_oneshot: bool,
-    ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
+    ) -> Result<StatisticsOracle, AdapterError> {
         if !session.vars().enable_session_cardinality_estimates() {
-            return Ok(Box::new(EmptyStatisticsOracle));
+            return Ok(StatisticsOracle::default());
         }
 
         let timeout = if is_oneshot {
@@ -4503,20 +4539,24 @@ impl Coordinator {
 
         let cached_stats = mz_ore::future::timeout(
             timeout,
-            CachedStatisticsOracle::new(source_ids, query_as_of, self.controller.storage.as_ref()),
+            new_statistics_oracle(source_ids, query_as_of, self.controller.storage.as_ref()),
         )
         .await;
 
         match cached_stats {
-            Ok(stats) => Ok(Box::new(stats)),
+            Ok(stats) => {
+                eprintln!("MGREE successfully collected stats for {source_ids:?}");
+                Ok(stats)
+            }
             Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
+                eprintln!("MGREE timed out");
                 warn!(
                     is_oneshot = is_oneshot,
                     "optimizer statistics collection timed out after {}ms",
                     timeout.as_millis()
                 );
 
-                Ok(Box::new(EmptyStatisticsOracle))
+                Ok(StatisticsOracle::default())
             }
             Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),
         }

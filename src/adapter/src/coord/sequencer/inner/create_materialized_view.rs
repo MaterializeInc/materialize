@@ -13,7 +13,7 @@ use maplit::btreemap;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
-use mz_expr::{CollectionPlan, ResultSpec};
+use mz_expr::{CollectionPlan, ResultSpec, StatisticsOracle};
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::soft_panic_or_log;
@@ -30,7 +30,6 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
-use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
 
@@ -216,7 +215,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(super) fn explain_materialized_view(
+    pub(super) async fn explain_materialized_view(
         &mut self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
@@ -229,9 +228,9 @@ impl Coordinator {
         let plan::Explainee::MaterializedView(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
-        let CatalogItem::MaterializedView(view) = self.catalog().get_entry(&id).item() else {
-            unreachable!() // Asserted in `plan_explain_plan`.
-        };
+        let cluster_id = self.catalog().get_entry(&id).item().cluster_id().unwrap(); // Asserted in `plan_explain_plan`.
+
+        let cardinality_stats = self.statistics_oracle_for_id(ctx, cluster_id, id).await;
 
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
             if !id.is_system() {
@@ -244,13 +243,15 @@ impl Coordinator {
             );
         };
 
-        let target_cluster = self.catalog().get_cluster(view.cluster_id);
+        let target_cluster = self.catalog().get_cluster(cluster_id);
 
         let features = OptimizerFeatures::from(self.catalog().system_config())
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
 
-        let cardinality_stats = BTreeMap::new();
+        let CatalogItem::MaterializedView(view) = self.catalog().get_entry(&id).item() else {
+            unreachable!();
+        };
 
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
@@ -259,7 +260,7 @@ impl Coordinator {
                 &config,
                 &features,
                 &self.catalog().for_session(ctx.session()),
-                cardinality_stats,
+                &cardinality_stats,
                 Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::LocalPlan => explain_plan(
@@ -268,7 +269,7 @@ impl Coordinator {
                 &config,
                 &features,
                 &self.catalog().for_session(ctx.session()),
-                cardinality_stats,
+                &cardinality_stats,
                 Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::GlobalPlan => {
@@ -282,7 +283,7 @@ impl Coordinator {
                     &config,
                     &features,
                     &self.catalog().for_session(ctx.session()),
-                    cardinality_stats,
+                    &cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
@@ -298,7 +299,7 @@ impl Coordinator {
                     &config,
                     &features,
                     &self.catalog().for_session(ctx.session()),
-                    cardinality_stats,
+                    &cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
@@ -840,12 +841,14 @@ impl Coordinator {
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
 
+        let cardinality_stats = StatisticsOracle::default(); // !!!(mgree) wire up
         let rows = optimizer_trace
             .into_rows(
                 format,
                 &config,
                 &features,
                 &expr_humanizer,
+                &cardinality_stats,
                 None,
                 Some(target_cluster),
                 df_meta,

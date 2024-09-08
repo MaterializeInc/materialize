@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
-use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, StatisticsOracle};
 use mz_repr::explain::trace_plan;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
@@ -171,9 +171,10 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = expr.lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
+        let stats = StatisticsOracle::default(); // !!!(mgree) wire in stats
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx =
-            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &stats,  &mut df_meta);
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
 
         self.duration += time.elapsed();
@@ -255,9 +256,10 @@ impl Optimize<LocalMirPlan> for Optimizer {
         )?;
 
         // Construct TransformCtx for global optimization.
+        let stats = StatisticsOracle::default(); // !!!(mgree) wire proper stats
         let mut transform_ctx = TransformCtx::global(
             &df_builder,
-            &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
+            &stats,
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,

@@ -22,7 +22,7 @@ use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::JoinImplementation::{Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
     FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper, MapFilterProject,
-    MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+    MirRelationExpr, MirScalarExpr, RECURSION_LIMIT, StatisticsOracle
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
@@ -31,7 +31,7 @@ use mz_repr::optimize::OptimizerFeatures;
 use crate::analysis::{Cardinality, DerivedBuilder};
 use crate::join_implementation::index_map::IndexMap;
 use crate::predicate_pushdown::PredicatePushdown;
-use crate::{StatisticsOracle, TransformCtx, TransformError};
+use crate::{TransformCtx, TransformError};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -86,7 +86,7 @@ impl JoinImplementation {
         &self,
         relation: &mut MirRelationExpr,
         indexes: &mut IndexMap,
-        stats: &dyn StatisticsOracle,
+        stats: &StatisticsOracle,
         features: &OptimizerFeatures,
     ) -> Result<(), TransformError> {
         self.checked_recur(|_| {
@@ -127,7 +127,7 @@ impl JoinImplementation {
         relation: &mut MirRelationExpr,
         mfp_above: MapFilterProject,
         indexes: &IndexMap,
-        stats: &dyn StatisticsOracle,
+        stats: &StatisticsOracle,
         features: &OptimizerFeatures,
     ) -> Result<(), TransformError> {
         if let MirRelationExpr::Join {
@@ -277,7 +277,7 @@ impl JoinImplementation {
                 if features.enable_cardinality_estimates {
                     let mut builder = DerivedBuilder::new(features);
                     // TODO(mgree): it would be good to not have to copy the statistics here
-                    builder.require(Cardinality::with_stats(stats.as_map()));
+                    builder.require(Cardinality::with_stats(stats.clone()));
                     let derived = builder.visit(input);
 
                     let estimate = *derived.as_view().value::<Cardinality>().unwrap();

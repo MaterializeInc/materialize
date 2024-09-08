@@ -18,6 +18,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
 use mz_compute_types::ComputeInstanceId;
+use mz_expr::StatisticsOracle;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
@@ -189,6 +190,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
             DataflowBuilder::new(catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
+        let stats = StatisticsOracle::default(); // !!!(mgree) wire up proper stats
         let mut df_meta = DataflowMetainfo::default();
 
         match plan {
@@ -229,8 +231,12 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 // let expr = expr.lower(&self.config)?;
 
                 // MIR ⇒ MIR optimization (local)
-                let mut transform_ctx =
-                    TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+                let mut transform_ctx = TransformCtx::local(
+                    &self.config.features,
+                    &self.typecheck_ctx,
+                    &stats,
+                    &mut df_meta,
+                );
                 let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
                 df_builder.import_view_into_dataflow(
@@ -267,7 +273,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
         // Construct TransformCtx for global optimization.
         let mut transform_ctx = TransformCtx::global(
             &df_builder,
-            &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
+            &stats, // TODO: wire proper stats
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,

@@ -7,10 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
-
 use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, Index};
+use mz_expr::StatisticsOracle;
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
@@ -188,7 +187,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(crate) fn explain_index(
+    pub(crate) async fn explain_index(
         &mut self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
@@ -201,6 +200,10 @@ impl Coordinator {
         let plan::Explainee::Index(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
+        let cluster_id = self.catalog().get_entry(&id).item().cluster_id().unwrap(); // Asserted in `sequence_explain_plan`
+
+        let cardinality_stats = self.statistics_oracle_for_id(ctx, cluster_id, id).await;
+
         let CatalogItem::Index(index) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
@@ -218,9 +221,6 @@ impl Coordinator {
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
 
-        // TODO(mgree): calculate statistics (need a timestamp)
-        let cardinality_stats = BTreeMap::new();
-
         let explain = match stage {
             ExplainStage::GlobalPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
@@ -234,7 +234,7 @@ impl Coordinator {
                     &config,
                     &features,
                     &self.catalog().for_session(ctx.session()),
-                    cardinality_stats,
+                    &cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
@@ -250,7 +250,7 @@ impl Coordinator {
                     &config,
                     &features,
                     &self.catalog().for_session(ctx.session()),
-                    cardinality_stats,
+                    &cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
                 )?
@@ -550,12 +550,14 @@ impl Coordinator {
             .override_from(&target_cluster.config.features())
             .override_from(&config.features);
 
+        let cardinality_stats = StatisticsOracle::default(); // !!!(mgree) wire up
         let rows = optimizer_trace
             .into_rows(
                 format,
                 &config,
                 &features,
                 &expr_humanizer,
+                &cardinality_stats,
                 None,
                 Some(target_cluster),
                 df_meta,

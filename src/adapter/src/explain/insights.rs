@@ -26,7 +26,6 @@ use mz_sql::names::Aug;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_transform::EmptyStatisticsOracle;
 use serde::Serialize;
 
 use crate::catalog::Catalog;
@@ -119,7 +118,7 @@ impl PlanInsights {
                         let local_mir_plan = local_mir_plan.resolve(
                             timestamp_context,
                             &*session,
-                            Box::new(EmptyStatisticsOracle {}),
+                            mz_expr::StatisticsOracle::default(),
                         );
                         // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
                         let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;

@@ -7,11 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
-
 use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, View};
-use mz_expr::CollectionPlan;
+use mz_expr::{CollectionPlan, StatisticsOracle};
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
@@ -186,7 +184,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(crate) fn explain_view(
+    pub(crate) async fn explain_view(
         &mut self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
@@ -199,6 +197,10 @@ impl Coordinator {
         let plan::Explainee::View(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
+
+        let cluster_id = self.catalog().get_entry(&id).item().cluster_id().unwrap(); // Asserted in `plan_explain_plan`.
+        let cardinality_stats = self.statistics_oracle_for_id(ctx, cluster_id, id).await;
+
         let CatalogItem::View(view) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
@@ -208,8 +210,6 @@ impl Coordinator {
         let features =
             OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
 
-        let cardinality_stats = BTreeMap::new();
-
         let explain = match stage {
             ExplainStage::RawPlan => explain_plan(
                 view.raw_expr.as_ref().clone(),
@@ -217,7 +217,7 @@ impl Coordinator {
                 &config,
                 &features,
                 &self.catalog().for_session(ctx.session()),
-                cardinality_stats,
+                &cardinality_stats,
                 target_cluster,
             )?,
             ExplainStage::LocalPlan => explain_plan(
@@ -226,7 +226,7 @@ impl Coordinator {
                 &config,
                 &features,
                 &self.catalog().for_session(ctx.session()),
-                cardinality_stats,
+                &cardinality_stats,
                 target_cluster,
             )?,
             _ => {
@@ -465,12 +465,14 @@ impl Coordinator {
         let features =
             OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
 
+        let cardinality_stats = StatisticsOracle::default(); // !!!(mgree) wire up
         let rows = optimizer_trace
             .into_rows(
                 format,
                 &config,
                 &features,
                 &expr_humanizer,
+                &cardinality_stats,
                 None,
                 None, // Views don't have a target cluster.
                 Default::default(),

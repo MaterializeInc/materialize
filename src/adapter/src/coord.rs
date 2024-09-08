@@ -116,7 +116,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, ProcessId};
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
-use mz_expr::{MapFilterProject, OptimizedMirRelationExpr};
+use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, StatisticsOracle};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::future::TimeoutError;
@@ -493,6 +493,8 @@ pub struct PeekStageOptimize {
     plan: mz_sql::plan::SelectPlan,
     max_query_result_size: Option<u64>,
     source_ids: BTreeSet<GlobalId>,
+    cluster_id: ComputeInstanceId,
+    timeline_context: TimelineContext,
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
@@ -511,6 +513,7 @@ pub struct PeekStageFinish {
     target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
+    cardinality_stats: StatisticsOracle,
     optimizer: optimize::peek::Optimizer,
     /// When present, an optimizer trace to be used for emitting a plan insights
     /// notice.
@@ -534,6 +537,7 @@ pub struct PeekStageExplainPlan {
     validity: PlanValidity,
     optimizer: optimize::peek::Optimizer,
     df_meta: DataflowMetainfo,
+    cardinality_stats: StatisticsOracle,
     explain_ctx: ExplainPlanContext,
     insights_ctx: Option<PlanInsightsContext>,
 }
