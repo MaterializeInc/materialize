@@ -98,16 +98,23 @@ build:linux-arm64 --@rules_rust//:extra_rustc_flag="-Ctarget-cpu=neoverse-n1"
 build:release --cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST"
 build:release --copt="-O3"
 build:release --copt="-DNDEBUG"
+build:release -c opt
 build:release --copt="-flto=thin"
 build:release --linkopt="-flto=thin"
 build:release --@rules_rust//:extra_rustc_flag="-Clto=thin"
-build:release -c opt
 
 # Cross Language LTO
 #
 # <https://blog.llvm.org/2019/09/closing-gap-cross-language-lto-between.html>
 #
-# TODO(parkmycar): Measure the tradeoff between compile time and runtime performance.
-# TODO(parkmycar): Experiment with a different number of codegen units.
-build:x-lang-lto --@rules_rust//:extra_rustc_flag="-Clinker-plugin-lto"
-build:x-lang-lto --@rules_rust//:extra_rustc_flag="-Clinker=external/llvm_toolchain_llvm/bin/clang"
+# TODO(parkmycar): Re-enable these. They eiter cause a compilation failure because of
+# missing object files, or (seemingly) makes the number of codegen units 1 which compiles
+# way too slow.
+#build:release --@rules_rust//:extra_rustc_flag="-Clinker-plugin-lto"
+#build:linux --@rules_rust//rust/settings:experimental_use_cc_common_link=True
+
+# This 'features' option comes from the `unix_cc_toolchain_config` in Bazel core and sets all the
+# right flags.
+#
+# See: <https://github.com/bazelbuild/bazel/blob/master/tools/cpp/unix_cc_toolchain_config.bzl>
+#build:release --features=thin_lto
