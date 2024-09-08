@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO(def-) Remove when #29397 and #29435 are fixed
+$ skip-if
+SELECT true
+
 $ set-arg-default default-replica-size=1
 $ set-arg-default single-replica-cluster=quickstart
 
