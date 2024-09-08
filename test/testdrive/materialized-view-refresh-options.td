@@ -407,6 +407,9 @@ true
 > SELECT * FROM mv11;
 4
 
+# Seems to take a while in k8s
+$ set-max-tries max-tries=50
+
 # The cluster should be turned off at some point.
 > SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster';
 0
