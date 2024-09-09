@@ -55,8 +55,8 @@ pub const ENABLE_CHUNKED_STACK: Config<bool> = Config::new(
 /// The interval at which the compute server performs maintenance tasks.
 pub const COMPUTE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "compute_server_maintenance_interval",
-    Duration::ZERO,
-    "The interval at which the compute server performs maintenance tasks.",
+    Duration::from_millis(10),
+    "The interval at which the compute server performs maintenance tasks. Zero enables maintenance on every iteration.",
 );
 
 /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
