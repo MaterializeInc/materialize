@@ -209,11 +209,14 @@ JSONB_OPERATION_TYPES.append(
 JSONB_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "jsonb_object_agg",
-        {3: "jsonb_object_agg($, $ ORDER BY row_index, $)"},
+        {4: "jsonb_object_agg($, $ ORDER BY row_index, $, $)"},
         [
+            # key
             AnyOperationParam(),
+            # value
             AnyOperationParam(include_record_type=False),
             SameOperationParam(index_of_previous_param=0),
+            SameOperationParam(index_of_previous_param=1),
         ],
         JsonbReturnTypeSpec(),
         is_aggregation=True,
@@ -228,7 +231,9 @@ JSONB_OPERATION_TYPES.append(
         "jsonb_object_agg",
         {3: "jsonb_object_agg($, $ ORDER BY row_index, $)"},
         [
+            # key
             AnyOperationParam(),
+            # value
             RecordOperationParam(),
             SameOperationParam(index_of_previous_param=0),
         ],
