@@ -232,15 +232,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         expression: ExpressionWithArgs,
         all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
-        inconsistent_value_ordering_functions = ["array_agg", "string_agg"]
-        if (
-            db_function.function_name_in_lower_case
-            in inconsistent_value_ordering_functions
-            # only exclude unordered variant
-            and "ORDER BY" not in db_function.to_pattern(db_function.max_param_count)
-        ):
-            return YesIgnore("inconsistent ordering, not an error")
-
         if db_function.function_name_in_lower_case == "jsonb_pretty":
             return YesIgnore("Accepted")
 

@@ -146,17 +146,6 @@ AGGREGATE_OPERATION_TYPES.append(
 )
 
 AGGREGATE_OPERATION_TYPES.append(
-    DbFunction(
-        "string_agg",
-        [StringOperationParam(), StringOperationParam()],
-        StringReturnTypeSpec(),
-        is_aggregation=True,
-        relevance=OperationRelevance.LOW,
-        comment="without ordering",
-    ),
-)
-
-AGGREGATE_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "string_agg",
         {3: "string_agg($, $ ORDER BY row_index, $)"},
@@ -168,6 +157,5 @@ AGGREGATE_OPERATION_TYPES.append(
         StringReturnTypeSpec(),
         is_aggregation=True,
         relevance=OperationRelevance.LOW,
-        comment="with ordering",
     ),
 )
