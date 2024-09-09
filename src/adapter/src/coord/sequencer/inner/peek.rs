@@ -973,7 +973,7 @@ impl Coordinator {
         );
 
         // Ship dataflow.
-        self.ship_dataflow(df_desc, cluster_id).await;
+        self.ship_dataflow(df_desc, cluster_id, None).await;
 
         let span = Span::current();
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(

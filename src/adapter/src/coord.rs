@@ -1979,7 +1979,7 @@ impl Coordinator {
 
                         self.controller
                             .compute
-                            .create_dataflow(idx.cluster_id, df_desc)
+                            .create_dataflow(idx.cluster_id, df_desc, None)
                             .unwrap_or_terminate("cannot fail to create dataflows");
                     }
                 }
@@ -2025,7 +2025,7 @@ impl Coordinator {
                         );
                     }
 
-                    self.ship_dataflow(df_desc, mview.cluster_id).await;
+                    self.ship_dataflow(df_desc, mview.cluster_id, None).await;
                 }
                 CatalogItem::Sink(sink) => {
                     let id = entry.id();
@@ -3050,6 +3050,7 @@ impl Coordinator {
         &mut self,
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
+        subscribe_target_replica: Option<ReplicaId>,
     ) {
         // We must only install read policies for indexes, not for sinks.
         // Sinks are write-only compute collections that don't have read policies.
@@ -3057,7 +3058,7 @@ impl Coordinator {
 
         self.controller
             .compute
-            .create_dataflow(instance, dataflow)
+            .create_dataflow(instance, dataflow, subscribe_target_replica)
             .unwrap_or_terminate("dataflow creation cannot fail");
 
         self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
@@ -3072,11 +3073,11 @@ impl Coordinator {
         notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
     ) {
         if let Some(notice_builtin_updates_fut) = notice_builtin_updates_fut {
-            let ship_dataflow_fut = self.ship_dataflow(dataflow, instance);
+            let ship_dataflow_fut = self.ship_dataflow(dataflow, instance, None);
             let ((), ()) =
                 futures::future::join(notice_builtin_updates_fut, ship_dataflow_fut).await;
         } else {
-            self.ship_dataflow(dataflow, instance).await;
+            self.ship_dataflow(dataflow, instance, None).await;
         }
     }
 
@@ -3384,7 +3385,7 @@ impl Coordinator {
         // this only works because this function will never run.
         let compute_instance = ComputeInstanceId::User(1);
 
-        let _: () = self.ship_dataflow(dataflow, compute_instance).await;
+        let _: () = self.ship_dataflow(dataflow, compute_instance, None).await;
     }
 }
 

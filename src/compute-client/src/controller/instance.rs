@@ -76,6 +76,8 @@ pub(super) struct ReplicaMissing(pub ReplicaId);
 pub(super) enum DataflowCreationError {
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
+    #[error("replica does not exist: {0}")]
+    ReplicaMissing(ReplicaId),
     #[error("dataflow definition lacks an as_of value")]
     MissingAsOf,
     #[error("dataflow has an as_of not beyond the since of collection: {0}")]
@@ -144,16 +146,6 @@ impl From<CollectionMissing> for ReadPolicyError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
     }
-}
-
-#[derive(Error, Debug)]
-pub(super) enum SubscribeTargetError {
-    #[error("subscribe does not exist: {0}")]
-    SubscribeMissing(GlobalId),
-    #[error("replica does not exist: {0}")]
-    ReplicaMissing(ReplicaId),
-    #[error("subscribe has already produced output")]
-    SubscribeAlreadyStarted,
 }
 
 /// The state we keep for a compute instance.
@@ -988,33 +980,6 @@ where
         }
     }
 
-    /// Assign a target replica to the identified subscribe.
-    ///
-    /// If a subscribe has a target replica assigned, only subscribe responses
-    /// sent by that replica are considered.
-    pub fn set_subscribe_target_replica(
-        &mut self,
-        id: GlobalId,
-        target_replica: ReplicaId,
-    ) -> Result<(), SubscribeTargetError> {
-        if !self.replica_exists(target_replica) {
-            return Err(SubscribeTargetError::ReplicaMissing(target_replica));
-        }
-
-        let Some(subscribe) = self.subscribes.get_mut(&id) else {
-            return Err(SubscribeTargetError::SubscribeMissing(id));
-        };
-
-        // For sanity reasons, we don't allow re-targeting a subscribe for which we have already
-        // produced output.
-        if !subscribe.frontier.less_equal(&T::minimum()) {
-            return Err(SubscribeTargetError::SubscribeAlreadyStarted);
-        }
-
-        subscribe.target_replica = Some(target_replica);
-        Ok(())
-    }
-
     /// Add a new instance replica, by ID.
     pub fn add_replica(
         &mut self,
@@ -1130,10 +1095,21 @@ where
     }
 
     /// Create the described dataflows and initializes state for their output.
+    ///
+    /// If a `subscribe_target_replica` is given, any subscribes exported by the dataflow are
+    /// configured to target that replica, i.e., only subscribe responses sent by that replica are
+    /// considered.
     pub fn create_dataflow(
         &mut self,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        subscribe_target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
+        if let Some(replica_id) = subscribe_target_replica {
+            if !self.replica_exists(replica_id) {
+                return Err(DataflowCreationError::ReplicaMissing(replica_id));
+            }
+        }
+
         // Simple sanity checks around `as_of`
         let as_of = dataflow
             .as_of
@@ -1202,7 +1178,8 @@ where
 
         // Initialize tracking of subscribes.
         for subscribe_id in dataflow.subscribe_ids() {
-            self.subscribes.insert(subscribe_id, ActiveSubscribe::new());
+            self.subscribes
+                .insert(subscribe_id, ActiveSubscribe::new(subscribe_target_replica));
         }
 
         // Initialize tracking of copy tos.
@@ -2484,10 +2461,10 @@ struct ActiveSubscribe<T> {
 }
 
 impl<T: ComputeControllerTimestamp> ActiveSubscribe<T> {
-    fn new() -> Self {
+    fn new(target_replica: Option<ReplicaId>) -> Self {
         Self {
-            frontier: Antichain::from_elem(timely::progress::Timestamp::minimum()),
-            target_replica: None,
+            frontier: Antichain::from_elem(T::minimum()),
+            target_replica,
         }
     }
 }

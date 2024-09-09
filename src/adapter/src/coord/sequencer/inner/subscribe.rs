@@ -25,7 +25,6 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
-use crate::util::ResultExt;
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
 
 impl Staged for SubscribeStage {
@@ -350,7 +349,7 @@ impl Coordinator {
             .add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
             .await;
         // Ship dataflow.
-        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id);
+        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id, replica_id);
 
         // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
         // requests to external services, which can take time, so we run them concurrently.
@@ -364,13 +363,6 @@ impl Coordinator {
 
         // Explicitly drop read holds, just to make it obvious what's happening.
         drop(txn_read_holds);
-
-        if let Some(target) = replica_id {
-            self.controller
-                .compute
-                .set_subscribe_target_replica(cluster_id, sink_id, target)
-                .unwrap_or_terminate("cannot fail to set subscribe target replica");
-        }
 
         let resp = ExecuteResponse::Subscribing {
             rx,
