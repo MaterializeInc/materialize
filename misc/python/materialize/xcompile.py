@@ -15,6 +15,7 @@ import sys
 from enum import Enum
 
 from materialize import MZ_ROOT, spawn
+from materialize import bazel as bazel_utils
 from materialize.rustc_flags import Sanitizer
 
 
@@ -88,6 +89,7 @@ def target_features(arch: Arch) -> list[str]:
 def bazel(
     arch: Arch,
     subcommand: str,
+    is_tagged_build: bool,
     rustflags: list[str],
     extra_env: dict[str, str] = {},
 ) -> list[str]:
@@ -100,6 +102,7 @@ def bazel(
             is empty, the default flags are used.
         extra_env: Extra environment variables to set for the execution of
             Bazel.
+        is_tagged_build: Should this build be stamped with release info.
     """
     # Note: Unlike `cargo`, Bazel does not use CI_BUILDER and all of the cross
     # compilation is handled at a higher level.
@@ -113,10 +116,18 @@ def bazel(
     if sys.platform != "darwin":
         bazel_flags += [f"--config=linux-{arch.go_str()}"]
 
+    # If we're a tagged build, then we'll use stamping to update our build info, otherwise we'll
+    # use our side channel/best-effort approach to update it.
+    if is_tagged_build:
+        bazel_flags += ["--config=release-stamp"]
+    else:
+        bazel_utils.write_git_hash()
+
     rustc_flags = [
         f"--@rules_rust//:extra_rustc_flag={flag}"
         for flag in rustflags
-        # TODO(parkmycar): Fix tokio_unstable in Bazel.
+        # We apply `tokio_unstable` at the `WORKSPACE` level so skip it here to
+        # prevent changing the compile options and possibly missing cache hits.
         if "tokio_unstable" not in flag
     ]
 
