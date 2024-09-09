@@ -863,9 +863,9 @@ criteria = "maintained-and-necessary"
 version = "0.13.1"
 
 [[audits.prost-reflect]]
-who = "Jan Teske <jteske@posteo.net>"
+who = "Dennis Felsing <dennis@felsing.org>"
 criteria = "maintained-and-necessary"
-version = "0.14.0"
+version = "0.14.2"
 
 [[audits.prost-types]]
 who = "Jan Teske <jteske@posteo.net>"

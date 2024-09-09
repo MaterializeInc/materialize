@@ -30,7 +30,7 @@ mz-repr = { path = "../repr" }
 mz-pgrepr = { path = "../pgrepr" }
 ordered-float = { version = "4.2.0", features = ["serde"] }
 prost = { version = "0.13.1", features = ["no-recursion-limit"] }
-prost-reflect = "0.14.0"
+prost-reflect = "0.14.2"
 seahash = "4"
 serde_json = "1.0.125"
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
