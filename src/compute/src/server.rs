@@ -446,7 +446,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         }
 
         // The last time we did periodic maintenance.
-        let mut last_maintenance = None;
+        let mut last_maintenance = Instant::now();
 
         // Commence normal operation.
         let mut shutdown = false;
@@ -461,8 +461,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // Determine if we need to perform maintenance, which is true if `maintenance_interval`
             // time has passed since the last maintenance.
             let sleep_duration;
-            if last_maintenance.map_or(true, |l_m| now >= l_m + maintenance_interval) {
-                last_maintenance = Some(now);
+            if now >= last_maintenance + maintenance_interval {
+                last_maintenance = now;
                 sleep_duration = None;
 
                 // Report frontier information back the coordinator.
@@ -477,8 +477,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     .record_shared_row_metrics(self.timely_worker.index());
             } else {
                 // We didn't perform maintenance, sleep until the next maintenance interval.
-                let next_maintenance = last_maintenance.unwrap() + maintenance_interval;
-                sleep_duration = Some(next_maintenance.saturating_duration_since(Instant::now()))
+                let next_maintenance = last_maintenance + maintenance_interval;
+                sleep_duration = Some(next_maintenance.saturating_duration_since(now))
             };
 
             // Step the timely worker, recording the time taken.
