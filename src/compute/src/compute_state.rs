@@ -158,6 +158,10 @@ pub struct ComputeState {
 
     /// Send-side for read-only state.
     pub read_only_tx: watch::Sender<bool>,
+
+    /// Interval at which to perform server maintenance tasks. Set to a zero interval to
+    /// perform maintenance with every `step_or_park` invocation.
+    pub server_maintenance_interval: Duration,
 }
 
 impl ComputeState {
@@ -203,6 +207,7 @@ impl ComputeState {
             suspended_collections: Default::default(),
             read_only_tx,
             read_only_rx,
+            server_maintenance_interval: Duration::ZERO,
         }
     }
 
@@ -285,6 +290,10 @@ impl ComputeState {
         let chunked_stack = ENABLE_CHUNKED_STACK.get(config);
         info!("using chunked stack: {chunked_stack}");
         mz_timely_util::containers::stack::use_chunked_stack(chunked_stack);
+
+        // Remember the maintenance interval locally to avoid reading it from the config set on
+        // every server iteration.
+        self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
     }
 
     /// Returns the cc or non-cc version of "dataflow_max_inflight_bytes", as

@@ -52,6 +52,13 @@ pub const ENABLE_CHUNKED_STACK: Config<bool> = Config::new(
     "Enable the chunked stack implementation in compute.",
 );
 
+/// The interval at which the compute server performs maintenance tasks.
+pub const COMPUTE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
+    "compute_server_maintenance_interval",
+    Duration::from_millis(10),
+    "The interval at which the compute server performs maintenance tasks. Zero enables maintenance on every iteration.",
+);
+
 /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
 pub const DATAFLOW_MAX_INFLIGHT_BYTES: Config<Option<usize>> = Config::new(
     "compute_dataflow_max_inflight_bytes",
@@ -133,6 +140,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_CHUNKED_STACK)
+        .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)

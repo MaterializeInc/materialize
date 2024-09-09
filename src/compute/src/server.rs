@@ -15,7 +15,7 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
@@ -445,26 +445,46 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             return;
         }
 
+        // The last time we did periodic maintenance.
+        let mut last_maintenance = Instant::now();
+
         // Commence normal operation.
         let mut shutdown = false;
         while !shutdown {
-            // Enable trace compaction.
-            if let Some(compute_state) = &mut self.compute_state {
-                compute_state.traces.maintenance();
-            }
+            // Get the maintenance interval, default to zero if we don't have a compute state.
+            let maintenance_interval = self
+                .compute_state
+                .as_ref()
+                .map_or(Duration::ZERO, |state| state.server_maintenance_interval);
 
-            let start = Instant::now();
-            self.timely_worker.step_or_park(None);
-            self.metrics
-                .timely_step_duration_seconds
-                .observe(start.elapsed().as_secs_f64());
+            let now = Instant::now();
+            // Determine if we need to perform maintenance, which is true if `maintenance_interval`
+            // time has passed since the last maintenance.
+            let sleep_duration;
+            if now >= last_maintenance + maintenance_interval {
+                last_maintenance = now;
+                sleep_duration = None;
 
-            // Report frontier information back the coordinator.
-            if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
-                compute_state.report_frontiers();
-                compute_state.report_dropped_collections();
-                compute_state.report_operator_hydration();
-            }
+                // Report frontier information back the coordinator.
+                if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
+                    compute_state.compute_state.traces.maintenance();
+                    compute_state.report_frontiers();
+                    compute_state.report_dropped_collections();
+                    compute_state.report_operator_hydration();
+                }
+
+                self.metrics
+                    .record_shared_row_metrics(self.timely_worker.index());
+            } else {
+                // We didn't perform maintenance, sleep until the next maintenance interval.
+                let next_maintenance = last_maintenance + maintenance_interval;
+                sleep_duration = Some(next_maintenance.saturating_duration_since(now))
+            };
+
+            // Step the timely worker, recording the time taken.
+            let timer = self.metrics.timely_step_duration_seconds.start_timer();
+            self.timely_worker.step_or_park(sleep_duration);
+            timer.observe_duration();
 
             // Handle any received commands.
             let mut cmds = vec![];
@@ -488,9 +508,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
             }
-
-            self.metrics
-                .record_shared_row_metrics(self.timely_worker.index());
         }
     }
 
