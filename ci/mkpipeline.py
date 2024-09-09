@@ -170,8 +170,8 @@ so it is executed.""",
             if step.get("sanitizer") == "skip":
                 step["skip"] = True
 
-            # Nightly required for sanitizers
-            if step.get("id") in ("build-x86_64", "build-aarch64"):
+            # Nightly and Rust build required for sanitizers
+            if step.get("id") in ("rust-build-x86_64", "rust-build-aarch64"):
                 step["command"] = (
                     "bin/ci-builder run nightly bin/pyactivate -m ci.test.build"
                 )
@@ -588,7 +588,7 @@ def trim_builds(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
                 # hash at least don't run concurrently, leading to wasted
                 # resources.
                 step["concurrency"] = 1
-                step["concurrency_group"] = f"build-aarch64/{hash(deps)}"
+                step["concurrency_group"] = f"rust-build-aarch64/{hash(deps)}"
         elif step.get("id") == "build-x86_64":
             (_deps, check) = get_deps(Arch.X86_64)
             inputs = step.get("inputs") or []
