@@ -50,6 +50,7 @@ MZ_VERSION_0_95_0 = MzVersion.parse_mz("v0.95.0")
 MZ_VERSION_0_99_0 = MzVersion.parse_mz("v0.99.0")
 MZ_VERSION_0_107_0 = MzVersion.parse_mz("v0.107.0")
 MZ_VERSION_0_109_0 = MzVersion.parse_mz("v0.109.0")
+MZ_VERSION_0_117_0 = MzVersion.parse_mz("v0.117.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -177,6 +178,18 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             )
         ):
             return YesIgnore("Contains on list and array introduced in PR 27959")
+
+        if (
+            self.lower_version < MZ_VERSION_0_117_0 <= self.higher_version
+            and expression.matches(
+                partial(
+                    matches_fun_by_any_name,
+                    function_names_in_lower_case={"array_agg", "string_agg"},
+                ),
+                True,
+            )
+        ):
+            return YesIgnore("Order changes with PR#29422 for both DFR and CTF")
 
         return super().shall_ignore_expression(expression, row_selection)
 
