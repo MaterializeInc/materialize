@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from materialize.output_consistency.input_data.params.any_operation_param import (
-    AnyLikeOtherOperationParam,
     AnyOperationParam,
 )
 from materialize.output_consistency.input_data.params.collection_operation_param import (
@@ -96,10 +95,7 @@ LIST_OPERATION_TYPES.append(
     DbFunction(
         "list_agg",
         [
-            AnyOperationParam(include_record_type=False),
-            AnyLikeOtherOperationParam(index_of_previous_param=0, optional=True),
-            AnyLikeOtherOperationParam(index_of_previous_param=0, optional=True),
-            AnyLikeOtherOperationParam(index_of_previous_param=0, optional=True),
+            AnyOperationParam(include_record_type=True),
         ],
         ListReturnTypeSpec(),
     )
