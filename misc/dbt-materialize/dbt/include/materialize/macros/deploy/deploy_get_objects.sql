@@ -17,32 +17,32 @@
     {% set clusters = {} %}
     {% set schemas = {} %}
 
-    {# Get ignored clusters and schemas from project variables #}
+    {# Get clusters and schemas to exclude from project variables #}
     {% set deployment_vars = var('deployment', {}).get(target.name, {}) %}
-    {% set ignored_clusters = deployment_vars.get('ignored_clusters', []) %}
-    {% set ignored_schemas = deployment_vars.get('ignored_schemas', []) %}
+    {% set exclude_clusters = deployment_vars.get('exclude_clusters', []) %}
+    {% set exclude_schemas = deployment_vars.get('exclude_schemas', []) %}
 
     {% if debug %}
         {{ log("Debug: Starting deploy_get_objects macro", info=True) }}
-        {{ log("Debug: Ignored clusters: " ~ ignored_clusters, info=True) }}
-        {{ log("Debug: Ignored schemas: " ~ ignored_schemas, info=True) }}
+        {{ log("Debug: Excluded clusters: " ~ exclude_clusters, info=True) }}
+        {{ log("Debug: Excluded schemas: " ~ exclude_schemas, info=True) }}
     {% endif %}
 
     {# Add cluster and schema from the current target #}
-    {% if target.cluster and target.cluster not in ignored_clusters %}
+    {% if target.cluster and target.cluster not in exclude_clusters %}
         {% do clusters.update({target.cluster: true}) %}
     {% endif %}
-    {% if target.schema and target.schema not in ignored_schemas %}
+    {% if target.schema and target.schema not in exclude_schemas %}
         {% do schemas.update({target.schema: true}) %}
     {% endif %}
 
     {# Add clusters and schemas from the models #}
     {% for node in graph.nodes.values() %}
         {% if node.resource_type == 'model' %}
-            {% if node.config.cluster and node.config.cluster not in ignored_clusters %}
+            {% if node.config.cluster and node.config.cluster not in exclude_clusters %}
                 {% do clusters.update({node.config.cluster: true}) %}
             {% endif %}
-            {% if node.schema and node.schema not in ignored_schemas %}
+            {% if node.schema and node.schema not in exclude_schemas %}
                 {% do schemas.update({node.schema: true}) %}
             {% endif %}
         {% endif %}
