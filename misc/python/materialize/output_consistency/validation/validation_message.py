@@ -22,11 +22,17 @@ from materialize.output_consistency.query.query_result import QueryExecution
 
 class ValidationErrorType(Enum):
     SUCCESS_MISMATCH = 1
+    """Different outcome (success vs. error)"""
     ROW_COUNT_MISMATCH = 2
+    """Different number of rows"""
     CONTENT_TYPE_MISMATCH = 3
+    """Different data types in successful queries"""
     CONTENT_MISMATCH = 4
+    """Different data in successful queries"""
     ERROR_MISMATCH = 5
+    """Different error messages"""
     EXPLAIN_PLAN_MISMATCH = 6
+    """Different explain plans"""
 
     def __str__(self) -> str:
         return self.name
