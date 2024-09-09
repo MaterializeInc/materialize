@@ -170,22 +170,12 @@ ARRAY_OPERATION_TYPES.append(
     )
 )
 ARRAY_OPERATION_TYPES.append(
-    DbFunction(
-        "array_agg",
-        [AnyOperationParam()],
-        ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.DYNAMIC),
-        is_aggregation=True,
-        comment="without ordering",
-    ),
-)
-ARRAY_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "array_agg",
         {2: "array_agg($ ORDER BY row_index, $)"},
         [AnyOperationParam(), SameOperationParam(index_of_previous_param=0)],
         ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.DYNAMIC),
         is_aggregation=True,
-        comment="with ordering",
     ),
 )
 ARRAY_OPERATION_TYPES.append(

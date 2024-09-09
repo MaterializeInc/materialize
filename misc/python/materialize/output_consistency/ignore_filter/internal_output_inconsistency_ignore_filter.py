@@ -39,7 +39,6 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
-    DbFunctionWithCustomPattern,
     DbOperation,
     DbOperationOrFunction,
 )
@@ -111,13 +110,6 @@ class PreExecutionInternalOutputInconsistencyIgnoreFilter(
                 and ExpressionCharacteristics.TINY_VALUE in all_involved_characteristics
             ):
                 return YesIgnore("#15186")
-
-        if db_function.function_name_in_lower_case in {
-            "array_agg",
-            "string_agg",
-        } and not isinstance(db_function, DbFunctionWithCustomPattern):
-            # The unordered variants are to be ignored.
-            return YesIgnore("#19832")
 
         return NoIgnore()
 
