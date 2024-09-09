@@ -1171,19 +1171,10 @@ impl<T: Timestamp + Lattice> Spine<T> {
         } else {
             // Otherwise, we'll need to introduce fake updates to move merges
             // along.
-            let id = {
-                let id = self.next_id;
-                self.next_id += 1;
-                SpineId(id, self.next_id)
-            };
-            let batch = SpineBatch::empty(
-                id,
-                self.upper.clone(),
-                self.upper.clone(),
-                Antichain::from_elem(T::minimum()),
-            );
-            let index = usize::try_from(effort).unwrap_or(0).next_power_of_two();
-            self.introduce_batch(batch, usize::cast_from(index.trailing_zeros()), log);
+
+            // TODO: Tracked in #29459. Once we've finished deleting the legacy
+            // spine-diff code, push an empty batch here to move things along.
+            return false;
         }
         true
     }

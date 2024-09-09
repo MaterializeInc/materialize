@@ -711,6 +711,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
     let mut machine = write.machine.clone();
 
     let mut last_exert: Instant;
+
     loop {
         last_exert = Instant::now();
         let fuel = fuel();
@@ -790,6 +791,7 @@ mod tests {
 
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
+    // #[ignore] // TODO: Re-enable when #29459 is fixed.
     async fn dangerous_force_compaction_and_break_pushdown(dyncfgs: ConfigUpdates) {
         let client = new_test_client(&dyncfgs).await;
         for num_batches in 0..=17 {

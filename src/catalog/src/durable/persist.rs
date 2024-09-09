@@ -1377,7 +1377,7 @@ impl UnopenedPersistCatalogState {
             let wait = CATALOG_FORCE_COMPACTION_WAIT.handle(catalog.persist_client.dyncfgs());
             // We're going to gradually turn this on via dyncfgs. Run it in a task so that it
             // doesn't block startup.
-            let _ = mz_ore::task::spawn(|| "catalog::force_shard_compaction", async move {
+            let _task = mz_ore::task::spawn(|| "catalog::force_shard_compaction", async move {
                 let () =
                     mz_persist_client::cli::admin::dangerous_force_compaction_and_break_pushdown(
                         &write_handle,
