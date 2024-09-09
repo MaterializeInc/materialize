@@ -11,6 +11,7 @@
 
 DELETE FROM feature_benchmark_result WHERE build_job_id IN (SELECT build_id FROM build_job WHERE build_id IN (%build-ids%));
 DELETE FROM scalability_framework_result WHERE build_job_id IN (SELECT build_id FROM build_job WHERE build_id IN (%build-ids%));
+DELETE FROM parallel_benchmark_result WHERE build_job_id IN (SELECT build_id FROM build_job WHERE build_id IN (%build-ids%));
 DELETE FROM build_annotation_error WHERE build_job_id IN (SELECT build_job_id FROM build_annotation WHERE build_id IN (%build-ids%));
 DELETE FROM build_annotation WHERE build_id IN (%build-ids%);
 DELETE FROM build_job WHERE build_id IN (%build-ids%);

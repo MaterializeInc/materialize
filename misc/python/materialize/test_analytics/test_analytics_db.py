@@ -29,6 +29,9 @@ from materialize.test_analytics.data.known_issues.known_issues_storage import (
 from materialize.test_analytics.data.output_consistency.output_consistency_stats_storage import (
     OutputConsistencyStatsStorage,
 )
+from materialize.test_analytics.data.parallel_benchmark.parallel_benchmark_result_storage import (
+    ParallelBenchmarkResultStorage,
+)
 from materialize.test_analytics.data.scalability_framework.scalability_framework_result_storage import (
     ScalabilityFrameworkResultStorage,
 )
@@ -56,6 +59,9 @@ class TestAnalyticsDb:
         self.build_history = BuildHistoryAnalysis(self.database_connector)
         self.output_consistency = OutputConsistencyStatsStorage(self.database_connector)
         self.known_issues = KnownIssuesStorage(self.database_connector)
+        self.parallel_benchmark_results = ParallelBenchmarkResultStorage(
+            self.database_connector
+        )
 
     def submit_updates(self) -> None:
         """
