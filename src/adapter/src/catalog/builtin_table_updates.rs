@@ -494,6 +494,7 @@ impl CatalogState {
                             ingestion_id,
                             external_reference: UnresolvedItemName(external_reference),
                             details: _,
+                            data_config: _,
                         } => {
                             let ingestion_entry = self
                                 .get_entry(ingestion_id)

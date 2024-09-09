@@ -823,10 +823,12 @@ impl CatalogState {
                                 ingestion_id,
                                 external_reference,
                                 details,
+                                data_config,
                             } => TableDataSource::DataSource(DataSourceDesc::IngestionExport {
                                 ingestion_id,
                                 external_reference,
                                 details,
+                                data_config,
                             }),
                             _ => {
                                 return Err(AdapterError::Unstructured(anyhow::anyhow!(
@@ -862,10 +864,12 @@ impl CatalogState {
                         ingestion_id,
                         external_reference,
                         details,
+                        data_config,
                     } => DataSourceDesc::IngestionExport {
                         ingestion_id,
                         external_reference,
                         details,
+                        data_config,
                     },
                     mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
                     mz_sql::plan::DataSourceDesc::Webhook {

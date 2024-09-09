@@ -38,10 +38,8 @@ use mz_repr::{
     Row, RowColumnarDecoder, RowColumnarEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
-use proptest::collection::vec;
 use proptest::prelude::any;
-use proptest::strategy::{BoxedStrategy, Strategy};
-use proptest::string::string_regex;
+use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -74,34 +72,6 @@ pub use crate::sources::postgres::{PostgresSourceConnection, PostgresSourceExpor
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 
-/// A fraternal twin of [`UnresolvedItemName`] that can implement [`Arbitrary`].
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ExportReference(pub Vec<Ident>);
-
-impl proptest::prelude::Arbitrary for ExportReference {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        // Generate a set of valid `Ident` strings.
-        let string_strategy = string_regex("[a-zA-Z_][a-zA-Z0-9_$]{3,10}").unwrap();
-
-        // We only ever expect between 1 and 3 elements of the reference. We
-        // could theoretically expect more, but we can never expect 0.
-        vec(string_strategy, 1..=3)
-            .prop_map(|inner| {
-                ExportReference(inner.into_iter().map(|i| Ident::new(i).unwrap()).collect())
-            })
-            .boxed()
-    }
-}
-
-impl From<UnresolvedItemName> for ExportReference {
-    fn from(value: UnresolvedItemName) -> Self {
-        ExportReference(value.0)
-    }
-}
-
 /// A description of a source ingestion
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedConnection> {
@@ -113,22 +83,19 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     ///
     /// # Notes
     /// - For multi-output sources:
-    ///     - Add subsources by adding a new [`SourceExport`].
-    ///     - Remove subsources by removing the [`SourceExport`].
+    ///     - Add exports by adding a new [`SourceExport`].
+    ///     - Remove exports by removing the [`SourceExport`].
     ///
     ///   Re-rendering/executing the source after making these modifications
     ///   adds and drops the subsource, respectively.
     /// - This field includes the primary source's ID, which might need to be
-    ///   filtered out to understand which exports are ingestion export
-    ///   subsources.
+    ///   filtered out to understand which exports are explicit ingestion exports.
     /// - This field does _not_ include the remap collection, which is tracked
     ///   in its own field.
-    /// - This field should not be populated by the storage controller in
-    ///   response to collections being created.
     #[proptest(
-        strategy = "proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<Option<ExportReference>, S>>(), 0..4)"
+        strategy = "proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 0..4)"
     )]
-    pub source_exports: BTreeMap<GlobalId, SourceExport<Option<ExportReference>, S>>,
+    pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
     /// The ID of the instance in which to install the source.
     pub instance_id: StorageInstanceId,
     /// The ID of this ingestion's remap/progress collection.
@@ -152,8 +119,11 @@ impl IngestionDescription {
 }
 
 impl<S> IngestionDescription<S> {
-    /// Return an iterator over the `GlobalId`s of `self`'s subsources.
-    pub fn subsource_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+    /// Return an iterator over the `GlobalId`s of `self`'s collections.
+    /// This will contain ids for the remap collection, subsources,
+    /// tables for this source, and the primary collection ID, even if
+    /// no data will be exported to the primary collection.
+    pub fn collection_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
         // Expand self so that any new fields added generate a compiler error to
         // increase the likelihood of developers seeing this function.
         let IngestionDescription {
@@ -172,40 +142,34 @@ impl<S> IngestionDescription<S> {
 }
 
 impl<S: Clone> IngestionDescription<S> {
-    pub fn source_exports_with_output_indices(&self) -> BTreeMap<GlobalId, SourceExport<usize, S>> {
+    pub fn indexed_source_exports(
+        &self,
+        primary_source_id: &GlobalId,
+    ) -> BTreeMap<GlobalId, IndexedSourceExport<S>> {
         let mut source_exports = BTreeMap::new();
-
         // `self.source_exports` contains all source-exports (e.g. subsources & tables) as well as
         // the primary source relation. It's not guaranteed that the primary source relation is
-        // the first element in the map, however it much be set to output 0. The other elements
-        // must maintain their map order, so we use this rather than the index to determine the
-        // output index.
+        // the first element in the map, however it much be set to output 0 to align with
+        // assumptions in source implementations. This is the case even if the primary
+        // export will not have any data output for it, since output 0 is the convention
+        // used for errors that should halt the entire source dataflow.
+        // TODO: See if we can simplify this to avoid needing to include the primary output
+        // if no data will be exported to it. This requires refactoring all error output handling.
         let mut next_output = 1;
-        for (
-            id,
-            SourceExport {
-                ingestion_output: _,
-                storage_metadata,
-                details,
-            },
-        ) in self.source_exports.iter()
-        {
-            let ingestion_output = match details {
-                // the primary source relation will use SourceExportDetails::None
-                SourceExportDetails::None => 0,
-                _ => {
-                    let idx = next_output;
-                    next_output += 1;
-                    idx
-                }
+        for (id, export) in self.source_exports.iter() {
+            let ingestion_output = if id == primary_source_id {
+                0
+            } else {
+                let idx = next_output;
+                next_output += 1;
+                idx
             };
 
             source_exports.insert(
                 *id,
-                SourceExport {
+                IndexedSourceExport {
                     ingestion_output,
-                    storage_metadata: storage_metadata.clone(),
-                    details: details.clone(),
+                    export: export.clone(),
                 },
             );
         }
@@ -248,23 +212,23 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
                             (
                                 _,
                                 SourceExport {
-                                    ingestion_output: l_reference,
                                     storage_metadata: l_metadata,
                                     details: l_details,
+                                    data_config: l_data_config,
                                 },
                             ),
                             (
                                 _,
                                 SourceExport {
-                                    ingestion_output: r_reference,
                                     storage_metadata: r_metadata,
                                     details: r_details,
+                                    data_config: r_data_config,
                                 },
                             ),
                         ) => {
-                            l_reference == r_reference
-                                && l_metadata.alter_compatible(id, r_metadata).is_ok()
+                            l_metadata.alter_compatible(id, r_metadata).is_ok()
                                 && l_details.alter_compatible(id, r_details).is_ok()
+                                && l_data_config.alter_compatible(id, r_data_config).is_ok()
                         }
                         _ => true,
                     }),
@@ -315,13 +279,21 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
-pub struct SourceExport<O: proptest::prelude::Arbitrary, S = ()> {
-    /// Which output from the ingestion this source refers to.
-    pub ingestion_output: O,
+pub struct IndexedSourceExport<S = ()> {
+    /// Which output index from the ingestion this export refers to.
+    pub ingestion_output: usize,
+    /// The SourceExport
+    pub export: SourceExport<S>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
+pub struct SourceExport<S = (), C: ConnectionAccess = InlinedConnection> {
     /// The collection metadata needed to write the exported data
     pub storage_metadata: S,
     /// Details necessary for the source to export data to this export's collection.
     pub details: SourceExportDetails,
+    /// Config necessary to handle (e.g. decode and envelope) the data for this export.
+    pub data_config: SourceExportDataConfig<C>,
 }
 
 impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
@@ -371,57 +343,31 @@ impl ProtoMapEntry<GlobalId, CollectionMetadata> for ProtoSourceImport {
     }
 }
 
-impl ProtoMapEntry<GlobalId, SourceExport<Option<ExportReference>, CollectionMetadata>>
-    for ProtoSourceExport
-{
+impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceExport {
     fn from_rust<'a>(
-        (id, source_export): (
-            &'a GlobalId,
-            &'a SourceExport<Option<ExportReference>, CollectionMetadata>,
-        ),
+        (id, source_export): (&'a GlobalId, &'a SourceExport<CollectionMetadata>),
     ) -> Self {
         ProtoSourceExport {
             id: Some(id.into_proto()),
-            ingestion_output: source_export
-                .ingestion_output
-                .iter()
-                .map(|e| &e.0)
-                .flatten()
-                .map(|i| i.clone().into_string())
-                .collect(),
             storage_metadata: Some(source_export.storage_metadata.into_proto()),
             details: Some(source_export.details.into_proto()),
+            data_config: Some(source_export.data_config.into_proto()),
         }
     }
 
-    fn into_rust(
-        self,
-    ) -> Result<
-        (
-            GlobalId,
-            SourceExport<Option<ExportReference>, CollectionMetadata>,
-        ),
-        TryFromProtoError,
-    > {
+    fn into_rust(self) -> Result<(GlobalId, SourceExport<CollectionMetadata>), TryFromProtoError> {
         Ok((
             self.id.into_rust_if_some("ProtoSourceExport::id")?,
             SourceExport {
-                ingestion_output: if self.ingestion_output.is_empty() {
-                    None
-                } else {
-                    Some(ExportReference(
-                        self.ingestion_output
-                            .into_iter()
-                            .map(|i| Ident::new(i).expect("proto encoding must roundtrip"))
-                            .collect(),
-                    ))
-                },
                 storage_metadata: self
                     .storage_metadata
                     .into_rust_if_some("ProtoSourceExport::storage_metadata")?,
                 details: self
                     .details
                     .into_rust_if_some("ProtoSourceExport::details")?,
+                data_config: self
+                    .data_config
+                    .into_rust_if_some("ProtoSourceExport::data_config")?,
             },
         ))
     }
@@ -742,6 +688,11 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     /// Returns metadata columns that this connection *instance* will produce once rendered. The
     /// columns are returned in the order specified by the user.
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)>;
+
+    /// If this source connection can output to a primary collection, contains the source-specific
+    /// details of that export, else is set to `SourceExportDetails::None` to indicate that
+    /// this source should not export to the primary collection.
+    fn primary_export_details(&self) -> SourceExportDetails;
 }
 
 #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -775,13 +726,115 @@ impl RustType<ProtoCompression> for Compression {
     }
 }
 
+/// Defines the configuration for how to handle data that is exported for a given
+/// Source Export.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
+pub struct SourceExportDataConfig<C: ConnectionAccess = InlinedConnection> {
+    pub encoding: Option<encoding::SourceDataEncoding<C>>,
+    pub envelope: SourceEnvelope,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<SourceExportDataConfig, R>
+    for SourceExportDataConfig<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> SourceExportDataConfig {
+        let SourceExportDataConfig { encoding, envelope } = self;
+
+        SourceExportDataConfig {
+            encoding: encoding.map(|e| e.into_inline_connection(r)),
+            envelope,
+        }
+    }
+}
+
+impl RustType<ProtoSourceExportDataConfig> for SourceExportDataConfig {
+    fn into_proto(&self) -> ProtoSourceExportDataConfig {
+        ProtoSourceExportDataConfig {
+            encoding: self.encoding.into_proto(),
+            envelope: Some(self.envelope.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoSourceExportDataConfig) -> Result<Self, TryFromProtoError> {
+        Ok(SourceExportDataConfig {
+            encoding: proto.encoding.into_rust()?,
+            envelope: proto
+                .envelope
+                .into_rust_if_some("ProtoSourceExportDataConfig::envelope")?,
+        })
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for SourceExportDataConfig<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self == other {
+            return Ok(());
+        }
+        let Self { encoding, envelope } = &self;
+
+        let compatibility_checks = [
+            (
+                match (encoding, &other.encoding) {
+                    (Some(s), Some(o)) => s.alter_compatible(id, o).is_ok(),
+                    (s, o) => s == o,
+                },
+                "encoding",
+            ),
+            (envelope == &other.envelope, "envelope"),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "SourceDesc incompatible {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<C: ConnectionAccess> SourceExportDataConfig<C> {
+    /// Returns `true` if this connection yields data that is
+    /// append-only/monotonic. Append-monly means the source
+    /// never produces retractions.
+    // TODO(guswynn): consider enforcing this more completely at the
+    // parsing/typechecking level, by not using an `envelope`
+    // for sources like pg
+    pub fn monotonic(&self, connection: &GenericSourceConnection<C>) -> bool {
+        match &self.envelope {
+            // Upsert and CdcV2 may produce retractions.
+            SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2 => false,
+            SourceEnvelope::None(_) => {
+                match connection {
+                    // Postgres can produce retractions (deletes)
+                    GenericSourceConnection::Postgres(_) => false,
+                    // MySQL can produce retractions (deletes)
+                    GenericSourceConnection::MySql(_) => false,
+                    // Loadgen
+                    GenericSourceConnection::LoadGenerator(g) => g.load_generator.is_monotonic(),
+                    // Kafka exports with `None` envelope are append-only
+                    GenericSourceConnection::Kafka(_) => true,
+                }
+            }
+        }
+    }
+}
+
 /// An external source of updates for a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     pub connection: GenericSourceConnection<C>,
-    pub encoding: Option<encoding::SourceDataEncoding<C>>,
-    pub envelope: SourceEnvelope,
     pub timestamp_interval: Duration,
+    /// The data encoding and format of data to export to the
+    /// primary collection for this source.
+    /// TODO: This will be removed once sources no longer export
+    /// to primary collections and only export to explicit SourceExports (tables).
+    pub primary_export: SourceExportDataConfig<C>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
@@ -790,15 +843,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
     fn into_inline_connection(self, r: R) -> SourceDesc {
         let SourceDesc {
             connection,
-            encoding,
-            envelope,
+            primary_export,
             timestamp_interval,
         } = self;
 
         SourceDesc {
             connection: connection.into_inline_connection(&r),
-            encoding: encoding.map(|e| e.into_inline_connection(r)),
-            envelope,
+            primary_export: primary_export.into_inline_connection(r),
             timestamp_interval,
         }
     }
@@ -808,8 +859,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
     fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
-            encoding: self.encoding.into_proto(),
-            envelope: Some(self.envelope.into_proto()),
+            primary_export: Some(self.primary_export.into_proto()),
             timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
     }
@@ -819,58 +869,13 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoSourceDesc::connection")?,
-            encoding: proto.encoding.into_rust()?,
-            envelope: proto
-                .envelope
-                .into_rust_if_some("ProtoSourceDesc::envelope")?,
+            primary_export: proto
+                .primary_export
+                .into_rust_if_some("ProtoSourceDesc::primary_export")?,
             timestamp_interval: proto
                 .timestamp_interval
                 .into_rust_if_some("ProtoSourceDesc::timestamp_interval")?,
         })
-    }
-}
-
-impl<C: ConnectionAccess> SourceDesc<C> {
-    /// Returns `true` if this connection yields data that is
-    /// append-only/monotonic. Append-monly means the source
-    /// never produces retractions.
-    // TODO(guswynn): consider enforcing this more completely at the
-    // parsing/typechecking level, by not using an `envelope`
-    // for sources like pg
-    pub fn monotonic(&self) -> bool {
-        match self {
-            // Postgres can produce retractions (deletes)
-            SourceDesc {
-                connection: GenericSourceConnection::Postgres(_),
-                ..
-            } => false,
-            // MySQL can produce retractions (deletes)
-            SourceDesc {
-                connection: GenericSourceConnection::MySql(_),
-                ..
-            } => false,
-            // Upsert and CdcV2 may produce retractions.
-            SourceDesc {
-                envelope: SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
-                connection:
-                    GenericSourceConnection::Kafka(_) | GenericSourceConnection::LoadGenerator(_),
-                ..
-            } => false,
-            // Loadgen can produce retractions (deletes)
-            SourceDesc {
-                connection: GenericSourceConnection::LoadGenerator(g),
-                ..
-            } => g.load_generator.is_monotonic(),
-            // Other sources with the `None` envelope are append-only.
-            SourceDesc {
-                envelope: SourceEnvelope::None(_),
-                ..
-            } => true,
-        }
-    }
-
-    pub fn envelope(&self) -> &SourceEnvelope {
-        &self.envelope
     }
 }
 
@@ -884,8 +889,7 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
         }
         let Self {
             connection,
-            encoding,
-            envelope,
+            primary_export,
             timestamp_interval,
         } = &self;
 
@@ -894,14 +898,7 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
                 connection.alter_compatible(id, &other.connection).is_ok(),
                 "connection",
             ),
-            (
-                match (encoding, &other.encoding) {
-                    (Some(s), Some(o)) => s.alter_compatible(id, o).is_ok(),
-                    (s, o) => s == o,
-                },
-                "encoding",
-            ),
-            (envelope == &other.envelope, "envelope"),
+            (primary_export == &other.primary_export, "primary_export"),
             (
                 timestamp_interval == &other.timestamp_interval,
                 "timestamp_interval",
@@ -921,6 +918,19 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
         }
 
         Ok(())
+    }
+}
+
+impl SourceDesc<InlinedConnection> {
+    /// Returns the SourceExport details for the primary export.
+    /// TODO: This will be removed once sources no longer export
+    /// to primary collections and only export to explicit SourceExports (tables).
+    pub fn primary_source_export(&self) -> SourceExport<(), InlinedConnection> {
+        SourceExport {
+            storage_metadata: (),
+            details: self.connection.primary_export_details(),
+            data_config: self.primary_export.clone(),
+        }
     }
 }
 
@@ -1040,6 +1050,15 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::LoadGenerator(conn) => conn.metadata_columns(),
         }
     }
+
+    fn primary_export_details(&self) -> SourceExportDetails {
+        match self {
+            Self::Kafka(conn) => conn.primary_export_details(),
+            Self::Postgres(conn) => conn.primary_export_details(),
+            Self::MySql(conn) => conn.primary_export_details(),
+            Self::LoadGenerator(conn) => conn.primary_export_details(),
+        }
+    }
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> {
@@ -1104,7 +1123,8 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
 /// to export data to the export's collection.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SourceExportDetails {
-    /// Used for the primary export of a source
+    /// Used when the primary collection of a source isn't an export to
+    /// output to.
     None,
     Kafka(KafkaSourceExportDetails),
     Postgres(PostgresSourceExportDetails),
@@ -1489,8 +1509,8 @@ impl<'a> SourceReferenceResolver {
     /// the `referenceable_items` provided to [`Self::new`].
     ///
     /// # Args
-    /// - `name` is `&[Ident]` to let users provide the inner element of either
-    ///   [`UnresolvedItemName`] or [`ExportReference`].
+    /// - `name` is `&[Ident]` to let users provide the inner element of
+    ///   [`UnresolvedItemName`].
     /// - `canonicalize_to_width` limits the number of elements in the returned
     ///   [`UnresolvedItemName`];this is useful if the source type requires
     ///   contriving database and schema names that a subsource should not
@@ -1524,8 +1544,8 @@ impl<'a> SourceReferenceResolver {
     /// provided to [`Self::new`].
     ///
     /// # Args
-    /// `name` is `&[Ident]` to let users provide the inner element of either
-    /// [`UnresolvedItemName`] or [`ExportReference`].
+    /// `name` is `&[Ident]` to let users provide the inner element of
+    /// [`UnresolvedItemName`].
     ///
     /// # Errors
     /// - If `name` does not resolve to an item in `self.inner`.
@@ -1538,8 +1558,8 @@ impl<'a> SourceReferenceResolver {
     /// provided to [`Self::new`].
     ///
     /// # Args
-    /// `name` is `&[Ident]` to let users provide the inner element of either
-    /// [`UnresolvedItemName`] or [`ExportReference`].
+    /// `name` is `&[Ident]` to let users provide the inner element of
+    /// [`UnresolvedItemName`].
     ///
     /// # Return
     /// Returns a tuple whose elements are:

@@ -125,7 +125,7 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
 
             let compactions = ingestion
                 .description
-                .subsource_ids()
+                .collection_ids()
                 .filter_map(|id| final_compactions.remove(&id).map(|f| (id, f)));
             allow_compaction.extend(compactions);
 
@@ -208,10 +208,12 @@ mod tests {
         KafkaSinkFormatType, MetadataFilled, SinkEnvelope, SinkPartitionStrategy,
         StorageSinkConnection, StorageSinkDesc,
     };
-    use mz_storage_types::sources::load_generator::LoadGenerator;
+    use mz_storage_types::sources::load_generator::{
+        LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceExportDetails,
+    };
     use mz_storage_types::sources::{
         GenericSourceConnection, IngestionDescription, LoadGeneratorSourceConnection, SourceDesc,
-        SourceEnvelope, SourceExport, SourceExportDetails,
+        SourceEnvelope, SourceExport, SourceExportDataConfig, SourceExportDetails,
     };
     use timely::progress::Antichain;
 
@@ -237,7 +239,6 @@ mod tests {
         let source_exports = export_ids
             .map(|id| {
                 let export = SourceExport {
-                    ingestion_output: Default::default(),
                     storage_metadata: CollectionMetadata {
                         persist_location: PersistLocation {
                             blob_uri: Default::default(),
@@ -255,7 +256,13 @@ mod tests {
                         ),
                         txns_shard: Default::default(),
                     },
-                    details: SourceExportDetails::None,
+                    details: SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
+                        output: LoadGeneratorOutput::Default,
+                    }),
+                    data_config: SourceExportDataConfig {
+                        encoding: Default::default(),
+                        envelope: SourceEnvelope::CdcV2,
+                    },
                 };
                 (GlobalId::User(id), export)
             })
@@ -269,8 +276,10 @@ mod tests {
                     as_of: Default::default(),
                     up_to: Default::default(),
                 }),
-                encoding: Default::default(),
-                envelope: SourceEnvelope::CdcV2,
+                primary_export: SourceExportDataConfig {
+                    encoding: Default::default(),
+                    envelope: SourceEnvelope::CdcV2,
+                },
                 timestamp_interval: Default::default(),
             },
             ingestion_metadata: CollectionMetadata {

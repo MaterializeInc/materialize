@@ -294,14 +294,29 @@ impl<'a> DataflowBuilder<'a> {
 
     /// Determine the given source's monotonicity.
     fn monotonic_source(&self, source: &Source) -> bool {
-        // TODO(petrosagg): store an inverse mapping of subsource -> source in the catalog so that
-        // we can retrieve monotonicity information from the parent source.
         match &source.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc.desc.monotonic(),
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                // Check if the primary export of this source is monotonic
+                ingestion_desc
+                    .desc
+                    .primary_export
+                    .monotonic(&ingestion_desc.desc.connection)
+            }
             DataSourceDesc::Webhook { .. } => true,
-            DataSourceDesc::IngestionExport { .. }
-            | DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Progress => false,
+            DataSourceDesc::IngestionExport {
+                ingestion_id,
+                data_config,
+                ..
+            } => {
+                let source_desc = self
+                    .catalog
+                    .get_entry(ingestion_id)
+                    .source_desc()
+                    .expect("ingestion export must reference a source")
+                    .expect("ingestion export must reference a source");
+                data_config.monotonic(&source_desc.connection)
+            }
+            DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => false,
         }
     }
 

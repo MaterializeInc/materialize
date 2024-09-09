@@ -272,7 +272,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let base_source_config = RawSourceCreationConfig {
                 name: format!("{}-{}", connection.name(), primary_source_id),
                 id: primary_source_id,
-                source_exports: description.source_exports_with_output_indices(),
+                source_exports: description.indexed_source_exports(&primary_source_id),
                 timestamp_interval: description.desc.timestamp_interval,
                 worker_id: mz_scope.index(),
                 worker_count: mz_scope.peers(),
@@ -345,7 +345,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let mut upper_streams = vec![];
             let mut health_streams = vec![source_health];
-            let source_exports = description.source_exports_with_output_indices();
+            let source_exports = description.indexed_source_exports(&primary_source_id);
             for (export_id, export) in source_exports {
                 let (ok, err) = outputs
                     .get_mut(export.ingestion_output)
@@ -356,13 +356,13 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     export_id,
                     primary_source_id,
                     worker_id,
-                    &export.storage_metadata.data_shard,
+                    &export.export.storage_metadata.data_shard,
                     export.ingestion_output,
                 );
 
                 tracing::info!(
                     id = %primary_source_id,
-                    "timely-{worker_id}: persisting subsource #{} of {} into {}",
+                    "timely-{worker_id}: persisting export #{} of {} into {}",
                     export.ingestion_output,
                     primary_source_id,
                     export_id
@@ -370,7 +370,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
                     mz_scope,
                     export_id,
-                    export.storage_metadata.clone(),
+                    export.export.storage_metadata.clone(),
                     source_data,
                     storage_state,
                     metrics,

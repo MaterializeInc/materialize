@@ -24,6 +24,8 @@ use crate::sources::AlterError;
 use crate::sources::{MzOffset, SourceConnection};
 use crate::AlterCompatible;
 
+use super::SourceExportDetails;
+
 include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_types.sources.load_generator.rs"
@@ -134,6 +136,36 @@ impl SourceConnection for LoadGeneratorSourceConnection {
 
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         vec![]
+    }
+
+    // Some load-gen types output to their primary collection while
+    // others do not.
+    fn primary_export_details(&self) -> SourceExportDetails {
+        match &self.load_generator {
+            LoadGenerator::Auction => SourceExportDetails::None,
+            LoadGenerator::Clock => {
+                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
+                    output: LoadGeneratorOutput::Default,
+                })
+            }
+            LoadGenerator::Datums => {
+                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
+                    output: LoadGeneratorOutput::Default,
+                })
+            }
+            LoadGenerator::Counter { .. } => {
+                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
+                    output: LoadGeneratorOutput::Default,
+                })
+            }
+            LoadGenerator::Marketing => SourceExportDetails::None,
+            LoadGenerator::Tpch { .. } => SourceExportDetails::None,
+            LoadGenerator::KeyValue(_) => {
+                SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
+                    output: LoadGeneratorOutput::Default,
+                })
+            }
+        }
     }
 }
 

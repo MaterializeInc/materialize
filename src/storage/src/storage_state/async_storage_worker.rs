@@ -92,24 +92,6 @@ where
 {
     let metadata = &ingestion_description.ingestion_metadata;
 
-    // We can only resume with certain envelope types otherwise we must re-ingest everything.
-    // TODO(petrosagg): move this reasoning to the controller
-    let envelope = &ingestion_description.desc.envelope;
-    if !matches!(
-        envelope,
-        SourceEnvelope::None(_) | SourceEnvelope::Upsert(_)
-    ) {
-        let mut source_resume_uppers = BTreeMap::new();
-        for (id, upper) in resume_uppers {
-            if upper.is_empty() {
-                source_resume_uppers.insert(*id, Antichain::new());
-            } else {
-                source_resume_uppers.insert(*id, Antichain::from_elem(Timestamp::minimum()));
-            }
-        }
-        return source_resume_uppers;
-    }
-
     let persist_client = persist_clients
         .open(metadata.persist_location.clone())
         .await
@@ -294,7 +276,14 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 .await
                                 .unwrap();
                             let upper = write_handle.fetch_recent_upper().await;
-                            resume_uppers.insert(*id, upper.clone());
+                            let upper = match export.data_config.envelope {
+                                // The CdcV2 envelope must re-ingest everything since the Mz frontier does not have a relation to upstream timestamps.
+                                // TODO(petrosagg): move this reasoning to the controller
+                                SourceEnvelope::CdcV2 if upper.is_empty() => Antichain::new(),
+                                SourceEnvelope::CdcV2 => Antichain::from_elem(Timestamp::minimum()),
+                                _ => upper.clone(),
+                            };
+                            resume_uppers.insert(*id, upper);
                             write_handle.expire().await;
 
                             // TODO(petrosagg): The as_of of the ingestion should normally be based

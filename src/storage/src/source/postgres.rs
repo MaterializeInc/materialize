@@ -94,7 +94,8 @@ use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{
-    MzOffset, PostgresSourceConnection, SourceExport, SourceExportDetails, SourceTimestamp,
+    IndexedSourceExport, MzOffset, PostgresSourceConnection, SourceExport, SourceExportDetails,
+    SourceTimestamp,
 };
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
@@ -135,20 +136,21 @@ impl SourceRender for PostgresSourceConnection {
         let mut table_info = BTreeMap::new();
         for (
             id,
-            SourceExport {
+            IndexedSourceExport {
                 ingestion_output,
-                details,
-                storage_metadata: _,
+                export:
+                    SourceExport {
+                        details,
+                        storage_metadata: _,
+                        data_config: _,
+                    },
             },
         ) in &config.source_exports
         {
-            // Output index 0 is the primary source which is not a table.
-            if *ingestion_output == 0 {
-                continue;
-            }
-
             let details = match details {
                 SourceExportDetails::Postgres(details) => details,
+                // This is an export that doesn't need any data output to it.
+                SourceExportDetails::None => continue,
                 _ => panic!("unexpected source export details: {:?}", details),
             };
             let desc = details.table.clone();

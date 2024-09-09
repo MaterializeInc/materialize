@@ -38,12 +38,16 @@ message ProtoTimeline {
     }
 }
 
+message ProtoSourceExportDataConfig {
+    mz_storage_types.sources.encoding.ProtoSourceDataEncoding encoding = 1;
+    mz_storage_types.sources.envelope.ProtoSourceEnvelope envelope = 2;
+}
+
 message ProtoSourceDesc {
-    reserved 4;
+    reserved 2, 3, 4;
     ProtoSourceConnection connection = 1;
-    mz_storage_types.sources.encoding.ProtoSourceDataEncoding encoding = 2;
-    mz_storage_types.sources.envelope.ProtoSourceEnvelope envelope = 3;
     mz_proto.ProtoDuration timestamp_interval = 5;
+    ProtoSourceExportDataConfig primary_export = 6;
 }
 
 message ProtoSourceConnection {
@@ -96,14 +100,14 @@ message ProtoIngestionDescription {
         mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
     }
     message ProtoSourceExport {
-        reserved 2;
+        reserved 2, 4;
         reserved "output_index";
+        reserved "ingestion_output";
 
         mz_repr.global_id.ProtoGlobalId id = 1;
-        // uint64 output_index = 2;
         mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 3;
-        repeated string ingestion_output = 4;
         ProtoSourceExportDetails details = 5;
+        ProtoSourceExportDataConfig data_config = 6;
     }
 
     reserved 1;

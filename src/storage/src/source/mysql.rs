@@ -57,6 +57,7 @@ use std::rc::Rc;
 
 use mz_repr::Diff;
 use mz_storage_types::errors::{DataflowError, SourceError};
+use mz_storage_types::sources::IndexedSourceExport;
 use mz_storage_types::sources::SourceExport;
 use mz_timely_util::containers::stack::{AccountedStackBuilder, StackWrapper};
 use serde::{Deserialize, Serialize};
@@ -111,20 +112,21 @@ impl SourceRender for MySqlSourceConnection {
         let mut source_outputs = Vec::new();
         for (
             id,
-            SourceExport {
+            IndexedSourceExport {
                 ingestion_output,
-                details,
-                storage_metadata: _,
+                export:
+                    SourceExport {
+                        details,
+                        storage_metadata: _,
+                        data_config: _,
+                    },
             },
         ) in &config.source_exports
         {
-            // Output index 0 is the primary source which is not a table.
-            if *ingestion_output == 0 {
-                continue;
-            }
-
             let details = match details {
                 SourceExportDetails::MySql(details) => details,
+                // This is an export that doesn't need any data output to it.
+                SourceExportDetails::None => continue,
                 _ => panic!("unexpected source export details: {:?}", details),
             };
 

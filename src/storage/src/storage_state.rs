@@ -623,13 +623,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                 &self.storage_state.metrics.source_statistics,
                                 ingestion_id,
                                 &export.storage_metadata.data_shard,
-                                ingestion_description.desc.envelope.clone(),
+                                export.data_config.envelope.clone(),
                                 resume_uppers[export_id].clone(),
                             )
                         });
                 }
 
-                for id in ingestion_description.subsource_ids() {
+                for id in ingestion_description.collection_ids() {
                     // If there is already a shared upper, we re-use it, to make
                     // sure that parties that are already using the shared upper
                     // can continue doing so.
@@ -933,7 +933,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             // If an ingestion is dropped, so too must all of
                             // its subsources (i.e. ingestion exports, as well
                             // as its progress subsource).
-                            for id in ingestion.description.subsource_ids() {
+                            for id in ingestion.description.collection_ids() {
                                 drop_commands.remove(&id);
                                 self.storage_state.dropped_ids.insert(id);
                             }
@@ -954,7 +954,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                                 // After clearing any dropped subsources, we can
                                 // state that we expect all of these to exist.
-                                expected_objects.extend(ingestion.description.subsource_ids());
+                                expected_objects.extend(ingestion.description.collection_ids());
                             }
 
                             let running_ingestion =
@@ -1021,7 +1021,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             .storage_state
             .ingestions
             .values()
-            .map(|i| i.subsource_ids())
+            .map(|i| i.collection_ids())
             .flatten()
             .chain(self.storage_state.exports.keys().copied())
             // Objects are considered stale if we did not see them re-created.
@@ -1112,7 +1112,7 @@ impl StorageState {
                     self.ingestions.insert(id, description.clone());
 
                     // Initialize shared frontier reporting.
-                    for id in description.subsource_ids() {
+                    for id in description.collection_ids() {
                         self.reported_frontiers
                             .entry(id)
                             .or_insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));

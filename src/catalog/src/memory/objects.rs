@@ -53,8 +53,8 @@ use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection};
 use mz_storage_types::sources::{
-    GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, SourceExportDetails,
-    Timeline,
+    GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, SourceExportDataConfig,
+    SourceExportDetails, Timeline,
 };
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
@@ -575,10 +575,16 @@ pub enum DataSourceDesc {
     },
     /// This source receives its data from the identified ingestion,
     /// specifically the output identified by `external_reference`.
+    /// N.B. that `external_reference` should not be used to identify
+    /// anything downstream of purification, as the purification process
+    /// encodes source-specific identifiers into the `details` struct.
+    /// The `external_reference` field is only used here for displaying
+    /// human-readable names in system tables.
     IngestionExport {
         ingestion_id: GlobalId,
         external_reference: UnresolvedItemName,
         details: SourceExportDetails,
+        data_config: SourceExportDataConfig<ReferencedConnection>,
     },
     /// Receives introspection data from an internal system
     Introspection(IntrospectionType),
@@ -650,6 +656,7 @@ impl Source {
                     ingestion_id,
                     external_reference,
                     details,
+                    data_config,
                 } => {
                     assert!(
                         plan.in_cluster.is_none(),
@@ -659,6 +666,7 @@ impl Source {
                         ingestion_id,
                         external_reference,
                         details,
+                        data_config,
                     }
                 }
                 mz_sql::plan::DataSourceDesc::Webhook {
@@ -701,8 +709,16 @@ impl Source {
     /// The key and value formats of the source.
     pub fn formats(&self) -> (Option<&str>, Option<&str>) {
         match &self.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => match &ingestion_desc.desc.encoding
-            {
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                match &ingestion_desc.desc.primary_export.encoding.as_ref() {
+                    Some(encoding) => match &encoding.key {
+                        Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
+                        None => (None, Some(encoding.value.type_())),
+                    },
+                    None => (None, None),
+                }
+            }
+            DataSourceDesc::IngestionExport { data_config, .. } => match &data_config.encoding {
                 Some(encoding) => match &encoding.key {
                     Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
                     None => (None, Some(encoding.value.type_())),
@@ -710,7 +726,6 @@ impl Source {
                 None => (None, None),
             },
             DataSourceDesc::Introspection(_)
-            | DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress => (None, None),
         }
@@ -722,37 +737,41 @@ impl Source {
         // sources don't have an envelope (internal logs, for example), while
         // other sources have an envelope that we call the "NONE"-envelope.
 
+        fn envelope_string(envelope: &SourceEnvelope) -> &str {
+            match envelope {
+                SourceEnvelope::None(_) => "none",
+                SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
+                    mz_storage_types::sources::envelope::UpsertStyle::Default(_) => "upsert",
+                    mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
+                        // NOTE(aljoscha): Should we somehow mark that this is
+                        // using upsert internally? See note above about
+                        // DEBEZIUM.
+                        "debezium"
+                    }
+                    mz_storage_types::sources::envelope::UpsertStyle::ValueErrInline { .. } => {
+                        "upsert-value-err-inline"
+                    }
+                },
+                SourceEnvelope::CdcV2 => {
+                    // TODO(aljoscha): Should we even report this? It's
+                    // currently not exposed.
+                    "materialize"
+                }
+            }
+        }
+
         match &self.data_source {
             // NOTE(aljoscha): We could move the block for ingestions into
             // `SourceEnvelope` itself, but that one feels more like an internal
             // thing and adapter should own how we represent envelopes as a
             // string? It would not be hard to convince me otherwise, though.
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                match ingestion_desc.desc.envelope() {
-                    SourceEnvelope::None(_) => Some("none"),
-                    SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
-                        mz_storage_types::sources::envelope::UpsertStyle::Default(_) => {
-                            Some("upsert")
-                        }
-                        mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
-                            // NOTE(aljoscha): Should we somehow mark that this is
-                            // using upsert internally? See note above about
-                            // DEBEZIUM.
-                            Some("debezium")
-                        }
-                        mz_storage_types::sources::envelope::UpsertStyle::ValueErrInline {
-                            ..
-                        } => Some("upsert-value-err-inline"),
-                    },
-                    SourceEnvelope::CdcV2 => {
-                        // TODO(aljoscha): Should we even report this? It's
-                        // currently not exposed.
-                        Some("materialize")
-                    }
-                }
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => Some(envelope_string(
+                &ingestion_desc.desc.primary_export.envelope,
+            )),
+            DataSourceDesc::IngestionExport { data_config, .. } => {
+                Some(envelope_string(&data_config.envelope))
             }
-            DataSourceDesc::IngestionExport { .. }
-            | DataSourceDesc::Introspection(_)
+            DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress => None,
         }
@@ -1664,6 +1683,7 @@ impl CatalogEntry {
                     ingestion_id,
                     external_reference,
                     details,
+                    data_config: _,
                 } => Some((*ingestion_id, external_reference, details)),
                 _ => None,
             },

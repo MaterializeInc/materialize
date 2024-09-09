@@ -35,7 +35,6 @@ use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_types::{Codec64, Opaque, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
@@ -45,7 +44,8 @@ use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
-    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExportDetails,
+    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExportDataConfig,
+    SourceExportDetails,
 };
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -99,17 +99,13 @@ pub enum DataSource {
     /// Ingest data from some external source.
     Ingestion(IngestionDescription),
     /// This source receives its data from the identified ingestion,
-    /// specifically the output identified by `external_reference`.
+    /// from an external object identified using `SourceExportDetails`.
     ///
     /// The referenced ingestion must be created before all of its exports.
     IngestionExport {
         ingestion_id: GlobalId,
-        // This is an `UnresolvedItemName` because the structure works for PG,
-        // MySQL, and load generator sources. However, in the future, it should
-        // be sufficiently genericized to support all multi-output sources we
-        // support.
-        external_reference: UnresolvedItemName,
         details: SourceExportDetails,
+        data_config: SourceExportDataConfig,
     },
     /// Data comes from introspection sources, which the controller itself is
     /// responsible for generating.
