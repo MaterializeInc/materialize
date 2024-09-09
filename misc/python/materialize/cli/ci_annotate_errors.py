@@ -323,7 +323,7 @@ class Annotation:
             error_markdown = ""
             for error in errors:
                 if len(error_markdown) > available_length:
-                    error_markdown = "* Further errors exist!\n"
+                    error_markdown = error_markdown + "* Further errors exist!\n"
                     break
 
                 error_markdown = error_markdown + (
