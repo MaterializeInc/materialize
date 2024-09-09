@@ -136,6 +136,39 @@ var1 5678 <null>
 var0 5555 6666
 var1 4444 12
 
+> CREATE TABLE pg_table_4 (a INTEGER);
+
+! CREATE TABLE pg_table_4 FROM SOURCE pg_source (REFERENCE "public"."pg_table") WITH (TEXT COLUMNS = (a));
+contains:already exists
+
+! CREATE TABLE pg_table_5 FROM SOURCE pg_source (REFERENCE "public"."pg_table_5000");
+contains:not found in source
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+CREATE TABLE pg_table_added_later (a INTEGER);
+INSERT INTO pg_table_added_later VALUES (555), (666);
+ALTER TABLE pg_table_added_later REPLICA IDENTITY FULL;
+
+> CREATE TABLE pg_table_6a FROM SOURCE pg_source (REFERENCE "public"."pg_table_added_later");
+> CREATE TABLE pg_table_6b FROM SOURCE pg_source (REFERENCE "public"."pg_table_added_later");
+
+> SELECT * FROM pg_table_6a;
+555
+666
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+INSERT INTO pg_table_added_later VALUES (777);
+
+> SELECT * FROM pg_table_6a;
+555
+666
+777
+
+> SELECT * FROM pg_table_6b;
+555
+666
+777
+
 > DROP SOURCE pg_source CASCADE;
 
 
