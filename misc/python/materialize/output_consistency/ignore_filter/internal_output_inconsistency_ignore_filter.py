@@ -20,6 +20,7 @@ from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
+    is_table_function,
     matches_fun_by_any_name,
     matches_fun_by_name,
 )
@@ -205,6 +206,16 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
+        dfr_outcome = error.query_execution.get_outcome_by_strategy_key()[
+            EvaluationStrategyKey.MZ_DATAFLOW_RENDERING
+        ]
+        ctf_outcome = error.query_execution.get_outcome_by_strategy_key()[
+            EvaluationStrategyKey.MZ_CONSTANT_FOLDING
+        ]
+
+        assert isinstance(dfr_outcome, QueryFailure)
+        assert isinstance(ctf_outcome, QueryFailure)
+
         all_characteristics = query_template.get_involved_characteristics(
             ALL_QUERY_COLUMNS_BY_INDEX_SELECTION
         )
@@ -226,6 +237,22 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
             and ExpressionCharacteristics.MAX_VALUE in all_characteristics
         ):
             return YesIgnore("#17189: evaluation order")
+
+        if (
+            query_template.matches_any_expression(
+                is_table_function,
+                True,
+            )
+            and dfr_outcome.error_message.startswith(
+                "invalid input syntax for type jsonb"
+            )
+            and ctf_outcome.error_message.startswith(
+                "invalid input syntax for type jsonb"
+            )
+        ):
+            return YesIgnore(
+                "Table function rows executed in different order, resulting in different error messages"
+            )
 
         return NoIgnore()
 
