@@ -376,9 +376,8 @@ The model above would be compiled to `database.schema.view_a`.
 
 #### Materialized views
 
-In Materialize, [materialized
-views](/concepts/views/#materialized-views)**perform incremental updates** as
-the underlying data changes:
+In Materialize, [materialized views](/concepts/views/#materialized-views)
+**perform incremental updates** as the underlying data changes:
 
 **Filename:** models/materialized_view_a.sql
 ```mzsql
