@@ -786,6 +786,9 @@ pub struct ExportState<T: TimelyTimestamp> {
 
     /// Reported write frontier.
     pub write_frontier: Antichain<T>,
+
+    /// Maximum frontier wallclock lag since the last introspection update.
+    pub wallclock_lag_max: Duration,
 }
 
 impl<T: Timestamp> ExportState<T> {
@@ -799,6 +802,7 @@ impl<T: Timestamp> ExportState<T> {
             read_hold,
             read_policy,
             write_frontier: Antichain::from_elem(Timestamp::minimum()),
+            wallclock_lag_max: Default::default(),
         }
     }
 

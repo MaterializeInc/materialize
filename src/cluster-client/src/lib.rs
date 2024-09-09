@@ -13,11 +13,16 @@
 
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 pub mod client;
+
+/// A function that computes the lag between the given time and wallclock time.
+pub type WallclockLagFn<T> = Arc<dyn Fn(&T) -> Duration>;
 
 /// Identifier of a replica.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]

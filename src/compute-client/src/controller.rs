@@ -38,7 +38,7 @@ use differential_dataflow::consolidation::consolidate;
 use futures::{future, Future, FutureExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_cluster_client::ReplicaId;
+use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::ComputeInstanceId;
 use mz_dyncfg::ConfigSet;
@@ -78,7 +78,6 @@ mod sequential_hydration;
 pub mod error;
 
 type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
-type WallclockLagFn<T> = Arc<dyn Fn(&T) -> Duration>;
 
 /// A composite trait for types that serve as timestamps in the Compute Controller.
 /// `Into<Datum<'a>>` is needed for writing timestamps to introspection collections.

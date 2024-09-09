@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 use mz_build_info::BuildInfo;
-use mz_cluster_client::ReplicaId;
+use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_client::controller::{
     ComputeController, ComputeControllerResponse, ComputeControllerTimestamp,
 };
@@ -665,12 +665,12 @@ where
         }
 
         let now_fn = config.now.clone();
-        let wallclock_lag = move |time: &T| {
+        let wallclock_lag: WallclockLagFn<_> = Arc::new(move |time: &T| {
             let now = mz_repr::Timestamp::new(now_fn());
             let time_ts: mz_repr::Timestamp = time.clone().into();
             let lag_ts = now.saturating_sub(time_ts);
             Duration::from(lag_ts)
-        };
+        });
 
         let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
@@ -694,6 +694,7 @@ where
             config.persist_location,
             config.persist_clients,
             config.now.clone(),
+            Arc::clone(&wallclock_lag),
             Arc::clone(&txns_metrics),
             envd_epoch,
             read_only,
@@ -712,7 +713,7 @@ where
             read_only,
             config.metrics_registry.clone(),
             config.now.clone(),
-            Arc::new(wallclock_lag),
+            wallclock_lag,
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
