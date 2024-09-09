@@ -419,10 +419,10 @@ def trim_test_selection(pipeline: Any, steps_to_run: set[str]) -> None:
             not in (
                 "coverage-pr-analyze",
                 "analyze",
-                "bazel-build-x86_64",
-                "bazel-build-aarch64",
                 "build-x86_64",
                 "build-aarch64",
+                "rust-build-x86_64",
+                "rust-build-aarch64",
                 "build-wasm",
             )
             and not step.get("async")
@@ -569,7 +569,7 @@ def trim_builds(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
         return h.hexdigest()
 
     for step in steps(pipeline):
-        if step.get("id") == "build-x86_64":
+        if step.get("id") == "rust-build-x86_64":
             (deps, check) = get_deps(Arch.X86_64)
             if check:
                 step["skip"] = True
@@ -579,7 +579,7 @@ def trim_builds(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
                 # resources.
                 step["concurrency"] = 1
                 step["concurrency_group"] = f"build-x86_64/{hash(deps)}"
-        elif step.get("id") == "build-aarch64":
+        elif step.get("id") == "rust-build-aarch64":
             (deps, check) = get_deps(Arch.AARCH64)
             if check:
                 step["skip"] = True
@@ -589,13 +589,13 @@ def trim_builds(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
                 # resources.
                 step["concurrency"] = 1
                 step["concurrency_group"] = f"build-aarch64/{hash(deps)}"
-        elif step.get("id") == "bazel-build-x86_64":
+        elif step.get("id") == "build-x86_64":
             (_deps, check) = get_deps(Arch.X86_64)
             inputs = step.get("inputs") or []
             if check and not have_paths_changed(inputs):
                 step["skip"] = True
             # Bazel builds are not uploaded yet, so no concurrency group
-        elif step.get("id") == "bazel-build-aarch64":
+        elif step.get("id") == "build-aarch64":
             (_deps, check) = get_deps(Arch.AARCH64)
             inputs = step.get("inputs") or []
             if check and not have_paths_changed(inputs):
