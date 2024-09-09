@@ -114,8 +114,11 @@ MAP_OPERATION_TYPES.append(
         "map_agg",
         {3: "map_agg($, $ ORDER BY row_index, $)"},
         [
+            # key
             StringOperationParam(only_type_text=True),
+            # value
             AnyOperationParam(),
+            # order within aggregated values
             SameOperationParam(index_of_previous_param=1),
         ],
         MapReturnTypeSpec(),

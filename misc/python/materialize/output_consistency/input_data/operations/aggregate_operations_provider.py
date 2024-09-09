@@ -151,8 +151,9 @@ AGGREGATE_OPERATION_TYPES.append(
         {3: "string_agg($, $ ORDER BY row_index, $)"},
         [
             StringOperationParam(),
+            # separator value
             StringOperationParam(),
-            SameOperationParam(index_of_previous_param=1),
+            SameOperationParam(index_of_previous_param=0),
         ],
         StringReturnTypeSpec(),
         is_aggregation=True,
