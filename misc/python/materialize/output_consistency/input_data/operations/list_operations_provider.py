@@ -22,6 +22,9 @@ from materialize.output_consistency.input_data.params.list_operation_param impor
     ListOfOtherElementOperationParam,
     ListOperationParam,
 )
+from materialize.output_consistency.input_data.params.same_operation_param import (
+    SameOperationParam,
+)
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
 )
@@ -36,6 +39,7 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
+    DbFunctionWithCustomPattern,
     DbOperation,
     DbOperationOrFunction,
 )
@@ -92,10 +96,14 @@ LIST_OPERATION_TYPES.append(
 )
 
 LIST_OPERATION_TYPES.append(
-    DbFunction(
+    DbFunctionWithCustomPattern(
         "list_agg",
+        {
+            2: "list_agg($ ORDER BY row_index, $)",
+        },
         [
             AnyOperationParam(include_record_type=True),
+            SameOperationParam(index_of_previous_param=0),
         ],
         ListReturnTypeSpec(),
     )
