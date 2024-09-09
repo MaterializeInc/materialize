@@ -16,8 +16,7 @@ from pathlib import Path
 
 import boto3
 
-from materialize import elf, mzbuild, spawn, ui
-from materialize.bazel.utils import output_paths as bazel_output_paths
+from materialize import bazel, elf, mzbuild, spawn, ui
 from materialize.mzbuild import CargoBuild, ResolvedImage
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
@@ -95,7 +94,7 @@ def maybe_upload_debuginfo(
     for bin in bins:
         if repo.rd.bazel:
             options = ["--config=release"] if repo.rd.release_mode else []
-            paths = bazel_output_paths(bazel_bins[bin], options)
+            paths = bazel.output_paths(bazel_bins[bin], options)
             assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
             bin_path = paths[0]
         else:

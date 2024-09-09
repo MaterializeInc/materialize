@@ -39,8 +39,7 @@ from typing import IO, Any, cast
 
 import yaml
 
-from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
-from materialize.bazel.utils import output_paths as bazel_output_paths
+from materialize import bazel, cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
@@ -106,6 +105,7 @@ class RepositoryDetails:
         rustflags: list[str],
         channel: str | None = None,
         extra_env: dict[str, str] = {},
+        is_tagged_build: bool = False,
     ) -> list[str]:
         """Start a build invocation for the configured architecture."""
         if self.bazel:
@@ -115,6 +115,7 @@ class RepositoryDetails:
                 subcommand=subcommand,
                 rustflags=rustflags,
                 extra_env=extra_env,
+                is_tagged_build=is_tagged_build,
             )
         else:
             return xcompile.cargo(
@@ -348,9 +349,14 @@ class CargoBuild(CargoPreImage):
         extra_env = {
             "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
         }
+        is_tagged_build = ui.env_is_truthy("BUILDKITE_TAG")
 
         bazel_build = rd.build(
-            "build", channel=None, rustflags=rustflags, extra_env=extra_env
+            "build",
+            channel=None,
+            is_tagged_build=is_tagged_build,
+            rustflags=rustflags,
+            extra_env=extra_env,
         )
 
         for bin in bins:
@@ -492,11 +498,11 @@ class CargoBuild(CargoPreImage):
             options = ["--config=release"] if rd.release_mode else []
             paths_to_binaries = {}
             for bin in bins:
-                paths = bazel_output_paths(bazel_bins[bin], options)
+                paths = bazel.output_paths(bazel_bins[bin], options)
                 assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
                 paths_to_binaries[bin] = paths[0]
             for tar in bazel_tars:
-                paths = bazel_output_paths(tar, options)
+                paths = bazel.output_paths(tar, options)
                 assert len(paths) == 1, f"more than one output path found for '{tar}'"
                 paths_to_binaries[tar] = paths[0]
             prep = {"bazel": paths_to_binaries}

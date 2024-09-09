@@ -367,6 +367,14 @@ load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
 crates_repository(
     name = "crates_io",
     annotations = {
+        # `crates_repository` fails to automatically add the depenency on `tracing` when
+        # `tokio_unstable` is enabled, so we manually specify it.
+        "tokio": [
+            crate.annotation(
+                rustc_flags = ["--cfg=tokio_unstable"],
+                deps = ["@crates_io//:tracing"],
+            ),
+        ],
         "decnumber-sys": [crate.annotation(
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.decnumber.bazel",
             gen_build_script = False,
