@@ -96,6 +96,13 @@ impl Coordinator {
             .resolve_target_cluster(target_cluster, session)?;
         let cluster_id = cluster.id;
 
+        if cluster.replicas().next().is_none() {
+            return Err(AdapterError::NoClusterReplicasAvailable {
+                name: cluster.name.clone(),
+                is_managed: cluster.is_managed(),
+            });
+        }
+
         let mut replica_id = session
             .vars()
             .cluster_replica()
