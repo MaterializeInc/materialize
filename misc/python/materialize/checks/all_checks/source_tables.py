@@ -55,8 +55,9 @@ class TableFromPgSource(TableFromSourceBase):
                 DROP PUBLICATION IF EXISTS mz_source_{self.suffix};
                 CREATE PUBLICATION mz_source_{self.suffix} FOR ALL TABLES;
 
-                CREATE TABLE pg_table_1 (a INTEGER, b INTEGER);
-                INSERT INTO pg_table_1 VALUES (1, 1234), (2, 0);
+                CREATE TYPE an_enum AS ENUM ('x1', 'x2');
+                CREATE TABLE pg_table_1 (a INTEGER, b INTEGER, c an_enum);
+                INSERT INTO pg_table_1 VALUES (1, 1234, NULL), (2, 0, 'x1');
                 ALTER TABLE pg_table_1 REPLICA IDENTITY FULL;
 
                 CREATE TABLE pg_table_2 (a INTEGER);
@@ -65,7 +66,9 @@ class TableFromPgSource(TableFromSourceBase):
 
                 > CREATE SOURCE pg_source_{self.suffix} FROM POSTGRES CONNECTION pg_conn_{self.suffix} (PUBLICATION 'mz_source_{self.suffix}');
 
-                > CREATE SOURCE old_pg_source_{self.suffix} FROM POSTGRES CONNECTION pg_conn_{self.suffix} (PUBLICATION 'mz_source_{self.suffix}') FOR TABLES (pg_table_1 AS pg_table_1_old_syntax);
+                > CREATE SOURCE old_pg_source_{self.suffix} FROM POSTGRES CONNECTION pg_conn_{self.suffix}
+                  (PUBLICATION 'mz_source_{self.suffix}', TEXT COLUMNS = (pg_table_1.c))
+                  FOR TABLES (pg_table_1 AS pg_table_1_old_syntax);
                 """
             )
         )
@@ -75,17 +78,21 @@ class TableFromPgSource(TableFromSourceBase):
             Testdrive(dedent(s))
             for s in [
                 f"""
-                > CREATE TABLE pg_table_1 FROM SOURCE pg_source_{self.suffix} (REFERENCE "pg_table_1") WITH (TEXT COLUMNS = (a));
+                > CREATE TABLE pg_table_1 FROM SOURCE pg_source_{self.suffix}
+                  (REFERENCE "pg_table_1")
+                  WITH (TEXT COLUMNS = (c));
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO pg_table_1 VALUES (3, 2345);
+                INSERT INTO pg_table_1 VALUES (3, 2345, 'x2');
                 """,
                 f"""
-                > CREATE TABLE pg_table_1b FROM SOURCE pg_source_{self.suffix} (REFERENCE "pg_table_1");
+                > CREATE TABLE pg_table_1b FROM SOURCE pg_source_{self.suffix}
+                  (REFERENCE "pg_table_1")
+                  WITH (TEXT COLUMNS = (c));
                 > CREATE TABLE pg_table_2 FROM SOURCE pg_source_{self.suffix} (REFERENCE "pg_table_2");
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO pg_table_1 VALUES (4, 3456);
+                INSERT INTO pg_table_1 VALUES (4, 3456, 'x2');
                 INSERT INTO pg_table_2 VALUES (3000);
                 """,
             ]
@@ -96,16 +103,16 @@ class TableFromPgSource(TableFromSourceBase):
             dedent(
                 """
                 > SELECT * FROM pg_table_1;
-                1 1234
-                2 0
-                3 2345
-                4 3456
+                1 1234 <null>
+                2 0 x1
+                3 2345 x2
+                4 3456 x2
 
                 > SELECT * FROM pg_table_1b;
-                1 1234
-                2 0
-                3 2345
-                4 3456
+                1 1234 <null>
+                2 0 x1
+                3 2345 x2
+                4 3456 x2
 
                 > SELECT * FROM pg_table_2;
                 1000
@@ -113,10 +120,10 @@ class TableFromPgSource(TableFromSourceBase):
                 3000
 
                 > SELECT * FROM pg_table_1_old_syntax;
-                1 1234
-                2 0
-                3 2345
-                4 3456
+                1 1234 <null>
+                2 0 x1
+                3 2345 x2
+                4 3456 x2
            """
             )
         )
@@ -145,15 +152,17 @@ class TableFromMySqlSource(TableFromSourceBase):
                 CREATE DATABASE public_{self.suffix};
                 USE public_{self.suffix};
 
-                CREATE TABLE mysql_source_table_1 (a INTEGER, b INTEGER);
-                INSERT INTO mysql_source_table_1 VALUES (1, 1234), (2, 0);
+                CREATE TABLE mysql_source_table_1 (a INTEGER, b INTEGER, y YEAR);
+                INSERT INTO mysql_source_table_1 VALUES (1, 1234, 2024), (2, 0, 2001);
 
                 CREATE TABLE mysql_source_table_2 (a INTEGER);
                 INSERT INTO mysql_source_table_2 VALUES (1000), (2000);
 
                 > CREATE SOURCE mysql_source_{self.suffix} FROM MYSQL CONNECTION mysql_conn_{self.suffix};
 
-                > CREATE SOURCE old_mysql_source_{self.suffix} FROM MYSQL CONNECTION mysql_conn_{self.suffix} FOR TABLES (public_{self.suffix}.mysql_source_table_1 AS mysql_table_1_old_syntax);
+                > CREATE SOURCE old_mysql_source_{self.suffix} FROM MYSQL CONNECTION mysql_conn_{self.suffix}
+                  (TEXT COLUMNS = (public_{self.suffix}.mysql_source_table_1.y))
+                  FOR TABLES (public_{self.suffix}.mysql_source_table_1 AS mysql_table_1_old_syntax);
                 """
             )
         )
@@ -163,23 +172,27 @@ class TableFromMySqlSource(TableFromSourceBase):
             Testdrive(dedent(s))
             for s in [
                 f"""
-                > CREATE TABLE mysql_table_1 FROM SOURCE mysql_source_{self.suffix} (REFERENCE "public_{self.suffix}"."mysql_source_table_1");
+                > CREATE TABLE mysql_table_1 FROM SOURCE mysql_source_{self.suffix}
+                  (REFERENCE "public_{self.suffix}"."mysql_source_table_1")
+                  WITH (TEXT COLUMNS = (y));
 
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
                 USE public_{self.suffix};
-                INSERT INTO mysql_source_table_1 VALUES (3, 2345);
+                INSERT INTO mysql_source_table_1 VALUES (3, 2345, 2000);
                 """,
                 f"""
-                > CREATE TABLE mysql_table_1b FROM SOURCE mysql_source_{self.suffix} (REFERENCE "public_{self.suffix}"."mysql_source_table_1");
+                > CREATE TABLE mysql_table_1b FROM SOURCE mysql_source_{self.suffix}
+                  (REFERENCE "public_{self.suffix}"."mysql_source_table_1")
+                  WITH (IGNORE COLUMNS = (y));
                 > CREATE TABLE mysql_table_2 FROM SOURCE mysql_source_{self.suffix} (REFERENCE "public_{self.suffix}"."mysql_source_table_2");
 
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
                 USE public_{self.suffix};
-                INSERT INTO mysql_source_table_1 VALUES (4, 3456);
+                INSERT INTO mysql_source_table_1 VALUES (4, 3456, NULL);
                 INSERT INTO mysql_source_table_2 VALUES (3000);
                 """,
             ]
@@ -190,10 +203,10 @@ class TableFromMySqlSource(TableFromSourceBase):
             dedent(
                 """
                 > SELECT * FROM mysql_table_1;
-                1 1234
-                2 0
-                3 2345
-                4 3456
+                1 1234 2024
+                2 0 2001
+                3 2345 2000
+                4 3456 <null>
 
                 > SELECT * FROM mysql_table_1b;
                 1 1234
@@ -208,10 +221,10 @@ class TableFromMySqlSource(TableFromSourceBase):
 
                 # old source syntax still working
                 > SELECT * FROM mysql_table_1_old_syntax;
-                1 1234
-                2 0
-                3 2345
-                4 3456
+                1 1234 2024
+                2 0 2001
+                3 2345 2000
+                4 3456 <null>
            """
             )
         )
