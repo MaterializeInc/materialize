@@ -120,7 +120,7 @@ where
         //
         // We assume that `shared_stats` is kept up-to-date (and initialized)
         // by the controller.
-        let mut current_metrics = ChangeBatch::new();
+        let mut current_metrics = <ChangeBatch<_>>::new();
 
         let mut correction = Vec::new();
         {

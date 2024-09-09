@@ -1054,7 +1054,7 @@ where
 
             let (changes, frontier) = collections_net
                 .entry(id)
-                .or_insert_with(|| (ChangeBatch::new(), Antichain::new()));
+                .or_insert_with(|| (<ChangeBatch<_>>::new(), Antichain::new()));
 
             changes.extend(update.drain());
             *frontier = collection.read_capabilities.frontier().to_owned();

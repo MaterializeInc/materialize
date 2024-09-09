@@ -109,7 +109,7 @@ pub enum ComputeEvent {
         /// Operator index
         operator: usize,
         /// The address of the operator.
-        address: Vec<usize>,
+        address: Rc<[usize]>,
     },
     /// Arrangement size operator dropped
     ArrangementHeapSizeOperatorDrop {
@@ -907,8 +907,8 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 
     /// Indicate that a new arrangement exists, start maintaining the heap size state.
-    fn handle_arrangement_heap_size_operator(&mut self, operator_id: usize, address: Vec<usize>) {
-        let activator = self.state.worker.activator_for(&address);
+    fn handle_arrangement_heap_size_operator(&mut self, operator_id: usize, address: Rc<[usize]>) {
+        let activator = self.state.worker.activator_for(address);
         let existing = self
             .state
             .arrangement_size

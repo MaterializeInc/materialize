@@ -56,7 +56,6 @@ use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::{Capability, Operator};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::timestamp::Timestamp;
-use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tracing::trace;
 
@@ -99,8 +98,7 @@ where
             let operator_id = info.global_id;
 
             // Acquire an activator to reschedule the operator when it has unfinished work.
-            let activations = arranged1.stream.scope().activations();
-            let activator = Activator::new(&info.address[..], activations);
+            let activator = arranged1.stream.scope().activator_for(info.address);
 
             // Our initial invariants are that for each trace, physical compaction is less or equal the trace's upper bound.
             // These invariants ensure that we can reference observed batch frontiers from `_start_upper` onward, as long as

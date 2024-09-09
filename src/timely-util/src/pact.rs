@@ -9,6 +9,7 @@
 
 //! Parallelization contracts, describing requirements for data movement along dataflow edges.
 
+use std::rc::Rc;
 use timely::communication::{Data, Pull, Push};
 use timely::dataflow::channels::pact::{LogPuller, LogPusher, ParallelizationContract};
 use timely::dataflow::channels::{Bundle, Message};
@@ -29,7 +30,7 @@ impl<T: Timestamp, C: Container + Data> ParallelizationContract<T, C> for Distri
         self,
         allocator: &mut A,
         identifier: usize,
-        address: &[usize],
+        address: Rc<[usize]>,
         logging: Option<TimelyLogger>,
     ) -> (Self::Pusher, Self::Puller) {
         let (senders, receiver) = allocator.allocate::<Message<T, C>>(identifier, address);

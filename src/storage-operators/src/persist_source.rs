@@ -439,7 +439,7 @@ where
         let name = name.to_owned();
         // Acquire an activator to reschedule the operator when it has unfinished work.
         let activations = scope.activations();
-        let activator = Activator::new(&operator_info.address[..], activations);
+        let activator = Activator::new(operator_info.address, activations);
         // Maintain a list of work to do
         let mut pending_work = std::collections::VecDeque::new();
         let mut buffer = Default::default();

@@ -1260,7 +1260,7 @@ where
         self.unary(Pipeline, "StartSignal", |_cap, info| {
             let token = Box::new(ActivateOnDrop::new(
                 (),
-                Rc::new(info.address.clone()),
+                info.address,
                 self.scope().activations(),
             ));
             signal.drop_on_fire(token);
