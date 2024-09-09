@@ -127,7 +127,14 @@ class VersionConsistencyTest(OutputConsistencyTest):
         assert self.mz1_version is not None
         assert self.mz2_version is not None
 
-        return VersionConsistencyIgnoreFilter(self.mz1_version, self.mz2_version)
+        assert (
+            self.evaluation_strategy_name is not None
+        ), "Evaluation strategy name is not initialized"
+
+        uses_dfr = self.evaluation_strategy_name == EVALUATION_STRATEGY_NAME_DFR
+        return VersionConsistencyIgnoreFilter(
+            self.mz1_version, self.mz2_version, uses_dfr
+        )
 
     def create_evaluation_strategies(
         self, sql_executors: SqlExecutors

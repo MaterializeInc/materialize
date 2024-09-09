@@ -395,3 +395,17 @@ def is_other_db_evaluation_strategy(evaluation_key: EvaluationStrategyKey) -> bo
         EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_OTHER_DB,
         EvaluationStrategyKey.MZ_CONSTANT_FOLDING_OTHER_DB,
     }
+
+
+def is_data_flow_rendering(evaluation_key: EvaluationStrategyKey) -> bool:
+    return evaluation_key in {
+        EvaluationStrategyKey.MZ_DATAFLOW_RENDERING,
+        EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_OTHER_DB,
+    }
+
+
+def is_constant_folding(evaluation_key: EvaluationStrategyKey) -> bool:
+    return evaluation_key in {
+        EvaluationStrategyKey.MZ_CONSTANT_FOLDING,
+        EvaluationStrategyKey.MZ_CONSTANT_FOLDING_OTHER_DB,
+    }

@@ -53,16 +53,18 @@ MZ_VERSION_0_109_0 = MzVersion.parse_mz("v0.109.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
-    def __init__(self, mz1_version: MzVersion, mz2_version: MzVersion):
+    def __init__(self, mz1_version: MzVersion, mz2_version: MzVersion, uses_dfr: bool):
         lower_version, higher_version = (
             (mz1_version, mz2_version)
             if mz1_version < mz2_version
             else (mz2_version, mz1_version)
         )
         super().__init__(
-            VersionPreExecutionInconsistencyIgnoreFilter(lower_version, higher_version),
+            VersionPreExecutionInconsistencyIgnoreFilter(
+                lower_version, higher_version, uses_dfr
+            ),
             VersionPostExecutionInconsistencyIgnoreFilter(
-                lower_version, higher_version
+                lower_version, higher_version, uses_dfr
             ),
         )
 
@@ -70,9 +72,12 @@ class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
 class VersionPreExecutionInconsistencyIgnoreFilter(
     PreExecutionInconsistencyIgnoreFilterBase
 ):
-    def __init__(self, lower_version: MzVersion, higher_version: MzVersion):
+    def __init__(
+        self, lower_version: MzVersion, higher_version: MzVersion, uses_dfr: bool
+    ):
         self.lower_version = lower_version
         self.higher_version = higher_version
+        self.uses_dfr = uses_dfr
 
     def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection
@@ -184,9 +189,12 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
 class VersionPostExecutionInconsistencyIgnoreFilter(
     PostExecutionInconsistencyIgnoreFilterBase
 ):
-    def __init__(self, lower_version: MzVersion, higher_version: MzVersion):
+    def __init__(
+        self, lower_version: MzVersion, higher_version: MzVersion, uses_dfr: bool
+    ):
         self.lower_version = lower_version
         self.higher_version = higher_version
+        self.uses_dfr = uses_dfr
 
     def _shall_ignore_success_mismatch(
         self,
