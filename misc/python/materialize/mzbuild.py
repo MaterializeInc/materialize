@@ -359,9 +359,6 @@ class CargoBuild(CargoPreImage):
             extra_env=extra_env,
         )
 
-        if ui.env_is_truthy("CI"):
-            bazel_build.append("--config=ci")
-
         for bin in bins:
             bazel_build.append(bazel_bins[bin])
         for tar in bazel_tars:
