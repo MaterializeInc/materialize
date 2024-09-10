@@ -44,6 +44,23 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_day AS
         date_trunc('day', b.date)
 ;
 
+CREATE INDEX v_feature_benchmark_result_per_day_idx ON v_feature_benchmark_result_per_day
+(
+    branch,
+    scenario_name,
+    scenario_group,
+    framework_version,
+    scenario_version,
+    scale,
+    day,
+    min_wallclock,
+    max_wallclock,
+    min_memory_mz,
+    max_memory_mz,
+    min_memory_clusterd,
+    max_memory_clusterd
+);
+
 CREATE OR REPLACE VIEW v_feature_benchmark_result_per_week AS
     SELECT
         b.branch,
