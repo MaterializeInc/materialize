@@ -30,6 +30,7 @@ use arrow::buffer::{BooleanBuffer, NullBuffer, OffsetBuffer};
 use arrow::datatypes::{ArrowNativeType, DataType, Field, Fields};
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use prost::Message;
 
 #[allow(missing_docs)]
 mod proto {
@@ -301,6 +302,11 @@ impl ArrayOrd {
 
 /// A struct representing a particular entry in a particular array. Most useful for its `Ord`
 /// implementation, which can compare entire rows across similarly-typed arrays.
+///
+/// It is an error to compare indices from arrays with different types, with one exception:
+/// it is valid to compare two `StructArray`s, one of which is a prefix of the other...
+/// in which case we'll compare the values on that subset of the fields, and the shorter
+/// of the two structs will compare less if they're otherwise equal.
 #[derive(Clone, Copy, Debug)]
 pub struct ArrayIdx<'a> {
     /// An index into a particular array.
@@ -417,3 +423,178 @@ impl<'a> PartialEq for ArrayIdx<'a> {
 }
 
 impl<'a> Eq for ArrayIdx<'a> {}
+
+/// An array with precisely one entry, for use as a lower bound.
+#[derive(Debug, Clone)]
+pub struct ArrayBound {
+    raw: ArrayRef,
+    ord: ArrayOrd,
+    index: usize,
+}
+
+impl ArrayBound {
+    /// Create a new `ArrayBound` for this array, with the bound at the provided index.
+    pub fn new(array: ArrayRef, index: usize) -> Self {
+        Self {
+            ord: ArrayOrd::new(array.as_ref()),
+            raw: array,
+            index,
+        }
+    }
+
+    /// Get the value of the bound.
+    pub fn get(&self) -> ArrayIdx {
+        self.ord.at(self.index)
+    }
+
+    /// Convert to an array-data proto, respecting a maximum data size. The resulting proto will
+    /// decode to a single-row array, such that `ArrayBound::new(decoded, 0).get() <= self.get()`,
+    /// which makes it suitable as a lower bound.
+    pub fn to_proto_lower(&self, max_len: usize) -> Option<ProtoArrayData> {
+        // Use `take` instead of slice to make sure we encode just the relevant row to proto,
+        // instead of some larger buffer with an offset.
+        let indices = UInt64Array::from_value(u64::usize_as(self.index), 1);
+        let taken = arrow::compute::take(self.raw.as_ref(), &indices, None).ok()?;
+        let array_data = taken.into_data();
+
+        let mut proto = array_data.into_proto();
+        let original_len = proto.encoded_len();
+        if original_len <= max_len {
+            return Some(proto);
+        }
+
+        maybe_trim_proto(&mut proto, max_len);
+
+        if cfg!(debug_assertions) {
+            let array: ArrayData = proto
+                .clone()
+                .into_rust()
+                .expect("trimmed array data can still be decoded");
+            assert_eq!(array.len(), 1);
+            let new_bound = Self::new(make_array(array), 0);
+            assert!(
+                new_bound.get() <= self.get(),
+                "trimmed bound should be comparable to and no larger than the original data"
+            )
+        }
+
+        if proto.encoded_len() <= max_len {
+            Some(proto)
+        } else {
+            None
+        }
+    }
+}
+
+/// Makes a best effort to shrink the proto while preserving the ordering.
+/// (The proto may not be smaller after this method is called, but it should always
+/// be a valid lower bound.)
+fn maybe_trim_proto(proto: &mut ProtoArrayData, max_len: usize) {
+    // TODO: consider adding cases for strings and byte arrays
+    let encoded_len = proto.encoded_len();
+    match &mut proto.data_type {
+        Some(proto::DataType {
+            kind:
+                Some(proto::data_type::Kind::Struct(proto::data_type::Struct { children: fields })),
+        }) => {
+            // Pop off fields one by one, keeping an estimate of the encoded length.
+            let mut struct_len = encoded_len;
+            while struct_len > max_len {
+                let Some(mut child) = proto.children.pop() else {
+                    break;
+                };
+                let Some(mut field) = fields.pop() else { break };
+
+                struct_len -= child.encoded_len();
+                if let Some(max_child_len) = max_len.checked_sub(struct_len) {
+                    // We're under budget after removing this field! See if we can
+                    // shrink it to fit, but exit the loop regardless.
+                    maybe_trim_proto(&mut child, max_child_len);
+                    if child.encoded_len() <= max_child_len {
+                        // NB: update the data type of the field to match the data itself.
+                        field.data_type = child.data_type.as_ref().map(|t| t.clone().into());
+                        fields.push(field);
+                        proto.children.push(child);
+                    }
+                    break;
+                }
+
+                struct_len -= field.encoded_len();
+            }
+        }
+        _ => {}
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::arrow::ArrayOrd;
+    use arrow::array::{BooleanArray, StringArray, StructArray, UInt64Array};
+    use arrow::datatypes::{DataType, Field};
+    use std::sync::Arc;
+
+    #[mz_ore::test]
+    fn struct_ord() {
+        let prefix = StructArray::new(
+            vec![Field::new("a", DataType::UInt64, true)].into(),
+            vec![Arc::new(UInt64Array::from_iter_values([1, 3, 5]))],
+            None,
+        );
+        let full = StructArray::new(
+            vec![
+                Field::new("a", DataType::UInt64, true),
+                Field::new("b", DataType::Utf8, true),
+            ]
+            .into(),
+            vec![
+                Arc::new(UInt64Array::from_iter_values([2, 3, 4])),
+                Arc::new(StringArray::from_iter_values(["a", "b", "c"])),
+            ],
+            None,
+        );
+        let prefix_ord = ArrayOrd::new(&prefix);
+        let full_ord = ArrayOrd::new(&full);
+
+        // Comparison works as normal over the shared columns... but when those columns are identical,
+        // the shorter struct is always smaller.
+        assert!(prefix_ord.at(0) < full_ord.at(0), "(1) < (2, 'a')");
+        assert!(prefix_ord.at(1) < full_ord.at(1), "(3) < (3, 'b')");
+        assert!(prefix_ord.at(2) > full_ord.at(2), "(5) < (4, 'c')");
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "array types did not match")]
+    fn struct_ord_incompat() {
+        // This test is descriptive, not prescriptive: we declare it is an error to compare
+        // structs like this, but not what the result of comparing them is.
+        let string = StructArray::new(
+            vec![
+                Field::new("a", DataType::UInt64, true),
+                Field::new("b", DataType::Utf8, true),
+            ]
+            .into(),
+            vec![
+                Arc::new(UInt64Array::from_iter_values([1])),
+                Arc::new(StringArray::from_iter_values(["a"])),
+            ],
+            None,
+        );
+        let boolean = StructArray::new(
+            vec![
+                Field::new("a", DataType::UInt64, true),
+                Field::new("b", DataType::Boolean, true),
+            ]
+            .into(),
+            vec![
+                Arc::new(UInt64Array::from_iter_values([1])),
+                Arc::new(BooleanArray::from_iter([Some(true)])),
+            ],
+            None,
+        );
+        let string_ord = ArrayOrd::new(&string);
+        let bool_ord = ArrayOrd::new(&boolean);
+
+        // Despite the matching first column, this will panic with a type mismatch.
+        assert!(string_ord.at(0) < bool_ord.at(0));
+    }
+}

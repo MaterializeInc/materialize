@@ -34,6 +34,7 @@ use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
+use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
 use mz_persist_types::parquet::{CompressionFormat, EncodingConfig};
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
@@ -49,7 +50,7 @@ use tracing::{debug_span, trace_span, warn, Instrument};
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::MiB;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, Schemas};
+use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
@@ -352,6 +353,7 @@ pub struct BatchBuilderConfig {
     pub(crate) encoding_config: EncodingConfig,
     pub(crate) record_run_meta: bool,
     pub(crate) expected_order: RunOrder,
+    pub(crate) structured_key_lower_len: usize,
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
@@ -401,6 +403,13 @@ pub(crate) const STRUCTURED_ORDER: Config<bool> = Config::new(
     "persist_batch_structured_order",
     false,
     "If enabled, output compaction batches in structured-data order.",
+);
+
+pub(crate) const STRUCTURED_KEY_LOWER_LEN: Config<usize> = Config::new(
+    "persist_batch_structured_key_lower_len",
+    0,
+    "The maximum size in proto bytes of any structured key-lower metadata to preserve. \
+    (If we're unable to fit the lower in budget, or the budget is zero, no metadata is kept.)",
 );
 
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
@@ -472,6 +481,7 @@ impl BatchBuilderConfig {
             },
             record_run_meta,
             expected_order,
+            structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
         }
     }
 
@@ -1165,7 +1175,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let metrics_ = Arc::clone(&metrics);
         let schema_id = schemas.id;
 
-        let (stats, (buf, encode_time)) = isolated_runtime
+        let (stats, structured_key_lower, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
                 // Only encode our updates in a structured format if required, it's expensive.
                 let stats = 'collect_stats: {
@@ -1212,13 +1222,38 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     }
                 };
 
+                let structured_key_lower = if cfg.structured_key_lower_len > 0 {
+                    updates.updates.structured().and_then(|ext| {
+                        let min_key = if cfg.expected_order == RunOrder::Structured {
+                            0
+                        } else {
+                            let ord = ArrayOrd::new(ext.key.as_ref());
+                            (0..ext.key.len())
+                                .min_by_key(|i| ord.at(*i))
+                                .expect("non-empty batch")
+                        };
+                        let lower = ArrayBound::new(Arc::clone(&ext.key), min_key)
+                            .to_proto_lower(cfg.structured_key_lower_len);
+                        if lower.is_none() {
+                            batch_metrics.key_lower_too_big.inc()
+                        }
+                        lower.map(|proto| LazyProto::from(&proto))
+                    })
+                } else {
+                    None
+                };
+
                 let encode_start = Instant::now();
                 let mut buf = Vec::new();
                 updates.encode(&mut buf, &metrics_.columnar, &cfg.encoding_config);
 
                 // Drop batch as soon as we can to reclaim its memory.
                 drop(updates);
-                (stats, (Bytes::from(buf), encode_start.elapsed()))
+                (
+                    stats,
+                    structured_key_lower,
+                    (Bytes::from(buf), encode_start.elapsed()),
+                )
             })
             .instrument(debug_span!("batch::encode_part"))
             .await
@@ -1265,6 +1300,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             key: partial_key,
             encoded_size_bytes: payload_len,
             key_lower,
+            structured_key_lower,
             stats,
             ts_rewrite,
             diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
