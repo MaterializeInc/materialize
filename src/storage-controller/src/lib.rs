@@ -29,6 +29,7 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
+use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -3818,8 +3819,9 @@ where
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
     fn update_wallclock_lag_introspection(&mut self) {
-        let refresh_introspection =
-            !self.read_only && self.wallclock_lag_last_refresh.elapsed() >= Duration::from_secs(60);
+        let refresh_introspection = !self.read_only
+            && self.wallclock_lag_last_refresh.elapsed()
+                >= WALLCLOCK_LAG_REFRESH_INTERVAL.get(self.config.config_set());
         let mut introspection_updates = refresh_introspection.then(Vec::new);
 
         let now = mz_ore::now::to_datetime((self.now)());

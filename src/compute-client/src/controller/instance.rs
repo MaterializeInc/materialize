@@ -24,6 +24,7 @@ use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use mz_compute_types::sources::SourceInstanceDesc;
+use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
@@ -492,8 +493,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
     fn refresh_wallclock_lag(&mut self) {
-        let refresh_introspection =
-            !self.read_only && self.wallclock_lag_last_refresh.elapsed() >= Duration::from_secs(60);
+        let refresh_introspection = !self.read_only
+            && self.wallclock_lag_last_refresh.elapsed()
+                >= WALLCLOCK_LAG_REFRESH_INTERVAL.get(&self.dyncfg);
         let mut introspection_updates = refresh_introspection.then(Vec::new);
 
         let now = mz_ore::now::to_datetime((self.now)());

@@ -31,6 +31,7 @@ rust_library(
     deps = [
         "//src/build-info:mz_build_info",
         "//src/cluster-client:mz_cluster_client",
+        "//src/controller-types:mz_controller_types",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/ore:mz_ore",
         "//src/persist-client:mz_persist_client",
@@ -70,6 +71,7 @@ rust_test(
     deps = [
         "//src/build-info:mz_build_info",
         "//src/cluster-client:mz_cluster_client",
+        "//src/controller-types:mz_controller_types",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/ore:mz_ore",
         "//src/persist-client:mz_persist_client",
@@ -94,6 +96,7 @@ rust_doc_test(
     deps = [
         "//src/build-info:mz_build_info",
         "//src/cluster-client:mz_cluster_client",
+        "//src/controller-types:mz_controller_types",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/ore:mz_ore",
         "//src/persist-client:mz_persist_client",

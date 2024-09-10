@@ -20,7 +20,16 @@ pub const CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL: Config<Dura
     "The interval at which to attempt to retry cleaning up replicas from past generations.",
 );
 
+/// The interval at which to refresh wallclock lag introspection.
+pub const WALLCLOCK_LAG_REFRESH_INTERVAL: Config<Duration> = Config::new(
+    "wallclock_lag_refresh_interval",
+    Duration::from_secs(60),
+    "The interval at which to refresh wallclock lag introspection.",
+);
+
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
-    configs.add(&CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL)
+    configs
+        .add(&CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL)
+        .add(&WALLCLOCK_LAG_REFRESH_INTERVAL)
 }
