@@ -1104,6 +1104,23 @@ operations in the system.
 | `created_at`             | [`timestamp with time zone`] | The time at which the subscription was created.                                                                            |
 | `referenced_object_ids`  | [`text list`]                | The IDs of objects referenced by the subscription. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects)             |
 
+## `mz_wallclock_lag_history`
+
+The `mz_wallclock_lag_history` table records the historical wallclock lag,
+i.e., the difference between the write frontier and the current wallclock time,
+for each table, source, index, materialized view, and sink in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_wallclock_lag_history -->
+| Field         | Type         | Meaning
+| --------------| -------------| --------
+| `object_id`   | [`text`]     | The ID of the table, source, materialized view, index, or sink. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).
+| `replica_id`  | [`text`]     | The ID of a replica computing the object, or `NULL` for persistent objects. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas).
+| `lag`         | [`interval`] | The amount of time the object's write frontier lags behind wallclock time.
+| `occurred_at` | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_recent_history -->
+
 ## `mz_webhook_sources`
 
 The `mz_webhook_sources` table contains a row for each webhook source in the system.

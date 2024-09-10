@@ -581,6 +581,14 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  referenced_object_ids  list
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_wallclock_lag_history' ORDER BY position
+----
+1  object_id  text
+2  replica_id  text
+3  lag  interval
+4  occurred_at  timestamp␠with␠time␠zone
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_webhook_sources' ORDER BY position
 ----
 1  id  text
@@ -692,6 +700,9 @@ mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions
 mz_type_pg_metadata
+mz_wallclock_global_lag_history
+mz_wallclock_global_lag_recent_history
+mz_wallclock_lag_history
 mz_webhook_sources
 pg_attrdef_all_databases
 pg_attribute_all_databases
