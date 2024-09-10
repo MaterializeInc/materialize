@@ -28,6 +28,12 @@ class ParallelBenchmarkResultEntry:
     p50: float
     p95: float
     p99: float
+    p99_9: float
+    p99_99: float
+    p99_999: float
+    p99_9999: float
+    p99_99999: float
+    p99_999999: float
     std: float
     slope: float
 
@@ -63,6 +69,12 @@ class ParallelBenchmarkResultStorage(BaseDataStorage):
                     p50,
                     p95,
                     p99,
+                    p99_9,
+                    p99_99,
+                    p99_999,
+                    p99_9999,
+                    p99_99999,
+                    p99_999999,
                     std,
                     slope
                 )
@@ -81,6 +93,12 @@ class ParallelBenchmarkResultStorage(BaseDataStorage):
                     {result_entry.p50},
                     {result_entry.p95},
                     {result_entry.p99},
+                    {result_entry.p99_9},
+                    {result_entry.p99_99},
+                    {result_entry.p99_999},
+                    {result_entry.p99_9999},
+                    {result_entry.p99_99999},
+                    {result_entry.p99_999999},
                     {result_entry.std},
                     {result_entry.slope}
                 ;

@@ -40,7 +40,7 @@ class Materialized(Service):
         memory: str | None = None,
         options: list[str] = [],
         persist_blob_url: str | None = None,
-        default_size: int = Size.DEFAULT_SIZE,
+        default_size: int | str = Size.DEFAULT_SIZE,
         environment_id: str | None = None,
         propagate_crashes: bool = True,
         external_cockroach: str | bool = False,
@@ -154,7 +154,13 @@ class Materialized(Service):
         )
 
         self.default_replica_size = (
-            "1" if default_size == 1 else f"{default_size}-{default_size}"
+            "1"
+            if default_size == 1
+            else (
+                f"{default_size}-{default_size}"
+                if isinstance(default_size, int)
+                else default_size
+            )
         )
         command += [
             # Issue #15858 prevents the habitual use of large introspection
