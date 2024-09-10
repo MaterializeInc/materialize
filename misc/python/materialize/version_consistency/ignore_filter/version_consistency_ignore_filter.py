@@ -13,6 +13,9 @@ from materialize.output_consistency.execution.query_output_mode import QueryOutp
 from materialize.output_consistency.expression.expression import (
     Expression,
 )
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     is_any_date_time_expression,
     is_operation_tagged,
@@ -50,6 +53,7 @@ MZ_VERSION_0_95_0 = MzVersion.parse_mz("v0.95.0")
 MZ_VERSION_0_99_0 = MzVersion.parse_mz("v0.99.0")
 MZ_VERSION_0_107_0 = MzVersion.parse_mz("v0.107.0")
 MZ_VERSION_0_109_0 = MzVersion.parse_mz("v0.109.0")
+MZ_VERSION_0_117_0 = MzVersion.parse_mz("v0.117.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -212,6 +216,37 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
 
         return super()._shall_ignore_success_mismatch(
             error, query_template, contains_aggregation
+        )
+
+    def _shall_ignore_content_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+        col_index: int,
+        all_involved_characteristics: set[ExpressionCharacteristics],
+    ) -> IgnoreVerdict:
+        if (
+            self.lower_version < MZ_VERSION_0_117_0 <= self.higher_version
+            and query_template.matches_any_expression(
+                partial(
+                    matches_fun_by_name,
+                    function_name_in_lower_case="unnest",
+                ),
+                True,
+            )
+        ):
+            # the involvement of unnest affects all columns, therefore use matches_any_expression
+            return YesIgnore(
+                "Involvement of unnest changes order with PR#29422 for both DFR and CTF"
+            )
+
+        return super()._shall_ignore_content_mismatch(
+            error,
+            query_template,
+            contains_aggregation,
+            col_index,
+            all_involved_characteristics,
         )
 
     def _shall_ignore_explain_plan_mismatch(
