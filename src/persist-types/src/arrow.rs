@@ -97,8 +97,7 @@ fn into_proto_with_type(data: &ArrayData, expected_type: Option<&DataType>) -> P
                 data.data_type(),
                 "actual type should match expected type"
             );
-            // TODO(bkirwi): return None here in a future release, assuming the types match
-            Some(expected.into_proto())
+            None
         }
         None => Some(data.data_type().into_proto()),
     };
