@@ -243,6 +243,8 @@ class Gaussian(Distribution):
 
 
 class PhaseAction:
+    report_regressions: bool
+
     def run(
         self,
         duration: int,
@@ -254,9 +256,12 @@ class PhaseAction:
 
 
 class OpenLoop(PhaseAction):
-    def __init__(self, action: Action, dist: Distribution):
+    def __init__(
+        self, action: Action, dist: Distribution, report_regressions: bool = True
+    ):
         self.action = action
         self.dist = dist
+        self.report_regressions = report_regressions
 
     def run(
         self,
@@ -270,8 +275,9 @@ class OpenLoop(PhaseAction):
 
 
 class ClosedLoop(PhaseAction):
-    def __init__(self, action: Action):
+    def __init__(self, action: Action, report_regressions: bool = True):
         self.action = action
+        self.report_regressions = report_regressions
 
     def run(
         self,
@@ -356,6 +362,7 @@ class Scenario:
     thread_pool_size: int
     conn_pool_size: int
     guarantees: dict[str, dict[str, float]]
+    regression_thresholds: dict[str, dict[str, float]]
     jobs: queue.Queue
     conns: queue.Queue
     thread_pool: list[threading.Thread]
@@ -369,11 +376,13 @@ class Scenario:
         thread_pool_size: int = 5000,
         conn_pool_size: int = 0,
         guarantees: dict[str, dict[str, float]] = {},
+        regression_thresholds: dict[str, dict[str, float]] = {},
     ):
         self.phases = phases
         self.thread_pool_size = thread_pool_size
         self.conn_pool_size = conn_pool_size
         self.guarantees = guarantees
+        self.regression_thresholds = regression_thresholds
         self.jobs = queue.Queue()
         self.conns = queue.Queue()
 
@@ -888,6 +897,7 @@ class InsertsSelects(Scenario):
                                 strict_serializable=False,
                             ),
                             dist=Periodic(per_second=1),
+                            report_regressions=False,
                         ),
                         ClosedLoop(
                             action=ReuseConnQuery(
@@ -1017,8 +1027,8 @@ def run_once(
     params: str | None,
     args,
     suffix: str,
-) -> tuple[dict[str, dict[str, Statistics]], list[TestFailureDetails]]:
-    stats: dict[str, dict[str, Statistics]] = {}
+) -> tuple[dict[Scenario, dict[str, Statistics]], list[TestFailureDetails]]:
+    stats: dict[Scenario, dict[str, Statistics]] = {}
     failures: list[TestFailureDetails] = []
 
     if args.mz_url:
@@ -1118,7 +1128,7 @@ def run_once(
                 suffix,
             )
             failures.extend(new_failures)
-            stats[scenario_name] = new_stats
+            stats[scenario] = new_stats
 
     if not args.mz_url:
         c.kill("cockroach", "materialized", "testdrive")
@@ -1133,56 +1143,72 @@ def less_than_is_regression(stat: str) -> bool:
 
 
 def check_regressions(
-    this_stats: dict[str, dict[str, Statistics]],
-    other_stats: dict[str, dict[str, Statistics]],
+    this_stats: dict[Scenario, dict[str, Statistics]],
+    other_stats: dict[Scenario, dict[str, Statistics]],
     other_tag: str,
 ) -> list[TestFailureDetails]:
     failures: list[TestFailureDetails] = []
 
     assert len(this_stats) == len(other_stats)
 
-    for scenario in this_stats.keys():
+    for scenario, other_scenario in zip(this_stats.keys(), other_stats.keys()):
+        scenario_name = type(scenario).__name__
+        assert type(other_scenario).__name__ == scenario_name
         has_failed = False
-        print(f"Comparing scenario {scenario}")
+        print(f"Comparing scenario {scenario_name}")
         output_lines = [
             f"{'QUERY':<40} | {'STAT':<7} | {'THIS':^12} | {'OTHER':^12} | {'CHANGE':^9} | {'THRESHOLD':^9} | {'REGRESSION?':^12}",
             "-" * 118,
         ]
 
+        ignore_regressions = set()
+        for phase in scenario.phases:
+            if not isinstance(phase, LoadPhase):
+                continue
+            for action in phase.phase_actions:
+                if not action.report_regressions:
+                    ignore_regressions.add(str(action))
+
         for query in this_stats[scenario].keys():
             for stat in dir(this_stats[scenario][query]):
                 this_value = getattr(this_stats[scenario][query], stat)
-                other_value = getattr(other_stats[scenario][query], stat)
+                other_value = getattr(other_stats[other_scenario][query], stat)
                 less_than = less_than_is_regression(stat)
                 percentage = f"{(this_value / other_value - 1) * 100:.2f}%"
-                if REGRESSION_THRESHOLDS[stat] is None:
+                threshold = (
+                    None
+                    if query in ignore_regressions
+                    else (
+                        scenario.regression_thresholds.get(query, {}).get(stat)
+                        or REGRESSION_THRESHOLDS[stat]
+                    )
+                )
+                if threshold is None:
                     regression = ""
                 elif (
-                    this_value < other_value / REGRESSION_THRESHOLDS[stat]
+                    this_value < other_value / threshold
                     if less_than
-                    else this_value > other_value * REGRESSION_THRESHOLDS[stat]
+                    else this_value > other_value * threshold
                 ):
                     regression = "!!YES!!"
-                    if not known_regression(scenario, other_tag):
+                    if not known_regression(scenario_name, other_tag):
                         has_failed = True
                 else:
                     regression = "no"
-                threshold = (
-                    f"{((REGRESSION_THRESHOLDS[stat] - 1) * 100):.0f}%"
-                    if REGRESSION_THRESHOLDS[stat] is not None
-                    else ""
+                threshold_text = (
+                    f"{((threshold - 1) * 100):.0f}%" if threshold is not None else ""
                 )
                 output_lines.append(
-                    f"{query[:40]:<40} | {stat:<7} | {this_value:>12.2f} | {other_value:>12.2f} | {percentage:>9} | {threshold:>9} | {regression:^12}"
+                    f"{query[:40]:<40} | {stat:<7} | {this_value:>12.2f} | {other_value:>12.2f} | {percentage:>9} | {threshold_text:>9} | {regression:^12}"
                 )
 
         print("\n".join(output_lines))
         if has_failed:
             failures.append(
                 TestFailureDetails(
-                    message=f"Scenario {scenario} regressed",
+                    message=f"Scenario {scenario_name} regressed",
                     details="\n".join(output_lines),
-                    test_class_name_override=scenario,
+                    test_class_name_override=scenario_name,
                 )
             )
 
