@@ -22,7 +22,7 @@ Let's use the following sample data as input for examples:
 
 ```mzsql
 CREATE TABLE cities (
-    name text NOT NULL,
+    city text NOT NULL,
     state text NOT NULL,
     pop int NOT NULL
 );
@@ -45,24 +45,26 @@ INSERT INTO cities VALUES
 
 In other databases, a popular way of computing the top _K_ records per key is to use the `ROW_NUMBER` window function. For example, to get the 3 most populous city in each state:
 ```mzsql
-SELECT state, name
+SELECT state, city
 FROM (
-  SELECT state, name, ROW_NUMBER() OVER
+  SELECT state, city, pop, ROW_NUMBER() OVER
     (PARTITION BY state ORDER BY pop DESC) as row_num
   FROM cities
 )
-WHERE row_num <= 3;
+WHERE row_num <= 3
+ORDER BY state, pop DESC;
 ```
 
 If there are states that have many cities, a more performant way to express this in Materialize is to use a lateral join (or `DISTINCT ON`, if _K_ = 1) instead of window functions:
 ```mzsql
-SELECT state, name FROM
+SELECT state, city FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (
-        SELECT name FROM cities
+        SELECT city, pop FROM cities
         WHERE state = grp.state
         ORDER BY pop DESC LIMIT 3
-    );
+    )
+ORDER BY state, pop DESC;
 ```
 For more details, see [Top K by group](/sql/patterns/top-k).
 
@@ -70,21 +72,23 @@ For more details, see [Top K by group](/sql/patterns/top-k).
 
 Suppose that you want to compute the ratio of each city's population vs. the most populous city in the same state. You can do so using window functions as follows:
 ```mzsql
-SELECT state, name,
+SELECT state, city,
        CAST(pop AS float) / FIRST_VALUE(pop)
-         OVER (PARTITION BY state ORDER BY pop DESC)
-FROM cities;
+         OVER (PARTITION BY state ORDER BY pop DESC) as pop_ratio
+FROM cities
+ORDER BY state, pop_ratio DESC;
 ```
 
 For better performance, you can rewrite this query to first compute the largest population of each state using an aggregation, and then join against that:
 
 ```mzsql
-SELECT cities.state, name, CAST(pop as float) / max_pops.max_pop
+SELECT cities.state, city, CAST(pop as float) / max_pops.max_pop pop_ratio
 FROM cities,
      (SELECT state, MAX(pop) as max_pop
       FROM cities
       GROUP BY state) max_pops
-WHERE cities.state = max_pops.state;
+WHERE cities.state = max_pops.state
+ORDER BY state, pop_ratio DESC;
 ```
 
 If the `ROW_NUMBER` would be called with an expression that is different from the expression in the `ORDER BY` clause, then the inner query would have to be replaced by a [`DISTINCT ON` query](/sql/patterns/top-k).
@@ -103,16 +107,27 @@ INSERT INTO measurements VALUES
 
 You can compute the differences between consecutive measurements using `LAG()`:
 ```mzsql
-SELECT time, value - LAG(value) OVER (ORDER BY time)
-FROM measurements;
+SELECT time, value - LAG(value) OVER (ORDER BY time) as diff_w_prev
+FROM measurements
+ORDER BY time;
 ```
 
 For better performance, you can rewrite this query using an equi-join:
 
 ```mzsql
-SELECT m2.time, m2.value - m1.value
+SELECT m2.time, m2.value - m1.value as diff_w_prev
 FROM measurements m1, measurements m2
-WHERE m2.time = m1.time + INTERVAL '1' MINUTE;
+WHERE m2.time = m1.time + INTERVAL '1' MINUTE
+ORDER BY m2.time;
 ```
 
-Note that these queries differ in whether they include the first timestamp (with a `NULL` difference). Using a `LEFT JOIN` would make the outputs match exactly.
+Note that these queries differ in whether they include the first timestamp (with
+a `NULL` difference).  A `RIGHT JOIN` would make the outputs match exactly.
+
+```mzsql
+SELECT m2.time, m2.value - m1.value as diff_w_prev
+FROM measurements m1
+RIGHT JOIN measurements m2
+ON m2.time = m1.time + INTERVAL '1' MINUTE
+ORDER BY m2.time;
+```
