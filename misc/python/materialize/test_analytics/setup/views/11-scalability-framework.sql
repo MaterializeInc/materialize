@@ -38,6 +38,21 @@ CREATE OR REPLACE VIEW v_scalability_framework_result_per_day AS
         date_trunc('day', b.date)
 ;
 
+CREATE INDEX v_scalability_framework_result_per_day ON v_scalability_framework_result_per_day
+(
+    branch,
+    workload_name,
+    workload_group,
+    framework_version,
+    workload_version,
+    concurrency,
+    day,
+    min_count,
+    max_count,
+    min_tps,
+    max_tps
+);
+
 CREATE OR REPLACE VIEW v_scalability_framework_result_per_week AS
     SELECT
         b.branch,
