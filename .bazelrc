@@ -84,6 +84,12 @@ build --linkopt="-fuse-ld=lld"
 build --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,-O2"
 build --@rules_rust//:extra_rustc_flag="-Clink-arg=-fuse-ld=lld"
 build --@rules_rust//:extra_rustc_flag="-Csymbol-mangling-version=v0"
+# We use 64 because it's enough to totally saturate a CI builder so our builds
+# are as fast as possible, and it's less than the default of 256 used with
+# Cargo when incremental compilation is enabled.
+#
+# TODO(parkmycar): Investigate a "super release" build with codegen-units=1
+build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=64"
 
 # TODO(parkmycar): toolchains_llvm uses ld64 for macOS which doesn't support
 # compressing debug sections.
@@ -109,6 +115,7 @@ build:release --@rules_rust//:extra_rustc_flag="-Clto=thin"
 # Emit full debug info, allowing us to easily analyze core dumps from staging
 # (and, in an emergency, also prod).
 build:release --@rules_rust//:extra_rustc_flag="-Cdebuginfo=2"
+build:release --copt="-g"
 
 # Cross Language LTO
 #
