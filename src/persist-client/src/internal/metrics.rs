@@ -420,6 +420,7 @@ impl MetricsVecs {
             merge_res: self.cmd_metrics("merge_res"),
             become_tombstone: self.cmd_metrics("become_tombstone"),
             compare_and_evolve_schema: self.cmd_metrics("compare_and_evolve_schema"),
+            spine_exert: self.cmd_metrics("spine_exert"),
             fetch_upper_count: registry.register(metric!(
                 name: "mz_persist_cmd_fetch_upper_count",
                 help: "count of fetch_upper calls",
@@ -626,6 +627,7 @@ pub struct CmdsMetrics {
     pub(crate) merge_res: CmdMetrics,
     pub(crate) become_tombstone: CmdMetrics,
     pub(crate) compare_and_evolve_schema: CmdMetrics,
+    pub(crate) spine_exert: CmdMetrics,
     pub(crate) fetch_upper_count: IntCounter,
 }
 
@@ -769,6 +771,7 @@ pub struct CompactionMetrics {
     pub(crate) parts_prefetched: IntCounter,
     pub(crate) parts_waited: IntCounter,
     pub(crate) fast_path_eligible: IntCounter,
+    pub(crate) admin_count: IntCounter,
 
     pub(crate) applied_exact_match: IntCounter,
     pub(crate) applied_subset_match: IntCounter,
@@ -860,6 +863,10 @@ impl CompactionMetrics {
             fast_path_eligible: registry.register(metric!(
                 name: "mz_persist_compaction_fast_path_eligible",
                 help: "count of compaction requests that could have used the fast-path optimization",
+            )),
+            admin_count: registry.register(metric!(
+                name: "mz_persist_compaction_admin_count",
+                help: "count of compaction requests that were performed by admin tooling",
             )),
             applied_exact_match: registry.register(metric!(
                 name: "mz_persist_compaction_applied_exact_match",

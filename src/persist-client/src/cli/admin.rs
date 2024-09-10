@@ -13,13 +13,13 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::{Blob, Consensus, ExternalError};
@@ -28,7 +28,7 @@ use mz_persist_types::{Codec, Codec64};
 use prometheus::proto::{MetricFamily, MetricType};
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
@@ -496,6 +496,7 @@ where
                 schemas,
             )
             .await?;
+            metrics.compaction.admin_count.inc();
             info!(
                 "attempt {} req {}: compacted into {} parts {} bytes in {:?}",
                 attempt,
@@ -663,4 +664,174 @@ async fn force_gc(
     }
 
     Ok(Box::new(machine))
+}
+
+/// Exposed for `mz-catalog`.
+pub const CATALOG_FORCE_COMPACTION_FUEL: Config<usize> = Config::new(
+    "persist_catalog_force_compaction_fuel",
+    0,
+    "fuel to use in catalog dangerous_force_compaction task",
+);
+
+/// Exposed for `mz-catalog`.
+pub const CATALOG_FORCE_COMPACTION_WAIT: Config<Duration> = Config::new(
+    "persist_catalog_force_compaction_wait",
+    Duration::from_secs(60),
+    "wait to use in catalog dangerous_force_compaction task",
+);
+
+/// Attempts to compact all batches in a shard into a minimal number.
+///
+/// This destroys most hope of filter pushdown doing anything useful. If you
+/// think you want this, you almost certainly want something else, please come
+/// talk to the persist team before using.
+///
+/// This is accomplished by adding artificial fuel (representing some count of
+/// updates) to the shard's internal Spine of batches structure on some schedule
+/// and doing any compaction work that results. Both the amount of fuel and
+/// cadence are dynamically tunable. However, it is not clear exactly how much
+/// fuel is safe to add in each call: 10 definitely seems fine, usize::MAX may
+/// not be. This also adds to the danger in "dangerous".
+///
+/// This is intentionally not even hooked up to `persistcli admin` for the above
+/// reasons.
+///
+/// Exits once the shard is sufficiently compacted, but can be called in a loop
+/// to keep it compacted.
+pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
+    write: &WriteHandle<K, V, T, D>,
+    fuel: impl Fn() -> usize,
+    wait: impl Fn() -> Duration,
+    // TODO: Here to make the test semi-work until we fix #29459.
+    max_attempts: Option<usize>,
+) where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
+{
+    let mut machine = write.machine.clone();
+
+    let mut last_exert: Instant;
+
+    let mut attempts = 0;
+    loop {
+        last_exert = Instant::now();
+        let fuel = fuel();
+        let (reqs, mut maintenance) = machine.spine_exert(fuel).await;
+        for req in reqs {
+            info!(
+                "dangerous_force_compaction_and_break_pushdown {} {} compacting {} batches in {} parts totaling {} bytes: lower={:?} upper={:?} since={:?}",
+                machine.applier.shard_metrics.name,
+                machine.applier.shard_metrics.shard_id,
+                req.inputs.len(),
+                req.inputs.iter().flat_map(|x| &x.parts).count(),
+                req.inputs.iter().flat_map(|x| &x.parts).map(|x| x.encoded_size_bytes()).sum::<usize>(),
+                req.desc.lower().elements(),
+                req.desc.upper().elements(),
+                req.desc.since().elements(),
+            );
+            let start = Instant::now();
+            let res = Compactor::<K, V, T, D>::compact_and_apply(
+                &mut machine,
+                req,
+                write.writer_id.clone(),
+                write.schemas.clone(),
+            )
+            .await;
+            let (res, apply_maintenance) = match res {
+                Ok(x) => x,
+                Err(err) => {
+                    warn!(
+                        "dangerous_force_compaction_and_break_pushdown {} {} errored in compaction: {:?}",
+                        machine.applier.shard_metrics.name,
+                        machine.applier.shard_metrics.shard_id,
+                        err
+                    );
+                    continue;
+                }
+            };
+            machine.applier.metrics.compaction.admin_count.inc();
+            info!(
+                "dangerous_force_compaction_and_break_pushdown {} {} compacted in {:?}: {:?}",
+                machine.applier.shard_metrics.name,
+                machine.applier.shard_metrics.shard_id,
+                start.elapsed(),
+                res
+            );
+            maintenance.merge(apply_maintenance);
+        }
+        maintenance.perform(&machine, &write.gc).await;
+
+        // Now sleep before the next one. Make sure to delay from when we
+        // started the last exert in case the compaction takes non-trivial time.
+        let next_exert = last_exert + wait();
+        tokio::time::sleep_until(next_exert.into()).await;
+
+        // NB: This check is intentionally at the end so that it's safe to call
+        // this method in a loop.
+        let num_batches = machine.applier.all_batches().len();
+        if num_batches < 2 {
+            info!(
+                "dangerous_force_compaction_and_break_pushdown {} {} exiting with {} batches",
+                machine.applier.shard_metrics.name,
+                machine.applier.shard_metrics.shard_id,
+                num_batches
+            );
+            return;
+        }
+        attempts += 1;
+        if max_attempts.map_or(false, |max| attempts >= max) {
+            info!(
+                "dangerous_force_compaction_and_break_pushdown {} {} exiting with {} batches after {} attempts",
+                machine.applier.shard_metrics.name,
+                machine.applier.shard_metrics.shard_id,
+                num_batches,
+                attempts,
+            );
+            return;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use mz_dyncfg::ConfigUpdates;
+    use mz_ore::cast::CastFrom;
+    use mz_persist_types::ShardId;
+
+    use crate::tests::new_test_client;
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn dangerous_force_compaction_and_break_pushdown(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
+        for num_batches in 0..=17 {
+            let (mut write, _read) = client
+                .expect_open::<String, (), u64, i64>(ShardId::new())
+                .await;
+            let machine = write.machine.clone();
+
+            for idx in 0..num_batches {
+                let () = write
+                    .expect_compare_and_append(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)
+                    .await;
+            }
+
+            // Run the tool and verify that we get down to at most two.
+            super::dangerous_force_compaction_and_break_pushdown(
+                &write,
+                || 1,
+                || Duration::ZERO,
+                Some(usize::cast_from(num_batches) * 2),
+            )
+            .await;
+            let batches_after = machine.applier.all_batches().len();
+            println!("{}: got {} batches after", num_batches, batches_after);
+            // TODO: Enable this after #29459 is fixed.
+            // assert!(batches_after < 2, "{} vs {}", num_batches, batches_after);
+        }
+    }
 }

@@ -36,6 +36,7 @@ use crate::fetch::FetchBatchFilter;
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
+use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{BatchPart, HollowBatch, RunMeta, RunOrder};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -143,7 +144,6 @@ where
     pub fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
-        isolated_runtime: Arc<IsolatedRuntime>,
         writer_id: WriterId,
         schemas: Schemas<K, V>,
         gc: GarbageCollector<K, V, T, D>,
@@ -193,9 +193,6 @@ where
                     .queued_seconds
                     .inc_by(enqueued.elapsed().as_secs_f64());
 
-                let cfg = machine.applier.cfg.clone();
-                let blob = Arc::clone(&machine.applier.state_versions.blob);
-                let isolated_runtime = Arc::clone(&isolated_runtime);
                 let writer_id = writer_id.clone();
                 let schemas = schemas.clone();
 
@@ -204,19 +201,13 @@ where
                 compact_span.follows_from(&Span::current());
                 let gc = gc.clone();
                 mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
-                    let res = Self::compact_and_apply(
-                        cfg,
-                        blob,
-                        metrics,
-                        isolated_runtime,
-                        req,
-                        writer_id,
-                        schemas,
-                        &mut machine,
-                        &gc,
-                    )
-                    .instrument(compact_span)
-                    .await;
+                    let res = Self::compact_and_apply(&mut machine, req, writer_id, schemas)
+                        .instrument(compact_span)
+                        .await;
+                    let res = res.map(|(res, maintenance)| {
+                        maintenance.start_performing(&machine, &gc);
+                        res
+                    });
 
                     // we can safely ignore errors here, it's possible the caller
                     // wasn't interested in waiting and dropped their receiver
@@ -283,17 +274,13 @@ where
         Some(compaction_completed_receiver)
     }
 
-    async fn compact_and_apply(
-        cfg: PersistConfig,
-        blob: Arc<dyn Blob>,
-        metrics: Arc<Metrics>,
-        isolated_runtime: Arc<IsolatedRuntime>,
+    pub(crate) async fn compact_and_apply(
+        machine: &mut Machine<K, V, T, D>,
         req: CompactReq<T>,
         writer_id: WriterId,
         schemas: Schemas<K, V>,
-        machine: &mut Machine<K, V, T, D>,
-        gc: &GarbageCollector<K, V, T, D>,
-    ) -> Result<ApplyMergeResult, anyhow::Error> {
+    ) -> Result<(ApplyMergeResult, RoutineMaintenance), anyhow::Error> {
+        let metrics = Arc::clone(&machine.applier.metrics);
         metrics.compaction.started.inc();
         let start = Instant::now();
 
@@ -306,7 +293,7 @@ where
             .sum::<usize>();
         let timeout = Duration::max(
             // either our minimum timeout
-            COMPACTION_MINIMUM_TIMEOUT.get(&cfg),
+            COMPACTION_MINIMUM_TIMEOUT.get(&machine.applier.cfg),
             // or 1s per MB of input data
             Duration::from_secs(u64::cast_from(total_input_bytes / MiB)),
         );
@@ -322,17 +309,18 @@ where
         let res = tokio::time::timeout(
             timeout,
             // Compaction is cpu intensive, so be polite and spawn it on the isolated runtime.
-            isolated_runtime
+            machine
+                .isolated_runtime
                 .spawn_named(
                     || "persist::compact::consolidate",
                     Self::compact(
-                        CompactConfig::new(&cfg, &writer_id),
-                        Arc::clone(&blob),
+                        CompactConfig::new(&machine.applier.cfg, &writer_id),
+                        Arc::clone(&machine.applier.state_versions.blob),
                         Arc::clone(&metrics),
                         Arc::clone(&machine.applier.shard_metrics),
-                        Arc::clone(&isolated_runtime),
+                        Arc::clone(&machine.isolated_runtime),
                         req,
-                        schemas.clone(),
+                        schemas,
                     )
                     .instrument(compact_span),
                 )
@@ -357,19 +345,18 @@ where
             Ok(Ok(res)) => {
                 let res = FueledMergeRes { output: res.output };
                 let (apply_merge_result, maintenance) = machine.merge_res(&res).await;
-                maintenance.start_performing(machine, gc);
                 match &apply_merge_result {
                     ApplyMergeResult::AppliedExact => {
                         metrics.compaction.applied.inc();
                         metrics.compaction.applied_exact_match.inc();
                         machine.applier.shard_metrics.compaction_applied.inc();
-                        Ok(apply_merge_result)
+                        Ok((apply_merge_result, maintenance))
                     }
                     ApplyMergeResult::AppliedSubset => {
                         metrics.compaction.applied.inc();
                         metrics.compaction.applied_subset_match.inc();
                         machine.applier.shard_metrics.compaction_applied.inc();
-                        Ok(apply_merge_result)
+                        Ok((apply_merge_result, maintenance))
                     }
                     ApplyMergeResult::NotAppliedNoMatch
                     | ApplyMergeResult::NotAppliedInvalidSince
@@ -384,12 +371,12 @@ where
                         }
                         let () = part_deletes
                             .delete(
-                                &blob,
+                                &machine.applier.state_versions.blob,
                                 machine.shard_id(),
                                 &metrics.retries.external.compaction_noop_delete,
                             )
                             .await;
-                        Ok(apply_merge_result)
+                        Ok((apply_merge_result, maintenance))
                     }
                 }
             }

@@ -519,6 +519,30 @@ impl<T: Timestamp + Lattice> Trace<T> {
         self.spine.insert(batch, &mut SpineLog::Disabled);
     }
 
+    /// Apply some amount of effort to trace maintenance.
+    ///
+    /// The units of effort are updates, and the method should be thought of as
+    /// analogous to inserting as many empty updates, where the trace is
+    /// permitted to perform proportionate work.
+    ///
+    /// Returns true if this did work and false if it left the spine unchanged.
+    #[must_use]
+    pub fn exert(&mut self, fuel: usize) -> (Vec<FueledMergeReq<T>>, bool) {
+        let fuel = isize::try_from(fuel).unwrap_or(isize::MAX);
+
+        let mut merge_reqs = Vec::new();
+        let did_work = self.spine.exert(
+            fuel,
+            &mut SpineLog::Enabled {
+                merge_reqs: &mut merge_reqs,
+            },
+        );
+        debug_assert_eq!(self.spine.validate(), Ok(()), "{:?}", self);
+        // See the comment in [Self::push_batch].
+        let merge_reqs = Self::remove_redundant_merge_reqs(merge_reqs);
+        (merge_reqs, did_work)
+    }
+
     /// Validates invariants.
     ///
     /// See `Spine::validate` for details.
@@ -1128,6 +1152,33 @@ impl<T: Timestamp + Lattice> Spine<T> {
         }
     }
 
+    /// Apply some amount of effort to trace maintenance.
+    ///
+    /// The units of effort are updates, and the method should be thought of as
+    /// analogous to inserting as many empty updates, where the trace is
+    /// permitted to perform proportionate work.
+    ///
+    /// Returns true if this did work and false if it left the spine unchanged.
+    fn exert(&mut self, effort: isize, log: &mut SpineLog<'_, T>) -> bool {
+        self.tidy_layers();
+        if self.reduced() {
+            return false;
+        }
+
+        if self.merging.iter().any(|b| b.merge.is_some()) {
+            // If any merges exist, we can directly call `apply_fuel`.
+            self.apply_fuel(&effort, log);
+        } else {
+            // Otherwise, we'll need to introduce fake updates to move merges
+            // along.
+
+            // TODO: Tracked in #29459. Once we've finished deleting the legacy
+            // spine-diff code, push an empty batch here to move things along.
+            return false;
+        }
+        true
+    }
+
     // Ideally, this method acts as insertion of `batch`, even if we are not yet
     // able to begin merging the batch. This means it is a good time to perform
     // amortized work proportional to the size of batch.
@@ -1166,6 +1217,18 @@ impl<T: Timestamp + Lattice> Spine<T> {
         // Normal insertion for the batch.
         let index = batch.len().next_power_of_two();
         self.introduce_batch(batch, usize::cast_from(index.trailing_zeros()), log);
+    }
+
+    /// True iff there is at most one HollowBatch in `self.merging`.
+    ///
+    /// When true, there is no maintenance work to perform in the trace, other
+    /// than compaction. We do not yet have logic in place to determine if
+    /// compaction would improve a trace, so for now we are ignoring that.
+    fn reduced(&self) -> bool {
+        self.spine_batches()
+            .flat_map(|b| b.parts.as_slice())
+            .count()
+            < 2
     }
 
     /// Describes the merge progress of layers in the trace.

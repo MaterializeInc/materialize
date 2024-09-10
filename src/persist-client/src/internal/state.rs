@@ -1263,6 +1263,21 @@ where
         Continue(apply_merge_result)
     }
 
+    pub fn spine_exert(
+        &mut self,
+        fuel: usize,
+    ) -> ControlFlow<NoOpStateTransition<Vec<FueledMergeReq<T>>>, Vec<FueledMergeReq<T>>> {
+        let (merge_reqs, did_work) = self.trace.exert(fuel);
+        if did_work {
+            Continue(merge_reqs)
+        } else {
+            assert!(merge_reqs.is_empty());
+            // Break if we have nothing useful to do to save the seqno (and
+            // resulting crdb traffic)
+            Break(NoOpStateTransition(Vec::new()))
+        }
+    }
+
     pub fn downgrade_since(
         &mut self,
         reader_id: &LeasedReaderId,

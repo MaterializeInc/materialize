@@ -263,6 +263,33 @@ where
         (state, maintenance)
     }
 
+    pub async fn spine_exert(&mut self, fuel: usize) -> (Vec<CompactReq<T>>, RoutineMaintenance) {
+        // Performance special case for no-ops, to avoid the State clones.
+        if fuel == 0 || self.applier.all_batches().len() < 2 {
+            return (Vec::new(), RoutineMaintenance::default());
+        }
+
+        let metrics = Arc::clone(&self.applier.metrics);
+        let (_seqno, reqs, maintenance) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.spine_exert, |_seqno, _cfg, state| {
+                state.spine_exert(fuel)
+            })
+            .await;
+        let reqs = reqs
+            .into_iter()
+            .map(|req| CompactReq {
+                shard_id: self.shard_id(),
+                desc: req.desc,
+                inputs: req
+                    .inputs
+                    .into_iter()
+                    .map(|b| Arc::unwrap_or_clone(b.batch))
+                    .collect(),
+            })
+            .collect();
+        (reqs, maintenance)
+    }
+
     pub async fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
