@@ -3637,7 +3637,7 @@ impl Coordinator {
 
                 let mz_sql::plan::AlterSourceAddSubsourceOptionExtracted {
                     text_columns: mut new_text_columns,
-                    ignore_columns: mut new_ignore_columns,
+                    exclude_columns: mut new_exclude_columns,
                     ..
                 } = options.try_into()?;
 
@@ -3715,7 +3715,7 @@ impl Coordinator {
                     } => {
                         let mz_sql::plan::MySqlConfigOptionExtracted {
                             mut text_columns,
-                            mut ignore_columns,
+                            mut exclude_columns,
                             ..
                         } = curr_options.clone().try_into()?;
 
@@ -3725,28 +3725,28 @@ impl Coordinator {
                             !matches!(
                                 o.name,
                                 MySqlConfigOptionName::TextColumns
-                                    | MySqlConfigOptionName::IgnoreColumns
+                                    | MySqlConfigOptionName::ExcludeColumns
                             )
                         });
 
-                        // Drop all text / ignore columns that are not currently referred to.
+                        // Drop all text / exclude columns that are not currently referred to.
                         let column_referenced =
                             |column_qualified_reference: &UnresolvedItemName| {
                                 mz_ore::soft_assert_eq_or_log!(
                                 column_qualified_reference.0.len(),
                                 3,
-                                "all TEXT COLUMNS & IGNORE COLUMNS values must be column-qualified references"
+                                "all TEXT COLUMNS & EXCLUDE COLUMNS values must be column-qualified references"
                             );
                                 let mut table = column_qualified_reference.clone();
                                 table.0.truncate(2);
                                 curr_references.contains(&table)
                             };
                         text_columns.retain(column_referenced);
-                        ignore_columns.retain(column_referenced);
+                        exclude_columns.retain(column_referenced);
 
-                        // Merge the current text / ignore columns into the new text / ignore columns.
+                        // Merge the current text / exclude columns into the new text / exclude columns.
                         new_text_columns.extend(text_columns);
-                        new_ignore_columns.extend(ignore_columns);
+                        new_exclude_columns.extend(exclude_columns);
 
                         // If we have text columns, add them to the options.
                         if !new_text_columns.is_empty() {
@@ -3761,17 +3761,17 @@ impl Coordinator {
                                 value: Some(WithOptionValue::Sequence(new_text_columns)),
                             });
                         }
-                        // If we have ignore columns, add them to the options.
-                        if !new_ignore_columns.is_empty() {
-                            new_ignore_columns.sort();
-                            let new_ignore_columns = new_ignore_columns
+                        // If we have exclude columns, add them to the options.
+                        if !new_exclude_columns.is_empty() {
+                            new_exclude_columns.sort();
+                            let new_exclude_columns = new_exclude_columns
                                 .into_iter()
                                 .map(WithOptionValue::UnresolvedItemName)
                                 .collect();
 
                             curr_options.push(MySqlConfigOption {
-                                name: MySqlConfigOptionName::IgnoreColumns,
-                                value: Some(WithOptionValue::Sequence(new_ignore_columns)),
+                                name: MySqlConfigOptionName::ExcludeColumns,
+                                value: Some(WithOptionValue::Sequence(new_exclude_columns)),
                             });
                         }
                     }

@@ -150,6 +150,7 @@ Escape
 Estimate
 Every
 Except
+Exclude
 Execute
 Exists
 Expected

@@ -1021,7 +1021,7 @@ fn humanize_sql_for_show_create(
                             // COLUMNS` values that refer to the table it
                             // ingests, which we'll handle below.
                             MySqlConfigOptionName::TextColumns
-                            | MySqlConfigOptionName::IgnoreColumns => {}
+                            | MySqlConfigOptionName::ExcludeColumns => {}
                             // Drop details, which does not rountrip.
                             MySqlConfigOptionName::Details => return false,
                         };
@@ -1036,13 +1036,13 @@ fn humanize_sql_for_show_create(
                                         curr_references.contains_key(&name)
                                     }
                                     _ => unreachable!(
-                                        "TEXT COLUMNS + IGNORE COLUMNS must be sequence of unresolved item names"
+                                        "TEXT COLUMNS + EXCLUDE COLUMNS must be sequence of unresolved item names"
                                     ),
                                 });
                                 !seq_unresolved_item_names.is_empty()
                             }
                             _ => unreachable!(
-                                "TEXT COLUMNS + IGNORE COLUMNS must be sequence of unresolved item names"
+                                "TEXT COLUMNS + EXCLUDE COLUMNS must be sequence of unresolved item names"
                             ),
                         }
                     });
@@ -1077,7 +1077,7 @@ fn humanize_sql_for_show_create(
             stmt.with_options.retain_mut(|o| {
                 match o.name {
                     CreateSubsourceOptionName::TextColumns => true,
-                    CreateSubsourceOptionName::IgnoreColumns => true,
+                    CreateSubsourceOptionName::ExcludeColumns => true,
                     // Drop details, which does not rountrip.
                     CreateSubsourceOptionName::Details => false,
                     CreateSubsourceOptionName::ExternalReference => true,

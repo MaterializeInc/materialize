@@ -1098,8 +1098,8 @@ pub enum CreateSubsourceOptionName {
     ExternalReference,
     /// Columns whose types you want to unconditionally format as text
     TextColumns,
-    /// Columns you want to ignore when ingesting data
-    IgnoreColumns,
+    /// Columns you want to exclude when ingesting data
+    ExcludeColumns,
     /// `DETAILS` for this subsource, hex-encoded protobuf type
     /// `mz_storage_types::sources::SourceExportStatementDetails`
     Details,
@@ -1111,7 +1111,7 @@ impl AstDisplay for CreateSubsourceOptionName {
             CreateSubsourceOptionName::Progress => "PROGRESS",
             CreateSubsourceOptionName::ExternalReference => "EXTERNAL REFERENCE",
             CreateSubsourceOptionName::TextColumns => "TEXT COLUMNS",
-            CreateSubsourceOptionName::IgnoreColumns => "IGNORE COLUMNS",
+            CreateSubsourceOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
             CreateSubsourceOptionName::Details => "DETAILS",
         })
     }
@@ -1129,7 +1129,7 @@ impl WithOptionName for CreateSubsourceOptionName {
             | CreateSubsourceOptionName::ExternalReference
             | CreateSubsourceOptionName::Details
             | CreateSubsourceOptionName::TextColumns
-            | CreateSubsourceOptionName::IgnoreColumns => false,
+            | CreateSubsourceOptionName::ExcludeColumns => false,
         }
     }
 }
@@ -1510,8 +1510,8 @@ impl_display_for_with_option!(TableOption);
 pub enum TableFromSourceOptionName {
     /// Columns whose types you want to unconditionally format as text
     TextColumns,
-    /// Columns you want to ignore when ingesting data
-    IgnoreColumns,
+    /// Columns you want to exclude when ingesting data
+    ExcludeColumns,
     /// Hex-encoded protobuf of a `ProtoSourceExportStatementDetails`
     /// message, which includes details necessary for planning this
     /// table as a Source Export
@@ -1522,7 +1522,7 @@ impl AstDisplay for TableFromSourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             TableFromSourceOptionName::TextColumns => "TEXT COLUMNS",
-            TableFromSourceOptionName::IgnoreColumns => "IGNORE COLUMNS",
+            TableFromSourceOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
             TableFromSourceOptionName::Details => "DETAILS",
         })
     }
@@ -1539,7 +1539,7 @@ impl WithOptionName for TableFromSourceOptionName {
         match self {
             TableFromSourceOptionName::Details
             | TableFromSourceOptionName::TextColumns
-            | TableFromSourceOptionName::IgnoreColumns => false,
+            | TableFromSourceOptionName::ExcludeColumns => false,
         }
     }
 }
@@ -2534,7 +2534,7 @@ pub enum AlterSourceAddSubsourceOptionName {
     /// Columns whose types you want to unconditionally format as text
     TextColumns,
     /// Columns you want to ignore when ingesting data
-    IgnoreColumns,
+    ExcludeColumns,
     /// Updated `DETAILS` for an ingestion, e.g.
     /// [`crate::ast::PgConfigOptionName::Details`]
     /// or
@@ -2546,7 +2546,7 @@ impl AstDisplay for AlterSourceAddSubsourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             AlterSourceAddSubsourceOptionName::TextColumns => "TEXT COLUMNS",
-            AlterSourceAddSubsourceOptionName::IgnoreColumns => "IGNORE COLUMNS",
+            AlterSourceAddSubsourceOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
             AlterSourceAddSubsourceOptionName::Details => "DETAILS",
         })
     }
@@ -2563,7 +2563,7 @@ impl WithOptionName for AlterSourceAddSubsourceOptionName {
         match self {
             AlterSourceAddSubsourceOptionName::Details
             | AlterSourceAddSubsourceOptionName::TextColumns
-            | AlterSourceAddSubsourceOptionName::IgnoreColumns => false,
+            | AlterSourceAddSubsourceOptionName::ExcludeColumns => false,
         }
     }
 }

@@ -262,7 +262,7 @@ pub enum PurifiedExportDetails {
     MySql {
         table: MySqlTableDesc,
         text_columns: Option<Vec<Ident>>,
-        ignore_columns: Option<Vec<Ident>>,
+        exclude_columns: Option<Vec<Ident>>,
         initial_gtid_set: String,
     },
     Postgres {
@@ -886,7 +886,7 @@ async fn purify_create_source(
             let crate::plan::statement::ddl::MySqlConfigOptionExtracted {
                 details,
                 text_columns,
-                ignore_columns,
+                exclude_columns,
                 seen: _,
             } = options.clone().try_into()?;
 
@@ -949,12 +949,12 @@ async fn purify_create_source(
             let mysql::PurifiedSourceExports {
                 source_exports: subsources,
                 normalized_text_columns,
-                normalized_ignore_columns,
+                normalized_exclude_columns,
             } = mysql::purify_source_exports(
                 &mut conn,
                 external_references,
                 text_columns,
-                ignore_columns,
+                exclude_columns,
                 source_name,
                 initial_gtid_set.clone(),
                 &reference_policy,
@@ -983,10 +983,10 @@ async fn purify_create_source(
             }
             if let Some(ignore_cols_option) = options
                 .iter_mut()
-                .find(|option| option.name == MySqlConfigOptionName::IgnoreColumns)
+                .find(|option| option.name == MySqlConfigOptionName::ExcludeColumns)
             {
                 ignore_cols_option.value =
-                    Some(WithOptionValue::Sequence(normalized_ignore_columns));
+                    Some(WithOptionValue::Sequence(normalized_exclude_columns));
             }
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
@@ -1194,7 +1194,7 @@ async fn purify_alter_source(
 
     let crate::plan::statement::ddl::AlterSourceAddSubsourceOptionExtracted {
         text_columns,
-        ignore_columns,
+        exclude_columns,
         details,
         seen: _,
     } = options.clone().try_into()?;
@@ -1230,9 +1230,9 @@ async fn purify_alter_source(
                 Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
             }
 
-            if !ignore_columns.is_empty() {
+            if !exclude_columns.is_empty() {
                 sql_bail!(
-                    "{} is a {} source, which does not support IGNORE COLUMNS.",
+                    "{} is a {} source, which does not support EXCLUDE COLUMNS.",
                     scx.catalog.minimal_qualification(source_name),
                     connection_name
                 )
@@ -1287,12 +1287,12 @@ async fn purify_alter_source(
             let mysql::PurifiedSourceExports {
                 source_exports: subsources,
                 normalized_text_columns,
-                normalized_ignore_columns,
+                normalized_exclude_columns,
             } = mysql::purify_source_exports(
                 &mut conn,
                 &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
-                ignore_columns,
+                exclude_columns,
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,
@@ -1309,10 +1309,10 @@ async fn purify_alter_source(
             }
             if let Some(ignore_cols_option) = options
                 .iter_mut()
-                .find(|option| option.name == AlterSourceAddSubsourceOptionName::IgnoreColumns)
+                .find(|option| option.name == AlterSourceAddSubsourceOptionName::ExcludeColumns)
             {
                 ignore_cols_option.value =
-                    Some(WithOptionValue::Sequence(normalized_ignore_columns));
+                    Some(WithOptionValue::Sequence(normalized_exclude_columns));
             }
         }
         _ => unreachable!(),
@@ -1370,7 +1370,7 @@ async fn purify_create_table_from_source(
 
     let crate::plan::statement::ddl::TableFromSourceOptionExtracted {
         text_columns,
-        ignore_columns,
+        exclude_columns,
         details,
         seen: _,
     } = with_options.clone().try_into()?;
@@ -1392,7 +1392,7 @@ async fn purify_create_table_from_source(
             )
         })
         .collect_vec();
-    let qualified_ignore_columns = ignore_columns
+    let qualified_exclude_columns = exclude_columns
         .iter()
         .map(|col| {
             UnresolvedItemName(
@@ -1450,9 +1450,9 @@ async fn purify_create_table_from_source(
             }
 
             // TODO(roshan): Add support for PG sources to allow this
-            if !ignore_columns.is_empty() {
+            if !exclude_columns.is_empty() {
                 sql_bail!(
-                    "{} is a {} source, which does not support IGNORE COLUMNS.",
+                    "{} is a {} source, which does not support EXCLUDE COLUMNS.",
                     scx.catalog.minimal_qualification(qualified_source_name),
                     connection_name
                 )
@@ -1503,16 +1503,16 @@ async fn purify_create_table_from_source(
 
             let mysql::PurifiedSourceExports {
                 source_exports,
-                // `normalized_text/ignore_columns` is not relevant for us and is only returned for
+                // `normalized_text/exclude_columns` is not relevant for us and is only returned for
                 // `CREATE SOURCE` statements that automatically generate subsources, and will be
                 // removed with that functionality in the future.
                 normalized_text_columns: _,
-                normalized_ignore_columns: _,
+                normalized_exclude_columns: _,
             } = mysql::purify_source_exports(
                 &mut conn,
                 &Some(ExternalReferences::SubsetTables(vec![requested_reference])),
                 qualified_text_columns,
-                qualified_ignore_columns,
+                qualified_exclude_columns,
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,
@@ -1605,7 +1605,7 @@ async fn purify_create_table_from_source(
                 columns: gen_columns,
                 constraints: gen_constraints,
                 text_columns: gen_text_columns,
-                ignore_columns: gen_ignore_columns,
+                exclude_columns: gen_exclude_columns,
                 details: gen_details,
                 external_reference: _,
             } = mysql::generate_source_export_statement_values(&scx, purified_export)?;
@@ -1624,10 +1624,10 @@ async fn purify_create_table_from_source(
             }
             if let Some(ignore_cols_option) = with_options
                 .iter_mut()
-                .find(|option| option.name == TableFromSourceOptionName::IgnoreColumns)
+                .find(|option| option.name == TableFromSourceOptionName::ExcludeColumns)
             {
-                if let Some(gen_ignore_columns) = gen_ignore_columns {
-                    ignore_cols_option.value = Some(WithOptionValue::Sequence(gen_ignore_columns));
+                if let Some(gen_exclude_columns) = gen_exclude_columns {
+                    ignore_cols_option.value = Some(WithOptionValue::Sequence(gen_exclude_columns));
                 } else {
                     soft_panic_or_log!(
                         "text_columns should be Some if ignore_cols_option is present"

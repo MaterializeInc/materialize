@@ -1092,13 +1092,13 @@ pub enum MySqlConfigOptionName {
     /// fully deprecating that feature and forcing users to use explicit
     /// `CREATE TABLE .. FROM SOURCE` statements
     TextColumns,
-    /// Columns you want to ignore
+    /// Columns you want to exclude
     /// NOTE(roshan): This value is kept around to allow round-tripping a
     /// `CREATE SOURCE` statement while we still allow creating implicit
     /// subsources from `CREATE SOURCE`, but will be removed once
     /// fully deprecating that feature and forcing users to use explicit
     /// `CREATE TABLE .. FROM SOURCE` statements
-    IgnoreColumns,
+    ExcludeColumns,
 }
 
 impl AstDisplay for MySqlConfigOptionName {
@@ -1106,7 +1106,7 @@ impl AstDisplay for MySqlConfigOptionName {
         f.write_str(match self {
             MySqlConfigOptionName::Details => "DETAILS",
             MySqlConfigOptionName::TextColumns => "TEXT COLUMNS",
-            MySqlConfigOptionName::IgnoreColumns => "IGNORE COLUMNS",
+            MySqlConfigOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
         })
     }
 }
@@ -1122,7 +1122,7 @@ impl WithOptionName for MySqlConfigOptionName {
         match self {
             MySqlConfigOptionName::Details
             | MySqlConfigOptionName::TextColumns
-            | MySqlConfigOptionName::IgnoreColumns => false,
+            | MySqlConfigOptionName::ExcludeColumns => false,
         }
     }
 }

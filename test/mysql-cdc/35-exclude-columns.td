@@ -37,14 +37,14 @@ contains: unsupported type
 
 ! CREATE SOURCE da
   FROM MYSQL CONNECTION mysqc (
-    IGNORE COLUMNS (t1.f2, t1.f3)
+    EXCLUDE COLUMNS (t1.f2, t1.f3)
   )
   FOR TABLES (public.t1);
-contains:invalid IGNORE COLUMNS option value: column name 't1.f2' must have at least a table qualification
+contains:invalid EXCLUDE COLUMNS option value: column name 't1.f2' must have at least a table qualification
 
 > CREATE SOURCE da
   FROM MYSQL CONNECTION mysqc (
-    IGNORE COLUMNS (public.t1.f2, public.t1.f3)
+    EXCLUDE COLUMNS (public.t1.f2, public.t1.f3)
   )
   FOR TABLES (public.t1);
 
@@ -62,7 +62,7 @@ INSERT INTO t1 SELECT * FROM t1;
 "test"
 
 > SHOW CREATE SOURCE t1;
-materialize.public.t1 "CREATE SUBSOURCE \"materialize\".\"public\".\"t1\" (\"f1\" \"pg_catalog\".\"int4\", \"f4\" \"pg_catalog\".\"varchar\"(64)) OF SOURCE \"materialize\".\"public\".\"da\" WITH (EXTERNAL REFERENCE = \"public\".\"t1\", IGNORE COLUMNS = (\"f2\", \"f3\"))"
+materialize.public.t1 "CREATE SUBSOURCE \"materialize\".\"public\".\"t1\" (\"f1\" \"pg_catalog\".\"int4\", \"f4\" \"pg_catalog\".\"varchar\"(64)) OF SOURCE \"materialize\".\"public\".\"da\" WITH (EXTERNAL REFERENCE = \"public\".\"t1\", EXCLUDE COLUMNS = (\"f2\", \"f3\"))"
 
 ! SELECT f2 FROM t1;
 contains:column "f2" does not exist

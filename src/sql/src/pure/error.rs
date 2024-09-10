@@ -316,7 +316,7 @@ impl MySqlSourcePurificationError {
             ),
             Self::UnrecognizedTypes { cols: _ } => Some(
                 "Check the docs -- some types can be supported using the TEXT COLUMNS option to \
-                ingest their values as text, or ignored using IGNORE COLUMNS."
+                ingest their values as text, or ignored using EXCLUDE COLUMNS."
                     .into(),
             ),
             Self::EmptyDatabase => Some(

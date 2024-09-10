@@ -454,7 +454,7 @@ generate_extracted_config!(
     MySqlConfigOption,
     (Details, String),
     (TextColumns, Vec::<UnresolvedItemName>, Default(vec![])),
-    (IgnoreColumns, Vec::<UnresolvedItemName>, Default(vec![]))
+    (ExcludeColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
 
 pub fn plan_create_webhook_source(
@@ -845,11 +845,11 @@ pub fn plan_create_source(
             };
             let MySqlConfigOptionExtracted {
                 details,
-                // text/ignore columns are already part of the source-exports and are only included
+                // text/exclude columns are already part of the source-exports and are only included
                 // in these options for round-tripping of a `CREATE SOURCE` statement. This should
                 // be removed once we drop support for implicitly created subsources.
                 text_columns: _,
-                ignore_columns: _,
+                exclude_columns: _,
                 seen: _,
             } = options.clone().try_into()?;
 
@@ -1339,7 +1339,7 @@ generate_extracted_config!(
     (Progress, bool, Default(false)),
     (ExternalReference, UnresolvedItemName),
     (TextColumns, Vec::<Ident>, Default(vec![])),
-    (IgnoreColumns, Vec::<Ident>, Default(vec![])),
+    (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (Details, String)
 );
 
@@ -1360,7 +1360,7 @@ pub fn plan_create_subsource(
         progress,
         external_reference,
         text_columns,
-        ignore_columns,
+        exclude_columns,
         details,
         seen: _,
     } = with_options.clone().try_into()?;
@@ -1410,7 +1410,7 @@ pub fn plan_create_subsource(
                 table,
                 initial_gtid_set,
                 text_columns: text_columns.into_iter().map(|c| c.into_string()).collect(),
-                ignore_columns: ignore_columns
+                exclude_columns: exclude_columns
                     .into_iter()
                     .map(|c| c.into_string())
                     .collect(),
@@ -1462,7 +1462,7 @@ pub fn plan_create_subsource(
 generate_extracted_config!(
     TableFromSourceOption,
     (TextColumns, Vec::<Ident>, Default(vec![])),
-    (IgnoreColumns, Vec::<Ident>, Default(vec![])),
+    (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (Details, String)
 );
 
@@ -1484,7 +1484,7 @@ pub fn plan_create_table_from_source(
 
     let TableFromSourceOptionExtracted {
         text_columns,
-        ignore_columns,
+        exclude_columns,
         details,
         seen: _,
     } = with_options.clone().try_into()?;
@@ -1522,7 +1522,7 @@ pub fn plan_create_table_from_source(
             table,
             initial_gtid_set,
             text_columns: text_columns.into_iter().map(|c| c.into_string()).collect(),
-            ignore_columns: ignore_columns
+            exclude_columns: exclude_columns
                 .into_iter()
                 .map(|c| c.into_string())
                 .collect(),
@@ -6077,7 +6077,7 @@ pub fn describe_alter_source(
 generate_extracted_config!(
     AlterSourceAddSubsourceOption,
     (TextColumns, Vec::<UnresolvedItemName>, Default(vec![])),
-    (IgnoreColumns, Vec::<UnresolvedItemName>, Default(vec![])),
+    (ExcludeColumns, Vec::<UnresolvedItemName>, Default(vec![])),
     (Details, String)
 );
 
