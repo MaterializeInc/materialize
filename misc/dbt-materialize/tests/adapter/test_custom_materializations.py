@@ -66,12 +66,12 @@ class TestCustomMaterializations:
         # run models
         results = run_dbt(["run"])
         # run result length
-        assert len(results) == 10
+        assert len(results) == 11
         # re-run models to ensure there are no lingering errors in recreating
         # the materializations
         results = run_dbt(["run"])
         # re-run result length
-        assert len(results) == 10
+        assert len(results) == 11
         # relations_equal
         check_relations_equal(
             project.adapter,

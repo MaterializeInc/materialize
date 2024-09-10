@@ -87,6 +87,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         )
                     )
 
+                    # Set enable_create_table_from_source to true
+                    c.testdrive(
+                        input=dedent(
+                            """
+                                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                                ALTER SYSTEM SET enable_create_table_from_source = true
+                                """
+                        )
+                    )
+
                     # Give the test harness permission to modify the built-in
                     # objects as necessary.
                     for what in [
