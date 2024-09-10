@@ -101,7 +101,17 @@
 
   {{ sql }}
   ;
-  {%- endmacro %}
+{%- endmacro %}
+
+{% macro materialize__create_source_table(relation, sql) %}
+  {% set contract_config = config.get('contract') %}
+  {% if contract_config.enforced %}
+    {{exceptions.warn("Model contracts cannot be enforced for custom materializations (see dbt-core #7213)")}}
+  {%- endif %}
+
+  create table {{ relation }}
+  {{ sql }}
+{% endmacro %}
 
 {% macro materialize__create_sink(relation, sql) -%}
   {% set contract_config = config.get('contract') %}

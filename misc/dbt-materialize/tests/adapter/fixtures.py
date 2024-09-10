@@ -96,6 +96,15 @@ FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
 FORMAT BYTES
 """
 
+test_source_table = """
+{{ config(
+    materialized='source_table',
+    database='materialize'
+) }}
+FROM SOURCE {{ ref('test_subsources') }}
+(REFERENCE 'bids') WITH (TEXT COLUMNS ["amount"])
+"""
+
 test_subsources = """
 {{ config(
     materialized='source',
