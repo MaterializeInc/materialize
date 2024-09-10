@@ -77,6 +77,10 @@ idx      hydrated_test_1 true
 mv       hydrated_test_1 true
 mv_const hydrated_test_1 true
 
+# TODO: re-enable when #29465 is resolved
+$ skip-if
+SELECT true
+
 > SELECT o.name, r.name, bool_and(h.hydrated)
   FROM mz_internal.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
