@@ -69,5 +69,9 @@ class MaterializeRelation(PostgresRelation):
         return self.type == MaterializeRelationType.Source
 
     @property
+    def is_source_table(self) -> bool:
+        return self.type == MaterializeRelationType.SourceTable
+
+    @property
     def is_sink(self) -> bool:
         return self.type == MaterializeRelationType.Sink
