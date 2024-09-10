@@ -38,6 +38,7 @@ from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -47,8 +48,17 @@ from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
 )
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_test_analytics_config,
+)
+from materialize.test_analytics.data.parallel_benchmark import (
+    parallel_benchmark_result_storage,
+)
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 from materialize.util import PgConnInfo, all_subclasses, parse_pg_conn_string
 from materialize.version_list import resolve_ancestor_image_tag
+
+PARALLEL_BENCHMARK_FRAMEWORK_VERSION = "1.0.0"
 
 
 def known_regression(scenario: str, other_tag: str) -> bool:
@@ -83,6 +93,7 @@ SERVICES = [
     Materialized(),
     Clusterd(),
     Testdrive(no_reset=True, seed=1),
+    Mz(app_password=""),
 ]
 
 
@@ -244,6 +255,7 @@ class Gaussian(Distribution):
 
 class PhaseAction:
     report_regressions: bool
+    action: Action
 
     def run(
         self,
@@ -366,9 +378,14 @@ class Scenario:
     jobs: queue.Queue
     conns: queue.Queue
     thread_pool: list[threading.Thread]
+    version: str = "1.0.0"
 
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         raise NotImplementedError
+
+    @classmethod
+    def name(cls) -> str:
+        return cls.__name__
 
     def init(
         self,
@@ -926,12 +943,12 @@ class Statistics:
         self.qps: float = len(times) / max(times)
         self.max: float = max(durations)
         self.min: float = min(durations)
-        self.avg = numpy.mean(durations)
-        self.p50 = numpy.median(durations)
-        self.p95 = numpy.percentile(durations, 95)
-        self.p99 = numpy.percentile(durations, 99)
-        self.std = numpy.std(durations, ddof=1)
-        self.slope = numpy.polyfit(times, durations, 1)[0]
+        self.avg: float = float(numpy.mean(durations))
+        self.p50: float = float(numpy.median(durations))
+        self.p95: float = float(numpy.percentile(durations, 95))
+        self.p99: float = float(numpy.percentile(durations, 99))
+        self.std: float = float(numpy.std(durations, ddof=1))
+        self.slope: float = float(numpy.polyfit(times, durations, 1)[0])
 
     def __str__(self) -> str:
         return f"""  queries: {self.queries:>5}
@@ -968,7 +985,7 @@ def report(
     guarantees: bool,
     suffix: str,
 ) -> tuple[dict[str, Statistics], list[TestFailureDetails]]:
-    scenario_name = type(scenario).__name__
+    scenario_name = type(scenario).name()
     stats: dict[str, Statistics] = {}
     failures: list[TestFailureDetails] = []
     plt.figure(figsize=(10, 6))
@@ -1100,7 +1117,7 @@ def run_once(
     c.silent = True
 
     for scenario_class in scenarios:
-        scenario_name = scenario_class.__name__
+        scenario_name = scenario_class.name()
         print(f"--- Running scenario {scenario_name}")
         state = State(
             measurements=defaultdict(list),
@@ -1152,8 +1169,8 @@ def check_regressions(
     assert len(this_stats) == len(other_stats)
 
     for scenario, other_scenario in zip(this_stats.keys(), other_stats.keys()):
-        scenario_name = type(scenario).__name__
-        assert type(other_scenario).__name__ == scenario_name
+        scenario_name = type(scenario).name()
+        assert type(other_scenario).name() == scenario_name
         has_failed = False
         print(f"Comparing scenario {scenario_name}")
         output_lines = [
@@ -1161,13 +1178,14 @@ def check_regressions(
             "-" * 118,
         ]
 
-        ignore_regressions = set()
+        ignored_queries = set()
         for phase in scenario.phases:
+            # We only care about LoadPhases, and only they have report_regressions
             if not isinstance(phase, LoadPhase):
                 continue
-            for action in phase.phase_actions:
-                if not action.report_regressions:
-                    ignore_regressions.add(str(action))
+            for phase_action in phase.phase_actions:
+                if not phase_action.report_regressions:
+                    ignored_queries.add(str(phase_action.action))
 
         for query in this_stats[scenario].keys():
             for stat in dir(this_stats[scenario][query]):
@@ -1177,7 +1195,7 @@ def check_regressions(
                 percentage = f"{(this_value / other_value - 1) * 100:.2f}%"
                 threshold = (
                     None
-                    if query in ignore_regressions
+                    if query in ignored_queries
                     else (
                         scenario.regression_thresholds.get(query, {}).get(stat)
                         or REGRESSION_THRESHOLDS[stat]
@@ -1220,6 +1238,57 @@ def resolve_tag(tag: str) -> str:
         # TODO: We probably will need overrides too
         return resolve_ancestor_image_tag({})
     return tag
+
+
+def upload_results_to_test_analytics(
+    c: Composition,
+    load_phase_duration: int | None,
+    stats: dict[Scenario, dict[str, Statistics]],
+    was_successful: bool,
+) -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    test_analytics.builds.add_build_job(was_successful=was_successful)
+
+    result_entries = []
+
+    for scenario in stats.keys():
+        scenario_name = type(scenario).name()
+        scenario_version = scenario.version
+
+        for query in stats[scenario].keys():
+            result_entries.append(
+                parallel_benchmark_result_storage.ParallelBenchmarkResultEntry(
+                    scenario_name=scenario_name,
+                    scenario_version=str(scenario_version),
+                    query=query,
+                    load_phase_duration=load_phase_duration,
+                    queries=stats[scenario][query].queries,
+                    qps=stats[scenario][query].qps,
+                    min=stats[scenario][query].min,
+                    max=stats[scenario][query].max,
+                    avg=stats[scenario][query].avg,
+                    p50=stats[scenario][query].p50,
+                    p95=stats[scenario][query].p95,
+                    p99=stats[scenario][query].p99,
+                    std=stats[scenario][query].std,
+                    slope=stats[scenario][query].slope,
+                )
+            )
+
+    test_analytics.parallel_benchmark_results.add_result(
+        framework_version=PARALLEL_BENCHMARK_FRAMEWORK_VERSION,
+        results=result_entries,
+    )
+
+    try:
+        test_analytics.submit_updates()
+        print("Uploaded results.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        test_analytics.on_upload_failed(e)
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1305,13 +1374,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         scenarios = list(all_subclasses(Scenario))
 
+    sharded_scenarios = buildkite.shard_list(scenarios, lambda s: s.name())
+
     service_names = ["materialized", "postgres", "mysql"] + (
         ["redpanda"] if args.redpanda else ["zookeeper", "kafka", "schema-registry"]
     )
 
     this_stats, failures = run_once(
         c,
-        scenarios,
+        sharded_scenarios,
         service_names,
         tag=None,
         params=args.this_params,
@@ -1325,7 +1396,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         args.guarantees = False
         other_stats, other_failures = run_once(
             c,
-            scenarios,
+            sharded_scenarios,
             service_names,
             tag=tag,
             params=args.other_params,
@@ -1334,6 +1405,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         failures.extend(other_failures)
         failures.extend(check_regressions(this_stats, other_stats, tag))
+
+    upload_results_to_test_analytics(
+        c, args.load_phase_duration, this_stats, not failures
+    )
 
     if failures:
         raise FailedTestExecutionError(errors=failures)
