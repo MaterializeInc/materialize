@@ -54,7 +54,7 @@ use mz_pgwire_common::{
 };
 use mz_server_core::{
     listen, Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
-    ReloadingTlsConfig, TlsCertConfig, TlsMode,
+    ReloadingTlsConfig, ServeConfig, ServeDyncfg, TlsCertConfig, TlsMode,
 };
 use openssl::ssl::{NameType, Ssl};
 use prometheus::{IntCounterVec, IntGaugeVec};
@@ -262,10 +262,7 @@ impl BalancerService {
         let pgwire_addr = self.pgwire.0.local_addr();
         let https_addr = self.https.0.local_addr();
         let internal_http_addr = self.internal_http.0.local_addr();
-        // TODO: Change mz_server_core::serve to take a dyncfg so that it can dynamically fetch this
-        // value when it's used, allowing the value to change during runtime in LD instead of
-        // snapshotting at startup.
-        let sigterm_wait = Some(SIGTERM_WAIT.get(&self.configs));
+
         {
             if let Some(dir) = &self.cfg.cancellation_resolver_dir {
                 if !dir.is_dir() {
@@ -281,9 +278,20 @@ impl BalancerService {
             };
             let (handle, stream) = self.pgwire;
             server_handles.push(handle);
-            set.spawn_named(|| "pgwire_stream", async move {
-                mz_server_core::serve(stream, pgwire, sigterm_wait).await;
-                warn!("pgwire server exited");
+            set.spawn_named(|| "pgwire_stream", {
+                let config_set = self.configs.clone();
+                async move {
+                    mz_server_core::serve(ServeConfig {
+                        server: pgwire,
+                        conns: stream,
+                        dyncfg: Some(ServeDyncfg {
+                            config_set,
+                            sigterm_wait_config: &SIGTERM_WAIT,
+                        }),
+                    })
+                    .await;
+                    warn!("pgwire server exited");
+                }
             });
         }
         {
@@ -301,9 +309,20 @@ impl BalancerService {
             };
             let (handle, stream) = self.https;
             server_handles.push(handle);
-            set.spawn_named(|| "https_stream", async move {
-                mz_server_core::serve(stream, https, sigterm_wait).await;
-                warn!("https server exited");
+            set.spawn_named(|| "https_stream", {
+                let config_set = self.configs.clone();
+                async move {
+                    mz_server_core::serve(ServeConfig {
+                        server: https,
+                        conns: stream,
+                        dyncfg: Some(ServeDyncfg {
+                            config_set,
+                            sigterm_wait_config: &SIGTERM_WAIT,
+                        }),
+                    })
+                    .await;
+                    warn!("https server exited");
+                }
             });
         }
         {
@@ -323,9 +342,14 @@ impl BalancerService {
             let (handle, stream) = self.internal_http;
             server_handles.push(handle);
             set.spawn_named(|| "internal_http_stream", async move {
-                // Prevent internal monitoring from allowing a graceful shutdown. In our testing
-                // *something* kept this open for at least 10 minutes.
-                mz_server_core::serve(stream, internal_http, None).await;
+                mz_server_core::serve(ServeConfig {
+                    server: internal_http,
+                    conns: stream,
+                    // Disable graceful termination because our internal
+                    // monitoring keeps persistent HTTP connections open.
+                    dyncfg: None,
+                })
+                .await;
                 warn!("internal_http server exited");
             });
         }

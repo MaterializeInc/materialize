@@ -148,11 +148,11 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
     }
 
     /// Reads current values from LaunchDarkly and updates the ConfigSet.
-    fn sync(&self) -> Result<ConfigUpdates, anyhow::Error> {
+    fn sync(&self) -> Result<(), anyhow::Error> {
         let mut updates = ConfigUpdates::default();
         let Some(ld_client) = &self.ld_client else {
             (self.on_update)(&updates, &self.set);
-            return Ok(updates);
+            return Ok(());
         };
         for entry in self.set.entries() {
             let val = dyn_into_flag(entry.val()).expect("new() verifies all configs can convert");
@@ -190,7 +190,7 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
         }
         updates.apply(&self.set);
         (self.on_update)(&updates, &self.set);
-        Ok(updates)
+        Ok(())
     }
 }
 

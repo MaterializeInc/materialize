@@ -42,7 +42,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_repr::strconv;
 use mz_secrets::SecretsController;
-use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, TlsCertConfig};
+use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, ServeConfig, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::{ConnectionCounter, Value, VarInput};
 use tokio::sync::oneshot;
@@ -322,7 +322,13 @@ impl Listeners {
                 deployment_state_handle,
                 internal_console_redirect_url: config.internal_console_redirect_url,
             });
-            mz_server_core::serve(internal_http_conns, internal_http_server, None)
+            mz_server_core::serve(ServeConfig {
+                server: internal_http_server,
+                conns: internal_http_conns,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
         });
 
         info!(
@@ -638,7 +644,13 @@ impl Listeners {
                 internal: false,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            mz_server_core::serve(sql_conns, sql_server, None)
+            mz_server_core::serve(ServeConfig {
+                conns: sql_conns,
+                server: sql_server,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
         });
 
         // Launch internal SQL server.
@@ -661,7 +673,13 @@ impl Listeners {
                 internal: true,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            mz_server_core::serve(internal_sql_conns, internal_sql_server, None)
+            mz_server_core::serve(ServeConfig {
+                conns: internal_sql_conns,
+                server: internal_sql_server,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
         });
 
         // Launch HTTP server.
@@ -677,7 +695,13 @@ impl Listeners {
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics.clone(),
             });
-            mz_server_core::serve(http_conns, http_server, None)
+            mz_server_core::serve(ServeConfig {
+                conns: http_conns,
+                server: http_server,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
         });
 
         // Launch HTTP server exposed to balancers
@@ -693,7 +717,13 @@ impl Listeners {
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics,
             });
-            mz_server_core::serve(balancer_http_conns, balancer_http_server, None)
+            mz_server_core::serve(ServeConfig {
+                conns: balancer_http_conns,
+                server: balancer_http_server,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
         });
 
         // Launch SQL server exposed to balancers
@@ -707,7 +737,13 @@ impl Listeners {
                 internal: false,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            mz_server_core::serve(balancer_sql_conns, balancer_sql_server, None)
+            mz_server_core::serve(ServeConfig {
+                conns: balancer_sql_conns,
+                server: balancer_sql_server,
+                // `environmentd` does not currently need to dynamically
+                // configure graceful termination behavior.
+                dyncfg: None,
+            })
         });
 
         // Start telemetry reporting loop.
