@@ -305,7 +305,8 @@ version = "1.0.5"
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:e9128d448ddb4ff28a8f7b8979bb03ccdd14233f"
+version = "0.12.0@git:7607a2b757394485453343a681df6083872b3f0a"
+importable = false
 
 [[audits.domain]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
@@ -1122,22 +1123,26 @@ version = "0.17.0"
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:5a3a4abb3d7a4f84b499782c579af067b466cb66"
+version = "0.12.0@git:50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
+importable = false
 
 [[audits.timely_bytes]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:5a3a4abb3d7a4f84b499782c579af067b466cb66"
+version = "0.12.0@git:50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
+importable = false
 
 [[audits.timely_communication]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:5a3a4abb3d7a4f84b499782c579af067b466cb66"
+version = "0.12.0@git:50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
+importable = false
 
 [[audits.timely_logging]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:5a3a4abb3d7a4f84b499782c579af067b466cb66"
+version = "0.12.0@git:50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
+importable = false
 
 [[audits.tokio]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
@@ -1362,7 +1367,7 @@ delta = "6.0.6 -> 7.0.0"
 
 [[trusted.abomonation]]
 criteria = "safe-to-deploy"
-user-id = 704 # Frank McSherry (frankmcsherry)
+user-id = 704
 start = "2019-05-27"
 end = "2024-11-21"
 
@@ -1608,7 +1613,7 @@ end = "2024-11-16"
 
 [[trusted.differential-dataflow]]
 criteria = "safe-to-deploy"
-user-id = 704 # Frank McSherry (frankmcsherry)
+user-id = 704
 start = "2019-03-31"
 end = "2024-11-21"
 
@@ -1710,7 +1715,7 @@ end = "2024-11-16"
 
 [[trusted.launchdarkly-server-sdk]]
 criteria = "safe-to-deploy"
-user-id = 144672 # LaunchDarklyReleaseBot
+user-id = 144672
 start = "2022-01-22"
 end = "2024-12-24"
 
@@ -2016,31 +2021,31 @@ end = "2024-11-16"
 
 [[trusted.timely]]
 criteria = "safe-to-deploy"
-user-id = 704 # Frank McSherry (frankmcsherry)
+user-id = 704
 start = "2019-03-31"
 end = "2024-11-21"
 
 [[trusted.timely_bytes]]
 criteria = "safe-to-deploy"
-user-id = 704 # Frank McSherry (frankmcsherry)
+user-id = 704
 start = "2019-03-31"
 end = "2024-11-21"
 
 [[trusted.timely_communication]]
 criteria = "safe-to-deploy"
-user-id = 704 # Frank McSherry (frankmcsherry)
+user-id = 704
 start = "2019-03-31"
 end = "2024-11-21"
 
 [[trusted.timely_logging]]
 criteria = "safe-to-deploy"
-user-id = 704 # Frank McSherry (frankmcsherry)
+user-id = 704
 start = "2019-03-31"
 end = "2024-11-21"
 
 [[trusted.tokio-macros]]
 criteria = "safe-to-deploy"
-user-id = 10 # Carl Lerche (carllerche)
+user-id = 10
 start = "2019-04-24"
 end = "2024-11-16"
 
