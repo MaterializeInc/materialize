@@ -23,9 +23,6 @@ steps:
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-          - "WORKSPACE"
-          - ".bazelrc"
-          - "**/*.bzl"
         artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
@@ -45,9 +42,6 @@ steps:
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-          - "WORKSPACE"
-          - ".bazelrc"
-          - "**/*.bzl"
         artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
