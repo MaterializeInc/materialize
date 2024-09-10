@@ -113,6 +113,10 @@ skip = [
     { name = "sync_wrapper", version = "0.1.2" },
 ]
 
+# We don't want to use abomonation anymore.
+[[bans.deny]]
+name = "abomonation"
+
 # Use `tracing` instead.
 [[bans.deny]]
 name = "env_logger"

@@ -3,23 +3,6 @@
 version = 3
 
 [[package]]
-name = "abomonation"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56e72913c99b1f927aa7bd59a41518fdd9995f63ffc8760f211609e0241c4fb2"
-
-[[package]]
-name = "abomonation_derive"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e50e2a046af56a864c62d97b7153fda72c596e646be1b0c7963736821f6e1efa"
-dependencies = [
- "proc-macro2",
- "quote",
- "synstructure",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2053,10 +2036,8 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#e9128d448ddb4ff28a8f7b8979bb03ccdd14233f"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7607a2b757394485453343a681df6083872b3f0a"
 dependencies = [
- "abomonation",
- "abomonation_derive",
  "fnv",
  "serde",
  "timely",
@@ -2109,10 +2090,8 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#e9128d448ddb4ff28a8f7b8979bb03ccdd14233f"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7607a2b757394485453343a681df6083872b3f0a"
 dependencies = [
- "abomonation",
- "abomonation_derive",
  "differential-dataflow",
  "serde",
  "serde_derive",
@@ -9419,18 +9398,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7065abeca94b6a8a577f9bd45aa0867a2238b74e8eb67cf10d492bc39351394"
 
 [[package]]
-name = "synstructure"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67656ea1dc1b41b1451851562ea232ec2e5a80242139f7e679ceccfb5d61f545"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.107",
- "unicode-xid",
-]
-
-[[package]]
 name = "sysctl"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9723,14 +9690,14 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#5a3a4abb3d7a4f84b499782c579af067b466cb66"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
 dependencies = [
- "abomonation",
- "abomonation_derive",
+ "bincode",
  "crossbeam-channel",
  "getopts",
  "serde",
  "serde_derive",
+ "smallvec",
  "timely_bytes",
  "timely_communication",
  "timely_container",
@@ -9740,15 +9707,13 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#5a3a4abb3d7a4f84b499782c579af067b466cb66"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#5a3a4abb3d7a4f84b499782c579af067b466cb66"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
 dependencies = [
- "abomonation",
- "abomonation_derive",
  "bincode",
  "byteorder",
  "crossbeam-channel",
@@ -9762,7 +9727,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#5a3a4abb3d7a4f84b499782c579af067b466cb66"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -9772,7 +9737,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#5a3a4abb3d7a4f84b499782c579af067b466cb66"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
 
 [[package]]
 name = "tiny-keccak"
@@ -10438,12 +10403,6 @@ name = "unicode-width"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0edd1e5b14653f783770bce4a4dabb4a5108a5370a5f5d8cfe8710c361f6c8b"
-
-[[package]]
-name = "unicode-xid"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ccb82d61f80a663efe1f787a51b16b5a51e3314d6ac365b08639f52387b33f3"
 
 [[package]]
 name = "unsafe-libyaml"

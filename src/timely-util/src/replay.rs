@@ -85,7 +85,7 @@ where
         let mut builder = OperatorBuilder::new(name, scope.clone());
 
         let address = builder.operator_info().address;
-        let periodic_activator = scope.activator_for(&address[..]);
+        let periodic_activator = scope.activator_for(Rc::clone(&address));
 
         let (targets, stream) = builder.new_output();
 
@@ -96,15 +96,15 @@ where
         let mut last_active = Instant::now();
 
         let mut progress_sofar =
-            timely::progress::ChangeBatch::new_from(S::Timestamp::minimum(), 1);
+            <timely::progress::ChangeBatch<_>>::new_from(S::Timestamp::minimum(), 1);
         let token = Rc::new(ActivateOnDrop::new(
             (),
-            Rc::new(address.clone()),
+            Rc::clone(&address),
             scope.activations(),
         ));
         let weak_token = Rc::downgrade(&token);
 
-        activator.register(scope, &address[..]);
+        activator.register(scope, address);
 
         builder.build(move |progress| {
             activator.ack();

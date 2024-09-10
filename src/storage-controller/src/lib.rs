@@ -2638,7 +2638,11 @@ where
 
                 let (changes, frontier, _cluster_id) =
                     collections_net.entry(key).or_insert_with(|| {
-                        (ChangeBatch::new(), Antichain::new(), ingestion.instance_id)
+                        (
+                            <ChangeBatch<_>>::new(),
+                            Antichain::new(),
+                            ingestion.instance_id,
+                        )
                     });
 
                 changes.extend(update.drain());
@@ -2654,9 +2658,14 @@ where
 
                 // Make sure we also send `AllowCompaction` commands for sinks,
                 // which drives updating the sink's `as_of`, among other things.
-                let (changes, frontier, _cluster_id) = exports_net
-                    .entry(key)
-                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new(), export.cluster_id()));
+                let (changes, frontier, _cluster_id) =
+                    exports_net.entry(key).or_insert_with(|| {
+                        (
+                            <ChangeBatch<_>>::new(),
+                            Antichain::new(),
+                            export.cluster_id(),
+                        )
+                    });
 
                 changes.extend(update.drain());
                 *frontier = staged_read_hold.frontier().to_owned();

@@ -23,7 +23,7 @@ mz-timely-util = { path = "../timely-util" }
 prometheus = { version = "0.13.3", default-features = false }
 prost = { version = "0.13.1", features = ["no-recursion-limit"] }
 serde = { version = "1.0.152", features = ["derive", "rc"] }
-timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
+timely = "0.12.0"
 tokio = { version = "1.38.0", default-features = false, features = ["rt", "rt-multi-thread"] }
 tracing = "0.1.37"
 uuid = { version = "1.7.0", features = ["v4"] }

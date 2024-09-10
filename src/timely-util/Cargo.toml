@@ -16,7 +16,7 @@ lgalloc = "0.3"
 columnation = { git = "https://github.com/frankmcsherry/columnation" }
 futures-util = "0.3.25"
 proptest = { version = "1.0.0", default-features = false, features = ["std"]}
-timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
+timely = "0.12.0"
 serde = { version = "1.0.152", features = ["derive"] }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing_", "test"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

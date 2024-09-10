@@ -100,7 +100,7 @@ where
         compute_state: &ComputeState,
     ) -> Self {
         use mz_ore::collections::CollectionExt as IteratorExt;
-        let dataflow_id = scope.addr().into_first();
+        let dataflow_id = *scope.addr().into_first();
         let as_of_frontier = dataflow
             .as_of
             .clone()
@@ -845,9 +845,7 @@ where
             .stream
             .unary::<CB<_>, _, _, _>(Pipeline, &name, move |_, info| {
                 // Acquire an activator to reschedule the operator when it has unfinished work.
-                use timely::scheduling::Activator;
-                let activations = trace.stream.scope().activations();
-                let activator = Activator::new(&info.address[..], activations);
+                let activator = trace.stream.scope().activator_for(info.address);
                 // Maintain a list of work to do, cursor to navigate and process.
                 let mut todo = std::collections::VecDeque::new();
                 move |input, output| {

@@ -413,14 +413,14 @@ impl<G: Scope> OperatorBuilder<G> {
     pub fn new(name: String, mut scope: G) -> Self {
         let builder = OperatorBuilderRc::new(name, scope.clone());
         let info = builder.operator_info();
-        let activator = scope.activator_for(&info.address);
-        let sync_activator = scope.sync_activator_for(&info.address);
+        let activator = scope.activator_for(Rc::clone(&info.address));
+        let sync_activator = scope.sync_activator_for(info.address.to_vec());
         let operator_waker = TimelyWaker {
             activator: sync_activator,
             active: AtomicBool::new(false),
             task_ready: AtomicBool::new(true),
         };
-        let (shutdown_handle, shutdown_button) = button(&mut scope, &info.address);
+        let (shutdown_handle, shutdown_button) = button(&mut scope, info.address);
 
         OperatorBuilder {
             builder,
@@ -694,7 +694,7 @@ impl<G: Scope> OperatorBuilder<G> {
 }
 
 /// Creates a new coordinated button the worker configuration described by `scope`.
-pub fn button<G: Scope>(scope: &mut G, addr: &[usize]) -> (ButtonHandle, Button) {
+pub fn button<G: Scope>(scope: &mut G, addr: Rc<[usize]>) -> (ButtonHandle, Button) {
     let index = scope.new_identifier();
     let (pushers, puller) = scope.allocate(index, addr);
 

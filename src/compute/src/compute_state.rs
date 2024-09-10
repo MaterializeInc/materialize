@@ -930,7 +930,7 @@ impl PendingPeek {
             let chosen_index = usize::cast_from(peek.uuid.hashed()) % timely_worker.peers();
             chosen_index == timely_worker.index()
         };
-        let activator = timely_worker.sync_activator_for(&[]);
+        let activator = timely_worker.sync_activator_for([].into());
         let peek_uuid = peek.uuid;
 
         let (result_tx, result_rx) = oneshot::channel();

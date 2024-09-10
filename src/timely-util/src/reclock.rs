@@ -219,7 +219,7 @@ where
     let info = builder.operator_info();
     let channel_id = scope.new_identifier();
     let (pusher, mut events) =
-        scope.pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, &info.address);
+        scope.pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, info.address);
 
     let mut remap_input = builder.new_input(&remap_collection.inner, Pipeline);
     let (mut output, reclocked) = builder.new_output();
