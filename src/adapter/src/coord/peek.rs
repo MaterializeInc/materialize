@@ -562,15 +562,13 @@ impl crate::coord::Coordinator {
                 permutation: index_permutation,
                 thinned_arity: index_thinned_arity,
             }) => {
-                let output_ids = dataflow.export_ids().collect();
-
                 // Very important: actually create the dataflow (here, so we can destructure).
                 self.controller
                     .compute
                     .create_dataflow(compute_instance, dataflow, None)
                     .unwrap_or_terminate("cannot fail to create dataflows");
-                self.initialize_compute_read_policies(
-                    output_ids,
+                self.initialize_compute_read_policy(
+                    index_id,
                     compute_instance,
                     // Disable compaction so that nothing can compact before the peek occurs below.
                     CompactionWindow::DisableCompaction,

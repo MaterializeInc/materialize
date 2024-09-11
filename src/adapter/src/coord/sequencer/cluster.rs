@@ -390,13 +390,9 @@ impl Coordinator {
             self.create_cluster_replica(cluster_id, replica_id).await;
         }
 
-        if !introspection_source_ids.is_empty() {
-            self.initialize_compute_read_policies(
-                introspection_source_ids,
-                cluster_id,
-                CompactionWindow::Default,
-            )
-            .await;
+        for id in introspection_source_ids {
+            self.initialize_compute_read_policy(id, cluster_id, CompactionWindow::Default)
+                .await;
         }
     }
 

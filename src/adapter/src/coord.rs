@@ -1810,7 +1810,8 @@ impl Coordinator {
         self.controller
             .set_arrangement_exert_proportionality(exert_prop);
 
-        let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
+        let mut storage_policies: BTreeMap<GlobalId, CompactionWindow> = Default::default();
+        let mut compute_policies: BTreeMap<GlobalId, (ComputeInstanceId, CompactionWindow)> =
             Default::default();
 
         let enable_worker_core_affinity =
@@ -1930,40 +1931,29 @@ impl Coordinator {
                             );
                         }
                     }
-                    policies_to_set
-                        .entry(policy.expect("sources have a compaction window"))
-                        .or_insert_with(Default::default)
-                        .storage_ids
-                        .insert(entry.id());
+                    let cw = policy.expect("sources have a compaction window");
+                    storage_policies.insert(entry.id, cw);
                 }
                 CatalogItem::Table(_) => {
-                    policies_to_set
-                        .entry(policy.expect("tables have a compaction window"))
-                        .or_insert_with(Default::default)
-                        .storage_ids
-                        .insert(entry.id());
+                    let cw = policy.expect("tables have a compaction window");
+                    storage_policies.insert(entry.id, cw);
                 }
                 CatalogItem::Index(idx) => {
-                    let policy_entry = policies_to_set
-                        .entry(policy.expect("indexes have a compaction window"))
-                        .or_insert_with(Default::default);
+                    let id = entry.id;
+                    let cw = policy.expect("indexes have a compaction window");
 
                     if logs.contains(&idx.on) {
-                        policy_entry
-                            .compute_ids
-                            .entry(idx.cluster_id)
-                            .or_insert_with(BTreeSet::new)
-                            .insert(entry.id());
+                        compute_policies.insert(id, (idx.cluster_id, cw));
                     } else {
                         let df_desc = self
                             .catalog()
-                            .try_get_physical_plan(&entry.id())
+                            .try_get_physical_plan(&id)
                             .expect("added in `bootstrap_dataflow_plans`")
                             .clone();
 
                         let df_meta = self
                             .catalog()
-                            .try_get_dataflow_metainfo(&entry.id())
+                            .try_get_dataflow_metainfo(&id)
                             .expect("added in `bootstrap_dataflow_plans`");
 
                         if self.catalog().state().system_config().enable_mz_notices() {
@@ -1977,11 +1967,7 @@ impl Coordinator {
 
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
-                        policy_entry
-                            .compute_ids
-                            .entry(idx.cluster_id)
-                            .or_insert_with(Default::default)
-                            .extend(df_desc.export_ids());
+                        compute_policies.insert(id, (idx.cluster_id, cw));
 
                         self.controller
                             .compute
@@ -1991,11 +1977,8 @@ impl Coordinator {
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
-                    policies_to_set
-                        .entry(policy.expect("materialized views have a compaction window"))
-                        .or_insert_with(Default::default)
-                        .storage_ids
-                        .insert(entry.id());
+                    let cw = policy.expect("materialized views have a compaction window");
+                    storage_policies.insert(entry.id, cw);
 
                     let mut df_desc = self
                         .catalog()
@@ -2081,9 +2064,12 @@ impl Coordinator {
         // Having installed all entries, creating all constraints, we can now drop read holds and
         // relax read policies.
         drop(dataflow_read_holds);
-        // TODO -- Improve `initialize_read_policies` API so we can avoid calling this in a loop.
-        for (cw, policies) in policies_to_set {
-            self.initialize_read_policies(&policies, cw).await;
+        for (id, cw) in storage_policies {
+            self.initialize_storage_read_policy(id, cw).await;
+        }
+        for (id, (cluster_id, cw)) in compute_policies {
+            self.initialize_compute_read_policy(id, cluster_id, cw)
+                .await;
         }
 
         // Expose mapping from T-shirt sizes to actual sizes
@@ -3060,15 +3046,17 @@ impl Coordinator {
     ) {
         // We must only install read policies for indexes, not for sinks.
         // Sinks are write-only compute collections that don't have read policies.
-        let export_ids = dataflow.exported_index_ids().collect();
+        let export_ids: Vec<_> = dataflow.exported_index_ids().collect();
 
         self.controller
             .compute
             .create_dataflow(instance, dataflow, subscribe_target_replica)
             .unwrap_or_terminate("dataflow creation cannot fail");
 
-        self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
-            .await;
+        for id in export_ids {
+            self.initialize_compute_read_policy(id, instance, CompactionWindow::Default)
+                .await;
+        }
     }
 
     /// Like `ship_dataflow`, but also await on builtin table updates.

@@ -14,14 +14,13 @@
 //! the controller from compacting the associated collections, and ensures that they
 //! remain "readable" at a specific time, as long as the hold is held.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_compute_types::ComputeInstanceId;
-use mz_ore::instrument;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_types::read_holds::ReadHold;
@@ -95,6 +94,16 @@ impl<T: TimelyTimestamp> ReadHolds<T> {
         }
     }
 
+    fn insert_storage_collection(&mut self, id: GlobalId, hold: ReadHold<T>) {
+        let prev = self.storage_holds.insert(id, hold);
+        assert!(prev.is_none(), "duplicate storage read hold: {id}");
+    }
+
+    fn insert_compute_collection(&mut self, id: (ComputeInstanceId, GlobalId), hold: ReadHold<T>) {
+        let prev = self.compute_holds.insert(id, hold);
+        assert!(prev.is_none(), "duplicate compute read hold: {id:?}");
+    }
+
     pub fn remove_storage_collection(&mut self, id: GlobalId) {
         self.storage_holds.remove(&id);
     }
@@ -166,24 +175,6 @@ impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
             }
         }
     }
-
-    /// Extend the contained read holds with those in `other`.
-    ///
-    ///
-    /// # Panics
-    ///
-    /// In contrast to [`ReadHolds::merge`], this method expects the collection
-    /// IDs in `self` and `other` to be distinct and panics otherwise.
-    fn extend(&mut self, other: Self) {
-        for (id, other_hold) in other.storage_holds {
-            let prev = self.storage_holds.insert(id, other_hold);
-            assert!(prev.is_none(), "duplicate storage read hold: {id}");
-        }
-        for (id, other_hold) in other.compute_holds {
-            let prev = self.compute_holds.insert(id, other_hold);
-            assert!(prev.is_none(), "duplicate compute read hold: {id:?}");
-        }
-    }
 }
 
 impl<T: TimelyTimestamp> Default for ReadHolds<T> {
@@ -193,94 +184,81 @@ impl<T: TimelyTimestamp> Default for ReadHolds<T> {
 }
 
 impl crate::coord::Coordinator {
-    /// Initialize the storage read policies.
+    /// Initialize the read policy for a storage collection.
     ///
     /// This should be called only after a storage collection is created, and
     /// ideally very soon afterwards. The collection is otherwise initialized
     /// with a read policy that allows no compaction.
-    pub(crate) async fn initialize_storage_read_policies(
+    pub(crate) async fn initialize_storage_read_policy(
         &mut self,
-        ids: BTreeSet<GlobalId>,
+        id: GlobalId,
         compaction_window: CompactionWindow,
     ) {
-        self.initialize_read_policies(
-            &CollectionIdBundle {
-                storage_ids: ids,
-                compute_ids: BTreeMap::new(),
-            },
-            compaction_window,
-        )
-        .await;
+        // Install read hold in the Coordinator's timeline state.
+        if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
+            let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
+            let read_ts = oracle.read_ts().await;
+
+            let mut read_hold = self
+                .controller
+                .storage
+                .acquire_read_hold(id)
+                .expect("missing storage collection");
+            let _ = read_hold.try_downgrade(Antichain::from_elem(read_ts));
+
+            let TimelineState { read_holds, .. } = self.ensure_timeline_state(&timeline).await;
+            read_holds.insert_storage_collection(id, read_hold);
+        };
+
+        // Install read policy.
+        self.controller
+            .storage
+            .set_read_policy(vec![(id, compaction_window.into())]);
     }
 
-    /// Initialize the compute read policies.
+    pub(crate) async fn initialize_storage_read_policies(
+        &mut self,
+        ids: impl IntoIterator<Item = GlobalId>,
+        compaction_window: CompactionWindow,
+    ) {
+        for id in ids {
+            self.initialize_storage_read_policy(id, compaction_window)
+                .await;
+        }
+    }
+
+    /// Initialize the read policy for a compute collection.
     ///
     /// This should be called only after a compute collection is created, and
     /// ideally very soon afterwards. The collection is otherwise initialized
     /// with a read policy that allows no compaction.
-    pub(crate) async fn initialize_compute_read_policies(
+    pub(crate) async fn initialize_compute_read_policy(
         &mut self,
-        ids: Vec<GlobalId>,
+        id: GlobalId,
         instance: ComputeInstanceId,
         compaction_window: CompactionWindow,
     ) {
-        let mut compute_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
-        compute_ids.insert(instance, ids.into_iter().collect());
-        self.initialize_read_policies(
-            &CollectionIdBundle {
-                storage_ids: BTreeSet::new(),
-                compute_ids,
-            },
-            compaction_window,
-        )
-        .await;
-    }
+        // Install read hold in the Coordinator's timeline state.
+        if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
+            let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
+            let read_ts = oracle.read_ts().await;
 
-    /// Initialize the storage and compute read policies.
-    ///
-    /// This should be called only after a collection is created, and
-    /// ideally very soon afterwards. The collection is otherwise initialized
-    /// with a read policy that allows no compaction.
-    #[instrument(name = "coord::initialize_read_policies")]
-    pub(crate) async fn initialize_read_policies(
-        &mut self,
-        id_bundle: &CollectionIdBundle,
-        compaction_window: CompactionWindow,
-    ) {
-        // Install read holds in the Coordinator's timeline state.
-        for (timeline_context, id_bundle) in self.partition_ids_by_timeline_context(id_bundle) {
-            if let TimelineContext::TimelineDependent(timeline) = timeline_context {
-                let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
-                let read_ts = oracle.read_ts().await;
-
-                let mut new_read_holds = self.acquire_read_holds(&id_bundle);
-                new_read_holds.downgrade(read_ts);
-
-                let TimelineState { read_holds, .. } = self.ensure_timeline_state(&timeline).await;
-                read_holds.extend(new_read_holds);
-            }
-        }
-
-        // Install read policies.
-        let read_policy = ReadPolicy::from(compaction_window);
-
-        let storage_policies = id_bundle
-            .storage_ids
-            .iter()
-            .map(|id| (*id, read_policy.clone()))
-            .collect();
-        self.controller.storage.set_read_policy(storage_policies);
-
-        for (instance_id, collection_ids) in &id_bundle.compute_ids {
-            let compute_policies = collection_ids
-                .iter()
-                .map(|id| (*id, read_policy.clone()))
-                .collect();
-            self.controller
+            let mut read_hold = self
+                .controller
                 .compute
-                .set_read_policy(*instance_id, compute_policies)
-                .expect("cannot fail to set read policy");
-        }
+                .acquire_read_hold(instance, id)
+                .expect("missing compute collection");
+            let _ = read_hold.try_downgrade(Antichain::from_elem(read_ts));
+
+            let TimelineState { read_holds, .. } = self.ensure_timeline_state(&timeline).await;
+            read_holds.insert_compute_collection((instance, id), read_hold);
+        };
+
+        // Install read policy.
+        self.controller
+            .compute
+            .set_read_policy(instance, vec![(id, compaction_window.into())])
+            .expect("cannot fail to set read policy");
     }
 
     pub(crate) fn update_storage_read_policies(

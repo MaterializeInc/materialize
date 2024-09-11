@@ -19,7 +19,6 @@ use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
 use futures::{future, Future, FutureExt};
 use itertools::Itertools;
-use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::ReplicaId;
@@ -620,9 +619,9 @@ impl Coordinator {
                     .catalog()
                     .state()
                     .source_compaction_windows(source_ids);
-                for (compaction_window, storage_policies) in read_policies {
+                for (compaction_window, ids) in read_policies {
                     coord
-                        .initialize_storage_read_policies(storage_policies, compaction_window)
+                        .initialize_storage_read_policies(ids, compaction_window)
                         .await;
                 }
             })
@@ -970,8 +969,8 @@ impl Coordinator {
                         coord.apply_local_write(register_ts).await;
 
                         coord
-                            .initialize_storage_read_policies(
-                                btreeset![table_id],
+                            .initialize_storage_read_policy(
+                                table_id,
                                 table
                                     .custom_logical_compaction_window
                                     .unwrap_or(CompactionWindow::Default),
@@ -1020,12 +1019,9 @@ impl Coordinator {
                                     .catalog()
                                     .state()
                                     .source_compaction_windows(vec![table_id]);
-                                for (compaction_window, storage_policies) in read_policies {
+                                for (compaction_window, ids) in read_policies {
                                     coord
-                                        .initialize_storage_read_policies(
-                                            storage_policies,
-                                            compaction_window,
-                                        )
+                                        .initialize_storage_read_policies(ids, compaction_window)
                                         .await;
                                 }
                             }

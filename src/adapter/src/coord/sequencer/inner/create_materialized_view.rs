@@ -10,7 +10,6 @@
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
-use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::{CollectionPlan, ResultSpec};
@@ -686,8 +685,8 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to append");
 
                 coord
-                    .initialize_storage_read_policies(
-                        btreeset![sink_id],
+                    .initialize_storage_read_policy(
+                        sink_id,
                         compaction_window.unwrap_or(CompactionWindow::Default),
                     )
                     .await;
