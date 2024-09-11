@@ -312,20 +312,29 @@ These environments are later swapped transparently.
 
 <br>
 
-1. In `dbt_project.yml`, use the `deployment` variable to specify the cluster(s)
-   and schema(s) that contain the changes you want to deploy.
+1. The `deploy_get_objects` macro automatically identifies the clusters and schemas in your dbt project. If you need to exclude specific clusters or schemas from the deployment, you can specify them in the `dbt_project.yml` file:
 
     ```yaml
     vars:
       deployment:
         default:
-          clusters:
+          exclude_clusters:
             # To specify multiple clusters, use [<cluster1_name>, <cluster2_name>].
-            - <cluster_name>
-          schemas:
-            # to specify multiple schemas, use [<schema1_name>, <schema2_name>].
-            - <schema_name>
+            - <cluster_to_exclude>
+          exclude_schemas:
+            # To specify multiple schemas, use [<schema1_name>, <schema2_name>].
+            - <schema_to_exclude>
     ```
+
+   If you don't need to exclude any clusters or schemas, you can omit this configuration entirely.
+
+1. To quickly view the clusters and schemas that will be included in the deployment, you can use the [`deploy_get_objects`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_get_objects.sql) macro with the `debug` argument:
+
+  ```bash
+  dbt run-operation deploy_get_objects --args '{debug: true}'
+  ```
+
+  This will output the list of clusters and schemas that will be included in the deployment, as well as any that have been excluded based on your configuration.
 
 1. Use the [`run-operation`](https://docs.getdbt.com/reference/commands/run-operation)
    command to invoke the [`deploy_init`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_init.sql)
@@ -335,9 +344,9 @@ These environments are later swapped transparently.
     dbt run-operation deploy_init
     ```
 
-    This macro spins up a new cluster named `<cluster_name>_dbt_deploy` and a new
-    schema named `<schema_name>_dbt_deploy` using the same configuration
-    as the current environment to swap with (including privileges).
+    This macro spins up new clusters named `<cluster_name>_dbt_deploy` and new
+    schemas named `<schema_name>_dbt_deploy` for all identified clusters and schemas,
+    using the same configuration as the current environment to swap with (including privileges).
 
 1. Run the dbt project containing the code changes against the new deployment
    environment.
