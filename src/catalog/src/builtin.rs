@@ -7189,6 +7189,7 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
                     details ->> 'replica_id' AS replica_id,
                     details ->> 'replica_name' AS replica_name,
                     details ->> 'cluster_name' AS cluster_name,
+                    details ->> 'cluster_id' AS cluster_id,
                     occurred_at
                 FROM mz_catalog.mz_audit_events
                 WHERE
@@ -7210,6 +7211,7 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
             creates.cluster_name,
             creates.replica_name,
             creates.occurred_at AS created_at,
+            creates.cluster_id,
             drops.occurred_at AS dropped_at,
             mz_unsafe.mz_error_if_null(
                     mz_cluster_replica_sizes.credits_per_hour, 'Replica of unknown size'
