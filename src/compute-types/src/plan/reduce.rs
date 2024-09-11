@@ -754,7 +754,7 @@ impl ReducePlan {
     /// that key a single arrangement.
     pub fn keys(&self, key_arity: usize, arity: usize) -> AvailableCollections {
         let key = (0..key_arity)
-            .map(mz_expr::MirScalarExpr::Column)
+            .map(MirScalarExpr::Column)
             .collect::<Vec<_>>();
         let (permutation, thinning) = permutation_for_arrangement(&key, arity);
         AvailableCollections::new_arranged(vec![(key, permutation, thinning)], None)
@@ -863,7 +863,7 @@ impl KeyValPlan {
         input_permutation_and_new_arity: Option<(BTreeMap<usize, usize>, usize)>,
     ) -> Self {
         // Form an operator for evaluating key expressions.
-        let mut key_mfp = mz_expr::MapFilterProject::new(input_arity)
+        let mut key_mfp = MapFilterProject::new(input_arity)
             .map(group_key.iter().cloned())
             .project(input_arity..(input_arity + group_key.len()));
         if let Some((input_permutation, new_arity)) = input_permutation_and_new_arity.clone() {
@@ -871,7 +871,7 @@ impl KeyValPlan {
         }
 
         // Form an operator for evaluating value expressions.
-        let mut val_mfp = mz_expr::MapFilterProject::new(input_arity)
+        let mut val_mfp = MapFilterProject::new(input_arity)
             .map(aggregates.iter().map(|a| a.expr.clone()))
             .project(input_arity..(input_arity + aggregates.len()));
         if let Some((input_permutation, new_arity)) = input_permutation_and_new_arity {

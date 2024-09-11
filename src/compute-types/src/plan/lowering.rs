@@ -587,12 +587,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         MapFilterProject::new(mfp.input_arity),
                         group_key.len() + aggregates.len(),
                     );
-                    soft_assert_eq_or_log!(
-                        mfp.input_arity,
-                        output_arity,
-                        "Output arity of reduce must match input arity for MFP on top of it"
-                    );
                 }
+                soft_assert_eq_or_log!(
+                    mfp.input_arity,
+                    output_arity,
+                    "Output arity of reduce must match input arity for MFP on top of it"
+                );
                 let output_keys = reduce_plan.keys(group_key.len(), output_arity);
                 (
                     Plan::Reduce {
