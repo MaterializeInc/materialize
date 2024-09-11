@@ -116,7 +116,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, ProcessId};
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
-use mz_expr::{MapFilterProject, OptimizedMirRelationExpr};
+use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::future::TimeoutError;
@@ -511,7 +511,8 @@ pub struct PeekStageFinish {
     target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
-    optimizer: optimize::peek::Optimizer,
+    cluster_id: ComputeInstanceId,
+    finishing: RowSetFinishing,
     /// When present, an optimizer trace to be used for emitting a plan insights
     /// notice.
     plan_insights_optimizer_trace: Option<OptimizerTrace>,
