@@ -57,7 +57,7 @@ use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
     SinkStatisticsUpdate, SourceStatisticsUpdate, WebhookStatistics,
 };
-use mz_storage_client::storage_collections::{CollectionFrontiers, StorageCollections};
+use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
@@ -82,6 +82,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::mpsc;
 use tokio::sync::watch::{channel, Sender};
 use tokio::time::error::Elapsed;
+use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
 use crate::instance::{Instance, ReplicaConfig};
@@ -205,10 +206,15 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     /// Migrated storage collections that can be written even in read only mode.
     migrated_storage_collections: BTreeSet<GlobalId>,
+
+    /// Ticker for scheduling periodic maintenance work.
+    maintenance_ticker: tokio::time::Interval,
+    /// Whether maintenance work was scheduled.
+    maintenance_scheduled: bool,
 }
 
 #[async_trait(?Send)]
-impl<'a, T> StorageController for Controller<T>
+impl<T> StorageController for Controller<T>
 where
     T: Timestamp
         + Lattice
@@ -216,7 +222,7 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<Datum<'a>>
+        + Into<Datum<'static>>
         + Display,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
@@ -1762,6 +1768,9 @@ where
         if self.pending_compaction_commands.len() > 0 {
             return;
         }
+        if self.maintenance_scheduled {
+            return;
+        }
 
         if let Ok(dropped_id) = self.pending_table_handle_drops_rx.try_recv() {
             // HACKY: We cannot check if the channel has data on the version of
@@ -1786,6 +1795,10 @@ where
 
             Some(m) = self.internal_response_queue.recv() => Some(m),
             Some(m) = instance_responses.next() => m,
+            _ = self.maintenance_ticker.tick() => {
+                self.maintenance_scheduled = true;
+                None
+            },
         };
     }
 
@@ -1794,6 +1807,13 @@ where
         &mut self,
         storage_metadata: &StorageMetadata,
     ) -> Result<Option<Response<T>>, anyhow::Error> {
+        // Perform periodic maintenance work.
+        if self.maintenance_scheduled {
+            self.maintain();
+            self.maintenance_ticker.reset();
+            self.maintenance_scheduled = false;
+        }
+
         for instance in self.instances.values_mut() {
             instance.rehydrate_failed_replicas();
         }
@@ -2049,136 +2069,6 @@ where
         Ok(json_state)
     }
 
-    fn record_frontiers(&mut self) {
-        let mut frontiers = BTreeMap::new();
-
-        // Enrich `frontiers` with storage frontiers.
-        for CollectionFrontiers {
-            id,
-            implied_capability: since,
-            write_frontier: upper,
-            ..
-        } in self.storage_collections.active_collection_frontiers()
-        {
-            frontiers.insert(id, (since, upper));
-        }
-        for (object_id, export) in self.active_exports() {
-            // Exports cannot be read from, so their `since` is always the empty frontier.
-            let since = Antichain::new();
-            let upper = export.write_frontier.clone();
-            frontiers.insert(object_id, (since, upper));
-        }
-
-        let mut updates = Vec::new();
-        let mut push_update =
-            |object_id: GlobalId,
-             (since, upper): (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
-             diff: Diff| {
-                let read_frontier = since.into_option().map_or(Datum::Null, |ts| ts.into());
-                let write_frontier = upper.into_option().map_or(Datum::Null, |ts| ts.into());
-                let row = Row::pack_slice(&[
-                    Datum::String(&object_id.to_string()),
-                    read_frontier,
-                    write_frontier,
-                ]);
-                updates.push((row, diff));
-            };
-
-        let mut old_frontiers = std::mem::replace(&mut self.recorded_frontiers, frontiers);
-        for (&id, new) in &self.recorded_frontiers {
-            match old_frontiers.remove(&id) {
-                Some(old) if &old != new => {
-                    push_update(id, new.clone(), 1);
-                    push_update(id, old, -1);
-                }
-                Some(_) => (),
-                None => push_update(id, new.clone(), 1),
-            }
-        }
-        for (id, old) in old_frontiers {
-            push_update(id, old, -1);
-        }
-
-        let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
-        self.collection_manager.differential_append(id, updates);
-    }
-
-    fn record_replica_frontiers(&mut self) {
-        let mut frontiers = BTreeMap::new();
-
-        // Enrich `frontiers` with storage frontiers.
-        let mut uppers: BTreeMap<GlobalId, Antichain<Self::Timestamp>> = self
-            .storage_collections
-            .active_collection_frontiers()
-            .into_iter()
-            .map(
-                |CollectionFrontiers {
-                     id, write_frontier, ..
-                 }| (id, write_frontier),
-            )
-            .collect();
-        for (object_id, collection_state) in self.collections.iter() {
-            let ingestion_state = match &collection_state.extra_state {
-                CollectionStateExtra::Ingestion(ingestion) => ingestion,
-                CollectionStateExtra::None => continue,
-            };
-
-            let replica_ids = self
-                .instances
-                .get(&ingestion_state.instance_id)
-                .map(|i| i.replica_ids());
-            let upper = uppers.remove(object_id);
-
-            if let (Some(replica_ids), Some(upper)) = (replica_ids, upper) {
-                for replica_id in replica_ids {
-                    frontiers.insert((*object_id, replica_id), upper.clone());
-                }
-            }
-        }
-        for (object_id, export) in self.active_exports() {
-            let cluster_id = export.cluster_id();
-            let replica_ids = self.instances.get(&cluster_id).map(|i| i.replica_ids());
-            if let Some(replica_ids) = replica_ids {
-                for replica_id in replica_ids {
-                    let upper = export.write_frontier.clone();
-                    frontiers.insert((object_id, replica_id), upper);
-                }
-            }
-        }
-
-        let mut updates = Vec::new();
-        let mut push_update = |(object_id, replica_id): (GlobalId, ReplicaId),
-                               upper: Antichain<Self::Timestamp>,
-                               diff: Diff| {
-            let write_frontier = upper.into_option().map_or(Datum::Null, |ts| ts.into());
-            let row = Row::pack_slice(&[
-                Datum::String(&object_id.to_string()),
-                Datum::String(&replica_id.to_string()),
-                write_frontier,
-            ]);
-            updates.push((row, diff));
-        };
-
-        let mut old_frontiers = std::mem::replace(&mut self.recorded_replica_frontiers, frontiers);
-        for (&key, new) in &self.recorded_replica_frontiers {
-            match old_frontiers.remove(&key) {
-                Some(old) if &old != new => {
-                    push_update(key, new.clone(), 1);
-                    push_update(key, old, -1);
-                }
-                Some(_) => (),
-                None => push_update(key, new.clone(), 1),
-            }
-        }
-        for (key, old) in old_frontiers {
-            push_update(key, old, -1);
-        }
-
-        let id =
-            self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
-        self.collection_manager.differential_append(id, updates);
-    }
-
     fn append_introspection_updates(
         &mut self,
         type_: IntrospectionType,
@@ -2344,7 +2234,13 @@ pub fn prepare_initialization<T>(txn: &mut dyn StorageTxn<T>) -> Result<(), Stor
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
+    T: Timestamp
+        + Lattice
+        + TotalOrder
+        + Codec64
+        + From<EpochMillis>
+        + TimestampManipulation
+        + Into<Datum<'static>>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
 
@@ -2426,6 +2322,9 @@ where
         let (pending_table_handle_drops_tx, pending_table_handle_drops_rx) =
             tokio::sync::mpsc::unbounded_channel();
 
+        let mut maintenance_ticker = tokio::time::interval(Duration::from_secs(1));
+        maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
         Self {
             build_info,
             collections: BTreeMap::default(),
@@ -2462,6 +2361,8 @@ where
             recorded_replica_frontiers: BTreeMap::new(),
             storage_collections,
             migrated_storage_collections: BTreeSet::new(),
+            maintenance_ticker,
+            maintenance_scheduled: false,
         }
     }
 
@@ -3815,6 +3716,127 @@ where
         instance.send(StorageCommand::RunSinks(vec![cmd]));
 
         Ok(())
+    }
+
+    /// Update introspection with the current frontiers of storage objects.
+    ///
+    /// This method is invoked by `Controller::maintain`, which we expect to be called once per
+    /// second during normal operation.
+    fn update_frontier_introspection(&mut self) {
+        let mut global_frontiers = BTreeMap::new();
+        let mut replica_frontiers = BTreeMap::new();
+
+        for collection_frontiers in self.storage_collections.active_collection_frontiers() {
+            let id = collection_frontiers.id;
+            let since = collection_frontiers.read_capabilities;
+            let upper = collection_frontiers.write_frontier;
+
+            let instance = self
+                .collections
+                .get(&id)
+                .and_then(|c| match &c.extra_state {
+                    CollectionStateExtra::Ingestion(ingestion) => Some(ingestion),
+                    CollectionStateExtra::None => None,
+                })
+                .and_then(|i| self.instances.get(&i.instance_id));
+            if let Some(instance) = instance {
+                for replica_id in instance.replica_ids() {
+                    replica_frontiers.insert((id, replica_id), upper.clone());
+                }
+            }
+
+            global_frontiers.insert(id, (since, upper));
+        }
+
+        for (id, export) in self.active_exports() {
+            // Exports cannot be read from, so their `since` is always the empty frontier.
+            let since = Antichain::new();
+            let upper = export.write_frontier.clone();
+
+            let instance = self.instances.get(&export.cluster_id());
+            if let Some(instance) = instance {
+                for replica_id in instance.replica_ids() {
+                    replica_frontiers.insert((id, replica_id), upper.clone());
+                }
+            }
+
+            global_frontiers.insert(id, (since, upper));
+        }
+
+        let mut global_updates = Vec::new();
+        let mut replica_updates = Vec::new();
+
+        let mut push_global_update =
+            |id: GlobalId, (since, upper): (Antichain<T>, Antichain<T>), diff: Diff| {
+                let read_frontier = since.into_option().map_or(Datum::Null, |t| t.into());
+                let write_frontier = upper.into_option().map_or(Datum::Null, |t| t.into());
+                let row = Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    read_frontier,
+                    write_frontier,
+                ]);
+                global_updates.push((row, diff));
+            };
+
+        let mut push_replica_update =
+            |(id, replica_id): (GlobalId, ReplicaId), upper: Antichain<T>, diff: Diff| {
+                let write_frontier = upper.into_option().map_or(Datum::Null, |t| t.into());
+                let row = Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String(&replica_id.to_string()),
+                    write_frontier,
+                ]);
+                replica_updates.push((row, diff));
+            };
+
+        let mut old_global_frontiers =
+            std::mem::replace(&mut self.recorded_frontiers, global_frontiers);
+        for (&id, new) in &self.recorded_frontiers {
+            match old_global_frontiers.remove(&id) {
+                Some(old) if &old != new => {
+                    push_global_update(id, new.clone(), 1);
+                    push_global_update(id, old, -1);
+                }
+                Some(_) => (),
+                None => push_global_update(id, new.clone(), 1),
+            }
+        }
+        for (id, old) in old_global_frontiers {
+            push_global_update(id, old, -1);
+        }
+
+        let mut old_replica_frontiers =
+            std::mem::replace(&mut self.recorded_replica_frontiers, replica_frontiers);
+        for (&key, new) in &self.recorded_replica_frontiers {
+            match old_replica_frontiers.remove(&key) {
+                Some(old) if &old != new => {
+                    push_replica_update(key, new.clone(), 1);
+                    push_replica_update(key, old, -1);
+                }
+                Some(_) => (),
+                None => push_replica_update(key, new.clone(), 1),
+            }
+        }
+        for (key, old) in old_replica_frontiers {
+            push_replica_update(key, old, -1);
+        }
+
+        let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
+        self.collection_manager
+            .differential_append(id, global_updates);
+
+        let id =
+            self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
+        self.collection_manager
+            .differential_append(id, replica_updates);
+    }
+
+    /// Run periodic tasks.
+    ///
+    /// This method is invoked roughly once per second during normal operation. It is a good place
+    /// for tasks that need to run periodically, such as state cleanup or updating of metrics.
+    fn maintain(&mut self) {
+        self.update_frontier_introspection();
     }
 }
 

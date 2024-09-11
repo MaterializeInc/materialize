@@ -694,12 +694,6 @@ pub trait StorageController: Debug {
     async fn inspect_persist_state(&self, id: GlobalId)
         -> Result<serde_json::Value, anyhow::Error>;
 
-    /// Records the current read and write frontiers of all known storage objects.
-    fn record_frontiers(&mut self);
-
-    /// Records the current per-replica write frontiers of all known storage objects.
-    fn record_replica_frontiers(&mut self);
-
     /// Records append-only updates for the given introspection type.
     ///
     /// Rows passed in `updates` MUST have the correct schema for the given
