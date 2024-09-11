@@ -7032,6 +7032,40 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_cluster_replica_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_CLUSTER_REPLICA_HISTORY_OID,
+    column_defs: None,
+    sql: r#"
+        WITH
+            replica_alter_history AS
+            (
+                SELECT
+                    occurred_at,
+                    audit_events.details ->> 'replica_id' AS id,
+                    audit_events.details ->> 'old_name' AS old_name,
+                    audit_events.details ->> 'new_name' AS new_name,
+                    audit_events.details ->> 'cluster_id' AS cluster_id
+                FROM mz_catalog.mz_audit_events AS audit_events
+                WHERE
+                    object_type = 'cluster-replica' AND audit_events.event_type = 'alter'
+            ),
+            replica_create_history AS
+            (
+                SELECT
+                    occurred_at,
+                    audit_events.details ->> 'replica_id' AS id,
+                    NULL AS old_name,
+                    audit_events.details ->> 'replica_name' AS new_name,
+                    audit_events.details ->> 'cluster_id' AS cluster_id
+                FROM mz_catalog.mz_audit_events AS audit_events
+                WHERE object_type = 'cluster-replica' AND audit_events.event_type = 'create'
+            )
+        SELECT * FROM (SELECT * FROM replica_alter_history) UNION (SELECT * FROM replica_create_history)"#,
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -8355,6 +8389,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),
+        Builtin::View(&MZ_CLUSTER_REPLICA_NAME_HISTORY),
     ]);
 
     builtins.extend(notice::builtins());
