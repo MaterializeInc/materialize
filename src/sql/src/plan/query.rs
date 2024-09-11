@@ -168,7 +168,7 @@ pub fn plan_root_query(
 /// TODO(ct): Dedup this with [plan_root_query].
 #[mz_ore::instrument(target = "compiler", level = "trace", name = "ast_to_hir")]
 pub fn plan_ct_query(
-    mut qcx: &mut QueryContext,
+    qcx: &mut QueryContext,
     mut query: Query<Aug>,
 ) -> Result<PlannedRootQuery<HirRelationExpr>, PlanError> {
     transform_ast::transform(qcx.scx, &mut query)?;
@@ -180,7 +180,7 @@ pub fn plan_ct_query(
         offset,
         project,
         group_size_hints,
-    } = plan_query(&mut qcx, &query)?;
+    } = plan_query(qcx, &query)?;
 
     let mut finishing = RowSetFinishing {
         limit,

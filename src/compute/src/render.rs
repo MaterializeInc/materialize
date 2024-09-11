@@ -226,7 +226,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         inner,
                         *source_id,
                         &source.storage_metadata,
-                        &compute_state,
+                        compute_state,
                         mfp.as_mut(),
                         &start_signal,
                     );

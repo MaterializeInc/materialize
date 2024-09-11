@@ -59,6 +59,7 @@ impl Coordinator {
                     as_of: _,
                 },
         } = plan;
+        // WIP feature flag
 
         // Collect optimizer parameters.
         let compute_instance = self
@@ -160,8 +161,8 @@ impl Coordinator {
             name: name.clone(),
             item: CatalogItem::MaterializedView(MaterializedView {
                 create_sql,
-                raw_expr,
-                optimized_expr: local_mir_plan.expr(),
+                raw_expr: Arc::new(raw_expr),
+                optimized_expr: Arc::new(local_mir_plan.expr()),
                 desc: desc.clone(),
                 resolved_ids,
                 cluster_id,
@@ -194,7 +195,7 @@ impl Coordinator {
                     .await
                     .unwrap_or_terminate("cannot fail to append");
 
-                coord.ship_dataflow(df_desc, cluster_id.clone()).await;
+                coord.ship_dataflow(df_desc, cluster_id.clone(), None).await;
             })
             .await?;
         Ok(ExecuteResponse::CreatedContinualTask)

@@ -961,8 +961,8 @@ impl CatalogState {
                 // TODO(ct): CatalogItem::ContinualTask
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: continual_task.create_sql,
-                    raw_expr: continual_task.expr.clone(),
-                    optimized_expr,
+                    raw_expr: Arc::new(continual_task.expr.clone()),
+                    optimized_expr: Arc::new(optimized_expr),
                     desc,
                     resolved_ids,
                     cluster_id: continual_task.cluster_id,
