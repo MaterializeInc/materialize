@@ -18,10 +18,11 @@ use mz_repr::explain::sql::DisplaySql;
 use mz_repr::explain::PlanRenderingContext;
 use mz_repr::{Datum, GlobalId};
 use mz_sql_parser::ast::{
-    Cte, CteBlock, Expr, Ident, IdentError, JoinConstraint, JoinOperator, Query, Raw, RawItemName,
-    Select, SelectItem, SelectOption, SelectOptionName, SetExpr, TableAlias, TableFactor,
-    TableWithJoins, UnresolvedItemName, Value, Values, WithOptionValue,
+    Cte, CteBlock, Expr, Ident, IdentError, JoinConstraint, JoinOperator, Limit, OrderByExpr,
+    Query, Raw, RawItemName, Select, SelectItem, SelectOption, SelectOptionName, SetExpr,
+    TableAlias, TableFactor, TableWithJoins, UnresolvedItemName, Value, Values, WithOptionValue,
 };
+use timely::Container;
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
 use crate::{
@@ -106,20 +107,18 @@ where
 
 impl DisplaySql<PlanRenderingContext<'_, MirRelationExpr>> for MirRelationExpr {
     fn to_sql_query(&self, ctx: &mut PlanRenderingContext<'_, MirRelationExpr>) -> Query<Raw> {
-        MirToSql::new()
-            .to_sql_query(self, &mut BTreeMap::new(), ctx)
-            .unwrap_or_else(|e| {
-                ::tracing::error!("could not convert MIR to SQL: {e:?}");
+        MirToSql::new().to_sql_query(self, ctx).unwrap_or_else(|e| {
+            ::tracing::error!("could not convert MIR to SQL: {e:?}");
 
-                // dummy empty select
-                Query::<Raw> {
-                    ctes: CteBlock::Simple(vec![]),
-                    body: SetExpr::Values(Values(vec![])),
-                    order_by: vec![],
-                    limit: None,
-                    offset: None,
-                }
-            })
+            // dummy empty select
+            Query::<Raw> {
+                ctes: CteBlock::Simple(vec![]),
+                body: SetExpr::Values(Values(vec![])),
+                order_by: vec![],
+                limit: None,
+                offset: None,
+            }
+        })
     }
 }
 
@@ -154,6 +153,15 @@ impl From<RecursionLimitError> for SqlConversionError {
     }
 }
 struct MirToSql {
+    // vec![(name_0, columns_0, query_0), ..., (name_n-1, columns_n-1, query_n-1)]
+    //
+    // is equivalent to
+    //
+    // WITH name_0 (columns_0) (query_0)
+    // ...
+    // WITH name_n-1 (columns_n-2) (query_n-2)
+    // (query_n-1)
+    query: Vec<(Ident, Vec<Ident>, PreQuery)>,
     fresh_name_counter: u64,
     recursion_guard: RecursionGuard,
 }
@@ -167,6 +175,7 @@ impl<'a> CheckedRecursion for MirToSql {
 impl MirToSql {
     fn new() -> Self {
         Self {
+            query: vec![],
             fresh_name_counter: 0,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
@@ -208,80 +217,180 @@ impl MirToSql {
     fn to_sql_query(
         &mut self,
         expr: &MirRelationExpr,
-        bindings: &mut BTreeMap<LocalId, RawItemName>,
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> Result<Query<Raw>, SqlConversionError> {
+        let _ = self.build_query(expr, &mut BTreeMap::new(), ctx)?;
+
+        Ok(Query::from(self))
+    }
+
+    fn build_query(
+        &mut self,
+        expr: &MirRelationExpr,
+        bindings: &mut BTreeMap<LocalId, (Ident, Vec<Ident>)>,
+        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+    ) -> Result<(Ident, Vec<Ident>), SqlConversionError> {
         use MirRelationExpr::*;
 
-        self.checked_recur_mut(|sc: &mut MirToSql| match expr {
-            Constant { rows, .. } => {
-                let rows = match rows {
-                    Err(err) => return Err(SqlConversionError::BadConstant { err: err.clone() }),
-                    Ok(raw_rows) => raw_rows
-                        .into_iter()
-                        .map(|(row, _id)| {
-                            row.unpack()
-                                .into_iter()
-                                .map(|datum| sc.to_sql_value(datum))
-                                .collect()
-                        })
-                        .collect(),
-                };
+        self.checked_recur_mut(|sc: &mut MirToSql| {
+            let columns = sc.column_info(expr, ctx);
 
-                Ok(SqlQuery {
-                    ctes: CteBlock::Simple(vec![]),
-                    body: SetExpr::Values(Values(rows)),
-                    order_by: vec![],
-                    limit: None,
-                    offset: None,
-                })
-            }
-            Get {
-                id: Id::Local(id), ..
-            } => {
-                // find the corresponding name in our CTEs
-                let name = bindings
-                    .get(id)
-                    .ok_or_else(|| SqlConversionError::UnboundId {
-                        id: Id::Local(id.clone()),
-                    })?;
-
-                Ok(SqlQuery {
-                    ctes: CteBlock::Simple(vec![]),
-                    body: SetExpr::Table(name.clone()),
-                    order_by: vec![],
-                    limit: None,
-                    offset: None,
-                })
-            }
-            Get {
-                id: Id::Global(id), ..
-            } => {
-                let name = ctx.humanizer.humanize_id(*id).ok_or_else(|| {
-                    SqlConversionError::UnboundId {
-                        id: Id::Global(id.clone()),
-                    }
-                })?;
-
-                let ident = Ident::new(name)
-                    .map_err(|err| SqlConversionError::BadGlobalName { id: *id, err })?;
-
-                //
-                Ok(SqlQuery {
-                    ctes: CteBlock::Simple(Vec::new()),
-                    body: SetExpr::Select(Box::new(Select {
-                        distinct: None,
-                        projection: sc
-                            .column_info(expr, ctx)
+            match expr {
+                Constant { rows, .. } => {
+                    let rows = match rows {
+                        Err(err) => {
+                            return Err(SqlConversionError::BadConstant { err: err.clone() })
+                        }
+                        Ok(raw_rows) => raw_rows
                             .into_iter()
-                            .map(|i| SelectItem::Expr {
-                                expr: Expr::Identifier(vec![i.clone()]),
-                                alias: Some(i),
+                            .map(|(row, _id)| {
+                                row.unpack()
+                                    .into_iter()
+                                    .map(|datum| sc.to_sql_value(datum))
+                                    .collect()
                             })
                             .collect(),
+                    };
+
+                    let ident = sc.fresh_ident("const");
+                    sc.push_body(
+                        ident.clone(),
+                        columns.clone(),
+                        SetExpr::Values(Values(rows)),
+                    )
+                }
+                Get {
+                    id: Id::Local(id), ..
+                } => {
+                    // find the corresponding name in our CTEs
+                    bindings
+                        .get(id)
+                        .cloned()
+                        .ok_or_else(|| SqlConversionError::UnboundId {
+                            id: Id::Local(id.clone()),
+                        })
+                }
+                Get {
+                    id: Id::Global(id), ..
+                } => {
+                    let name = ctx.humanizer.humanize_id(*id).ok_or_else(|| {
+                        SqlConversionError::UnboundId {
+                            id: Id::Global(id.clone()),
+                        }
+                    })?;
+
+                    let ident = Ident::new(name)
+                        .map_err(|err| SqlConversionError::BadGlobalName { id: *id, err })?;
+
+                    sc.push_body(
+                        ident.clone(),
+                        columns.clone(),
+                        SetExpr::Select(Box::new(Select {
+                            distinct: None,
+                            projection: columns
+                                .iter()
+                                .map(|i| SelectItem::Expr {
+                                    expr: Expr::Identifier(vec![ident.clone(), i.clone()]),
+                                    alias: Some(i.clone()),
+                                })
+                                .collect(),
+                            from: vec![TableWithJoins {
+                                relation: TableFactor::Table {
+                                    name: RawItemName::Name(UnresolvedItemName(
+                                        vec![ident.clone()],
+                                    )),
+                                    alias: None,
+                                },
+                                joins: vec![],
+                            }],
+                            selection: None,
+                            group_by: vec![],
+                            having: None,
+                            options: vec![],
+                        })),
+                    )
+                }
+                Let { id, value, body } => {
+                    // build value query, store binding
+                    let v_query = sc.build_query(value, bindings, ctx)?;
+                    bindings.insert(*id, v_query);
+
+                    // build body
+                    sc.build_query(body, bindings, ctx)
+                }
+                Project { input, outputs } => {
+                    let (inner, inner_columns) = sc.build_query(input, bindings, ctx)?;
+                    let ident = sc.fresh_ident("proj");
+
+                    // TODO(mgree) this always generates a new CTE, but we can sometimes just project the prior one (needs QB support)
+                    let mut projection = Vec::with_capacity(outputs.len());
+                    for col in outputs {
+                        let i = &inner_columns[*col];
+
+                        projection.push(SelectItem::Expr {
+                            expr: Expr::Identifier(vec![inner.clone(), i.clone()]),
+                            alias: Some(i.clone()),
+                        });
+                    }
+
+                    sc.push_body(
+                        ident,
+                        columns.clone(),
+                        SetExpr::Select(Box::new(Select {
+                            distinct: None,
+                            projection,
+                            from: vec![TableWithJoins {
+                                relation: TableFactor::Table {
+                                    name: RawItemName::Name(UnresolvedItemName(vec![inner])),
+                                    alias: None,
+                                },
+                                joins: vec![],
+                            }],
+                            selection: None,
+                            group_by: vec![],
+                            having: None,
+                            options: vec![],
+                        })),
+                    )
+                }
+                Map { input, scalars } => {
+                    let (inner, inner_columns) = sc.build_query(input, bindings, ctx)?;
+                    let num_inner_columns = inner_columns.len();
+                    let fq_columns = inner_columns
+                        .iter()
+                        .map(|col_name| vec![inner.clone(), col_name.clone()])
+                        .collect::<Vec<_>>();
+
+                    let mut new_select_items = Vec::with_capacity(scalars.len());
+                    for (col, expr) in scalars.iter().enumerate() {
+                        let cols_so_far = num_inner_columns + col;
+                        new_select_items.push(SelectItem::Expr {
+                            expr: sc.to_sql_expr(expr, &fq_columns[0..cols_so_far])?,
+                            alias: Some(columns[cols_so_far].clone()),
+                        });
+                    }
+
+                    // TODO(mgree) this always generates a new CTE, but we can sometimes just add to the prior one (needs QB support)
+                    let ident = sc.fresh_ident("map");
+
+                    let mut projection: Vec<SelectItem<Raw>> = fq_columns
+                        .into_iter()
+                        .map(|fqi| {
+                            let alias = fqi.last().cloned();
+                            SelectItem::Expr {
+                                expr: Expr::Identifier(fqi),
+                                alias,
+                            }
+                        })
+                        .collect();
+                    projection.extend(new_select_items.into_iter());
+
+                    let body = SetExpr::Select(Box::new(Select {
+                        distinct: None,
+                        projection,
                         from: vec![TableWithJoins {
                             relation: TableFactor::Table {
-                                name: RawItemName::Name(UnresolvedItemName(vec![ident])),
+                                name: RawItemName::Name(UnresolvedItemName(vec![inner])),
                                 alias: None,
                             },
                             joins: vec![],
@@ -290,496 +399,283 @@ impl MirToSql {
                         group_by: vec![],
                         having: None,
                         options: vec![],
-                    })),
-                    order_by: Vec::new(),
-                    limit: None,
-                    offset: None,
-                })
-            }
-            Let { id, value, body } => {
-                let q_value = sc.to_sql_query(value, bindings, ctx)?;
+                    }));
 
-                // prepare the CTE block
-                let ident = Ident::new_unchecked(format!("cte_{id}"));
-                let name = RawItemName::Name(UnresolvedItemName(vec![ident.clone()]));
-                let columns = sc.column_info(value, ctx);
-                let cte_value = Cte::<Raw> {
-                    alias: TableAlias {
-                        name: ident,
-                        columns,
-                        strict: false,
-                    },
-                    id: (),
-                    query: q_value,
-                };
-                // record the name used in binding
-                bindings.insert(*id, name);
-
-                let mut q_body = sc.to_sql_query(body, bindings, ctx)?;
-                let body_columns = sc.column_info(body, ctx);
-
-                sc.add_cte_to_query(&mut q_body, body_columns, cte_value);
-
-                Ok(q_body)
-            }
-            Project { input, outputs } => {
-                let mut q = sc.to_sql_query(input, bindings, ctx)?;
-
-                match &mut q.body {
-                    SetExpr::Select(select) => {
-                        // winnow the existing projection
-                        let mut new_projection = Vec::with_capacity(outputs.len());
-
-                        for col in outputs {
-                            new_projection.push(select.projection[*col].clone());
-                        }
-
-                        select.projection = new_projection;
-                    }
-                    body => {
-                        // extract the body and project in a separate query
-                        let ident = sc.fresh_ident("proj");
-                        let columns = sc.column_info(input, ctx);
-
-                        let cte = Cte::<Raw> {
-                            alias: TableAlias {
-                                name: ident.clone(),
-                                columns: columns.clone(),
-                                strict: false,
-                            },
-                            id: (),
-                            query: SqlQuery {
-                                ctes: CteBlock::Simple(vec![]),
-                                body: body.take(),
-                                order_by: vec![],
-                                limit: None,
-                                offset: None,
-                            },
-                        };
-
-                        sc.add_cte_to_query(&mut q, columns.clone(), cte);
-
-                        let mut projection = Vec::with_capacity(outputs.len());
-                        for col in outputs {
-                            let i = &columns[*col];
-
-                            projection.push(SelectItem::Expr {
-                                expr: Expr::Identifier(vec![i.clone()]),
-                                alias: Some(i.clone()),
-                            });
-                        }
-
-                        q.body = SetExpr::Select(Box::new(Select {
-                            distinct: None,
-                            projection,
-                            from: vec![TableWithJoins {
-                                relation: TableFactor::Table {
-                                    name: RawItemName::Name(UnresolvedItemName(vec![ident])),
-                                    alias: None,
-                                },
-                                joins: vec![],
-                            }],
-                            selection: None,
-                            group_by: vec![],
-                            having: None,
-                            options: vec![],
-                        }))
-                    }
+                    sc.push_body(ident, columns, body)
                 }
+                FlatMap {
+                    input: _,
+                    func: _,
+                    exprs: _,
+                } => unimplemented!("MIR-to-SQL FlatMap\n{expr:?}"),
+                Filter { input, predicates } => {
+                    let (inner, inner_columns) = sc.build_query(input, bindings, ctx)?;
 
-                Ok(q)
-            }
-            Map { input, scalars } => {
-                let mut q = sc.to_sql_query(input, bindings, ctx)?;
-                let inner_columns = sc.column_info(input, ctx);
-                let num_inner_columns = inner_columns.len();
-
-                let columns = sc.column_info(expr, ctx);
-                let mut new_select_items = Vec::with_capacity(scalars.len());
-                for (col, expr) in scalars.iter().enumerate() {
-                    let cols_so_far = num_inner_columns + col;
-                    new_select_items.push(SelectItem::Expr {
-                        expr: sc.to_sql_expr(expr, &columns[0..cols_so_far])?,
-                        alias: Some(columns[cols_so_far].clone()),
-                    });
-                }
-
-                match &mut q.body {
-                    SetExpr::Select(select) => {
-                        select.projection.extend(new_select_items.into_iter());
+                    if predicates.is_empty() {
+                        return Ok((inner, inner_columns));
                     }
-                    body => {
-                        // extract the body and add columns in a separate query
-                        let ident = sc.fresh_ident("map");
 
-                        let cte = Cte::<Raw> {
-                            alias: TableAlias {
-                                name: ident.clone(),
-                                columns: inner_columns.clone(),
-                                strict: false,
-                            },
-                            id: (),
-                            query: SqlQuery {
-                                ctes: CteBlock::Simple(vec![]),
-                                body: body.take(),
-                                order_by: vec![],
-                                limit: None,
-                                offset: None,
-                            },
-                        };
+                    let fq_columns = inner_columns
+                        .iter()
+                        .map(|col_name| vec![inner.clone(), col_name.clone()])
+                        .collect::<Vec<_>>();
 
-                        sc.add_cte_to_query(&mut q, inner_columns.clone(), cte);
+                    let mut predicates = predicates.into_iter();
+                    let mut selection = sc.to_sql_expr(predicates.next().unwrap(), &fq_columns)?;
+                    for expr in predicates {
+                        selection = selection.and(sc.to_sql_expr(&expr, &fq_columns)?);
+                    }
 
-                        let mut projection: Vec<SelectItem<Raw>> = inner_columns
+                    // TODO(mgree) this always generates a new CTE, but we can sometimes just add to the prior one (needs QB support)
+                    let ident = sc.fresh_ident("filter");
+                    let body = SetExpr::Select(Box::new(Select {
+                        distinct: None,
+                        projection: fq_columns
                             .into_iter()
-                            .map(|i| SelectItem::Expr {
-                                expr: Expr::Identifier(vec![i.clone()]),
-                                alias: Some(i),
+                            .map(|fqi| {
+                                let alias = fqi.last().cloned();
+                                SelectItem::Expr {
+                                    expr: Expr::Identifier(fqi),
+                                    alias,
+                                }
                             })
-                            .collect();
-                        projection.extend(new_select_items.into_iter());
-
-                        q.body = SetExpr::Select(Box::new(Select {
-                            distinct: None,
-                            projection,
-                            from: vec![TableWithJoins {
-                                relation: TableFactor::Table {
-                                    name: RawItemName::Name(UnresolvedItemName(vec![ident])),
-                                    alias: None,
-                                },
-                                joins: vec![],
-                            }],
-                            selection: None,
-                            group_by: vec![],
-                            having: None,
-                            options: vec![],
-                        }))
-                    }
-                }
-
-                Ok(q)
-            }
-            FlatMap {
-                input: _,
-                func: _,
-                exprs: _,
-            } => unimplemented!("MIR-to-SQL FlatMap\n{expr:?}"),
-            Filter { input, predicates } => {
-                let mut q = sc.to_sql_query(input, bindings, ctx)?;
-                if predicates.is_empty() {
-                    return Ok(q);
-                }
-
-                let columns = sc.column_info(input, ctx);
-                let mut predicates = predicates.into_iter();
-                let mut selection = sc.to_sql_expr(predicates.next().unwrap(), &columns)?;
-                for expr in predicates {
-                    selection = selection.and(sc.to_sql_expr(&expr, &columns)?);
-                }
-
-                match &mut q.body {
-                    SetExpr::Select(select) => {
-                        select.selection = Some(selection);
-                    }
-                    body => {
-                        // extract the body and add columns in a separate query
-                        let ident = sc.fresh_ident("filter");
-
-                        let cte = Cte::<Raw> {
-                            alias: TableAlias {
-                                name: ident.clone(),
-                                columns: columns.clone(),
-                                strict: false,
-                            },
-                            id: (),
-                            query: SqlQuery {
-                                ctes: CteBlock::Simple(vec![]),
-                                body: body.take(),
-                                order_by: vec![],
-                                limit: None,
-                                offset: None,
-                            },
-                        };
-
-                        sc.add_cte_to_query(&mut q, columns.clone(), cte);
-
-                        q.body = SetExpr::Select(Box::new(Select {
-                            distinct: None,
-                            projection: columns
-                                .into_iter()
-                                .map(|i| SelectItem::Expr {
-                                    expr: Expr::Identifier(vec![i.clone()]),
-                                    alias: Some(i),
-                                })
-                                .collect(),
-                            from: vec![TableWithJoins {
-                                relation: TableFactor::Table {
-                                    name: RawItemName::Name(UnresolvedItemName(vec![ident])),
-                                    alias: None,
-                                },
-                                joins: vec![],
-                            }],
-                            selection: Some(selection),
-                            group_by: vec![],
-                            having: None,
-                            options: vec![],
-                        }))
-                    }
-                }
-
-                Ok(q)
-            }
-            Join {
-                inputs,
-                equivalences,
-                implementation,
-            } => {
-                let num_inputs = inputs.len();
-
-                if num_inputs == 0 {
-                    return Ok(SqlQuery {
-                        ctes: CteBlock::Simple(vec![]),
-                        body: SetExpr::Values(Values(vec![])),
-                        order_by: vec![],
-                        limit: None,
-                        offset: None,
-                    });
-                }
-
-                if num_inputs == 1 {
-                    return sc.to_sql_query(&inputs[0], bindings, ctx);
-                }
-
-                let mut q_inputs = Vec::with_capacity(num_inputs);
-                let mut q_columns = Vec::with_capacity(num_inputs);
-                for input in inputs.into_iter() {
-                    let q = sc.to_sql_query(input, bindings, ctx)?;
-                    q_inputs.push(q);
-                    q_columns.push(sc.column_info(input, ctx));
-                }
-                let columns = q_columns.clone().concat();
-                assert!(columns == sc.column_info(expr, ctx));
-
-                let q_idents: Vec<Ident> =
-                    (0..num_inputs).map(|_| sc.fresh_ident("join")).collect();
-
-                let (first, rest): (_, Vec<_>) = match implementation {
-                    crate::JoinImplementation::Differential((start, _, _), order) => {
-                        (*start, order.into_iter().map(|(idx, _, _)| *idx).collect())
-                    }
-                    crate::JoinImplementation::DeltaQuery(orders) => (
-                        orders[0][0].0,
-                        orders[0][1..].into_iter().map(|(idx, _, _)| *idx).collect(),
-                    ),
-                    crate::JoinImplementation::IndexedFilter(_, _, _, _)
-                    | crate::JoinImplementation::Unimplemented => {
-                        (0, (1..q_inputs.len()).collect())
-                    }
-                };
-
-                let from = vec![TableWithJoins {
-                    relation: TableFactor::Table {
-                        name: RawItemName::Name(UnresolvedItemName(vec![q_idents[first].clone()])),
-                        alias: None,
-                    },
-                    joins: rest
-                        .into_iter()
-                        .map(|idx| mz_sql_parser::ast::Join {
+                            .collect(),
+                        from: vec![TableWithJoins {
                             relation: TableFactor::Table {
-                                name: RawItemName::Name(UnresolvedItemName(vec![
-                                    q_idents[idx].clone()
-                                ])),
+                                name: RawItemName::Name(UnresolvedItemName(vec![inner])),
                                 alias: None,
                             },
-                            join_operator: JoinOperator::Inner(JoinConstraint::On(Expr::Value(
-                                Value::Boolean(true),
-                            ))),
-                        })
-                        .collect(),
-                }];
+                            joins: vec![],
+                        }],
+                        selection: Some(selection),
+                        group_by: vec![],
+                        having: None,
+                        options: vec![],
+                    }));
 
-                // TODO(mgree): would be nice to denest these
-                // TODO(mgree): generate CTEs in same order as from
-                let ctes = CteBlock::Simple(
-                    q_inputs
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, query)| Cte {
-                            alias: TableAlias {
-                                name: q_idents[i].clone(),
-                                columns: q_columns[i].clone(),
-                                strict: false,
-                            },
-                            id: (),
-                            query,
-                        })
-                        .collect(),
-                );
-
-                // TODO(mgree): rather than giving ON(true) and giving a where clause, move these equivalences into the join itself
-                let mut selection: Option<Expr<Raw>> = None;
-                for equivalence in equivalences {
-                    if let Some(conjunct) = sc.equivalence_to_conjunct(equivalence, &columns)? {
-                        if let Some(sel) = selection {
-                            selection = Some(sel.and(conjunct))
-                        } else {
-                            selection = Some(conjunct);
-                        }
-                    }
+                    sc.push_body(ident, columns, body)
                 }
+                Join {
+                    inputs,
+                    equivalences,
+                    implementation,
+                } => {
+                    let num_inputs = inputs.len();
 
-                let projection = columns
-                    .into_iter()
-                    .map(|i| SelectItem::Expr {
-                        expr: Expr::Identifier(vec![i.clone()]),
-                        alias: Some(i),
-                    })
-                    .collect();
-
-                let body = SetExpr::Select(Box::new(Select {
-                    distinct: None,
-                    projection,
-                    from,
-                    selection,
-                    group_by: vec![],
-                    having: None,
-                    options: vec![],
-                }));
-
-                Ok(Query {
-                    ctes,
-                    body,
-                    order_by: vec![],
-                    limit: None,
-                    offset: None,
-                })
-            }
-            Reduce {
-                input,
-                group_key,
-                aggregates,
-                monotonic: _monotonic,
-                expected_group_size,
-            } => {
-                let mut q = sc.to_sql_query(input, bindings, ctx)?;
-
-                let outer_columns = sc.column_info(expr, ctx);
-                assert!(outer_columns.len() == group_key.len() + aggregates.len());
-                let columns = sc.column_info(input, ctx);
-
-                // !!! selects group_key followed by each aggregate
-                let mut group_by = Vec::with_capacity(group_key.len());
-                let mut projection = Vec::with_capacity(outer_columns.len());
-
-                for (gk, ident) in group_key.iter().zip(outer_columns.iter()) {
-                    let expr = sc.to_sql_expr(gk, &columns)?;
-                    group_by.push(expr.clone());
-                    projection.push(SelectItem::Expr {
-                        expr,
-                        alias: Some(ident.clone()),
-                    });
-                }
-
-                let mut shared_distinct_value = None;
-                for (agg, ident) in aggregates
-                    .iter()
-                    .zip(outer_columns.iter().dropping(group_key.len()))
-                {
-                    if let Some(distinct) = shared_distinct_value {
-                        if agg.distinct != distinct {
-                            // TODO(mgree) if a reduce mixes distinct and non-distinct aggregates, we need to generate separate reduces and a join (i think???)
-                            return Err(SqlConversionError::UnexpectedMixedDistinctReduce);
-                        }
-                    } else {
-                        shared_distinct_value = Some(agg.distinct);
+                    // empty join
+                    if num_inputs == 0 {
+                        let ident = sc.fresh_ident("empty_join");
+                        return sc.push_body(ident, vec![], SetExpr::Values(Values(vec![])));
                     }
 
-                    let expr = sc.agg_to_sql_expr(agg, &columns)?;
-                    projection.push(SelectItem::Expr {
-                        expr,
-                        alias: Some(ident.clone()),
-                    });
-                }
+                    // singleton join
+                    if num_inputs == 1 {
+                        return sc.build_query(&inputs[0], bindings, ctx);
+                    }
 
-                let body = &mut q.body;
+                    // a real join! find the order...
+                    let (first, rest): (_, Vec<_>) = match implementation {
+                        crate::JoinImplementation::Differential((start, _, _), order) => {
+                            (*start, order.into_iter().map(|(idx, _, _)| *idx).collect())
+                        }
+                        crate::JoinImplementation::DeltaQuery(orders) => (
+                            orders[0][0].0,
+                            orders[0][1..].into_iter().map(|(idx, _, _)| *idx).collect(),
+                        ),
+                        crate::JoinImplementation::IndexedFilter(_, _, _, _)
+                        | crate::JoinImplementation::Unimplemented => {
+                            (0, (1..num_inputs).collect())
+                        }
+                    };
 
-                // extract the body and add columns in a separate query
-                let ident = sc.fresh_ident("reduce");
+                    // recursively generate inputs in the order...
+                    let mut fq_columns = Vec::with_capacity(columns.len());
+                    let mut q_idents = Vec::with_capacity(num_inputs);
+                    let mut q_columns = Vec::with_capacity(num_inputs);
+                    for input in std::iter::once(&first).chain(rest.iter()) {
+                        let (inner, inner_columns) =
+                            sc.build_query(&inputs[*input], bindings, ctx)?;
+                        assert!(inner_columns == sc.column_info(&inputs[*input], ctx));
+                        fq_columns.extend(
+                            inner_columns
+                                .iter()
+                                .map(|col_name| vec![inner.clone(), col_name.clone()]),
+                        );
+                        q_idents.push(inner);
+                        q_columns.push(inner_columns);
+                    }
+                    assert!(columns == q_columns.clone().concat());
 
-                let cte = Cte::<Raw> {
-                    alias: TableAlias {
-                        name: ident.clone(),
-                        columns: columns.clone(),
-                        strict: false,
-                    },
-                    id: (),
-                    query: SqlQuery {
-                        ctes: CteBlock::Simple(vec![]),
-                        body: body.take(),
-                        order_by: vec![],
-                        limit: None,
-                        offset: None,
-                    },
-                };
-
-                sc.add_cte_to_query(&mut q, columns.clone(), cte);
-
-                let options = expected_group_size.map_or_else(
-                    || vec![],
-                    |egs| {
-                        vec![SelectOption {
-                            name: SelectOptionName::ExpectedGroupSize,
-                            value: Some(WithOptionValue::Value(Value::Number(egs.to_string()))),
-                        }]
-                    },
-                );
-
-                q.body = SetExpr::Select(Box::new(Select {
-                    distinct: None,
-                    projection,
-                    from: vec![TableWithJoins {
+                    // build the parts of the actual JOINing SELECT
+                    let from = vec![TableWithJoins {
                         relation: TableFactor::Table {
-                            name: RawItemName::Name(UnresolvedItemName(vec![ident])),
+                            name: RawItemName::Name(UnresolvedItemName(vec![
+                                q_idents[first].clone()
+                            ])),
                             alias: None,
                         },
-                        joins: vec![],
-                    }],
-                    selection: None,
-                    group_by,
-                    having: None,
-                    options,
-                }));
+                        joins: rest
+                            .into_iter()
+                            .map(|idx| mz_sql_parser::ast::Join {
+                                relation: TableFactor::Table {
+                                    name: RawItemName::Name(UnresolvedItemName(vec![q_idents
+                                        [idx]
+                                        .clone()])),
+                                    alias: None,
+                                },
+                                join_operator: JoinOperator::Inner(JoinConstraint::On(
+                                    Expr::Value(Value::Boolean(true)),
+                                )),
+                            })
+                            .collect(),
+                    }];
 
-                Ok(q)
-            }
-            TopK {
-                input: _,
-                group_key: _,
-                order_key: _,
-                limit: _,
-                offset: _,
-                monotonic: _,
-                expected_group_size: _,
-            } => unimplemented!("MIR-to-SQL TopK\n{expr:?}"),
-            Union { base, inputs } => {
-                // detect aggregates
-                if let Some(query) = sc.detect_aggregate_union(base, inputs, bindings, ctx) {
-                    return Ok(query);
+                    // TODO(mgree): rather than giving ON(true) and giving a where clause, move these equivalences into the join itself
+                    let mut selection: Option<Expr<Raw>> = None;
+                    for equivalence in equivalences {
+                        if let Some(conjunct) =
+                            sc.equivalence_to_conjunct(equivalence, &fq_columns)?
+                        {
+                            if let Some(sel) = selection {
+                                selection = Some(sel.and(conjunct))
+                            } else {
+                                selection = Some(conjunct);
+                            }
+                        }
+                    }
+
+                    let projection = fq_columns
+                        .into_iter()
+                        .map(|fqi| {
+                            let alias = fqi.last().cloned();
+                            SelectItem::Expr {
+                                expr: Expr::Identifier(fqi),
+                                alias,
+                            }
+                        })
+                        .collect();
+
+                    let ident = sc.fresh_ident("join");
+                    sc.push_body(
+                        ident,
+                        columns,
+                        SetExpr::Select(Box::new(Select {
+                            distinct: None,
+                            projection,
+                            from,
+                            selection,
+                            group_by: vec![],
+                            having: None,
+                            options: vec![],
+                        })),
+                    )
                 }
+                Reduce {
+                    input,
+                    group_key,
+                    aggregates,
+                    monotonic: _monotonic,
+                    expected_group_size,
+                } => {
+                    assert!(columns.len() == group_key.len() + aggregates.len());
 
-                unimplemented!("MIR-to-SQL Union\n{expr:?}")
+                    let (inner, inner_columns) = sc.build_query(input, bindings, ctx)?;
+
+                    let fq_columns = inner_columns
+                        .iter()
+                        .map(|col_name| vec![inner.clone(), col_name.clone()])
+                        .collect::<Vec<_>>();
+                    // !!! selects group_key followed by each aggregate
+                    let mut group_by = Vec::with_capacity(group_key.len());
+                    let mut projection = Vec::with_capacity(columns.len());
+
+                    for (gk, ident) in group_key.iter().zip(columns.iter()) {
+                        let expr = sc.to_sql_expr(gk, &fq_columns)?;
+                        group_by.push(expr.clone());
+                        projection.push(SelectItem::Expr {
+                            expr,
+                            alias: Some(ident.clone()),
+                        });
+                    }
+
+                    let mut shared_distinct_value = None;
+                    for (agg, ident) in aggregates
+                        .iter()
+                        .zip(columns.iter().dropping(group_key.len()))
+                    {
+                        if let Some(distinct) = shared_distinct_value {
+                            if agg.distinct != distinct {
+                                // TODO(mgree) if a reduce mixes distinct and non-distinct aggregates, we need to generate separate reduces and a join (i think???)
+                                return Err(SqlConversionError::UnexpectedMixedDistinctReduce);
+                            }
+                        } else {
+                            shared_distinct_value = Some(agg.distinct);
+                        }
+
+                        let expr = sc.agg_to_sql_expr(agg, &fq_columns)?;
+                        projection.push(SelectItem::Expr {
+                            expr,
+                            alias: Some(ident.clone()),
+                        });
+                    }
+
+                    let options = expected_group_size.map_or_else(
+                        || vec![],
+                        |egs| {
+                            vec![SelectOption {
+                                name: SelectOptionName::ExpectedGroupSize,
+                                value: Some(WithOptionValue::Value(Value::Number(egs.to_string()))),
+                            }]
+                        },
+                    );
+
+                    let ident = sc.fresh_ident("reduce");
+                    let body = SetExpr::Select(Box::new(Select {
+                        distinct: None,
+                        projection,
+                        from: vec![TableWithJoins {
+                            relation: TableFactor::Table {
+                                name: RawItemName::Name(UnresolvedItemName(vec![inner])),
+                                alias: None,
+                            },
+                            joins: vec![],
+                        }],
+                        selection: None,
+                        group_by,
+                        having: None,
+                        options,
+                    }));
+                    sc.push_body(ident, columns, body)
+                }
+                TopK {
+                    input: _,
+                    group_key: _,
+                    order_key: _,
+                    limit: _,
+                    offset: _,
+                    monotonic: _,
+                    expected_group_size: _,
+                } => unimplemented!("MIR-to-SQL TopK\n{expr:?}"),
+                Union { base, inputs } => {
+                    // detect aggregates
+                    if let Some(res) = sc.detect_aggregate_union(base, inputs, bindings, ctx) {
+                        return Ok(res);
+                    }
+
+                    unimplemented!("MIR-to-SQL Union\n{expr:?}")
+                }
+                ArrangeBy { input, keys: _keys } => sc.build_query(input, bindings, ctx),
+                // Negate forms are handled under `Union` but not elsewhere (SQL doesn't have negative cardinalities!)
+                Negate { input: _ } => Err(SqlConversionError::UnexpectedNegation),
+                // Threshold forms are handled under `Union`'s LEFT JOIN detection but not elsewhere (SQL doesn't have negative cardinalities!)
+                Threshold { input: _ } => Err(SqlConversionError::UnexpectedThreshold),
+                LetRec {
+                    ids: _,
+                    values: _,
+                    limits: _,
+                    body: _,
+                } => Err(SqlConversionError::UnexpectedWMR),
             }
-            ArrangeBy { input, keys: _keys } => sc.to_sql_query(input, bindings, ctx),
-            // Negate forms are handled under `Union` but not elsewhere (SQL doesn't have negative cardinalities!)
-            Negate { input: _ } => Err(SqlConversionError::UnexpectedNegation),
-            // Threshold forms are handled under `Union`'s LEFT JOIN detection but not elsewhere (SQL doesn't have negative cardinalities!)
-            Threshold { input: _ } => Err(SqlConversionError::UnexpectedThreshold),
-            LetRec {
-                ids: _,
-                values: _,
-                limits: _,
-                body: _,
-            } => Err(SqlConversionError::UnexpectedWMR),
         })
     }
 
@@ -787,9 +683,9 @@ impl MirToSql {
         &mut self,
         base: &MirRelationExpr,
         inputs: &Vec<MirRelationExpr>,
-        bindings: &mut BTreeMap<LocalId, RawItemName>,
+        bindings: &mut BTreeMap<LocalId, (Ident, Vec<Ident>)>,
         ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
-    ) -> Option<Query<Raw>> {
+    ) -> Option<(Ident, Vec<Ident>)> {
         // detect the following idiom:
         //
         // Union
@@ -861,19 +757,19 @@ impl MirToSql {
 
         // if we conformed to that pattern... just behave like Get l0,
         // which should be the rendering of the (MRE) reduce as a (SQL) aggregate
-        self.to_sql_query(base, bindings, ctx).map_or_else(
+        self.build_query(base, bindings, ctx).map_or_else(
             |err| {
                 ::tracing::error!("MIR-to-SQL error caused aggregate detection to fail: {err:?}",);
                 None
             },
-            |query| Some(query),
+            Some,
         )
     }
 
     fn equivalence_to_conjunct(
         &mut self,
         exprs: &Vec<MirScalarExpr>,
-        columns: &[Ident],
+        columns: &[Vec<Ident>],
     ) -> Result<Option<Expr<Raw>>, SqlConversionError> {
         let mut iter = exprs.into_iter();
         let Some(lhs) = iter.next() else {
@@ -899,7 +795,7 @@ impl MirToSql {
     fn to_sql_expr(
         &mut self,
         expr: &MirScalarExpr,
-        columns: &[Ident],
+        columns: &[Vec<Ident>],
     ) -> Result<Expr<Raw>, SqlConversionError> {
         use MirScalarExpr::*;
         fn call<S: ToString>(f: S, args: Vec<Expr<Raw>>) -> Expr<Raw> {
@@ -912,7 +808,7 @@ impl MirToSql {
         }
 
         match expr {
-            Column(col) => Ok(Expr::Identifier(vec![columns[*col].clone()])),
+            Column(col) => Ok(Expr::Identifier(columns[*col].clone())),
             Literal(Ok(row), _) => {
                 let mut datums = row.unpack();
                 if datums.len() != 1 {
@@ -953,7 +849,7 @@ impl MirToSql {
     fn agg_to_sql_expr(
         &mut self,
         expr: &AggregateExpr,
-        columns: &[Ident],
+        columns: &[Vec<Ident>],
     ) -> Result<Expr<Raw>, SqlConversionError> {
         let arg = self.to_sql_expr(&expr.expr, columns)?;
 
@@ -1020,53 +916,112 @@ impl MirToSql {
         }
     }
 
-    fn add_cte_to_query(&mut self, query: &mut Query<Raw>, columns: Vec<Ident>, cte: Cte<Raw>) {
-        match &mut query.ctes {
-            CteBlock::Simple(ctes) => {
-                ctes.push(cte);
-            }
-            CteBlock::MutuallyRecursive(..) => {
-                let ident = self.fresh_ident("wmr");
+    fn push_prequery(
+        &mut self,
+        ident: Ident,
+        columns: Vec<Ident>,
+        query: PreQuery,
+    ) -> Result<(Ident, Vec<Ident>), SqlConversionError> {
+        self.query.push((ident.clone(), columns.clone(), query));
+        Ok((ident, columns))
+    }
 
-                *query = SqlQuery {
-                    ctes: CteBlock::Simple(vec![
-                        cte,
-                        Cte {
-                            alias: TableAlias {
-                                name: ident.clone(),
-                                columns: columns.clone(),
-                                strict: false,
-                            },
-                            id: (),
-                            query: query.take(),
-                        },
-                    ]),
-                    body: SetExpr::Select(Box::new(Select {
-                        distinct: None,
-                        projection: columns
-                            .into_iter()
-                            .map(|i| SelectItem::Expr {
-                                expr: Expr::Identifier(vec![i.clone()]),
-                                alias: Some(i),
-                            })
-                            .collect(),
-                        from: vec![TableWithJoins {
-                            relation: TableFactor::Table {
-                                name: RawItemName::Name(UnresolvedItemName(vec![ident])),
-                                alias: None,
-                            },
-                            joins: vec![],
-                        }],
-                        selection: None,
-                        group_by: vec![],
-                        having: None,
-                        options: vec![],
-                    })),
-                    order_by: Vec::new(),
-                    limit: None,
-                    offset: None,
-                };
-            }
+    fn push_body(
+        &mut self,
+        ident: Ident,
+        columns: Vec<Ident>,
+        body: SetExpr<Raw>,
+    ) -> Result<(Ident, Vec<Ident>), SqlConversionError> {
+        self.push_prequery(
+            ident,
+            columns,
+            PreQuery {
+                body,
+                order_by: vec![],
+                limit: None,
+                offset: None,
+            },
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PreQuery {
+    body: SetExpr<Raw>,
+    order_by: Vec<OrderByExpr<Raw>>,
+    limit: Option<Limit<Raw>>,
+    offset: Option<Expr<Raw>>,
+}
+
+impl From<PreQuery> for Query<Raw> {
+    fn from(
+        PreQuery {
+            body,
+            order_by,
+            limit,
+            offset,
+        }: PreQuery,
+    ) -> Query<Raw> {
+        Query {
+            ctes: CteBlock::empty(),
+            body,
+            order_by,
+            limit,
+            offset,
+        }
+    }
+}
+
+impl PreQuery {
+    fn to_cte(self, ident: Ident, columns: Vec<Ident>) -> Cte<Raw> {
+        Cte {
+            alias: TableAlias {
+                name: ident,
+                columns: columns,
+                strict: false,
+            },
+            id: (),
+            query: self.into(),
+        }
+    }
+}
+
+impl From<&mut MirToSql> for Query<Raw> {
+    fn from(q: &mut MirToSql) -> Self {
+        let Some((
+            _,
+            _,
+            PreQuery {
+                body,
+                order_by,
+                limit,
+                offset,
+            },
+        )) = q.query.pop()
+        else {
+            ::tracing::warn!("converting empty query builder to SQL");
+
+            // dummy empty select
+            return Query::<Raw> {
+                ctes: CteBlock::Simple(vec![]),
+                body: SetExpr::Values(Values(vec![])),
+                order_by: vec![],
+                limit: None,
+                offset: None,
+            };
+        };
+
+        Query {
+            ctes: CteBlock::Simple(
+                q.query
+                    .drain(..)
+                    .map(|(ident, columns, pq)| pq.to_cte(ident, columns))
+                    .collect(),
+            ),
+            body,
+            order_by,
+            limit,
+            offset,
         }
     }
 }
