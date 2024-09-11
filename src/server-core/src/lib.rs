@@ -22,6 +22,7 @@ use std::time::Duration;
 use anyhow::bail;
 use async_trait::async_trait;
 use futures::stream::{BoxStream, Stream, StreamExt};
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::channel::trigger;
 use mz_ore::error::ErrorExt;
 use mz_ore::netio::AsyncReady;
@@ -183,13 +184,46 @@ pub async fn listen(
     Ok((handle, Box::pin(stream)))
 }
 
-/// Serves incoming TCP connections from `conns` using `server`. `wait_timeout` is the time to wait
-/// after `conns` terminates for outstanding connections to complete. Returns handles to the
-/// outstanding connections after `wait_timeout` has expired or all connections have completed.
-pub async fn serve<C, S>(mut conns: C, server: S, wait_timeout: Option<Duration>) -> JoinSet<()>
+/// Configuration for [`serve`].
+pub struct ServeConfig<S, C>
 where
-    C: ConnectionStream,
     S: Server,
+    C: ConnectionStream,
+{
+    /// The server for the connections.
+    pub server: S,
+    /// The stream of incoming TCP connections.
+    pub conns: C,
+    /// Optional dynamic configuration for the server.
+    pub dyncfg: Option<ServeDyncfg>,
+}
+
+/// Dynamic configuration for [`ServeConfig`].
+pub struct ServeDyncfg {
+    /// The current bundle of dynamic configuration values.
+    pub config_set: ConfigSet,
+    /// A configuration in `config_set` that specifies how long to wait for
+    /// connections to terminate after receiving a SIGTERM before forcibly
+    /// terminated.
+    ///
+    /// If `None`, then forcible shutdown occurs immediately.
+    pub sigterm_wait_config: &'static Config<Duration>,
+}
+
+/// Serves incoming TCP connections.
+///
+/// Returns handles to the outstanding connections after the configured timeout
+/// has expired or all connections have completed.
+pub async fn serve<S, C>(
+    ServeConfig {
+        server,
+        mut conns,
+        dyncfg,
+    }: ServeConfig<S, C>,
+) -> JoinSet<()>
+where
+    S: Server,
+    C: ConnectionStream,
 {
     let task_name = format!("handle_{}_connection", S::NAME);
     let mut set = JoinSet::new();
@@ -271,7 +305,8 @@ where
             }
         }
     }
-    if let Some(wait) = wait_timeout {
+    if let Some(dyncfg) = dyncfg {
+        let wait = dyncfg.sigterm_wait_config.get(&dyncfg.config_set);
         if set.len() > 0 {
             warn!(
                 "{} exiting, {} outstanding connections, waiting for {:?}",

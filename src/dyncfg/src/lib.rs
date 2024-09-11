@@ -195,8 +195,19 @@ impl<T: ConfigType> ConfigDefault for fn() -> T {
     }
 }
 
-/// An set of [Config]s with values independent of other [ConfigSet]s (even if
-/// they contain the same configs).
+/// An set of [Config]s with values that may or may not be independent of other
+/// [ConfigSet]s.
+///
+/// When constructing a ConfigSet from scratch with [ConfigSet::default]
+/// followed by [ConfigSet::add], the values added to the ConfigSet will be
+/// independent of the values in all other ConfigSets.
+///
+/// When constructing a ConfigSet by cloning an existing ConfigSet, any values
+/// cloned from the original ConfigSet will be shared with the original
+/// ConfigSet. Updates to these values in one ConfigSet will be seen in the
+/// other ConfigSet, and vice versa. Any value added to the new ConfigSet via
+/// ConfigSet::add will be independent of values in the original ConfigSet,
+/// unless the new ConfigSet is later cloned.
 #[derive(Clone, Default)]
 pub struct ConfigSet {
     configs: BTreeMap<String, ConfigEntry>,

@@ -28,7 +28,10 @@ rust_library(
     rustc_env = {},
     rustc_flags = [],
     version = "0.0.0",
-    deps = ["//src/ore:mz_ore"] + all_crate_deps(normal = True),
+    deps = [
+        "//src/dyncfg:mz_dyncfg",
+        "//src/ore:mz_ore",
+    ] + all_crate_deps(normal = True),
 )
 
 rust_test(
@@ -52,7 +55,10 @@ rust_test(
     rustc_env = {},
     rustc_flags = [],
     version = "0.0.0",
-    deps = ["//src/ore:mz_ore"] + all_crate_deps(
+    deps = [
+        "//src/dyncfg:mz_dyncfg",
+        "//src/ore:mz_ore",
+    ] + all_crate_deps(
         normal = True,
         normal_dev = True,
     ),
@@ -61,7 +67,10 @@ rust_test(
 rust_doc_test(
     name = "mz_server_core_doc_test",
     crate = ":mz_server_core",
-    deps = ["//src/ore:mz_ore"] + all_crate_deps(
+    deps = [
+        "//src/dyncfg:mz_dyncfg",
+        "//src/ore:mz_ore",
+    ] + all_crate_deps(
         normal = True,
         normal_dev = True,
     ),

@@ -6164,6 +6164,7 @@ dependencies = [
  "async-trait",
  "clap",
  "futures",
+ "mz-dyncfg",
  "mz-ore",
  "openssl",
  "scopeguard",
