@@ -23,7 +23,6 @@ from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
-    argument_has_any_characteristic,
     involves_data_type_categories,
     involves_data_type_category,
     is_any_date_time_expression,
@@ -271,15 +270,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 assert isinstance(regex_flag, EnumConstant)
                 if regex_flag.value == "g":
                     return YesIgnore("Strange Postgres behavior (see PR 26526)")
-
-        if db_function.function_name_in_lower_case == "regexp_split_to_table":
-            if expression.count_args() == 3:
-                regex_flag = expression.args[2]
-                assert isinstance(regex_flag, EnumConstant)
-                if regex_flag.value == "i":
-                    return YesIgnore(
-                        "#29413: regexp_split_to_table: difference with case-insensitivity flag"
-                    )
 
         if db_function.function_name_in_lower_case == "nullif":
             type_arg0 = expression.args[0].try_resolve_exact_data_type()
@@ -650,42 +640,6 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             True,
         ):
             return YesIgnore("Different evaluation order")
-
-        if query_template.matches_any_expression(
-            partial(
-                matches_x_and_y,
-                x=partial(
-                    matches_fun_by_name,
-                    function_name_in_lower_case="regexp_split_to_table",
-                ),
-                y=partial(
-                    matches_x_or_y,
-                    x=partial(
-                        argument_has_any_characteristic,
-                        arg_index=1,
-                        characteristics={ExpressionCharacteristics.NULL},
-                        row_selection=query_template.row_selection,
-                    ),
-                    y=partial(
-                        argument_has_any_characteristic,
-                        arg_index=2,
-                        characteristics={ExpressionCharacteristics.NULL},
-                        row_selection=query_template.row_selection,
-                    ),
-                ),
-            ),
-            True,
-        ):
-            return YesIgnore("Evaluation shortcut on NULL pattern")
-
-        if query_template.matches_any_expression(
-            partial(
-                matches_fun_by_name,
-                function_name_in_lower_case="regexp_split_to_table",
-            ),
-            True,
-        ):
-            return YesIgnore("Evaluation shortcut on NULL pattern")
 
         if "argument of IN must not return a set" in pg_error_msg:
             return YesIgnore("Not supported by Postgres")

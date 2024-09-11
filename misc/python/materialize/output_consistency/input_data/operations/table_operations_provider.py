@@ -151,6 +151,8 @@ TABLE_OPERATION_TYPES.append(
         [StringOperationParam(), REGEX_PARAM, REGEX_FLAG_OPTIONAL_PARAM],
         StringReturnTypeSpec(),
         is_table_function=True,
+        # It is not possible to specify the order so that inconsistencies are inevitable.
+        is_pg_compatible=False,
         tags={TAG_REGEX},
     ),
 )
