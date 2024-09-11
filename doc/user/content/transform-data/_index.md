@@ -1,6 +1,6 @@
 ---
 title: "Overview"
-description: "Learn to transform data using Materialize SQL."
+description: "Learn how to efficiently transform data using Materialize SQL."
 disable_list: true
 menu:
   main:
@@ -9,15 +9,23 @@ menu:
     identifier: transform-overview
 ---
 
-With Materialize, organizations can use SQL to transform their data. Materialize
-follows the SQL-92 implementation, and in general, the implementation is modeled
-after PostgreSQL.
+With Materialize, you can use SQL to transform, deliver, and act on
+fast-changing data. Materialize follows the SQL standard
+(SQL-92) implementation, and strives for compatibility with the PostgreSQL
+dialect.
+
+You can build complex analytical workloads using [any type of join](https://materialize.com/docs/sql/join/)
+(including non-windowed joins and joins on arbitrary conditions), but you can
+also leverage exciting new SQL patterns enabled by streaming like [Change Data
+Capture (CDC)](https://materialize.com/docs/integrations/#databases),
+[temporal filters](https://materialize.com/docs/sql/patterns/temporal-filters/),
+and [subscriptions](https://materialize.com/docs/sql/subscribe/).
 
 ### SELECT statement
 
 In Materialize, you can [`SELECT`](/sql/select/) from
 [sources](/concepts/sources/), tables, [views](/concepts/views/#views), and
-[materialized view](/concepts/views/#materialized-views).
+[materialized views](/concepts/views/#materialized-views).
 
 ```mzsql
 SELECT [ ALL | DISTINCT [ ON ( col_ref [, ...] ) ] ]
