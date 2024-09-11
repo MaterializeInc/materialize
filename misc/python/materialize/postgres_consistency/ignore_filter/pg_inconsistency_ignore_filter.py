@@ -1127,10 +1127,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
-            partial(matches_fun_by_name, function_name_in_lower_case="floor"),
+            partial(
+                matches_fun_by_any_name, function_names_in_lower_case={"floor", "ceil"}
+            ),
             True,
         ):
-            return YesIgnore("#28801: floor return type")
+            return YesIgnore("#28801: return type of floor and ceil")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
