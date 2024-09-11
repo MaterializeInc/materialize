@@ -102,7 +102,7 @@ test_source_table = """
     database='materialize'
 ) }}
 FROM SOURCE {{ ref('test_subsources') }}
-(REFERENCE "bids") WITH (TEXT COLUMNS ["amount"])
+(REFERENCE "bids")
 """
 
 test_subsources = """
