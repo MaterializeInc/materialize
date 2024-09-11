@@ -85,7 +85,7 @@ For better performance, you can rewrite this query to first compute the largest 
 ```mzsql
 SELECT cities.state, city, CAST(pop as float) / max_pops.max_pop AS pop_ratio
 FROM cities,
-     (SELECT state, MAX(pop) as max_pop
+     (SELECT state, MAX(pop) AS max_pop
       FROM cities
       GROUP BY state) max_pops
 WHERE cities.state = max_pops.state
@@ -116,19 +116,18 @@ ORDER BY time;
 For better performance, you can rewrite this query using an equi-join:
 
 ```mzsql
-SELECT m2.time, m2.value - m1.value AS diff
+SELECT m1.time, m1.value - m2.value AS diff
 FROM measurements m1, measurements m2
-WHERE m2.time = m1.time + INTERVAL '1' MINUTE
-ORDER BY m2.time;
+WHERE m1.time = m2.time + INTERVAL '1' MINUTE ORDER BY m1.time;
 ```
 
 Note that these queries differ in whether they include the first timestamp (with
-a `NULL` difference).  A `RIGHT JOIN` would make the outputs match exactly.
+a `NULL` difference).  A `LEFT JOIN` would make the outputs match exactly.
 
 ```mzsql
-SELECT m2.time, m2.value - m1.value AS diff
+SELECT m1.time, m1.value - m2.value AS diff
 FROM measurements m1
-RIGHT JOIN measurements m2
-ON m2.time = m1.time + INTERVAL '1' MINUTE
-ORDER BY m2.time;
+LEFT JOIN measurements m2
+ON m1.time = m2.time + INTERVAL '1' MINUTE
+ORDER BY m1.time;
 ```
