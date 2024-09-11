@@ -21,13 +21,15 @@ databases, you might use window functions. In Materialize, we recommend using a
 query looks like this:
 
 ```mzsql
-SELECT * FROM
+SELECT key_col, ... FROM
     (SELECT DISTINCT key_col FROM tbl) grp,
     LATERAL (
-        SELECT col1, col2... FROM tbl
+        SELECT col1, col2..., order_col
+        FROM tbl
         WHERE key_col = grp.key_col
         ORDER BY order_col LIMIT k
     )
+ORDER BY key_col, order_col
 ```
 
 For example, suppose you have a relation containing the population of various
@@ -35,7 +37,7 @@ U.S. cities.
 
 ```mzsql
 CREATE TABLE cities (
-    name text NOT NULL,
+    city text NOT NULL,
     state text NOT NULL,
     pop int NOT NULL
 );
@@ -57,37 +59,46 @@ INSERT INTO cities VALUES
 To fetch the three most populous cities in each state:
 
 ```mzsql
-SELECT state, name FROM
+SELECT state, city FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (
-        SELECT name FROM cities
+        SELECT city, pop
+        FROM cities
         WHERE state = grp.state
         ORDER BY pop DESC LIMIT 3
-    );
+    )
+ORDER BY state, pop DESC;
 ```
-```nofmt
-AZ  Phoenix
-CA  Los_Angeles
-CA  San_Diego
-CA  San_Jose
-IL  Chicago
-NY  New_York
-TX  Houston
-TX  San_Antonio
-TX  Dallas
-```
+
+The query returns the following results:
+
+| state | city        |
+| ----- | ----------- |
+| AZ    | Phoenix     |
+| CA    | Los_Angeles |
+| CA    | San_Diego   |
+| CA    | San_Jose    |
+| IL    | Chicago     |
+| NY    | New_York    |
+| TX    | Houston     |
+| TX    | San_Antonio |
+| TX    | Dallas      |
 
 Despite the verbosity of the above query, Materialize produces a straightforward
 plan:
 
 ```mzsql
-EXPLAIN SELECT state, name FROM ...
+EXPLAIN SELECT state, city FROM ...
 ```
+
+The explain returns the following:
+
 ```nofmt
 Explained Query:
-  Project (#1, #0)
-    TopK group_by=[#1] order_by=[#2 desc nulls_first] limit=3
-      ReadStorage materialize.public.cities
+  Finish order_by=[#0{state} asc nulls_last, #2{pop} desc nulls_first] output=[#0..=#2]
+    TopK group_by=[#0{state}] order_by=[#2{pop} desc nulls_first] limit=3 // { arity: 3 }
+      Project (#1{city}, #0{state}, #2{pop}) // { arity: 3 }
+        ReadStorage materialize.public.cities // { arity: 3 }
 ```
 
 ## Top 1 using `DISTINCT ON`
@@ -95,7 +106,7 @@ Explained Query:
 If _K_ = 1, i.e., you would like to see only the most populous city in each state, another approach is to use `DISTINCT ON`:
 
 ```mzsql
-SELECT DISTINCT ON(state) state, name
+SELECT DISTINCT ON(state) state, city
 FROM cities
 ORDER BY state, pop DESC;
 ```
@@ -107,20 +118,22 @@ When using either the above `LATERAL` subquery pattern or `DISTINCT ON`, we reco
 specifying [query hints](/sql/select/#query-hints) to improve memory usage. For example:
 
 ```mzsql
-SELECT state, name FROM
+SELECT state, city FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (
-        SELECT name FROM cities
+        SELECT city, pop
+        FROM cities
         WHERE state = grp.state
         OPTIONS (LIMIT INPUT GROUP SIZE = 1000)
         ORDER BY pop DESC LIMIT 3
-    );
+    )
+ORDER BY state, pop DESC;
 ```
 
 or
 
 ```mzsql
-SELECT DISTINCT ON(state) state, name
+SELECT DISTINCT ON(state) state, city
 FROM cities
 OPTIONS (DISTINCT ON INPUT GROUP SIZE = 1000)
 ORDER BY state, pop DESC;
