@@ -34,6 +34,7 @@ pub use linear::util::{join_permutations, permutation_for_arrangement};
 pub use linear::{
     memoize_expr, MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan,
 };
+pub use relation::func::order_aggregate_datums as order_aggregate_datums_exported_for_benchmarking;
 pub use relation::func::{
     AggregateFunc, AnalyzedRegex, CaptureGroupDesc, LagLeadType, NaiveOneByOneAggr, OneByOneAggr,
     TableFunc,

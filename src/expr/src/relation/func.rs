@@ -276,18 +276,20 @@ where
 
 // Assuming datums is a List, sort them by the 2nd through Nth elements
 // corresponding to order_by, then return the 1st element.
-fn order_aggregate_datums<'a, I>(
+pub fn order_aggregate_datums<'a, I>(
     datums: I,
     order_by: &[ColumnOrder],
 ) -> impl Iterator<Item = Datum<'a>>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    order_aggregate_datums_with_rank(datums, order_by).map(|(expr, _order_row)| expr)
+    order_aggregate_datums_with_rank_inner(datums, order_by)
+        .into_iter()
+        .map(|(payload, _order_datums)| payload)
 }
 
-// Assuming datums is a List, sort them by the 2nd through Nth elements
-// corresponding to order_by, then return the 1st element and computed order by expression.
+/// Assuming datums is a List, sort them by the 2nd through Nth elements
+/// corresponding to order_by, then return the 1st element and computed order by expression.
 fn order_aggregate_datums_with_rank<'a, I>(
     datums: I,
     order_by: &[ColumnOrder],
@@ -295,25 +297,63 @@ fn order_aggregate_datums_with_rank<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let mut rows: Vec<(Datum, Row)> = datums
+    order_aggregate_datums_with_rank_inner(datums, order_by)
         .into_iter()
-        .filter_map(|d| {
+        .map(|(payload, order_by_datums)| (payload, Row::pack(order_by_datums)))
+}
+
+fn order_aggregate_datums_with_rank_inner<'a, I>(
+    datums: I,
+    order_by: &[ColumnOrder],
+) -> Vec<(Datum<'a>, Vec<Datum<'a>>)>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let mut decoded: Vec<(Datum, Vec<Datum>)> = datums
+        .into_iter()
+        .map(|d| {
             let list = d.unwrap_list();
-            let expr = list.iter().next().unwrap();
-            let order_row = Row::pack(list.iter().skip(1));
-            Some((expr, order_row))
+            let mut list_it = list.iter();
+            let payload = list_it.next().unwrap();
+
+            // We decode the order_by Datums here instead of the comparison function, because the
+            // comparison function is expected to be called `O(log n)` times on each input row.
+            // The only downside is that the decoded data might be bigger, but I think that's fine,
+            // because:
+            // - if we have a window partition so big that this would create a memory problem, then
+            //   the non-incrementalness of window functions will create a serious CPU problem
+            //   anyway,
+            // - and anyhow various other parts of the window function code already do decoding
+            //   upfront.
+            let mut order_by_datums = Vec::with_capacity(order_by.len());
+            for _ in 0..order_by.len() {
+                order_by_datums.push(
+                    list_it
+                        .next()
+                        .expect("must have exactly the same number of Datums as `order_by`"),
+                );
+            }
+
+            (payload, order_by_datums)
         })
         .collect();
 
-    let mut left_datum_vec = mz_repr::DatumVec::new();
-    let mut right_datum_vec = mz_repr::DatumVec::new();
-    let mut sort_by = |left: &(_, Row), right: &(_, Row)| {
-        let left_datums = left_datum_vec.borrow_with(&left.1);
-        let right_datums = right_datum_vec.borrow_with(&right.1);
-        compare_columns(order_by, &left_datums, &right_datums, || left.cmp(right))
-    };
-    rows.sort_by(&mut sort_by);
-    rows.into_iter()
+    let mut sort_by =
+        |(payload_left, left_order_by_datums): &(Datum, Vec<Datum>),
+         (payload_right, right_order_by_datums): &(Datum, Vec<Datum>)| {
+            compare_columns(
+                order_by,
+                left_order_by_datums,
+                right_order_by_datums,
+                || payload_left.cmp(payload_right),
+            )
+        };
+    // `sort_unstable_by` can be faster and uses less memory than `sort_by`. An unstable sort is
+    // enough here, because if two elements are equal in our `compare` function, then the elements
+    // are actually binary-equal (because of the `tiebreaker` given to `compare_columns`), so it
+    // doesn't matter what order they end up in.
+    decoded.sort_unstable_by(&mut sort_by);
+    decoded
 }
 
 fn array_concat<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
@@ -345,11 +385,17 @@ where
     })
 }
 
-fn row_number<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
+fn row_number<'a, I>(
+    datums: I,
+    callers_temp_storage: &'a RowArena,
+    order_by: &[ColumnOrder],
+) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let datums = order_aggregate_datums(datums, order_by);
+
+    let temp_storage = RowArena::with_capacity(datums.size_hint().0);
     let datums = datums
         .into_iter()
         .map(|d| d.unwrap_list().iter())
@@ -357,21 +403,26 @@ where
         .zip(1i64..)
         .map(|(d, i)| {
             temp_storage.make_datum(|packer| {
-                packer.push_list(vec![Datum::Int64(i), d]);
+                packer.push_list_with(|packer| {
+                    packer.push(Datum::Int64(i));
+                    packer.push(d);
+                });
             })
         });
 
-    temp_storage.make_datum(|packer| {
+    callers_temp_storage.make_datum(|packer| {
         packer.push_list(datums);
     })
 }
 
-fn rank<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
+fn rank<'a, I>(datums: I, callers_temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     // Keep the row used for ordering around, as it is used to determine the rank
     let datums = order_aggregate_datums_with_rank(datums, order_by);
+
+    let temp_storage = RowArena::with_capacity(datums.size_hint().0);
 
     let mut datums = datums
         .into_iter()
@@ -400,21 +451,30 @@ where
             })
         }.3).into_iter().map(|(d, i)| {
         temp_storage.make_datum(|packer| {
-            packer.push_list(vec![Datum::Int64(i), d]);
+            packer.push_list_with(|packer| {
+                packer.push(Datum::Int64(i));
+                packer.push(d);
+            });
         })
     });
 
-    temp_storage.make_datum(|packer| {
+    callers_temp_storage.make_datum(|packer| {
         packer.push_list(datums);
     })
 }
 
-fn dense_rank<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
+fn dense_rank<'a, I>(
+    datums: I,
+    callers_temp_storage: &'a RowArena,
+    order_by: &[ColumnOrder],
+) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     // Keep the row used for ordering around, as it is used to determine the rank
     let datums = order_aggregate_datums_with_rank(datums, order_by);
+
+    let temp_storage = RowArena::with_capacity(datums.size_hint().0);
 
     let mut datums = datums
         .into_iter()
@@ -442,11 +502,14 @@ where
             })
         }.2).into_iter().map(|(d, i)| {
             temp_storage.make_datum(|packer| {
-                packer.push_list(vec![Datum::Int64(i), d]);
+                packer.push_list_with(|packer| {
+                    packer.push(Datum::Int64(i));
+                    packer.push(d);
+                });
             })
         });
 
-    temp_storage.make_datum(|packer| {
+    callers_temp_storage.make_datum(|packer| {
         packer.push_list(datums);
     })
 }
@@ -474,7 +537,7 @@ where
 /// )
 fn lag_lead<'a, I>(
     datums: I,
-    temp_storage: &'a RowArena,
+    callers_temp_storage: &'a RowArena,
     order_by: &[ColumnOrder],
     lag_lead_type: &LagLeadType,
     ignore_nulls: &bool,
@@ -501,16 +564,20 @@ where
 
     let result = lag_lead_inner(unwrapped_args, lag_lead_type, ignore_nulls);
 
+    let temp_storage = RowArena::with_capacity(result.len());
     let result = result
         .into_iter()
         .zip_eq(orig_rows)
         .map(|(result_value, original_row)| {
             temp_storage.make_datum(|packer| {
-                packer.push_list(vec![result_value, original_row]);
+                packer.push_list_with(|packer| {
+                    packer.push(result_value);
+                    packer.push(original_row);
+                });
             })
         });
 
-    temp_storage.make_datum(|packer| {
+    callers_temp_storage.make_datum(|packer| {
         packer.push_list(result);
     })
 }
@@ -703,7 +770,7 @@ fn lag_lead_inner_ignore_nulls<'a>(
 /// The expected input is in the format of [((OriginalRow, InputValue), OrderByExprs...)]
 fn first_value<'a, I>(
     datums: I,
-    temp_storage: &'a RowArena,
+    callers_temp_storage: &'a RowArena,
     order_by: &[ColumnOrder],
     window_frame: &WindowFrame,
 ) -> Datum<'a>
@@ -727,17 +794,21 @@ where
 
     let results = first_value_inner(args, window_frame);
 
+    let temp_storage = RowArena::with_capacity(results.len());
     let results_with_orig_rows =
         results
             .into_iter()
             .zip_eq(orig_rows)
             .map(|(result_value, original_row)| {
                 temp_storage.make_datum(|packer| {
-                    packer.push_list(vec![result_value, original_row]);
+                    packer.push_list_with(|packer| {
+                        packer.push(result_value);
+                        packer.push(original_row);
+                    });
                 })
             });
 
-    temp_storage.make_datum(|packer| {
+    callers_temp_storage.make_datum(|packer| {
         packer.push_list(results_with_orig_rows);
     })
 }
@@ -807,7 +878,7 @@ fn first_value_inner<'a>(datums: Vec<Datum<'a>>, window_frame: &WindowFrame) -> 
 /// The expected input is in the format of [((OriginalRow, InputValue), OrderByExprs...)]
 fn last_value<'a, I>(
     datums: I,
-    temp_storage: &'a RowArena,
+    callers_temp_storage: &'a RowArena,
     order_by: &[ColumnOrder],
     window_frame: &WindowFrame,
 ) -> Datum<'a>
@@ -819,9 +890,10 @@ where
     let datums = order_aggregate_datums_with_rank(datums, order_by);
 
     // Decode the input (OriginalRow, InputValue) into separate datums, while keeping the OrderByRow
-    let mut args = Vec::new();
-    let mut original_rows = Vec::new();
-    let mut order_by_rows = Vec::new();
+    let size_hint = datums.size_hint().0;
+    let mut args = Vec::with_capacity(size_hint);
+    let mut original_rows = Vec::with_capacity(size_hint);
+    let mut order_by_rows = Vec::with_capacity(size_hint);
     for (d, order_by_row) in datums.into_iter() {
         let mut iter = d.unwrap_list().iter();
         let original_row = iter.next().unwrap();
@@ -833,16 +905,20 @@ where
 
     let results = last_value_inner(args, &order_by_rows, window_frame);
 
+    let temp_storage = RowArena::with_capacity(results.len());
     let result = results
         .into_iter()
         .zip_eq(original_rows)
         .map(|(result_value, original_row)| {
             temp_storage.make_datum(|packer| {
-                packer.push_list(vec![result_value, original_row]);
+                packer.push_list_with(|packer| {
+                    packer.push(result_value);
+                    packer.push(original_row);
+                });
             })
         });
 
-    temp_storage.make_datum(|packer| {
+    callers_temp_storage.make_datum(|packer| {
         packer.push_list(result);
     })
 }
@@ -950,20 +1026,16 @@ fn fused_value_window_func<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    // Let's create a new RowArena, to avoid flooding the caller's arena with stuff proportional to
-    // the window partition size. We will use our own arena for internal evaluations, and will use
-    // the caller's at the very end to return the final result Datum.
-    let temp_storage = RowArena::new();
-
     let has_last_value = funcs
         .iter()
         .any(|f| matches!(f, AggregateFunc::LastValue { .. }));
 
     let input_datums_with_ranks = order_aggregate_datums_with_rank(input_datums, order_by);
 
-    let mut encoded_argsss = vec![Vec::new(); funcs.len()];
-    let mut original_rows = Vec::new();
-    let mut order_by_rows = Vec::new();
+    let size_hint = input_datums_with_ranks.size_hint().0;
+    let mut encoded_argsss = vec![Vec::with_capacity(size_hint); funcs.len()];
+    let mut original_rows = Vec::with_capacity(size_hint);
+    let mut order_by_rows = Vec::with_capacity(size_hint);
     for (d, order_by_row) in input_datums_with_ranks {
         let mut iter = d.unwrap_list().iter();
         let original_row = iter.next().unwrap();
@@ -978,7 +1050,7 @@ where
         }
     }
 
-    let mut results_per_row = vec![Vec::new(); original_rows.len()];
+    let mut results_per_row = vec![Vec::with_capacity(funcs.len()); original_rows.len()];
     for (func, encoded_argss) in funcs.iter().zip_eq(encoded_argsss) {
         let results = match func {
             AggregateFunc::LagLead {
@@ -1018,12 +1090,16 @@ where
         }
     }
 
+    // Let's create a new RowArena, to avoid flooding the caller's arena with stuff proportional to
+    // the window partition size. We will use our own arena for internal evaluations, and will use
+    // the caller's at the very end to return the final result Datum.
+    let temp_storage = RowArena::with_capacity(2 * original_rows.len());
     let results_with_orig_rows = results_per_row.into_iter().enumerate().map(|(i, results)| {
         temp_storage.make_datum(|packer| {
-            packer.push_list(vec![
-                temp_storage.make_datum(|packer| packer.push_list(results)),
-                original_rows[i],
-            ]);
+            packer.push_list_with(|packer| {
+                packer.push(temp_storage.make_datum(|packer| packer.push_list(results)));
+                packer.push(original_rows[i]);
+            });
         })
     });
 
@@ -1032,8 +1108,8 @@ where
     })
 }
 
-// The expected input is in the format of [((OriginalRow, InputValue), OrderByExprs...)]
-// See also in the comment in `window_func_applied_to`.
+/// The expected input is in the format of `[((OriginalRow, InputValue), OrderByExprs...)]`
+/// See also in the comment in `window_func_applied_to`.
 fn window_aggr<'a, I, A>(
     input_datums: I, // An entire window partition.
     callers_temp_storage: &'a RowArena,
@@ -1047,11 +1123,6 @@ where
     I: IntoIterator<Item = Datum<'a>>,
     A: OneByOneAggr,
 {
-    // Let's create a new RowArena, to avoid flooding the caller's arena with stuff proportional to
-    // the window partition size. We will use our own arena for internal evaluations, and will use
-    // the caller's at the very end to return the final result Datum.
-    let temp_storage = RowArena::new();
-
     // Sort the datums according to the ORDER BY expressions and return the ((OriginalRow, InputValue), OrderByRow) record
     // The OrderByRow is kept around because it is required to compute the peer groups in RANGE mode
     let datums = order_aggregate_datums_with_rank(input_datums, order_by);
@@ -1070,6 +1141,11 @@ where
 
     let length = input_datums.len();
     let mut result: Vec<(Datum, Datum)> = Vec::with_capacity(length);
+
+    // Let's create a new RowArena, to avoid flooding the caller's arena with stuff proportional to
+    // the window partition size. We will use our own arena for internal evaluations, and will use
+    // the caller's at the very end to return the final result Datum.
+    let temp_storage = RowArena::with_capacity(length);
 
     // In this degenerate case, all results would be `wrapped_aggregate.default()` (usually null).
     // However, this currently can't happen, because
@@ -1392,7 +1468,10 @@ where
 
     let result = result.into_iter().map(|(result_value, original_row)| {
         temp_storage.make_datum(|packer| {
-            packer.push_list(vec![result_value, original_row]);
+            packer.push_list_with(|packer| {
+                packer.push(result_value);
+                packer.push(original_row);
+            });
         })
     });
 
@@ -3491,11 +3570,10 @@ impl fmt::Display for TableFunc {
 
 #[cfg(test)]
 mod tests {
+    use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
-
-    use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
 
     proptest! {
        #[mz_ore::test]
