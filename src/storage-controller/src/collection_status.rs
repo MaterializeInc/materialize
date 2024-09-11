@@ -14,10 +14,10 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, Row, TimestampManipulation};
-use mz_storage_client::client::{Status, StatusUpdate};
+use mz_storage_client::client::{Status, StatusUpdate, TimestamplessUpdate};
 use timely::progress::Timestamp;
 
-use crate::collection_mgmt::CollectionManager;
+use crate::persist_handles::PersistTableWriteWorker;
 use crate::IntrospectionType;
 
 pub use mz_storage_client::healthcheck::*;
@@ -29,8 +29,7 @@ pub struct CollectionStatusManager<T>
 where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
-    /// Managed collection interface
-    collection_manager: CollectionManager<T>,
+    persist_table_worker: PersistTableWriteWorker<T>,
     /// A list of introspection IDs for managed collections
     introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     previous_statuses: BTreeMap<GlobalId, Status>,
@@ -41,11 +40,11 @@ where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation + From<EpochMillis>,
 {
     pub fn new(
-        collection_manager: CollectionManager<T>,
+        persist_table_worker: PersistTableWriteWorker<T>,
         introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     ) -> Self {
         Self {
-            collection_manager,
+            persist_table_worker,
             introspection_ids,
             previous_statuses: Default::default(),
         }
@@ -80,10 +79,19 @@ where
             .extend(new.iter().map(|r| (r.id, r.status)));
 
         if !new.is_empty() {
-            self.collection_manager.blind_write(
+            tracing::info!(
+                "WIP append_updates {:?} {} {:?}",
+                type_,
+                source_status_history_id,
+                new
+            );
+            let _rx = self.persist_table_worker.append_soon(
                 source_status_history_id,
                 new.into_iter()
-                    .map(|update| (Row::from(update), 1))
+                    .map(|update| TimestamplessUpdate {
+                        row: Row::from(update),
+                        diff: 1,
+                    })
                     .collect(),
             );
         }

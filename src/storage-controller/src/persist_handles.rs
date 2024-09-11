@@ -29,7 +29,6 @@ use mz_storage_client::client::{TimestamplessUpdate, Update};
 use mz_storage_types::controller::{InvalidUpper, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
 use mz_txn_wal::txns::{Tidy, TxnsHandle};
-use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -77,6 +76,11 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
         updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
         tx: tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     },
+    AppendSoon {
+        id: GlobalId,
+        updates: Vec<TimestamplessUpdate>,
+        tx: tokio::sync::oneshot::Sender<()>,
+    },
     Shutdown,
 }
 
@@ -87,6 +91,7 @@ impl<T: Timestamp + Lattice + Codec64> PersistTableWriteCmd<T> {
             PersistTableWriteCmd::Update { .. } => "PersistTableWriteCmd::Update",
             PersistTableWriteCmd::DropHandles { .. } => "PersistTableWriteCmd::DropHandle",
             PersistTableWriteCmd::Append { .. } => "PersistTableWriteCmd::Append",
+            PersistTableWriteCmd::AppendSoon { .. } => "PersistTableWriteCmd::AppendSoon",
             PersistTableWriteCmd::Shutdown => "PersistTableWriteCmd::Shutdown",
         }
     }
@@ -164,6 +169,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 
     pub(crate) fn new_txns(
         txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
+        soon_debounce: Box<dyn Fn() -> T + Send + Sync>,
     ) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
@@ -172,6 +178,8 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
                 txns,
                 write_handles: BTreeMap::new(),
                 tidy: Tidy::default(),
+                soon_debounce,
+                soon: BTreeMap::new(),
             };
             worker.run(rx).await
         });
@@ -241,6 +249,21 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         }
     }
 
+    pub(crate) fn append_soon(
+        &self,
+        id: GlobalId,
+        updates: Vec<TimestamplessUpdate>,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if updates.is_empty() {
+            tx.send(()).expect("rx has not been dropped at this point");
+            rx
+        } else {
+            self.send(PersistTableWriteCmd::AppendSoon { id, updates, tx });
+            rx
+        }
+    }
+
     /// Drops the handles associated with `ids` from this worker.
     ///
     /// Note that this does not perform any other cleanup, such as finalizing
@@ -256,10 +279,28 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     }
 }
 
-struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
+struct AppendSoon<T> {
+    last_commit_ts: T,
+    updates: Vec<TimestamplessUpdate>,
+    txs: Vec<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl<T: Timestamp> Default for AppendSoon<T> {
+    fn default() -> Self {
+        Self {
+            last_commit_ts: T::minimum(),
+            updates: Default::default(),
+            txs: Default::default(),
+        }
+    }
+}
+
+struct TxnsTableWorker<T> {
     txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
+    soon_debounce: Box<dyn Fn() -> T + Send + Sync>,
+    soon: BTreeMap<GlobalId, AppendSoon<T>>,
 }
 
 impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T> {
@@ -307,6 +348,21 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                         .instrument(span)
                         .await
                 }
+                PersistTableWriteCmd::AppendSoon {
+                    id,
+                    mut updates,
+                    tx,
+                } => {
+                    let soon = self.soon.entry(id).or_default();
+                    if soon.updates.is_empty() {
+                        // Special case empty to reuse the input Vec because we
+                        // clear after draining.
+                        soon.updates = updates;
+                    } else {
+                        soon.updates.append(&mut updates);
+                    }
+                    soon.txs.push(tx);
+                }
                 PersistTableWriteCmd::Shutdown => {
                     tracing::info!("PersistTableWriteWorker shutting down via command");
                     return;
@@ -353,6 +409,12 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
 
     async fn drop_handles(&mut self, ids: Vec<GlobalId>, forget_ts: T) {
         tracing::info!(?ids, "drop tables");
+        for id in &ids {
+            // If there are any unresolved soon entries for this id, the caller
+            // can distinguish that this was not successful because the rx side
+            // of the channel will close.
+            self.soon.remove(id);
+        }
         let data_ids = ids
             .iter()
             // n.b. this should only remove the handle from the persist
@@ -380,9 +442,37 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         &mut self,
         write_ts: T,
         advance_to: T,
-        updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        mut updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
         tx: tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     ) {
+        // Sneak in any AppendSoon entries as necessary.
+        let mut soon_txs = Vec::new();
+        let mut soons = Vec::new();
+        for (id, soon) in &mut self.soon {
+            if soon.updates.is_empty() {
+                continue;
+            };
+            // Debounce these so we have to advance the physical upper less
+            // often.
+            let min_commit_ts = soon.last_commit_ts.step_forward_by(&(self.soon_debounce)());
+            tracing::info!(
+                "WIP append soon {} {} {} {:?} vs {:?} {}",
+                id,
+                soon.updates.len(),
+                soon.txs.len(),
+                min_commit_ts,
+                write_ts,
+                !(write_ts < min_commit_ts),
+            );
+            if write_ts < min_commit_ts {
+                continue;
+            }
+            soon.last_commit_ts = write_ts.clone();
+            soons.push((id, soon.updates.clone()));
+            updates.push((*id, std::mem::take(&mut soon.updates)));
+            soon_txs.append(&mut soon.txs);
+        }
+
         debug!(
             "tables append timestamp={:?} advance_to={:?} len={} ids={:?}{}",
             write_ts,
@@ -439,7 +529,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 // We don't serve any reads out of this TxnsHandle, so go ahead
                 // and compact as aggressively as we can (i.e. to the time we
                 // just wrote).
-                let () = self.txns.compact_to(write_ts).await;
+                let () = self.txns.compact_to(write_ts.clone()).await;
 
                 Ok(())
             }
@@ -462,6 +552,12 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
             }
         };
         // It is not an error for the other end to hang up.
+        for tx in soon_txs {
+            let _ = tx.send(());
+        }
+        for (id, updates) in soons {
+            tracing::info!("WIP appended soon {} at {:?}: {:?}", id, write_ts, updates);
+        }
         let _ = tx.send(response);
     }
 }
