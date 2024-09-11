@@ -5364,6 +5364,10 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new
 SELECT
     r.id AS replica_id,
     m.process_id,
+    m.cpu_nano_cores,
+    m.memory_bytes,
+    m.disk_bytes,
+    r.size,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
     m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent,
     m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent
@@ -5384,6 +5388,10 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
 SELECT
     r.id AS replica_id,
     m.process_id,
+    m.cpu_nano_cores,
+    m.memory_bytes,
+    m.disk_bytes,
+    r.size,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
     m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent,
     m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent,
