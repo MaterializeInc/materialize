@@ -22,6 +22,10 @@
     {% set exclude_clusters = deployment_vars.get('exclude_clusters', []) %}
     {% set exclude_schemas = deployment_vars.get('exclude_schemas', []) %}
 
+    {# Ensure exclude_clusters and exclude_schemas are lists #}
+    {% set exclude_clusters = exclude_clusters if exclude_clusters is iterable and exclude_clusters is not string else [] %}
+    {% set exclude_schemas = exclude_schemas if exclude_schemas is iterable and exclude_schemas is not string else [] %}
+
     {% if debug %}
         {{ log("Debug: Starting deploy_get_objects macro", info=True) }}
         {{ log("Debug: Excluded clusters: " ~ exclude_clusters, info=True) }}
@@ -36,11 +40,12 @@
         {% do schemas.update({target.schema: true}) %}
     {% endif %}
 
-    {# Add clusters and schemas from the models #}
+    {# Add clusters and schemas from models, seeds, and tests #}
     {% for node in graph.nodes.values() %}
-        {% if node.resource_type == 'model' %}
-            {% if node.config.cluster and node.config.cluster not in exclude_clusters %}
-                {% do clusters.update({node.config.cluster: true}) %}
+        {% if node.resource_type in ['model', 'seed', 'test'] %}
+            {% set node_cluster = node.config.get('cluster', target.cluster) %}
+            {% if node_cluster and node_cluster not in exclude_clusters %}
+                {% do clusters.update({node_cluster: true}) %}
             {% endif %}
             {% if node.schema and node.schema not in exclude_schemas %}
                 {% do schemas.update({node.schema: true}) %}
