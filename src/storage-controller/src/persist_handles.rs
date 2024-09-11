@@ -447,6 +447,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
     ) {
         // Sneak in any AppendSoon entries as necessary.
         let mut soon_txs = Vec::new();
+        let mut soons = Vec::new();
         for (id, soon) in &mut self.soon {
             if soon.updates.is_empty() {
                 continue;
@@ -455,17 +456,19 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
             // often.
             let min_commit_ts = soon.last_commit_ts.step_forward_by(&(self.soon_debounce)());
             tracing::info!(
-                "WIP append soon {} {} {} {:?} vs {:?}",
+                "WIP append soon {} {} {} {:?} vs {:?} {}",
                 id,
                 soon.updates.len(),
                 soon.txs.len(),
                 min_commit_ts,
-                write_ts
+                write_ts,
+                !(write_ts < min_commit_ts),
             );
             if write_ts < min_commit_ts {
                 continue;
             }
             soon.last_commit_ts = write_ts.clone();
+            soons.push((id, soon.updates.clone()));
             updates.push((*id, std::mem::take(&mut soon.updates)));
             soon_txs.append(&mut soon.txs);
         }
@@ -526,7 +529,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 // We don't serve any reads out of this TxnsHandle, so go ahead
                 // and compact as aggressively as we can (i.e. to the time we
                 // just wrote).
-                let () = self.txns.compact_to(write_ts).await;
+                let () = self.txns.compact_to(write_ts.clone()).await;
 
                 Ok(())
             }
@@ -551,6 +554,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         // It is not an error for the other end to hang up.
         for tx in soon_txs {
             let _ = tx.send(());
+        }
+        for (id, updates) in soons {
+            tracing::info!("WIP appended soon {} at {:?}: {:?}", id, write_ts, updates);
         }
         let _ = tx.send(response);
     }

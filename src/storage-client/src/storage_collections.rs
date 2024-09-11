@@ -61,7 +61,8 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
 
 use crate::controller::{
-    CollectionDescription, DataSource, DataSourceOther, PersistEpoch, StorageMetadata, StorageTxn,
+    CollectionDescription, DataSource, DataSourceOther, IntrospectionType, PersistEpoch,
+    StorageMetadata, StorageTxn,
 };
 use crate::storage_collections::metrics::{ShardIdSet, StorageCollectionsMetrics};
 
@@ -1340,8 +1341,10 @@ where
         migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         let is_in_txns = |id, metadata: &CollectionMetadata| {
-            metadata.txns_shard.is_some()
-                && !(self.read_only && migrated_storage_collections.contains(&id))
+            let ret = metadata.txns_shard.is_some()
+                && !(self.read_only && migrated_storage_collections.contains(&id));
+            tracing::info!("WIP {} is_in_txns {}", id, ret);
+            ret
         };
 
         // Validate first, to avoid corrupting state.
@@ -1409,9 +1412,20 @@ where
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         Some(*self.txns_read.txns_id())
                     }
+                    DataSource::Introspection(typ) => match typ {
+                        // WIP
+                        IntrospectionType::SourceStatusHistory
+                        | IntrospectionType::SinkStatusHistory
+                        | IntrospectionType::PrivatelinkConnectionStatusHistory
+                        | IntrospectionType::PreparedStatementHistory
+                        | IntrospectionType::StatementExecutionHistory
+                        | IntrospectionType::SessionHistory
+                        | IntrospectionType::StatementLifecycleHistory
+                        | IntrospectionType::SqlText => Some(*self.txns_read.txns_id()),
+                        _ => None,
+                    },
                     DataSource::Ingestion(_)
                     | DataSource::IngestionExport { .. }
-                    | DataSource::Introspection(_)
                     | DataSource::Progress
                     | DataSource::Webhook
                     | DataSource::Other(DataSourceOther::Compute) => None,
@@ -1603,6 +1617,24 @@ where
                 metadata.clone(),
             );
 
+            // See comment on self.initial_txn_upper on why we're doing
+            // this.
+            if is_in_txns(id, &metadata)
+                && PartialOrder::less_than(
+                    &collection_state.write_frontier,
+                    &self.initial_txn_upper,
+                )
+            {
+                // We could try and be cute and use the join of the txn
+                // upper and the table upper. But that has more
+                // complicated reasoning for why it is or isn't correct,
+                // and we're only dealing with totally ordered times
+                // here.
+                collection_state
+                    .write_frontier
+                    .clone_from(&self.initial_txn_upper);
+            }
+
             // Install the collection state in the appropriate spot.
             match &collection_state.description.data_source {
                 DataSource::Introspection(_) => {
@@ -1640,23 +1672,6 @@ where
                     self_collections.insert(id, collection_state);
                 }
                 DataSource::Other(DataSourceOther::TableWrites) => {
-                    // See comment on self.initial_txn_upper on why we're doing
-                    // this.
-                    if is_in_txns(id, &metadata)
-                        && PartialOrder::less_than(
-                            &collection_state.write_frontier,
-                            &self.initial_txn_upper,
-                        )
-                    {
-                        // We could try and be cute and use the join of the txn
-                        // upper and the table upper. But that has more
-                        // complicated reasoning for why it is or isn't correct,
-                        // and we're only dealing with totally ordered times
-                        // here.
-                        collection_state
-                            .write_frontier
-                            .clone_from(&self.initial_txn_upper);
-                    }
                     self_collections.insert(id, collection_state);
                 }
                 DataSource::Progress | DataSource::Other(DataSourceOther::Compute) => {
