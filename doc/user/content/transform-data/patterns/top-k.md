@@ -24,7 +24,8 @@ query looks like this:
 SELECT key_col, ... FROM
     (SELECT DISTINCT key_col FROM tbl) grp,
     LATERAL (
-        SELECT col1, col2..., order_col FROM tbl
+        SELECT col1, col2..., order_col
+        FROM tbl
         WHERE key_col = grp.key_col
         ORDER BY order_col LIMIT k
     )
@@ -61,7 +62,8 @@ To fetch the three most populous cities in each state:
 SELECT state, city FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (
-        SELECT city, pop FROM cities
+        SELECT city, pop
+        FROM cities
         WHERE state = grp.state
         ORDER BY pop DESC LIMIT 3
     )
@@ -119,7 +121,8 @@ specifying [query hints](/sql/select/#query-hints) to improve memory usage. For 
 SELECT state, city FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (
-        SELECT city, pop FROM cities
+        SELECT city, pop
+        FROM cities
         WHERE state = grp.state
         OPTIONS (LIMIT INPUT GROUP SIZE = 1000)
         ORDER BY pop DESC LIMIT 3

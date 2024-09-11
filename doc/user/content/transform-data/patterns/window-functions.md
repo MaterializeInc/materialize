@@ -60,7 +60,8 @@ If there are states that have many cities, a more performant way to express this
 SELECT state, city FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (
-        SELECT city, pop FROM cities
+        SELECT city, pop
+        FROM cities
         WHERE state = grp.state
         ORDER BY pop DESC LIMIT 3
     )
@@ -74,7 +75,7 @@ Suppose that you want to compute the ratio of each city's population vs. the mos
 ```mzsql
 SELECT state, city,
        CAST(pop AS float) / FIRST_VALUE(pop)
-         OVER (PARTITION BY state ORDER BY pop DESC) as pop_ratio
+         OVER (PARTITION BY state ORDER BY pop DESC) AS pop_ratio
 FROM cities
 ORDER BY state, pop_ratio DESC;
 ```
@@ -82,7 +83,7 @@ ORDER BY state, pop_ratio DESC;
 For better performance, you can rewrite this query to first compute the largest population of each state using an aggregation, and then join against that:
 
 ```mzsql
-SELECT cities.state, city, CAST(pop as float) / max_pops.max_pop pop_ratio
+SELECT cities.state, city, CAST(pop as float) / max_pops.max_pop AS pop_ratio
 FROM cities,
      (SELECT state, MAX(pop) as max_pop
       FROM cities
@@ -107,7 +108,7 @@ INSERT INTO measurements VALUES
 
 You can compute the differences between consecutive measurements using `LAG()`:
 ```mzsql
-SELECT time, value - LAG(value) OVER (ORDER BY time) as diff_w_prev
+SELECT time, value - LAG(value) OVER (ORDER BY time) AS diff
 FROM measurements
 ORDER BY time;
 ```
@@ -115,7 +116,7 @@ ORDER BY time;
 For better performance, you can rewrite this query using an equi-join:
 
 ```mzsql
-SELECT m2.time, m2.value - m1.value as diff_w_prev
+SELECT m2.time, m2.value - m1.value AS diff
 FROM measurements m1, measurements m2
 WHERE m2.time = m1.time + INTERVAL '1' MINUTE
 ORDER BY m2.time;
@@ -125,7 +126,7 @@ Note that these queries differ in whether they include the first timestamp (with
 a `NULL` difference).  A `RIGHT JOIN` would make the outputs match exactly.
 
 ```mzsql
-SELECT m2.time, m2.value - m1.value as diff_w_prev
+SELECT m2.time, m2.value - m1.value AS diff
 FROM measurements m1
 RIGHT JOIN measurements m2
 ON m2.time = m1.time + INTERVAL '1' MINUTE
