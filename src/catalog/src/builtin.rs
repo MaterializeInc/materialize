@@ -7223,6 +7223,7 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
                     details ->> 'replica_id' AS replica_id,
                     details ->> 'replica_name' AS replica_name,
                     details ->> 'cluster_name' AS cluster_name,
+                    details ->> 'cluster_id' AS cluster_id,
                     occurred_at
                 FROM mz_catalog.mz_audit_events
                 WHERE
@@ -7241,6 +7242,7 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
         SELECT
             creates.replica_id,
             creates.size,
+            creates.cluster_id,
             creates.cluster_name,
             creates.replica_name,
             creates.occurred_at AS created_at,
