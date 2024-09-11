@@ -49,7 +49,7 @@ pub struct Optimizer {
     /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// Optional row-set finishing to be applied to the final result.
-    finishing: RowSetFinishing,
+    pub finishing: RowSetFinishing,
     /// A transient GlobalId to be used when constructing the dataflow.
     select_id: GlobalId,
     /// A transient GlobalId to be used when constructing a PeekPlan.

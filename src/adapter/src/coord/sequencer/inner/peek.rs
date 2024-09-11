@@ -634,7 +634,8 @@ impl Coordinator {
                                         target_replica,
                                         source_ids,
                                         determination,
-                                        optimizer,
+                                        cluster_id: optimizer.cluster_id(),
+                                        finishing: optimizer.finishing,
                                         plan_insights_optimizer_trace: Some(optimizer_trace),
                                         global_lir_plan,
                                         optimization_finished_at,
@@ -649,7 +650,8 @@ impl Coordinator {
                                     target_replica,
                                     source_ids,
                                     determination,
-                                    optimizer,
+                                    cluster_id: optimizer.cluster_id(),
+                                    finishing: optimizer.finishing,
                                     plan_insights_optimizer_trace: None,
                                     global_lir_plan,
                                     optimization_finished_at,
@@ -798,7 +800,8 @@ impl Coordinator {
             target_replica,
             source_ids,
             determination,
-            optimizer,
+            cluster_id,
+            finishing,
             plan_insights_optimizer_trace,
             global_lir_plan,
             optimization_finished_at,
@@ -821,7 +824,7 @@ impl Coordinator {
 
         self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
 
-        let target_cluster = self.catalog().get_cluster(optimizer.cluster_id());
+        let target_cluster = self.catalog().get_cluster(cluster_id);
 
         let features = OptimizerFeatures::from(self.catalog().system_config())
             .override_from(&target_cluster.config.features());
@@ -902,8 +905,8 @@ impl Coordinator {
             .implement_peek_plan(
                 ctx.extra_mut(),
                 planned_peek,
-                optimizer.finishing().clone(),
-                optimizer.cluster_id(),
+                finishing,
+                cluster_id,
                 target_replica,
                 max_result_size,
                 max_query_result_size,
@@ -911,12 +914,8 @@ impl Coordinator {
             .await?;
 
         if ctx.session().vars().emit_timestamp_notice() {
-            let explanation = self.explain_timestamp(
-                ctx.session(),
-                optimizer.cluster_id(),
-                &id_bundle,
-                determination,
-            );
+            let explanation =
+                self.explain_timestamp(ctx.session(), cluster_id, &id_bundle, determination);
             ctx.session()
                 .add_notice(AdapterNotice::QueryTimestamp { explanation });
         }
