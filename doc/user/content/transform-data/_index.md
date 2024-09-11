@@ -14,16 +14,17 @@ fast-changing data. Materialize follows the SQL standard
 (SQL-92) implementation, and strives for compatibility with the PostgreSQL
 dialect.
 
-You can build complex analytical workloads using [any type of join](https://materialize.com/docs/sql/join/)
-(including non-windowed joins and joins on arbitrary conditions), but you can
-also leverage exciting new SQL patterns enabled by streaming like [Change Data
-Capture (CDC)](https://materialize.com/docs/integrations/#databases),
-[temporal filters](https://materialize.com/docs/sql/patterns/temporal-filters/),
-and [subscriptions](https://materialize.com/docs/sql/subscribe/).
+You can build complex analytical workloads using [any type of
+join](/sql/select/join/) (including non-windowed joins and joins on arbitrary
+conditions). You can also leverage exciting new SQL patterns enabled by
+streaming, like [Change Data Capture
+(CDC)](/integrations/#databases), [temporal
+filters](/sql/patterns/temporal-filters/), and
+[subscriptions](/sql/subscribe/).
 
 ### SELECT statement
 
-In Materialize, you can [`SELECT`](/sql/select/) from
+To build your transformations, you can [`SELECT`](/sql/select/) from
 [sources](/concepts/sources/), tables, [views](/concepts/views/#views), and
 [materialized views](/concepts/views/#materialized-views).
 
