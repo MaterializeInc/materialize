@@ -1061,23 +1061,23 @@ where
         }
 
         // Translate our net compute actions into downgrades of persist sinces.
-        // The actual downgrades are performed by a Tokio task asynchorously.
-        let mut persist_compaction_commands = BTreeMap::default();
+        // The actual downgrades are performed by a Tokio task asynchronously.
+        let mut persist_compaction_commands = Vec::with_capacity(collections_net.len());
         for (key, (mut changes, frontier)) in collections_net {
             if !changes.is_empty() {
                 if frontier.is_empty() {
                     info!(id = %key, "removing collection state because the since advanced to []!");
                     collections.remove(&key).expect("must still exist");
                 }
-                persist_compaction_commands.insert(key, frontier);
+                persist_compaction_commands.push((key, frontier));
             }
         }
 
-        let persist_compaction_commands = persist_compaction_commands.into_iter().collect_vec();
-
-        cmd_tx
-            .send(BackgroundCmd::DowngradeSince(persist_compaction_commands))
-            .expect("cannot fail to send");
+        if !persist_compaction_commands.is_empty() {
+            cmd_tx
+                .send(BackgroundCmd::DowngradeSince(persist_compaction_commands))
+                .expect("cannot fail to send");
+        }
     }
 
     /// Remove any shards that we know are finalized
