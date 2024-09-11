@@ -241,6 +241,7 @@ impl BlobTraceUpdates {
                 // compatible schemas... but if it fails we only log, and let some higher-level
                 // code signal the error if it cares.
                 let migrate = |array: &mut ArrayRef, to_type: DataType| {
+                    // TODO: Plumb down the SchemaCache and use it here for the array migrations.
                     let from_type = array.data_type().clone();
                     if from_type != to_type {
                         if let Some(migration) = backward_compatible(&from_type, &to_type) {

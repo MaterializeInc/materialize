@@ -98,6 +98,8 @@ pub struct Metrics {
     pub tasks: TasksMetrics,
     /// Metrics for columnar data encoding and decoding.
     pub columnar: ColumnarMetrics,
+    /// Metrics for schemas and the schema registry.
+    pub schema: SchemaMetrics,
     /// Metrics for inline writes.
     pub inline: InlineMetrics,
     /// Semaphore to limit memory/disk use by fetches.
@@ -110,6 +112,9 @@ pub struct Metrics {
     pub s3_blob: S3BlobMetrics,
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresClientMetrics,
+
+    #[allow(dead_code)]
+    pub(crate) registry: MetricsRegistry,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -163,6 +168,7 @@ impl Metrics {
             blob_cache_mem: BlobMemCache::new(registry),
             tasks: TasksMetrics::new(registry),
             columnar,
+            schema: SchemaMetrics::new(registry),
             inline: InlineMetrics::new(registry),
             semaphore: SemaphoreMetrics::new(cfg.clone(), registry.clone()),
             sink: SinkMetrics::new(registry),
@@ -170,6 +176,7 @@ impl Metrics {
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
             _vecs: vecs,
             _uptime: uptime,
+            registry: registry.clone(),
         }
     }
 
@@ -3066,6 +3073,104 @@ impl TasksMetrics {
         registry.register_collector(heartbeat_read.clone());
         TasksMetrics { heartbeat_read }
     }
+}
+
+#[derive(Debug)]
+pub struct SchemaMetrics {
+    pub(crate) cache_fetch_state_count: IntCounter,
+    pub(crate) cache_schema: SchemaCacheMetrics,
+    pub(crate) cache_migration: SchemaCacheMetrics,
+    pub(crate) migration_count_same: IntCounter,
+    pub(crate) migration_count_codec: IntCounter,
+    pub(crate) migration_count_either: IntCounter,
+    pub(crate) migration_len_legacy_codec: IntCounter,
+    pub(crate) migration_len_either_codec: IntCounter,
+    pub(crate) migration_len_either_arrow: IntCounter,
+    pub(crate) migration_new_count: IntCounter,
+    pub(crate) migration_new_seconds: Counter,
+    pub(crate) migration_migrate_seconds: Counter,
+}
+
+impl SchemaMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        let cached: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_cache_cached_count",
+            help: "count of schema cache entries served from cache",
+            var_labels: ["op"],
+        ));
+        let computed: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_cache_computed_count",
+            help: "count of schema cache entries computed",
+            var_labels: ["op"],
+        ));
+        let unavailable: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_cache_unavailable_count",
+            help: "count of schema cache entries unavailable at current state",
+            var_labels: ["op"],
+        ));
+        let added: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_cache_added_count",
+            help: "count of schema cache entries added",
+            var_labels: ["op"],
+        ));
+        let dropped: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_cache_dropped_count",
+            help: "count of schema cache entries dropped",
+            var_labels: ["op"],
+        ));
+        let cache = |name| SchemaCacheMetrics {
+            cached_count: cached.with_label_values(&[name]),
+            computed_count: computed.with_label_values(&[name]),
+            unavailable_count: unavailable.with_label_values(&[name]),
+            added_count: added.with_label_values(&[name]),
+            dropped_count: dropped.with_label_values(&[name]),
+        };
+        let migration_count: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_migration_count",
+            help: "count of fetch part migrations",
+            var_labels: ["op"],
+        ));
+        let migration_len: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_schema_migration_len",
+            help: "count of migrated update records",
+            var_labels: ["op"],
+        ));
+        SchemaMetrics {
+            cache_fetch_state_count: registry.register(metric!(
+                name: "mz_persist_schema_cache_fetch_state_count",
+                help: "count of state fetches by the schema cache",
+            )),
+            cache_schema: cache("schema"),
+            cache_migration: cache("migration"),
+            migration_count_same: migration_count.with_label_values(&["same"]),
+            migration_count_codec: migration_count.with_label_values(&["codec"]),
+            migration_count_either: migration_count.with_label_values(&["either"]),
+            migration_len_legacy_codec: migration_len.with_label_values(&["legacy_codec"]),
+            migration_len_either_codec: migration_len.with_label_values(&["either_codec"]),
+            migration_len_either_arrow: migration_len.with_label_values(&["either_arrow"]),
+            migration_new_count: registry.register(metric!(
+                name: "mz_persist_schema_migration_new_count",
+                help: "count of migrations constructed",
+            )),
+            migration_new_seconds: registry.register(metric!(
+                name: "mz_persist_schema_migration_new_seconds",
+                help: "seconds spent constructing migration logic",
+            )),
+            migration_migrate_seconds: registry.register(metric!(
+                name: "mz_persist_schema_migration_migrate_seconds",
+                help: "seconds spent applying migration logic",
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SchemaCacheMetrics {
+    pub(crate) cached_count: IntCounter,
+    pub(crate) computed_count: IntCounter,
+    pub(crate) unavailable_count: IntCounter,
+    pub(crate) added_count: IntCounter,
+    pub(crate) dropped_count: IntCounter,
 }
 
 #[derive(Debug)]

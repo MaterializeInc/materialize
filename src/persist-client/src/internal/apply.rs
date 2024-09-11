@@ -9,6 +9,7 @@
 
 //! Implementation of persist command application.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
@@ -30,15 +31,15 @@ use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    ExpiryMetrics, HollowBatch, Since, SnapshotErr, StateCollections, TypedState, Upper,
-    ROLLUP_THRESHOLD,
+    EncodedSchemas, ExpiryMetrics, HollowBatch, Since, SnapshotErr, StateCollections, TypedState,
+    Upper, ROLLUP_THRESHOLD,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
 use crate::rpc::{PubSubSender, PUBSUB_PUSH_DIFF_ENABLED};
-use crate::schema::SchemaId;
+use crate::schema::{SchemaCache, SchemaId};
 use crate::{Diagnostics, PersistConfig, ShardId};
 
 /// An applier of persist commands.
@@ -157,6 +158,20 @@ where
             .read_lock(&self.metrics.locks.applier_read_cacheable, move |state| {
                 f(state.seqno, state.upper())
             })
+    }
+
+    pub(crate) fn schemas<R>(
+        &self,
+        mut f: impl FnMut(SeqNo, &BTreeMap<SchemaId, EncodedSchemas>) -> R,
+    ) -> R {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, move |state| {
+                f(state.seqno, &state.collections.schemas)
+            })
+    }
+
+    pub(crate) fn schema_cache(&self) -> SchemaCache<K, V, T, D> {
+        SchemaCache::new(self.state.schema_cache(), self.clone())
     }
 
     /// A point-in-time read of `since` from the current state.

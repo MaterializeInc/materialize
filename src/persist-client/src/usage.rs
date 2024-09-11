@@ -957,14 +957,14 @@ mod tests {
                 &cfg,
                 &client.metrics.user,
                 &client.isolated_runtime,
-                &write.schemas,
+                &write.write_schemas,
             )
             .await;
             b2.flush_to_blob(
                 &cfg,
                 &client.metrics.user,
                 &client.isolated_runtime,
-                &write.schemas,
+                &write.write_schemas,
             )
             .await;
         }

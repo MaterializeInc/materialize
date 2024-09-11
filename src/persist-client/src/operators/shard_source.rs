@@ -526,7 +526,7 @@ where
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     descs: &Stream<G, (usize, SerdeLeasedBatchPart)>,
     name: &str,
-    client: impl Future<Output = PersistClient> + 'static,
+    client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
@@ -557,21 +557,27 @@ where
     let name_owned = name.to_owned();
 
     let shutdown_button = builder.build(move |_capabilities| async move {
-        let fetcher = {
-            client
-                .await
-                .create_batch_fetcher::<K, V, T, D>(
-                    shard_id,
-                    key_schema,
-                    val_schema,
-                    is_transient,
-                    Diagnostics {
-                        shard_name: name_owned.clone(),
-                        handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
-                    },
-                )
-                .await
-        };
+        let mut fetcher = mz_ore::task::spawn(|| format!("shard_source_fetch({})", name_owned), {
+            let diagnostics = Diagnostics {
+                shard_name: name_owned.clone(),
+                handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
+            };
+            async move {
+                client
+                    .await
+                    .create_batch_fetcher::<K, V, T, D>(
+                        shard_id,
+                        key_schema,
+                        val_schema,
+                        is_transient,
+                        diagnostics,
+                    )
+                    .await
+            }
+        })
+        .await
+        .expect("fetcher creation shouldn't panic")
+        .expect("shard codecs should not change");
 
         while let Some(event) = descs_input.next().await {
             if let Event::Data([fetched_cap, _completed_fetches_cap], data) = event {

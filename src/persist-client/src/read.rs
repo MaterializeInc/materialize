@@ -43,6 +43,7 @@ use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
 use crate::iter::{CodecSort, Consolidator};
+use crate::schema::SchemaCache;
 use crate::stats::{SnapshotPartStats, SnapshotPartsStats, SnapshotStats};
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
@@ -451,7 +452,8 @@ where
             &self.handle.metrics.read.listen,
             &self.handle.machine.applier.shard_metrics,
             &self.handle.reader_id,
-            self.handle.schemas.clone(),
+            self.handle.read_schemas.clone(),
+            &mut self.handle.schema_cache,
         )
         .await;
         fetched_part
@@ -498,7 +500,8 @@ pub struct ReadHandle<K: Codec, V: Codec, T, D> {
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) blob: Arc<dyn Blob>,
     pub(crate) reader_id: LeasedReaderId,
-    pub(crate) schemas: Schemas<K, V>,
+    pub(crate) read_schemas: Schemas<K, V>,
+    pub(crate) schema_cache: SchemaCache<K, V, T, D>,
 
     since: Antichain<T>,
     pub(crate) last_heartbeat: EpochMillis,
@@ -528,10 +531,11 @@ where
         gc: GarbageCollector<K, V, T, D>,
         blob: Arc<dyn Blob>,
         reader_id: LeasedReaderId,
-        schemas: Schemas<K, V>,
+        read_schemas: Schemas<K, V>,
         since: Antichain<T>,
         last_heartbeat: EpochMillis,
     ) -> Self {
+        let schema_cache = machine.applier.schema_cache();
         let expire_fn = Self::expire_fn(machine.clone(), gc.clone(), reader_id.clone());
         ReadHandle {
             cfg,
@@ -540,7 +544,8 @@ where
             gc: gc.clone(),
             blob,
             reader_id: reader_id.clone(),
-            schemas,
+            read_schemas,
+            schema_cache,
             since,
             last_heartbeat,
             leased_seqnos: BTreeMap::new(),
@@ -769,7 +774,7 @@ where
             gc,
             Arc::clone(&self.blob),
             new_reader_id,
-            self.schemas.clone(),
+            self.read_schemas.clone(),
             reader_state.since,
             heartbeat_ts,
         )
@@ -901,7 +906,7 @@ pub(crate) struct UnexpiredReadHandleState {
 pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
     consolidator: Consolidator<T, D>,
     _lease: Lease,
-    schemas: Schemas<K, V>,
+    read_schemas: Schemas<K, V>,
 }
 
 impl<K, V, T, D> Cursor<K, V, T, D>
@@ -921,8 +926,8 @@ where
             .await
             .expect("fetching a leased part")?;
         let iter = iter.map(|((k, v), t, d)| {
-            let key = K::decode(k, &self.schemas.key);
-            let val = V::decode(v, &self.schemas.val);
+            let key = K::decode(k, &self.read_schemas.key);
+            let val = V::decode(v, &self.read_schemas.val);
             ((key, val), t, d)
         });
         Some(iter)
@@ -1018,7 +1023,7 @@ where
         Ok(Cursor {
             consolidator,
             _lease: lease,
-            schemas: self.schemas.clone(),
+            read_schemas: self.read_schemas.clone(),
         })
     }
 
@@ -1104,7 +1109,8 @@ where
         let snapshot_metrics = self.metrics.read.snapshot.clone();
         let shard_metrics = Arc::clone(&self.machine.applier.shard_metrics);
         let reader_id = self.reader_id.clone();
-        let schemas = self.schemas.clone();
+        let schemas = self.read_schemas.clone();
+        let mut schema_cache = self.schema_cache.clone();
         let persist_cfg = self.cfg.clone();
         let stream = async_stream::stream! {
             for part in snap {
@@ -1117,6 +1123,7 @@ where
                     &shard_metrics,
                     &reader_id,
                     schemas.clone(),
+                    &mut schema_cache,
                 )
                 .await;
 
@@ -1359,7 +1366,7 @@ mod tests {
         offset += width;
 
         // Create machinery for subscribe + fetch
-        let fetcher = client
+        let mut fetcher = client
             .create_batch_fetcher::<String, String, u64, i64>(
                 shard_id,
                 Default::default(),
@@ -1367,7 +1374,8 @@ mod tests {
                 false,
                 Diagnostics::for_tests(),
             )
-            .await;
+            .await
+            .unwrap();
 
         let mut subscribe = read
             .subscribe(timely::progress::Antichain::from_elem(1))

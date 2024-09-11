@@ -4985,6 +4985,7 @@ dependencies = [
  "serde_urlencoded",
  "shell-words",
  "similar-asserts",
+ "stacker",
  "sysctl",
  "tempfile",
  "thiserror",

@@ -23,7 +23,7 @@ pub fn backward_compatible(old: &DataType, new: &DataType) -> Option<Migration> 
 }
 
 /// See [backward_compatible].
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Migration(ArrayMigration);
 
 impl Migration {

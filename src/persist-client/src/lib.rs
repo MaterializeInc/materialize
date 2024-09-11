@@ -405,49 +405,33 @@ impl PersistClient {
         val_schema: Arc<V::Schema>,
         is_transient: bool,
         diagnostics: Diagnostics,
-    ) -> BatchFetcher<K, V, T, D>
+    ) -> Result<BatchFetcher<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let state_versions = StateVersions::new(
-            self.cfg.clone(),
-            Arc::clone(&self.consensus),
-            Arc::clone(&self.blob),
-            Arc::clone(&self.metrics),
-        );
-        let shard_metrics = self
-            .metrics
-            .shards
-            .shard(&shard_id, &diagnostics.shard_name);
-
-        // This call ensures that the types match what was used when creating
-        // the shard or puts in place the types that we expect for future
-        // read/write handle creations. It's not technically needed for creating
-        // the `BatchFetcher` but acts as a safety net against accidental
-        // mis-use.
-        let _ = state_versions
-            .maybe_init_shard::<K, V, T, D>(&shard_metrics)
-            .await;
-        let schemas = Schemas {
+        let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
+        let read_schemas = Schemas {
             id: None,
             key: key_schema,
             val: val_schema,
         };
+        let schema_cache = machine.applier.schema_cache();
         let fetcher = BatchFetcher {
             cfg: BatchFetcherConfig::new(&self.cfg),
             blob: Arc::clone(&self.blob),
             metrics: Arc::clone(&self.metrics),
-            shard_metrics,
+            shard_metrics: Arc::clone(&machine.applier.shard_metrics),
             shard_id,
-            schemas,
+            read_schemas,
+            schema_cache,
             is_transient,
             _phantom: PhantomData,
         };
 
-        fetcher
+        Ok(fetcher)
     }
 
     /// A convenience [CriticalReaderId] for Materialize controllers.
@@ -859,7 +843,7 @@ mod tests {
         blob: &dyn Blob,
         key: &BlobKey,
         metrics: &Metrics,
-        schemas: &Schemas<K, V>,
+        read_schemas: &Schemas<K, V>,
     ) -> (
         BlobTraceBatchPart<T>,
         Vec<((Result<K, String>, Result<V, String>), T, D)>,
@@ -880,7 +864,10 @@ mod tests {
         let mut updates = Vec::new();
         for ((k, v), t, d) in part.updates.records().iter() {
             updates.push((
-                (K::decode(k, &schemas.key), V::decode(v, &schemas.val)),
+                (
+                    K::decode(k, &read_schemas.key),
+                    V::decode(v, &read_schemas.val),
+                ),
                 T::decode(t),
                 D::decode(d),
             ));
@@ -1138,7 +1125,7 @@ mod tests {
             let shard_id1 = "s11111111-1111-1111-1111-111111111111"
                 .parse::<ShardId>()
                 .expect("invalid shard id");
-            let fetcher1 = client
+            let mut fetcher1 = client
                 .create_batch_fetcher::<String, String, u64, i64>(
                     shard_id1,
                     Default::default(),
@@ -1146,7 +1133,8 @@ mod tests {
                     false,
                     Diagnostics::for_tests(),
                 )
-                .await;
+                .await
+                .unwrap();
             for batch in snap {
                 let res = fetcher1.fetch_leased_part(&batch).await;
                 assert_eq!(
