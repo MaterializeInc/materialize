@@ -34,7 +34,15 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
 > DROP SOURCE IF EXISTS tpch CASCADE
 > CREATE SOURCE tpch
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1)
-  FOR ALL TABLES
+
+> CREATE TABLE customer FROM SOURCE tpch (REFERENCE customer);
+> CREATE TABLE lineitem FROM SOURCE tpch (REFERENCE lineitem);
+> CREATE TABLE nation FROM SOURCE tpch (REFERENCE nation);
+> CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
+> CREATE TABLE part FROM SOURCE tpch (REFERENCE part);
+> CREATE TABLE partsupp FROM SOURCE tpch (REFERENCE partsupp);
+> CREATE TABLE region FROM SOURCE tpch (REFERENCE region);
+> CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
 
 > CREATE SCHEMA prod
 > CREATE MATERIALIZED VIEW prod.counter_mv IN CLUSTER prod AS SELECT count(*) FROM counter
