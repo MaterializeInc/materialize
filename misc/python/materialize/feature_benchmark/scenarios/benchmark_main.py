@@ -1518,8 +1518,9 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 
 > CREATE SOURCE mz_source_pgcdc
   IN CLUSTER source_cluster
-  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source')
-  FOR TABLES ("pk_table")
+  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source');
+
+> CREATE TABLE pk_table FROM SOURCE mz_source_pgcdc (REFERENCE pk_table);
   /* A */
 
 > SELECT count(*) FROM pk_table
@@ -1571,8 +1572,9 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
-  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'p1')
-  FOR TABLES ("t1")
+  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'p1');
+
+> CREATE TABLE t1 FROM SOURCE s1 (REFERENCE t1);
             """
         )
 
@@ -1648,8 +1650,8 @@ INSERT INTO pk_table SELECT @i:=@i+1, @i*@i FROM mysql.time_zone t1, mysql.time_
 
 > CREATE SOURCE mz_source_mysqlcdc
   IN CLUSTER source_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.pk_table)
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_table FROM SOURCE mz_source_mysqlcdc (REFERENCE public.pk_table);
   /* A */
 
 > SELECT count(*) FROM pk_table
@@ -1706,8 +1708,9 @@ CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 BIGINT);
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.t1)
+  FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE s1 (REFERENCE public.t1);
             """
         )
 
