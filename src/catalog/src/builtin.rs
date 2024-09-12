@@ -5364,6 +5364,10 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new
 SELECT
     r.id AS replica_id,
     m.process_id,
+    m.cpu_nano_cores,
+    m.memory_bytes,
+    m.disk_bytes,
+    r.size,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
     m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent,
     m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent
@@ -5384,6 +5388,10 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
 SELECT
     r.id AS replica_id,
     m.process_id,
+    m.cpu_nano_cores,
+    m.memory_bytes,
+    m.disk_bytes,
+    r.size,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
     m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent,
     m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent,
@@ -6997,14 +7005,13 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
                     details ->> 'replica_id' AS replica_id,
                     details ->> 'replica_name' AS replica_name,
                     details ->> 'cluster_name' AS cluster_name,
+                    details ->> 'cluster_id' AS cluster_id,
                     occurred_at
                 FROM mz_catalog.mz_audit_events
                 WHERE
                     object_type = 'cluster-replica' AND event_type = 'create'
                         AND
                     details ->> 'replica_id' IS NOT NULL
-                        AND
-                    details ->> 'cluster_id' !~~ 's%'
             ),
             drops AS
             (
@@ -7018,6 +7025,7 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
             creates.cluster_name,
             creates.replica_name,
             creates.occurred_at AS created_at,
+            creates.cluster_id,
             drops.occurred_at AS dropped_at,
             mz_unsafe.mz_error_if_null(
                     mz_cluster_replica_sizes.credits_per_hour, 'Replica of unknown size'
@@ -7029,6 +7037,40 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
                 LEFT JOIN
                     mz_catalog.mz_cluster_replica_sizes
                     ON mz_cluster_replica_sizes.size = creates.size"#,
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_cluster_replica_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_CLUSTER_REPLICA_HISTORY_OID,
+    column_defs: None,
+    sql: r#"
+        WITH
+            replica_alter_history AS
+            (
+                SELECT
+                    occurred_at,
+                    audit_events.details ->> 'replica_id' AS id,
+                    audit_events.details ->> 'old_name' AS old_name,
+                    audit_events.details ->> 'new_name' AS new_name,
+                    audit_events.details ->> 'cluster_id' AS cluster_id
+                FROM mz_catalog.mz_audit_events AS audit_events
+                WHERE
+                    object_type = 'cluster-replica' AND audit_events.event_type = 'alter'
+            ),
+            replica_create_history AS
+            (
+                SELECT
+                    occurred_at,
+                    audit_events.details ->> 'replica_id' AS id,
+                    NULL AS old_name,
+                    audit_events.details ->> 'replica_name' AS new_name,
+                    audit_events.details ->> 'cluster_id' AS cluster_id
+                FROM mz_catalog.mz_audit_events AS audit_events
+                WHERE object_type = 'cluster-replica' AND audit_events.event_type = 'create'
+            )
+        SELECT * FROM (SELECT * FROM replica_alter_history) UNION (SELECT * FROM replica_create_history)"#,
     access: vec![PUBLIC_SELECT],
 });
 
@@ -8355,6 +8397,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),
+        Builtin::View(&MZ_CLUSTER_REPLICA_NAME_HISTORY),
     ]);
 
     builtins.extend(notice::builtins());
