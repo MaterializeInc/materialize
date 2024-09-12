@@ -105,6 +105,16 @@ FROM SOURCE {{ ref('test_subsources') }}
 (REFERENCE "bids")
 """
 
+test_source_table_index = """
+{{ config(
+    materialized='source_table',
+    database='materialize',
+    indexes=[{'columns': ['amount']}]
+) }}
+FROM SOURCE {{ ref('test_subsources') }}
+(REFERENCE "bids")
+"""
+
 test_subsources = """
 {{ config(
     materialized='source',

@@ -25,6 +25,7 @@ from fixtures import (
     test_source,
     test_source_index,
     test_source_table,
+    test_source_table_index,
     test_subsources,
     test_table_index,
     test_view_index,
@@ -52,6 +53,7 @@ class TestCustomMaterializations:
             "test_source.sql": test_source,
             "test_source_index.sql": test_source_index,
             "test_source_table.sql": test_source_table,
+            "test_source_table_index.sql": test_source_table_index,
             "test_subsources.sql": test_subsources,
             "test_sink.sql": test_sink,
             "test_table_index.sql": test_table_index,
@@ -66,12 +68,12 @@ class TestCustomMaterializations:
         # run models
         results = run_dbt(["run"])
         # run result length
-        assert len(results) == 11
+        assert len(results) == 12
         # re-run models to ensure there are no lingering errors in recreating
         # the materializations
         results = run_dbt(["run"])
         # re-run result length
-        assert len(results) == 11
+        assert len(results) == 12
         # relations_equal
         check_relations_equal(
             project.adapter,

@@ -34,6 +34,7 @@
     {{ materialize__create_source_table(target_relation, sql) }}
   {%- endcall %}
 
+  {{ create_indexes(target_relation) }}
   {% do persist_docs(target_relation, model) %}
 
   {{ run_hooks(post_hooks, inside_transaction=False) }}
