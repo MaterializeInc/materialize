@@ -496,6 +496,7 @@ pub struct PeekStageOptimize {
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
+    read_holds: ReadHolds<mz_repr::Timestamp>,
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
@@ -511,6 +512,7 @@ pub struct PeekStageFinish {
     target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
+    read_holds: ReadHolds<mz_repr::Timestamp>,
     cluster_id: ComputeInstanceId,
     finishing: RowSetFinishing,
     /// When present, an optimizer trace to be used for emitting a plan insights
@@ -528,6 +530,7 @@ pub struct PeekStageCopyTo {
     global_lir_plan: optimize::copy_to::GlobalLirPlan,
     optimization_finished_at: EpochMillis,
     source_ids: BTreeSet<GlobalId>,
+    read_holds: ReadHolds<mz_repr::Timestamp>,
 }
 
 #[derive(Debug)]
@@ -808,6 +811,7 @@ pub struct SubscribeFinish {
     replica_id: Option<ReplicaId>,
     plan: plan::SubscribePlan,
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
+    read_holds: ReadHolds<Timestamp>,
     dependency_ids: BTreeSet<GlobalId>,
 }
 
@@ -1974,9 +1978,14 @@ impl Coordinator {
                             );
                         }
 
+                        let import_read_holds = df_desc
+                            .import_ids()
+                            .map(|id| read_holds[&id].clone())
+                            .collect();
+
                         self.controller
                             .compute
-                            .create_dataflow(idx.cluster_id, df_desc, None)
+                            .create_dataflow(idx.cluster_id, df_desc, import_read_holds, None)
                             .unwrap_or_terminate("cannot fail to create dataflows");
 
                         let read_hold = self
@@ -2030,7 +2039,13 @@ impl Coordinator {
                         );
                     }
 
-                    self.ship_dataflow(df_desc, mview.cluster_id, None).await;
+                    let import_read_holds = df_desc
+                        .import_ids()
+                        .map(|id| read_holds[&id].clone())
+                        .collect();
+
+                    self.ship_dataflow(df_desc, mview.cluster_id, import_read_holds, None)
+                        .await;
                 }
                 CatalogItem::Sink(sink) => {
                     let id = entry.id();
@@ -3055,6 +3070,7 @@ impl Coordinator {
         &mut self,
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
+        import_read_holds: Vec<ReadHold<Timestamp>>,
         subscribe_target_replica: Option<ReplicaId>,
     ) {
         // We must only install read policies for indexes, not for sinks.
@@ -3063,7 +3079,12 @@ impl Coordinator {
 
         self.controller
             .compute
-            .create_dataflow(instance, dataflow, subscribe_target_replica)
+            .create_dataflow(
+                instance,
+                dataflow,
+                import_read_holds,
+                subscribe_target_replica,
+            )
             .unwrap_or_terminate("dataflow creation cannot fail");
 
         for id in export_ids {
@@ -3077,14 +3098,16 @@ impl Coordinator {
         &mut self,
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
+        import_read_holds: Vec<ReadHold<Timestamp>>,
         notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
     ) {
         if let Some(notice_builtin_updates_fut) = notice_builtin_updates_fut {
-            let ship_dataflow_fut = self.ship_dataflow(dataflow, instance, None);
+            let ship_dataflow_fut = self.ship_dataflow(dataflow, instance, import_read_holds, None);
             let ((), ()) =
                 futures::future::join(notice_builtin_updates_fut, ship_dataflow_fut).await;
         } else {
-            self.ship_dataflow(dataflow, instance, None).await;
+            self.ship_dataflow(dataflow, instance, import_read_holds, None)
+                .await;
         }
     }
 
@@ -3388,11 +3411,14 @@ impl Coordinator {
         // prevent us from incorrectly teaching those functions how to return errors (which has
         // happened twice and is the motivation for this test).
 
-        // An arbitrary compute instance ID to satisfy the function calls below. Note that
-        // this only works because this function will never run.
+        // An arbitrary compute instance ID and empty read holds to satisfy the function calls
+        // below. Note that this only works because this function will never run.
         let compute_instance = ComputeInstanceId::User(1);
+        let import_read_holds = Default::default();
 
-        let _: () = self.ship_dataflow(dataflow, compute_instance, None).await;
+        let _: () = self
+            .ship_dataflow(dataflow, compute_instance, import_read_holds, None)
+            .await;
     }
 }
 

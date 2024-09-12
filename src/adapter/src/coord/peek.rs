@@ -43,10 +43,11 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::OptimizerError;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
-use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
+use crate::{AdapterError, ExecuteContext, ExecuteContextExtra, ExecuteResponse, ReadHolds};
 
 #[derive(Debug)]
 pub(crate) struct PendingPeek {
@@ -438,11 +439,12 @@ impl crate::coord::Coordinator {
     #[mz_ore::instrument(level = "debug")]
     pub async fn implement_peek_plan(
         &mut self,
-        ctx_extra: &mut ExecuteContextExtra,
+        ctx: &mut ExecuteContext,
         plan: PlannedPeek,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
+        mut read_holds: ReadHolds<mz_repr::Timestamp>,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
@@ -505,12 +507,12 @@ impl crate::coord::Coordinator {
                     StatementEndedExecutionReason::Errored { error },
                 ),
             };
-            self.retire_execution(reason, std::mem::take(ctx_extra));
+            self.retire_execution(reason, std::mem::take(ctx.extra_mut()));
             return ret;
         }
 
         let timestamp = determination.timestamp_context.timestamp_or_default();
-        if let Some(id) = ctx_extra.contents() {
+        if let Some(id) = ctx.extra().contents() {
             self.set_statement_execution_timestamp(id, timestamp)
         }
 
@@ -520,78 +522,105 @@ impl crate::coord::Coordinator {
         // differently.
 
         // If we must build the view, ship the dataflow.
-        let (peek_command, drop_dataflow, is_fast_path, peek_target, strategy) = match fast_path {
-            PeekPlan::FastPath(FastPathPlan::PeekExisting(
-                _coll_id,
-                idx_id,
-                literal_constraints,
-                map_filter_project,
-            )) => (
-                (literal_constraints, timestamp, map_filter_project),
-                None,
-                true,
-                PeekTarget::Index { id: idx_id },
-                StatementExecutionStrategy::FastPath,
-            ),
-            PeekPlan::FastPath(FastPathPlan::PeekPersist(coll_id, map_filter_project)) => {
-                let peek_command = (None, timestamp, map_filter_project);
-                let metadata = self
-                    .controller
-                    .storage
-                    .collection_metadata(coll_id)
-                    .expect("storage collection for fast-path peek")
-                    .clone();
-                (
-                    peek_command,
-                    None,
-                    true,
-                    PeekTarget::Persist {
-                        id: coll_id,
-                        metadata,
-                    },
-                    StatementExecutionStrategy::PersistFastPath,
-                )
-            }
-            PeekPlan::SlowPath(PeekDataflowPlan {
-                desc: dataflow,
-                // n.b. this index_id identifies a transient index the
-                // caller created, so it is guaranteed to be on
-                // `compute_instance`.
-                id: index_id,
-                key: index_key,
-                permutation: index_permutation,
-                thinned_arity: index_thinned_arity,
-            }) => {
-                // Very important: actually create the dataflow (here, so we can destructure).
-                self.controller
-                    .compute
-                    .create_dataflow(compute_instance, dataflow, None)
-                    .unwrap_or_terminate("cannot fail to create dataflows");
-                self.initialize_compute_read_policy(
-                    index_id,
-                    compute_instance,
-                    // Disable compaction so that nothing can compact before the peek occurs below.
-                    CompactionWindow::DisableCompaction,
-                )
-                .await;
+        let (peek_command, drop_dataflow, is_fast_path, peek_target, strategy, read_hold) =
+            match fast_path {
+                PeekPlan::FastPath(FastPathPlan::PeekExisting(
+                    _coll_id,
+                    idx_id,
+                    literal_constraints,
+                    map_filter_project,
+                )) => {
+                    let read_hold = read_holds
+                        .compute_holds
+                        .remove(&(compute_instance, idx_id))
+                        .expect("read hold must exist");
 
-                // Create an identity MFP operator.
-                let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
-                map_filter_project
-                    .permute(index_permutation, index_key.len() + index_thinned_arity);
-                let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
-                (
-                    (None, timestamp, map_filter_project),
-                    Some(index_id),
-                    false,
-                    PeekTarget::Index { id: index_id },
-                    StatementExecutionStrategy::Standard,
-                )
-            }
-            _ => {
-                unreachable!()
-            }
-        };
+                    (
+                        (literal_constraints, timestamp, map_filter_project),
+                        None,
+                        true,
+                        PeekTarget::Index { id: idx_id },
+                        StatementExecutionStrategy::FastPath,
+                        read_hold,
+                    )
+                }
+                PeekPlan::FastPath(FastPathPlan::PeekPersist(coll_id, map_filter_project)) => {
+                    let peek_command = (None, timestamp, map_filter_project);
+                    let metadata = self
+                        .controller
+                        .storage
+                        .collection_metadata(coll_id)
+                        .expect("storage collection for fast-path peek")
+                        .clone();
+
+                    let read_hold = read_holds
+                        .storage_holds
+                        .remove(&coll_id)
+                        .expect("read hold must exist");
+
+                    (
+                        peek_command,
+                        None,
+                        true,
+                        PeekTarget::Persist {
+                            id: coll_id,
+                            metadata,
+                        },
+                        StatementExecutionStrategy::PersistFastPath,
+                        read_hold,
+                    )
+                }
+                PeekPlan::SlowPath(PeekDataflowPlan {
+                    desc: dataflow,
+                    // n.b. this index_id identifies a transient index the
+                    // caller created, so it is guaranteed to be on
+                    // `compute_instance`.
+                    id: index_id,
+                    key: index_key,
+                    permutation: index_permutation,
+                    thinned_arity: index_thinned_arity,
+                }) => {
+                    let id_bundle = dataflow_import_id_bundle(&dataflow, compute_instance);
+                    let import_read_holds = read_holds.clone_for(&id_bundle).into();
+
+                    // Very important: actually create the dataflow (here, so we can destructure).
+                    self.controller
+                        .compute
+                        .create_dataflow(compute_instance, dataflow, import_read_holds, None)
+                        .unwrap_or_terminate("cannot fail to create dataflows");
+
+                    let read_hold = self
+                        .controller
+                        .compute
+                        .acquire_read_hold(compute_instance, index_id)
+                        .expect("collection just created");
+
+                    self.initialize_compute_read_policy(
+                        index_id,
+                        compute_instance,
+                        // Disable compaction so that nothing can compact before the peek occurs below.
+                        CompactionWindow::DisableCompaction,
+                    )
+                    .await;
+
+                    // Create an identity MFP operator.
+                    let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
+                    map_filter_project
+                        .permute(index_permutation, index_key.len() + index_thinned_arity);
+                    let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
+                    (
+                        (None, timestamp, map_filter_project),
+                        Some(index_id),
+                        false,
+                        PeekTarget::Index { id: index_id },
+                        StatementExecutionStrategy::Standard,
+                        read_hold,
+                    )
+                }
+                _ => {
+                    unreachable!()
+                }
+            };
 
         // Endpoints for sending and receiving peek responses.
         let (rows_tx, rows_rx) = tokio::sync::oneshot::channel();
@@ -612,7 +641,7 @@ impl crate::coord::Coordinator {
                 conn_id: conn_id.clone(),
                 cluster_id: compute_instance,
                 depends_on: source_ids,
-                ctx_extra: std::mem::take(ctx_extra),
+                ctx_extra: std::mem::take(ctx.extra_mut()),
                 is_fast_path,
                 limit: finishing.limit.map(|x| usize::cast_from(u64::from(x))),
                 offset: finishing.offset,
@@ -634,6 +663,7 @@ impl crate::coord::Coordinator {
                 timestamp,
                 finishing.clone(),
                 map_filter_project,
+                read_hold,
                 target_replica,
             )
             .unwrap_or_terminate("cannot fail to peek");

@@ -297,7 +297,7 @@ impl Coordinator {
         // dataflow for it.
         let response = if self.introspection_subscribes.contains_key(&subscribe_id) {
             let (df_desc, _df_meta) = global_lir_plan.unapply();
-            self.ship_dataflow(df_desc, cluster_id, Some(replica_id))
+            self.ship_dataflow(df_desc, cluster_id, read_holds.into(), Some(replica_id))
                 .await;
 
             Ok(StageResult::Response(
@@ -310,7 +310,6 @@ impl Coordinator {
             ))
         };
 
-        drop(read_holds);
         response
     }
 

@@ -111,6 +111,28 @@ impl<T: TimelyTimestamp> ReadHolds<T> {
     pub fn remove_compute_collection(&mut self, instance_id: ComputeInstanceId, id: GlobalId) {
         self.compute_holds.remove(&(instance_id, id));
     }
+
+    /// Return copies of a subset of the contained read holds, as specified by the given `ids`.
+    pub fn clone_for(&self, ids: &CollectionIdBundle) -> Self {
+        let mut storage_holds = BTreeMap::new();
+        let mut compute_holds = BTreeMap::new();
+
+        for &id in &ids.storage_ids {
+            let hold = self.storage_holds[&id].clone();
+            storage_holds.insert(id, hold);
+        }
+        for (&instance_id, compute_ids) in &ids.compute_ids {
+            for &id in compute_ids {
+                let hold = self.compute_holds[&(instance_id, id)].clone();
+                compute_holds.insert((instance_id, id), hold);
+            }
+        }
+
+        Self {
+            storage_holds,
+            compute_holds,
+        }
+    }
 }
 
 impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
@@ -180,6 +202,14 @@ impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
 impl<T: TimelyTimestamp> Default for ReadHolds<T> {
     fn default() -> Self {
         ReadHolds::new()
+    }
+}
+
+impl<T: TimelyTimestamp> From<ReadHolds<T>> for Vec<ReadHold<T>> {
+    fn from(holds: ReadHolds<T>) -> Self {
+        let storage = holds.storage_holds.into_values();
+        let compute = holds.compute_holds.into_values();
+        storage.chain(compute).collect()
     }
 }
 

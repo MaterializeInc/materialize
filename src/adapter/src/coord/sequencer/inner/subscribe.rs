@@ -281,8 +281,6 @@ impl Coordinator {
             }
         }
 
-        self.store_transaction_read_holds(ctx.session(), read_holds);
-
         let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
 
         // Optimize LIR
@@ -300,6 +298,7 @@ impl Coordinator {
                         cluster_id: optimizer.cluster_id(),
                         plan,
                         global_lir_plan,
+                        read_holds,
                         dependency_ids,
                         replica_id,
                     });
@@ -324,6 +323,7 @@ impl Coordinator {
                     ..
                 },
             global_lir_plan,
+            read_holds,
             dependency_ids,
             replica_id,
         }: SubscribeFinish,
@@ -355,21 +355,14 @@ impl Coordinator {
         let write_notify_fut = self
             .add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
             .await;
+
         // Ship dataflow.
-        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id, replica_id);
+        let ship_dataflow_fut =
+            self.ship_dataflow(df_desc, cluster_id, read_holds.into(), replica_id);
 
         // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
         // requests to external services, which can take time, so we run them concurrently.
         let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
-
-        // Release the pre-optimization read holds because the controller is now handling those.
-        let txn_read_holds = self
-            .txn_read_holds
-            .remove(ctx.session().conn_id())
-            .expect("must have previously installed read holds");
-
-        // Explicitly drop read holds, just to make it obvious what's happening.
-        drop(txn_read_holds);
 
         let resp = ExecuteResponse::Subscribing {
             rx,

@@ -313,7 +313,7 @@ impl Coordinator {
 
         let oracle_read_ts = self.oracle_read_ts(session, &timeline_context, &when).await;
 
-        let determination = self.sequence_peek_timestamp(
+        let (determination, _read_holds) = self.sequence_peek_timestamp(
             session,
             &when,
             cluster_id,
