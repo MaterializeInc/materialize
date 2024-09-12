@@ -104,6 +104,18 @@ type AppendOnlyWriteChannel<T> = mpsc::UnboundedSender<(
 type WriteTask = AbortOnDropHandle<()>;
 type ShutdownSender = oneshot::Sender<()>;
 
+/// Types of storage-managed/introspection collections:
+///
+/// Append-only: Only accepts blind writes, writes that can be applied at any
+/// timestamp and don’t depend on current collection contents.
+///
+/// Pseudo append-only: We treat them largely as append-only collections but
+/// periodically (currently on bootstrap) retract old updates from them.
+///
+/// Differential: at any given time `t` , collection contents mirrors some
+/// (small cardinality) state. The cardinality of the collection stays constant
+/// if the thing that is mirrored doesn’t change in cardinality. At steady
+/// state, updates always come in pairs of retractions/additions.
 pub enum CollectionManagerKind {
     AppendOnly,
     Differential,
