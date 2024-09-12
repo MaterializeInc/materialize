@@ -52,7 +52,8 @@ class SshPg(Check):
                 > CREATE SOURCE mz_source_ssh1
                   FROM POSTGRES CONNECTION pg_ssh1
                   (PUBLICATION 'mz_source_ssh')
-                  FOR TABLES (t_ssh1);
+
+                > CREATE TABLE t_ssh1 FROM SOURCE mz_source_ssh1 (REFERENCE t_ssh1);
                 """
             )
         )
@@ -72,8 +73,9 @@ class SshPg(Check):
 
                 > CREATE SOURCE mz_source_ssh2
                   FROM POSTGRES CONNECTION pg_ssh2
-                  (PUBLICATION 'mz_source_ssh')
-                  FOR TABLES (t_ssh2);
+                  (PUBLICATION 'mz_source_ssh');
+
+                > CREATE TABLE t_ssh2 FROM SOURCE mz_source_ssh2 (REFERENCE t_ssh2);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO t_ssh1 VALUES (6), (7), (8), (9), (10);
@@ -92,8 +94,9 @@ class SshPg(Check):
 
                 > CREATE SOURCE mz_source_ssh3
                   FROM POSTGRES CONNECTION pg_ssh3
-                  (PUBLICATION 'mz_source_ssh')
-                  FOR TABLES (t_ssh3);
+                  (PUBLICATION 'mz_source_ssh');
+
+                > CREATE TABLE t_ssh3 FROM SOURCE mz_source_ssh3 (REFERENCE t_ssh3);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO t_ssh1 VALUES (11), (12), (13), (14), (15);

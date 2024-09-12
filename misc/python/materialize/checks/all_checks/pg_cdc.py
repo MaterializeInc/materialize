@@ -69,8 +69,9 @@ class PgCdcBase:
                 > CREATE SOURCE postgres_source1{self.suffix}
                   FROM POSTGRES CONNECTION pg1{self.suffix}
                   (PUBLICATION 'postgres_source{self.suffix}',
-                   TEXT COLUMNS = (postgres_source_table{self.suffix}.f4))
-                  FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableA{self.suffix});
+                   TEXT COLUMNS = (postgres_source_table{self.suffix}.f4));
+
+                > CREATE TABLE postgres_source_tableA{self.suffix} FROM SOURCE postgres_source1{self.suffix} (REFERENCE postgres_source_table{self.suffix});
 
                 > CREATE DEFAULT INDEX ON postgres_source_tableA{self.suffix};
 
@@ -99,8 +100,9 @@ class PgCdcBase:
 
                 > CREATE SOURCE postgres_source2{self.suffix}
                   FROM POSTGRES CONNECTION pg2{self.suffix}
-                  (PUBLICATION 'postgres_source{self.suffix}')
-                  FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableB{self.suffix});
+                  (PUBLICATION 'postgres_source{self.suffix}');
+
+                > CREATE TABLE postgres_source_tableB{self.suffix} FROM SOURCE postgres_source2{self.suffix} (REFERENCE postgres_source_table{self.suffix});
 
                 # Create a view with a complex dependency structure
                 > CREATE VIEW IF NOT EXISTS table_a_b_count_sum AS SELECT SUM(total_count) AS total_rows FROM (
@@ -142,8 +144,9 @@ class PgCdcBase:
 
                 > CREATE SOURCE postgres_source3{self.suffix}
                   FROM POSTGRES CONNECTION pg3{self.suffix}
-                  (PUBLICATION 'postgres_source{self.suffix}')
-                  FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableC{self.suffix});
+                  (PUBLICATION 'postgres_source{self.suffix}');
+
+                > CREATE TABLE postgres_source_tableC{self.suffix} FROM SOURCE postgres_source3{self.suffix} (REFERENCE postgres_source_table{self.suffix});
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'G', i, REPEAT('G', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
@@ -289,8 +292,9 @@ class PgCdcMzNow(Check):
 
                 > CREATE SOURCE postgres_mz_now_source
                   FROM POSTGRES CONNECTION postgres_mz_now_conn
-                  (PUBLICATION 'postgres_mz_now_publication')
-                  FOR TABLES (postgres_mz_now_table);
+                  (PUBLICATION 'postgres_mz_now_publication');
+
+                > CREATE TABLE postgres_mz_now_table FROM SOURCE postgres_mz_now_source (REFERENCE postgres_mz_now_table);
 
                 # Return all rows fresher than 60 seconds
                 > CREATE MATERIALIZED VIEW postgres_mz_now_view AS
