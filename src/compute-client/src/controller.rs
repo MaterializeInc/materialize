@@ -494,15 +494,19 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Create a compute instance.
+    ///
+    /// Returns a [`ReadHold`] for each log index installed on the instance.
     pub fn create_instance(
         &mut self,
         id: ComputeInstanceId,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         workload_class: Option<String>,
-    ) -> Result<(), InstanceExists> {
+    ) -> Result<Vec<ReadHold<T>>, InstanceExists> {
         if self.instances.contains_key(&id) {
             return Err(InstanceExists(id));
         }
+
+        let log_ids: Vec<_> = arranged_logs.values().copied().collect();
 
         self.instances.insert(
             id,
@@ -538,7 +542,12 @@ where
         config_params.workload_class = Some(workload_class);
         instance.update_configuration(config_params);
 
-        Ok(())
+        let read_holds = log_ids
+            .into_iter()
+            .map(|id| instance.acquire_read_hold(id).expect("log index exists"))
+            .collect();
+
+        Ok(read_holds)
     }
 
     /// Updates a compute instance's workload class.
@@ -717,19 +726,26 @@ where
     /// If a `subscribe_target_replica` is given, any subscribes exported by the dataflow are
     /// configured to target that replica, i.e., only subscribe responses sent by that replica are
     /// considered.
+    ///
+    /// Returns a [`ReadHold`] at the `as_of` for each index exported by the create dataflow.
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
         import_read_holds: Vec<ReadHold<T>>,
         subscribe_target_replica: Option<ReplicaId>,
-    ) -> Result<(), DataflowCreationError> {
-        self.instance_mut(instance_id)?.create_dataflow(
-            dataflow,
-            import_read_holds,
-            subscribe_target_replica,
-        )?;
-        Ok(())
+    ) -> Result<Vec<ReadHold<T>>, DataflowCreationError> {
+        let instance = self.instance_mut(instance_id)?;
+
+        let index_ids: Vec<_> = dataflow.exported_index_ids().collect();
+        instance.create_dataflow(dataflow, import_read_holds, subscribe_target_replica)?;
+
+        let read_holds = index_ids
+            .into_iter()
+            .map(|id| instance.acquire_read_hold(id).expect("index just created"))
+            .collect();
+
+        Ok(read_holds)
     }
 
     /// Drop the read capability for the given collections and allow their resources to be

@@ -415,12 +415,14 @@ pub trait StorageController: Debug {
     /// might later give non-tables the same treatment, but hold off on that initially.) Callers
     /// must provide a Some if any of the collections is a table. A None may be given if none of the
     /// collections are a table (i.e. all materialized views, sources, etc).
+    ///
+    /// Returns a [`ReadHold`] for each created collection.
     async fn create_collections(
         &mut self,
         storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, StorageError<Self::Timestamp>> {
         self.create_collections_for_bootstrap(
             storage_metadata,
             register_ts,
@@ -440,7 +442,7 @@ pub trait StorageController: Debug {
         register_ts: Option<Self::Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, StorageError<Self::Timestamp>>;
 
     /// Check that the ingestion associated with `id` can use the provided
     /// [`SourceDesc`].

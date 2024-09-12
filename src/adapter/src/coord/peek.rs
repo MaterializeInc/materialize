@@ -32,6 +32,7 @@ use mz_expr::{
     OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::str::{separated, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::DisplayText;
@@ -584,16 +585,12 @@ impl crate::coord::Coordinator {
                     let import_read_holds = read_holds.clone_for(&id_bundle).into();
 
                     // Very important: actually create the dataflow (here, so we can destructure).
-                    self.controller
-                        .compute
-                        .create_dataflow(compute_instance, dataflow, import_read_holds, None)
-                        .unwrap_or_terminate("cannot fail to create dataflows");
-
                     let read_hold = self
                         .controller
                         .compute
-                        .acquire_read_hold(compute_instance, index_id)
-                        .expect("collection just created");
+                        .create_dataflow(compute_instance, dataflow, import_read_holds, None)
+                        .unwrap_or_terminate("cannot fail to create dataflows")
+                        .into_element();
 
                     self.initialize_compute_read_policy(
                         index_id,

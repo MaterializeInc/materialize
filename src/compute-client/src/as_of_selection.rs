@@ -847,7 +847,7 @@ mod tests {
             _register_ts: Option<Self::Timestamp>,
             _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
             _migrated_storage_collections: &BTreeSet<GlobalId>,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
+        ) -> Result<Vec<ReadHold<Self::Timestamp>>, StorageError<Self::Timestamp>> {
             unimplemented!()
         }
 

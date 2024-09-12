@@ -74,6 +74,7 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_compute_client::as_of_selection;
 use mz_ore::channel::trigger;
+use mz_ore::collections::CollectionExt;
 use mz_sql::names::{ResolvedIds, SchemaSpecifier};
 use mz_sql::session::user::User;
 use mz_storage_types::read_holds::ReadHold;
@@ -1822,7 +1823,7 @@ impl Coordinator {
         let enable_worker_core_affinity =
             self.catalog().system_config().enable_worker_core_affinity();
         for instance in self.catalog.clusters() {
-            self.controller.create_cluster(
+            let log_holds = self.controller.create_cluster(
                 instance.id,
                 ClusterConfig {
                     arranged_logs: instance.log_indexes.clone(),
@@ -1840,14 +1841,7 @@ impl Coordinator {
                 )?;
             }
 
-            for &log_id in instance.log_indexes.values() {
-                let read_hold = self
-                    .controller
-                    .compute
-                    .acquire_read_hold(instance.id, log_id)
-                    .expect("log index was created with the cluster");
-                read_holds.insert(log_id, read_hold);
-            }
+            read_holds.extend(log_holds.into_iter().map(|r| (r.id(), r)));
         }
 
         info!(
@@ -1983,16 +1977,13 @@ impl Coordinator {
                             .map(|id| read_holds[&id].clone())
                             .collect();
 
-                        self.controller
-                            .compute
-                            .create_dataflow(idx.cluster_id, df_desc, import_read_holds, None)
-                            .unwrap_or_terminate("cannot fail to create dataflows");
-
                         let read_hold = self
                             .controller
                             .compute
-                            .acquire_read_hold(idx.cluster_id, id)
-                            .expect("collection just created");
+                            .create_dataflow(idx.cluster_id, df_desc, import_read_holds, None)
+                            .unwrap_or_terminate("cannot fail to create dataflows")
+                            .into_element();
+
                         read_holds.insert(id, read_hold);
                     }
 
@@ -2484,8 +2475,6 @@ impl Coordinator {
             })
             .collect();
 
-        let collection_ids: Vec<_> = collections.iter().map(|(id, _)| *id).collect();
-
         let register_ts = if self.controller.read_only() {
             self.get_local_read_ts().await
         } else {
@@ -2496,7 +2485,8 @@ impl Coordinator {
 
         let storage_metadata = self.catalog.state().storage_metadata();
 
-        self.controller
+        let read_holds = self
+            .controller
             .storage
             .create_collections_for_bootstrap(
                 storage_metadata,
@@ -2511,10 +2501,7 @@ impl Coordinator {
             self.apply_local_write(register_ts).await;
         }
 
-        self.controller
-            .storage_collections
-            .acquire_read_holds(collection_ids)
-            .expect("collections created above")
+        read_holds
     }
 
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
@@ -3073,11 +3060,8 @@ impl Coordinator {
         import_read_holds: Vec<ReadHold<Timestamp>>,
         subscribe_target_replica: Option<ReplicaId>,
     ) {
-        // We must only install read policies for indexes, not for sinks.
-        // Sinks are write-only compute collections that don't have read policies.
-        let export_ids: Vec<_> = dataflow.exported_index_ids().collect();
-
-        self.controller
+        let read_holds = self
+            .controller
             .compute
             .create_dataflow(
                 instance,
@@ -3087,7 +3071,8 @@ impl Coordinator {
             )
             .unwrap_or_terminate("dataflow creation cannot fail");
 
-        for id in export_ids {
+        for hold in read_holds {
+            let id = hold.id();
             self.initialize_compute_read_policy(id, instance, CompactionWindow::Default)
                 .await;
         }

@@ -201,12 +201,14 @@ pub trait StorageCollections: Debug {
     /// but hold off on that initially.) Callers must provide a Some if any of
     /// the collections is a table. A None may be given if none of the
     /// collections are a table (i.e. all materialized views, sources, etc).
+    ///
+    /// Returns a [`ReadHold`] for each created collection.
     async fn create_collections(
         &self,
         storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, StorageError<Self::Timestamp>> {
         self.create_collections_for_bootstrap(
             storage_metadata,
             register_ts,
@@ -226,7 +228,7 @@ pub trait StorageCollections: Debug {
         register_ts: Option<Self::Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, StorageError<Self::Timestamp>>;
 
     /// Alters the identified ingestion to use the provided [`SourceDesc`].
     ///
@@ -1338,7 +1340,7 @@ where
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
+    ) -> Result<Vec<ReadHold<T>>, StorageError<Self::Timestamp>> {
         let is_in_txns = |id, metadata: &CollectionMetadata| {
             metadata.txns_shard.is_some()
                 && !(self.read_only && migrated_storage_collections.contains(&id))
@@ -1507,6 +1509,8 @@ where
         // Reorder in dependency order.
         to_register.sort_by_key(|(id, ..)| *id);
 
+        let collection_ids: Vec<_> = to_register.iter().map(|(id, ..)| *id).collect();
+
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
         let mut self_collections = self.collections.lock().expect("lock poisoned");
@@ -1670,7 +1674,10 @@ where
 
         self.synchronize_finalized_shards(storage_metadata);
 
-        Ok(())
+        let read_holds = self
+            .acquire_read_holds(collection_ids)
+            .expect("collections just created");
+        Ok(read_holds)
     }
 
     async fn alter_ingestion_source_desc(
