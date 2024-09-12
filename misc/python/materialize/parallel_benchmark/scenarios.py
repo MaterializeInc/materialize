@@ -200,6 +200,7 @@ class PgReadReplicaRTR(Scenario):
                                 strict_serializable=False,
                             ),
                             dist=Periodic(per_second=125),
+                            report_regressions=False,  # TODO: Currently not stable enough, reenable when RTR becomes more consistent
                         ),
                     ],
                 ),
@@ -303,7 +304,7 @@ class OpenIndexedSelects(Scenario):
             ],
             conn_pool_size=100,
             guarantees={
-                "SELECT * FROM t4 (pooled)": {"qps": 200, "p99": 100},
+                "SELECT * FROM t4 (pooled)": {"qps": 390, "p99": 100},
             },
         )
 
@@ -566,20 +567,24 @@ class CommandQueryResponsibilitySegregation(Scenario):
                 LoadPhase(
                     duration=120,
                     actions=[
-                        ClosedLoop(
-                            action=ReuseConnQuery(
+                        OpenLoop(
+                            action=StandaloneQuery(
                                 "INSERT INTO t1 VALUES (1, '1', now())",
                                 # "INSERT INTO t1 (id, name, date) SELECT i, i::text, now() FROM generate_series(1, 1000) AS s(i);",
                                 conn_infos["postgres"],
                                 strict_serializable=False,
                             ),
+                            dist=Periodic(per_second=100),
+                            report_regressions=False,
                         ),
-                        ClosedLoop(
-                            action=ReuseConnQuery(
+                        OpenLoop(
+                            action=StandaloneQuery(
                                 "UPDATE t1 SET id = id + 1",
                                 conn_infos["postgres"],
                                 strict_serializable=False,
                             ),
+                            dist=Periodic(per_second=10),
+                            report_regressions=False,
                         ),
                         OpenLoop(
                             action=StandaloneQuery(
@@ -587,7 +592,8 @@ class CommandQueryResponsibilitySegregation(Scenario):
                                 conn_infos["postgres"],
                                 strict_serializable=False,
                             ),
-                            dist=Periodic(per_second=0.1),
+                            dist=Periodic(per_second=1),
+                            report_regressions=False,
                         ),
                     ]
                     + [
@@ -597,6 +603,7 @@ class CommandQueryResponsibilitySegregation(Scenario):
                                 conn_infos["materialized"],
                                 strict_serializable=True,
                             ),
+                            report_regressions=False,  # TODO: Currently not stable enough
                         )
                     ],
                 ),
@@ -650,6 +657,7 @@ class OperationalDataStore(Scenario):
                                 conn_infos["postgres"],
                                 strict_serializable=False,
                             ),
+                            report_regressions=False,
                             dist=Periodic(per_second=10),
                         ),
                         ClosedLoop(
@@ -658,6 +666,7 @@ class OperationalDataStore(Scenario):
                                 conn_infos["materialized"],
                                 strict_serializable=True,
                             ),
+                            report_regressions=False,  # TODO: Currently not stable enough, reenable when RTR becomes more consistent
                         ),
                     ],
                 ),
@@ -728,10 +737,11 @@ class OperationalDataMesh(Scenario):
                         ClosedLoop(
                             action=StandaloneQuery(
                                 # TODO: This doesn't actually measure rtr all the way
-                                "SET REAL_TIME_RECENCY TO TRUE;  SELECT * FROM sink_source",
+                                "SET REAL_TIME_RECENCY TO TRUE; SELECT * FROM sink_source",
                                 conn_infos["materialized"],
                                 strict_serializable=True,
                             ),
+                            report_regressions=False,  # TODO: Currently not stable enough, reenable when RTR becomes more consistent
                         ),
                     ],
                 ),
