@@ -864,8 +864,12 @@ class TestDeployGetObjects:
         captured = capsys.readouterr()
         output = captured.out
 
-        assert "DRY RUN: Excluded clusters: ['excluded_cluster']" in output
-        assert "DRY RUN: Excluded schemas: ['excluded_schema']" in output
+        assert (
+            "DRY RUN: Excluded clusters from deployment: ['excluded_cluster']" in output
+        )
+        assert (
+            "DRY RUN: Excluded schemas from deployment: ['excluded_schema']" in output
+        )
         assert "DRY RUN: Final cluster list: ['test_cluster']" in output
         assert "DRY RUN: Final schema list: ['" in output
         assert "_test_deploy', '" in output
@@ -887,8 +891,8 @@ class TestDeployGetObjects:
         captured = capsys.readouterr()
         output = captured.out
 
-        assert "DRY RUN: Excluded clusters: []" in output
-        assert "DRY RUN: Excluded schemas: []" in output
+        assert "DRY RUN: Excluded clusters from deployment: []" in output
+        assert "DRY RUN: Excluded schemas from deployment: []" in output
         assert "DRY RUN: Final cluster list: ['test_cluster']" in output
         assert "DRY RUN: Final schema list: ['" in output
         assert "_test_deploy', '" in output

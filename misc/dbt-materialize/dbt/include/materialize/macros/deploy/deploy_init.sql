@@ -36,6 +36,7 @@
         {{ exceptions.raise_compiler_error("""
         Production schema " ~ schema ~ " contains sinks.
         Blue/green deployments require sinks to be in a dedicated schema.
+        Exclude this schema by adding it to the exclude_schemas list in your deployment configuration.
         """) }}
     {% endif %}
 {% endfor %}
@@ -48,6 +49,7 @@
         {{ exceptions.raise_compiler_error("""
         Production cluster " ~ cluster ~ " contains sinks.
         Blue/green deployments require sinks to be in a dedicated cluster.
+        Exclude this cluster by adding it to the exclude_clusters list in your deployment configuration.
         """) }}
     {% endif %}
 {% endfor %}
