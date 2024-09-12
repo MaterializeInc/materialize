@@ -40,8 +40,9 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE SOURCE mz_source
   IN CLUSTER storage
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES
   WITH (RETAIN HISTORY = FOR '365000 days');
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
 # Grab a cursor at timestamp 0
 > BEGIN

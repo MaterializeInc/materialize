@@ -44,19 +44,19 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO schema1.t1 SELECT * FROM schema1.t1;
 INSERT INTO schema2.t1 SELECT * FROM schema2.t1;
 
-! CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
-contains:multiple subsources would be named t1
+> CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
-! CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (t1);
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE schema1.t1);
+! CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE schema2.t1);
+contains:catalog item 't1' already exists
+
+> DROP TABLE t1;
+
+! CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 contains:reference to t1 is ambiguous, consider specifying an additional layer of qualification
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (schema1.t1);
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE schema1.t1);
 
 > SELECT * FROM t1;
 1
@@ -64,9 +64,9 @@ contains:reference to t1 is ambiguous, consider specifying an additional layer o
 
 > DROP SOURCE mz_source CASCADE;
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (schema1.t1 AS t1_1, schema2.t1 AS t1_2);
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+> CREATE TABLE t1_1 FROM SOURCE mz_source (REFERENCE schema1.t1);
+> CREATE TABLE t1_2 FROM SOURCE mz_source (REFERENCE schema2.t1);
 
 > SELECT * FROM t1_1;
 1
