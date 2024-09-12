@@ -330,11 +330,11 @@ These environments are later swapped transparently.
 
 1. To quickly view the clusters and schemas that will be included in the deployment, you can use the [`deploy_get_objects`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_get_objects.sql) macro with the `debug` argument:
 
-  ```bash
-  dbt run-operation deploy_get_objects --args '{debug: true}'
-  ```
+    ```bash
+    dbt run-operation deploy_get_objects --args '{debug: true}'
+    ```
 
-  This will output the list of clusters and schemas that will be included in the deployment, as well as any that have been excluded based on your configuration.
+    This will output the list of clusters and schemas that will be included in the deployment, as well as any that have been excluded based on your configuration.
 
 1. Use the [`run-operation`](https://docs.getdbt.com/reference/commands/run-operation)
    command to invoke the [`deploy_init`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_init.sql)
