@@ -1405,17 +1405,10 @@ where
                 // If the shard is being managed by txn-wal (initially,
                 // tables), then we need to pass along the shard id for the txns
                 // shard to dataflow rendering.
-                let txns_shard = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites) => {
-                        Some(*self.txns_read.txns_id())
-                    }
-                    DataSource::Ingestion(_)
-                    | DataSource::IngestionExport { .. }
-                    | DataSource::Introspection(_)
-                    | DataSource::Progress
-                    | DataSource::Webhook
-                    | DataSource::Other(DataSourceOther::Compute) => None,
-                };
+                let txns_shard = description
+                    .data_source
+                    .in_txns()
+                    .then(|| *self.txns_read.txns_id());
 
                 let metadata = CollectionMetadata {
                     persist_location: self.persist_location.clone(),

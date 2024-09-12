@@ -104,6 +104,11 @@ type AppendOnlyWriteChannel<T> = mpsc::UnboundedSender<(
 type WriteTask = AbortOnDropHandle<()>;
 type ShutdownSender = oneshot::Sender<()>;
 
+pub enum CollectionManagerKind {
+    AppendOnly,
+    Differential,
+}
+
 #[derive(Debug, Clone)]
 pub struct CollectionManager<T>
 where
