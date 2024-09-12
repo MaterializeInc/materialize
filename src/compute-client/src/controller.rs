@@ -709,21 +709,26 @@ where
         Ok(())
     }
 
-    /// Create and maintain the described dataflows, and initialize state for their output.
+    /// Creates the described dataflow and initializes state for its output.
     ///
-    /// This method creates dataflows whose inputs are still readable at the dataflow `as_of`
-    /// frontier, and initializes the outputs as readable from that frontier onward.
-    /// It installs read dependencies from the outputs to the inputs, so that the input read
-    /// capabilities will be held back to the output read capabilities, ensuring that we are
-    /// always able to return to a state that can serve the output read capabilities.
+    /// This method expects a `DataflowDescription` with an `as_of` frontier specified, as well as
+    /// for each imported collection a read hold in `import_read_holds` at at least the `as_of`.
+    ///
+    /// If a `subscribe_target_replica` is given, any subscribes exported by the dataflow are
+    /// configured to target that replica, i.e., only subscribe responses sent by that replica are
+    /// considered.
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        import_read_holds: Vec<ReadHold<T>>,
         subscribe_target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
-        self.instance_mut(instance_id)?
-            .create_dataflow(dataflow, subscribe_target_replica)?;
+        self.instance_mut(instance_id)?.create_dataflow(
+            dataflow,
+            import_read_holds,
+            subscribe_target_replica,
+        )?;
         Ok(())
     }
 
@@ -749,6 +754,7 @@ where
         timestamp: T,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
+        read_hold: ReadHold<T>,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), PeekError> {
         self.instance_mut(instance_id)?.peek(
@@ -758,6 +764,7 @@ where
             timestamp,
             finishing,
             map_filter_project,
+            read_hold,
             target_replica,
         )?;
         Ok(())
