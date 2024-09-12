@@ -131,6 +131,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "date_to_mz_timestamp"]
+    #[preserves_uniqueness = true]
     #[is_monotone = true]
     fn cast_date_to_mz_timestamp(a: Date) -> Result<Timestamp, EvalError> {
         let ts = CheckedTimestamp::try_from(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
