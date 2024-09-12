@@ -12,7 +12,16 @@
 
 # Start from a TPC-H load generator source with small data.
 > CREATE CLUSTER lgtpch_cluster_tuning SIZE '1';
-> CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_tuning FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.0001, TICK INTERVAL 0.1) FOR ALL TABLES;
+> CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_tuning FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.0001, TICK INTERVAL 0.1);
+
+> CREATE TABLE customer FROM SOURCE lgtpch (REFERENCE customer);
+> CREATE TABLE lineitem FROM SOURCE lgtpch (REFERENCE lineitem);
+> CREATE TABLE nation FROM SOURCE lgtpch (REFERENCE nation);
+> CREATE TABLE orders FROM SOURCE lgtpch (REFERENCE orders);
+> CREATE TABLE part FROM SOURCE lgtpch (REFERENCE part);
+> CREATE TABLE partsupp FROM SOURCE lgtpch (REFERENCE partsupp);
+> CREATE TABLE region FROM SOURCE lgtpch (REFERENCE region);
+> CREATE TABLE supplier FROM SOURCE lgtpch (REFERENCE supplier);
 
 # Create a set of materialized views for testing based on the TPC-H schema.
 > CREATE MATERIALIZED VIEW lineitem_by_orderkey AS

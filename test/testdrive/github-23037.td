@@ -14,7 +14,12 @@
   IN CLUSTER gh_23037_cluster
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '0.01s')
-  FOR ALL TABLES
+
+> CREATE TABLE accounts FROM SOURCE auction_house (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE auction_house (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE auction_house (REFERENCE users);
 
 > CREATE VIEW winning_bids AS
   SELECT DISTINCT ON (auctions.id) bids.*, auctions.item, auctions.seller

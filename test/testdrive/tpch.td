@@ -13,38 +13,57 @@ $ set-arg-default single-replica-cluster=quickstart
 # cardinality, don't depend on exact count that could change if the rng
 # implementation changes, just check that it's within the spec range.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_table_from_source = false
+
 ! CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 0)
 contains: multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_table_from_source = true
+
 ! CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR 9223372036854775807) FOR ALL TABLES
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 9223372036854775807)
 contains: unsupported scale factor 9223372036854776000
 
 ! CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR -1) FOR ALL TABLES
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR -1)
 contains: unsupported scale factor -1
 
 > CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR .01) FOR ALL TABLES
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR .01)
+
+> CREATE TABLE customer FROM SOURCE gen (REFERENCE customer);
+> CREATE TABLE lineitem FROM SOURCE gen (REFERENCE lineitem);
+> CREATE TABLE nation FROM SOURCE gen (REFERENCE nation);
+> CREATE TABLE orders FROM SOURCE gen (REFERENCE orders);
+> CREATE TABLE part FROM SOURCE gen (REFERENCE part);
+> CREATE TABLE partsupp FROM SOURCE gen (REFERENCE partsupp);
+> CREATE TABLE region FROM SOURCE gen (REFERENCE region);
+> CREATE TABLE supplier FROM SOURCE gen (REFERENCE supplier);
 
 > SHOW SOURCES
 name           type            cluster                          comment
 -----------------------------------------------------------------------
- customer      subsource       ${arg.single-replica-cluster}    ""
  gen           load-generator  ${arg.single-replica-cluster}    ""
  gen_progress  progress        <null>                           ""
- lineitem      subsource       ${arg.single-replica-cluster}    ""
- nation        subsource       ${arg.single-replica-cluster}    ""
- orders        subsource       ${arg.single-replica-cluster}    ""
- part          subsource       ${arg.single-replica-cluster}    ""
- partsupp      subsource       ${arg.single-replica-cluster}    ""
- region        subsource       ${arg.single-replica-cluster}    ""
- supplier      subsource       ${arg.single-replica-cluster}    ""
+
+> SHOW TABLES
+name           comment
+------------------------
+ customer      ""
+ lineitem      ""
+ nation        ""
+ orders        ""
+ part          ""
+ partsupp      ""
+ region        ""
+ supplier      ""
 
 # SF * 150,000
 > SELECT count(*) FROM customer
