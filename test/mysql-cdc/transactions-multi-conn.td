@@ -35,9 +35,11 @@ CREATE TABLE t1 (a INT);
 CREATE TABLE t2 (a INT);
 CREATE TABLE t3 (a INT);
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE public.t2);
+> CREATE TABLE t3 FROM SOURCE mz_source (REFERENCE public.t3);
 
 > SELECT count(*) FROM t1;
 0

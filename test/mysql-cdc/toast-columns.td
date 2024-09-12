@@ -47,9 +47,9 @@ INSERT INTO t1 SELECT 2, group_concat(md5(rand_value) SEPARATOR '') FROM temp_ra
 
 DROP TABLE temp_rand;
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 
 > SELECT a, length(b) FROM t1;
 1 32768

@@ -35,9 +35,9 @@ CREATE TABLE t1 (f1 TEXT CHARACTER SET utf8mb4);
 
 INSERT INTO t1 VALUES ('това е текст'), ('това ''е'' "текст"');
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 
 > SELECT COUNT(*) > 0 FROM t1;
 true

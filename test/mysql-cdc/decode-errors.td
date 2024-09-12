@@ -31,9 +31,9 @@ CREATE TABLE decode_err (f1 INTEGER, f2 TIME(6));
 INSERT INTO decode_err VALUES (1, TIME '12:00:00');
 INSERT INTO decode_err VALUES (2, TIME '29:59:59');
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE decode_err FROM SOURCE mz_source (REFERENCE public.decode_err);
 
 ! SELECT * FROM decode_err;
 contains: error decoding value

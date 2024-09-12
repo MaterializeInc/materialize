@@ -36,10 +36,9 @@ SET SESSION sql_mode = '';
 INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false, "nest": {"birds": ["seagull", "robin"]}}' AS JSON), 'large', 2024, '0000-00-00', '2024-00-01', '2024-01-00', '0000-00-00 00:00:00',  '0000-00-00 00:00:00.000000',  '0000-00-00 00:00:00.000000');
 
 > CREATE SOURCE da
-  FROM MYSQL CONNECTION mysqc (
-    TEXT COLUMNS (public.t1.f1, public.t1.f2, public.t1.f3, public.t1.f4, public.t1.f5, public.t1.f6, public.t1.f7, public.t1.f8, public.t1.f9)
-  )
-  FOR TABLES (public.t1);
+  FROM MYSQL CONNECTION mysqc;
+> CREATE TABLE t1 FROM SOURCE da (REFERENCE public.t1)
+  WITH (TEXT COLUMNS = (f1, f2, f3, f4, f5, f6, f7, f8, f9));
 
 # Insert the same data post-snapshot
 $ mysql-execute name=mysql
@@ -88,8 +87,10 @@ INSERT INTO t1 SELECT * FROM t1;
 "0000-00-00 00:00:00.0000"
 "0000-00-00 00:00:00.0000"
 
-> SHOW CREATE SOURCE t1;
-materialize.public.t1 "CREATE SUBSOURCE \"materialize\".\"public\".\"t1\" (\"f1\" \"pg_catalog\".\"text\", \"f2\" \"pg_catalog\".\"text\", \"f3\" \"pg_catalog\".\"text\", \"f4\" \"pg_catalog\".\"text\", \"f5\" \"pg_catalog\".\"text\", \"f6\" \"pg_catalog\".\"text\", \"f7\" \"pg_catalog\".\"text\", \"f8\" \"pg_catalog\".\"text\", \"f9\" \"pg_catalog\".\"text\") OF SOURCE \"materialize\".\"public\".\"da\" WITH (EXTERNAL REFERENCE = \"public\".\"t1\", TEXT COLUMNS = (\"f1\", \"f2\", \"f3\", \"f4\", \"f5\", \"f6\", \"f7\", \"f8\", \"f9\"))"
+$ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
+
+> SHOW CREATE TABLE t1;
+materialize.public.t1 "CREATE TABLE \"materialize\".\"public\".\"t1\" (\"f1\" \"pg_catalog\".\"text\", \"f2\" \"pg_catalog\".\"text\", \"f3\" \"pg_catalog\".\"text\", \"f4\" \"pg_catalog\".\"text\", \"f5\" \"pg_catalog\".\"text\", \"f6\" \"pg_catalog\".\"text\", \"f7\" \"pg_catalog\".\"text\", \"f8\" \"pg_catalog\".\"text\", \"f9\" \"pg_catalog\".\"text\") FROM SOURCE \"materialize\".\"public\".\"da\" (REFERENCE = \"public\".\"t1\") WITH (TEXT COLUMNS = (\"f1\", \"f2\", \"f3\", \"f4\", \"f5\", \"f6\", \"f7\", \"f8\", \"f9\"), <DETAILS>)"
 
 > DROP SOURCE da CASCADE;
 
@@ -105,9 +106,7 @@ CREATE TABLE t1 (f1 BIT(5));
 
 INSERT INTO t1 VALUES (b'11111');
 
-! CREATE SOURCE da_other
-  FROM MYSQL CONNECTION mysqc (
-    TEXT COLUMNS (public.t1.f1)
-  )
-  FOR TABLES (public.t1);
+> CREATE SOURCE da_other
+  FROM MYSQL CONNECTION mysqc;
+! CREATE TABLE t1 FROM SOURCE da_other (REFERENCE public.t1) WITH (TEXT COLUMNS (f1));
 contains: unsupported type

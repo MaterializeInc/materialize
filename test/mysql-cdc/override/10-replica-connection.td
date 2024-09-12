@@ -53,7 +53,7 @@ START REPLICA;
 #
 # Now try creating a source for this replica, and we should hit an error
 #
-! CREATE SOURCE replica_source FROM MYSQL CONNECTION mysq_replica FOR ALL TABLES;
+! CREATE SOURCE replica_source FROM MYSQL CONNECTION mysq_replica;
 contains:Invalid MySQL system replication settings
 
 #
@@ -73,4 +73,5 @@ START REPLICA;
 #
 # Validate we can now create a source to this replica
 #
-> CREATE SOURCE replica_source FROM MYSQL CONNECTION mysq_replica FOR ALL TABLES;
+> CREATE SOURCE replica_source FROM MYSQL CONNECTION mysq_replica;
+> CREATE TABLE t1 FROM SOURCE replica_source (REFERENCE public.t1);

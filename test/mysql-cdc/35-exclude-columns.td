@@ -30,23 +30,12 @@ CREATE TABLE t1 (f1 INTEGER, f2 GEOMETRY, f3 POINT, f4 VARCHAR(64));
 
 INSERT INTO t1 VALUES (1, ST_GeomFromText('LINESTRING(0 0,1 1,2 2)'), ST_GeomFromText('POINT(1 1)'), 'test');
 
-! CREATE SOURCE da_other
-  FROM MYSQL CONNECTION mysqc
-  FOR TABLES (public.t1);
+> CREATE SOURCE da
+  FROM MYSQL CONNECTION mysqc;
+! CREATE TABLE t1 FROM SOURCE da (REFERENCE public.t1);
 contains: unsupported type
 
-! CREATE SOURCE da
-  FROM MYSQL CONNECTION mysqc (
-    EXCLUDE COLUMNS (t1.f2, t1.f3)
-  )
-  FOR TABLES (public.t1);
-contains:invalid EXCLUDE COLUMNS option value: column name 't1.f2' must have at least a table qualification
-
-> CREATE SOURCE da
-  FROM MYSQL CONNECTION mysqc (
-    EXCLUDE COLUMNS (public.t1.f2, public.t1.f3)
-  )
-  FOR TABLES (public.t1);
+> CREATE TABLE t1 FROM SOURCE da (REFERENCE public.t1) WITH (EXCLUDE COLUMNS (f2, f3));
 
 # Insert the same data post-snapshot
 $ mysql-execute name=mysql
@@ -61,8 +50,10 @@ INSERT INTO t1 SELECT * FROM t1;
 "test"
 "test"
 
-> SHOW CREATE SOURCE t1;
-materialize.public.t1 "CREATE SUBSOURCE \"materialize\".\"public\".\"t1\" (\"f1\" \"pg_catalog\".\"int4\", \"f4\" \"pg_catalog\".\"varchar\"(64)) OF SOURCE \"materialize\".\"public\".\"da\" WITH (EXTERNAL REFERENCE = \"public\".\"t1\", EXCLUDE COLUMNS = (\"f2\", \"f3\"))"
+$ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
+
+> SHOW CREATE TABLE t1;
+materialize.public.t1 "CREATE TABLE \"materialize\".\"public\".\"t1\" (\"f1\" \"pg_catalog\".\"int4\", \"f4\" \"pg_catalog\".\"varchar\"(64)) FROM SOURCE \"materialize\".\"public\".\"da\" (REFERENCE = \"public\".\"t1\") WITH (EXCLUDE COLUMNS = (\"f2\", \"f3\"), <DETAILS>)"
 
 ! SELECT f2 FROM t1;
 contains:column "f2" does not exist

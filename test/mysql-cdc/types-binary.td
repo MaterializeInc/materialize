@@ -36,9 +36,9 @@ INSERT INTO t1 VALUES (HEX('ab'), HEX('ab'));
 INSERT INTO t1 VALUES ('abc ', 'abc ');
 INSERT INTO t1 VALUES ('a\0\0b', 'a\0\0b');
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 
 > SELECT COUNT(*) > 0 FROM t1;
 true

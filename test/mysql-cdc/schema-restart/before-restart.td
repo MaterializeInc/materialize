@@ -30,7 +30,9 @@ INSERT INTO dummy (f1, f2) SELECT @i:=@i+1, FLOOR(RAND()*10000) FROM mysql.time_
 CREATE TABLE other (d1 INTEGER);
 INSERT INTO other VALUES (1), (2), (3);
 
-> CREATE SOURCE schema_test FROM MYSQL CONNECTION mysq FOR ALL TABLES;
+> CREATE SOURCE schema_test FROM MYSQL CONNECTION mysq;
+> CREATE TABLE dummy FROM SOURCE schema_test (REFERENCE public.dummy);
+> CREATE TABLE other FROM SOURCE schema_test (REFERENCE public.other);
 
 # Now alter the dummy table
 $ mysql-execute name=mysql
