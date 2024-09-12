@@ -219,9 +219,6 @@ fn optimize_dataflow_relations(
     ctx: &mut TransformCtx,
 ) -> Result<(), TransformError> {
     // Re-optimize each dataflow
-    // TODO(mcsherry): we should determine indexes from the optimized representation
-    // just before we plan to install the dataflow. This would also allow us to not
-    // add indexes imperatively to `DataflowDesc`.
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-run all optimizations on the composite views.
         ctx.set_global_id(object.id);
@@ -456,7 +453,7 @@ pub fn optimize_dataflow_monotonic(
 /// The input `dataflow` should import all indexes belonging to all views/sources/tables it
 /// references.
 ///
-/// The input plans should be normalized with `NormalizeLets`! Otherwise we might find dangling
+/// The input plans should be normalized with `NormalizeLets`! Otherwise, we might find dangling
 /// `ArrangeBy`s at the top of unused Let bindings.
 #[mz_ore::instrument(
     target = "optimizer",

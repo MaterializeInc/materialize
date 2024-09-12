@@ -425,7 +425,7 @@ impl JoinImplementation {
             //
             // We compare the delta and differential join plans.
             //
-            // A delta query requires that, for every order, there is an arrangement for every
+            // A delta query requires that, for every path, there is an arrangement for every
             // input except for the starting one. Such queries are viable when:
             //
             //   (a) all the arrangements already exist, or
