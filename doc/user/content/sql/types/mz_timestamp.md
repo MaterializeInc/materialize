@@ -44,6 +44,7 @@ From | To | Required context
 `numeric` | `mz_timestamp` | Implicit
 `timestamp` | `mz_timestamp` | Implicit
 `timestamptz` | `mz_timestamp` | Implicit
+`date` | `mz_timestamp` | Implicit
 
 ### Valid operations
 

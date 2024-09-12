@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use mz_ore::result::ResultExt;
+use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -122,6 +123,19 @@ sqlfunc!(
         a: CheckedTimestamp<NaiveDateTime>,
     ) -> Result<Timestamp, EvalError> {
         a.and_utc()
+            .timestamp_millis()
+            .try_into()
+            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "date_to_mz_timestamp"]
+    #[preserves_uniqueness = true]
+    #[is_monotone = true]
+    fn cast_date_to_mz_timestamp(a: Date) -> Result<Timestamp, EvalError> {
+        let ts = CheckedTimestamp::try_from(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
+        ts.and_utc()
             .timestamp_millis()
             .try_into()
             .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))

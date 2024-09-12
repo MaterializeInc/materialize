@@ -458,6 +458,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty seahash_string = 330;
         ProtoToCharTimestamp to_char_timestamp = 331;
         ProtoToCharTimestamp to_char_timestamp_tz = 332;
+        google.protobuf.Empty cast_date_to_mz_timestamp = 333;
     }
 }
 
