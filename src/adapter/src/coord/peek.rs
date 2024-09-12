@@ -593,7 +593,7 @@ impl crate::coord::Coordinator {
                         .into_element();
 
                     self.initialize_compute_read_policy(
-                        index_id,
+                        read_hold.clone(),
                         compute_instance,
                         // Disable compaction so that nothing can compact before the peek occurs below.
                         CompactionWindow::DisableCompaction,

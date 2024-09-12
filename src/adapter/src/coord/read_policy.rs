@@ -221,22 +221,16 @@ impl crate::coord::Coordinator {
     /// with a read policy that allows no compaction.
     pub(crate) async fn initialize_storage_read_policy(
         &mut self,
-        id: GlobalId,
+        mut read_hold: ReadHold<Timestamp>,
         compaction_window: CompactionWindow,
     ) {
+        let id = read_hold.id();
+
         // Install read hold in the Coordinator's timeline state.
         if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
-            let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
+            let TimelineState { oracle, read_holds } = self.ensure_timeline_state(&timeline).await;
             let read_ts = oracle.read_ts().await;
-
-            let mut read_hold = self
-                .controller
-                .storage
-                .acquire_read_hold(id)
-                .expect("missing storage collection");
             let _ = read_hold.try_downgrade(Antichain::from_elem(read_ts));
-
-            let TimelineState { read_holds, .. } = self.ensure_timeline_state(&timeline).await;
             read_holds.insert_storage_collection(id, read_hold);
         };
 
@@ -248,11 +242,11 @@ impl crate::coord::Coordinator {
 
     pub(crate) async fn initialize_storage_read_policies(
         &mut self,
-        ids: impl IntoIterator<Item = GlobalId>,
+        read_holds: impl IntoIterator<Item = ReadHold<Timestamp>>,
         compaction_window: CompactionWindow,
     ) {
-        for id in ids {
-            self.initialize_storage_read_policy(id, compaction_window)
+        for hold in read_holds {
+            self.initialize_storage_read_policy(hold, compaction_window)
                 .await;
         }
     }
@@ -264,23 +258,17 @@ impl crate::coord::Coordinator {
     /// with a read policy that allows no compaction.
     pub(crate) async fn initialize_compute_read_policy(
         &mut self,
-        id: GlobalId,
+        mut read_hold: ReadHold<Timestamp>,
         instance: ComputeInstanceId,
         compaction_window: CompactionWindow,
     ) {
+        let id = read_hold.id();
+
         // Install read hold in the Coordinator's timeline state.
         if let TimelineContext::TimelineDependent(timeline) = self.get_timeline_context(id) {
-            let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
+            let TimelineState { oracle, read_holds } = self.ensure_timeline_state(&timeline).await;
             let read_ts = oracle.read_ts().await;
-
-            let mut read_hold = self
-                .controller
-                .compute
-                .acquire_read_hold(instance, id)
-                .expect("missing compute collection");
             let _ = read_hold.try_downgrade(Antichain::from_elem(read_ts));
-
-            let TimelineState { read_holds, .. } = self.ensure_timeline_state(&timeline).await;
             read_holds.insert_compute_collection((instance, id), read_hold);
         };
 

@@ -1941,12 +1941,14 @@ impl Coordinator {
                             );
                         }
                     }
+                    let read_hold = read_holds[&entry.id].clone();
                     let cw = policy.expect("sources have a compaction window");
-                    self.initialize_storage_read_policy(entry.id, cw).await;
+                    self.initialize_storage_read_policy(read_hold, cw).await;
                 }
                 CatalogItem::Table(_) => {
+                    let read_hold = read_holds[&entry.id].clone();
                     let cw = policy.expect("tables have a compaction window");
-                    self.initialize_storage_read_policy(entry.id, cw).await;
+                    self.initialize_storage_read_policy(read_hold, cw).await;
                 }
                 CatalogItem::Index(idx) => {
                     let id = entry.id;
@@ -1987,14 +1989,16 @@ impl Coordinator {
                         read_holds.insert(id, read_hold);
                     }
 
+                    let read_hold = read_holds[&id].clone();
                     let cw = policy.expect("indexes have a compaction window");
-                    self.initialize_compute_read_policy(id, idx.cluster_id, cw)
+                    self.initialize_compute_read_policy(read_hold, idx.cluster_id, cw)
                         .await;
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
+                    let read_hold = read_holds[&entry.id].clone();
                     let cw = policy.expect("materialized views have a compaction window");
-                    self.initialize_storage_read_policy(entry.id, cw).await;
+                    self.initialize_storage_read_policy(read_hold, cw).await;
 
                     let mut df_desc = self
                         .catalog()
@@ -3072,8 +3076,7 @@ impl Coordinator {
             .unwrap_or_terminate("dataflow creation cannot fail");
 
         for hold in read_holds {
-            let id = hold.id();
-            self.initialize_compute_read_policy(id, instance, CompactionWindow::Default)
+            self.initialize_compute_read_policy(hold, instance, CompactionWindow::Default)
                 .await;
         }
     }

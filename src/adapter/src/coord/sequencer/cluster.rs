@@ -371,11 +371,8 @@ impl Coordinator {
             ..
         } = self;
         let cluster = catalog.get_cluster(cluster_id);
-        let cluster_id = cluster.id;
-        let introspection_source_ids: Vec<_> =
-            cluster.log_indexes.iter().map(|(_, id)| *id).collect();
 
-        controller
+        let log_read_holds = controller
             .create_cluster(
                 cluster_id,
                 mz_controller::clusters::ClusterConfig {
@@ -390,8 +387,8 @@ impl Coordinator {
             self.create_cluster_replica(cluster_id, replica_id).await;
         }
 
-        for id in introspection_source_ids {
-            self.initialize_compute_read_policy(id, cluster_id, CompactionWindow::Default)
+        for hold in log_read_holds {
+            self.initialize_compute_read_policy(hold, cluster_id, CompactionWindow::Default)
                 .await;
         }
     }

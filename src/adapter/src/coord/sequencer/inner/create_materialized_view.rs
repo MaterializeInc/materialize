@@ -662,7 +662,7 @@ impl Coordinator {
                 let storage_metadata = coord.catalog.state().storage_metadata();
 
                 // Announce the creation of the materialized view source.
-                coord
+                let read_hold = coord
                     .controller
                     .storage
                     .create_collections(
@@ -679,11 +679,12 @@ impl Coordinator {
                         )],
                     )
                     .await
-                    .unwrap_or_terminate("cannot fail to append");
+                    .unwrap_or_terminate("cannot fail to append")
+                    .into_element();
 
                 coord
                     .initialize_storage_read_policy(
-                        sink_id,
+                        read_hold,
                         compaction_window.unwrap_or(CompactionWindow::Default),
                     )
                     .await;
