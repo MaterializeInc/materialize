@@ -8,9 +8,9 @@ menu:
 
 ## Overview
 
-When you enable a Materialize region, several clusters are pre-installed.  These
-clusters are used to improve the user experience as well as support system
-administration tasks.
+When you enable a Materialize region, various [system
+clusters](/sql/system-clusters/) are pre-installed to improve the user
+experience as well as support system administration tasks.
 
 ### `quickstart` cluster
 
