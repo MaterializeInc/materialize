@@ -81,36 +81,6 @@ identifier = "transform-data"
 name = "Transform data"
 weight= 12
 
-[[menu.main]]
-name = "Overview"
-parent = 'transform-data'
-identifier = 'transform-overview'
-weight = 5
-
-[[menu.main]]
-name = "Views"
-parent = "transform-overview"
-url = "/sql/create-view/"
-weight= 5
-
-[[menu.main]]
-name = "Indexes"
-parent = "transform-overview"
-url = "/sql/create-index"
-weight= 10
-
-[[menu.main]]
-name = "Materialized views"
-parent = "transform-overview"
-url = "/sql/create-materialized-view/"
-weight= 15
-
-[[menu.main]]
-name = "Common patterns"
-parent = 'transform-data'
-identifier = 'sql-patterns'
-weight = 30
-
 #
 # Serve results
 #

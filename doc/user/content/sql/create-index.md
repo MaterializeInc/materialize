@@ -11,11 +11,11 @@ menu:
 `CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a source, view, or materialized
 view.
 
-Indexes assemble and maintain a query's results in memory within a [cluster](/concepts/clusters/),
-which provides future queries the data
-they need in a format they can immediately use. In particular, creating indexes
-can be very helpful for the [`JOIN`](../join) operator, which needs to build
-and maintain the appropriate indexes if they do not otherwise exist.
+In Materialize, indexes store query results in memory within a [cluster](https://materialize.com/docs/concepts/clusters/),
+and keep these results incrementally updated as new data arrives. By making
+up-to-date results available in memory, indexes can help [optimize query
+performance](https://materialize.com/docs/transform-data/optimization/),
+both when serving results and maintaining resource-heavy operations like joins.
 
 ### Usage patterns
 
