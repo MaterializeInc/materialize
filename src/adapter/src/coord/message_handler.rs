@@ -26,9 +26,11 @@ use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
+use mz_repr::{Datum, Row};
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
+use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::controller::CollectionMetadata;
 use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
@@ -742,6 +744,25 @@ impl Coordinator {
         };
 
         if event.status != replica_statues[&event.process_id].status {
+            if !self.controller.read_only() {
+                let offline_reason = match event.status {
+                    ClusterStatus::Online => None,
+                    ClusterStatus::Offline(None) => None,
+                    ClusterStatus::Offline(Some(reason)) => Some(reason.to_string()),
+                };
+                let row = Row::pack_slice(&[
+                    Datum::String(&event.replica_id.to_string()),
+                    Datum::UInt64(event.process_id),
+                    Datum::String(event.status.as_kebab_case_str()),
+                    Datum::from(offline_reason.as_deref()),
+                    Datum::TimestampTz(event.time.try_into().expect("must fit")),
+                ]);
+                self.controller.storage.append_introspection_updates(
+                    IntrospectionType::ReplicaStatusHistory,
+                    vec![(row, 1)],
+                );
+            }
+
             let old_replica_status =
                 ClusterReplicaStatuses::cluster_replica_status(replica_statues);
             let old_process_status = replica_statues

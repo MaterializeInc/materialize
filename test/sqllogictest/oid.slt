@@ -1124,3 +1124,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17016  mz_cluster_replica_metrics_history
 17017  mz_cluster_replica_metrics_history_ind
 17018  mz_cluster_replica_utilization_history
+17019  mz_cluster_replica_status_history
+17020  mz_cluster_replica_status_history_ind

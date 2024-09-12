@@ -50,11 +50,11 @@ use mz_sql::session::user::{
     MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NAME,
 };
 use mz_storage_client::controller::IntrospectionType;
-use mz_storage_client::healthcheck::REPLICA_METRICS_HISTORY_DESC;
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
     MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
-    MZ_SQL_TEXT_DESC, MZ_STATEMENT_EXECUTION_HISTORY_DESC,
+    MZ_SQL_TEXT_DESC, MZ_STATEMENT_EXECUTION_HISTORY_DESC, REPLICA_METRICS_HISTORY_DESC,
+    REPLICA_STATUS_HISTORY_DESC,
 };
 use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATISTICS_RAW_DESC};
 use rand::Rng;
@@ -2727,6 +2727,8 @@ pub static MZ_PENDING_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|
     access: vec![PUBLIC_SELECT],
 });
 
+// TODO(teskje) Remove this table in favor of `MZ_CLUSTER_REPLICA_STATUS_HISTORY`, once internal
+//              clients have been migrated.
 pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_cluster_replica_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2744,6 +2746,17 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinTable> = LazyLock::new(|
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
+
+pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> =
+    LazyLock::new(|| BuiltinSource {
+        name: "mz_cluster_replica_status_history",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_CLUSTER_REPLICA_STATUS_HISTORY_OID,
+        data_source: IntrospectionType::ReplicaStatusHistory,
+        desc: REPLICA_STATUS_HISTORY_DESC.clone(),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    });
 
 pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_cluster_replica_sizes",
@@ -7655,6 +7668,15 @@ ON mz_internal.mz_cluster_replica_statuses (replica_id)",
     is_retained_metrics_object: true,
 };
 
+pub const MZ_CLUSTER_REPLICA_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_status_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_REPLICA_STATUS_HISTORY_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_cluster_replica_status_history (replica_id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_CLUSTER_REPLICA_METRICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_metrics_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -8097,6 +8119,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Source(&MZ_CLUSTER_REPLICA_METRICS_HISTORY),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
+        Builtin::Source(&MZ_CLUSTER_REPLICA_STATUS_HISTORY),
         Builtin::Table(&MZ_INTERNAL_CLUSTER_REPLICAS),
         Builtin::Table(&MZ_PENDING_CLUSTER_REPLICAS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
@@ -8332,6 +8355,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_HISTORY_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_HISTORY_IND),

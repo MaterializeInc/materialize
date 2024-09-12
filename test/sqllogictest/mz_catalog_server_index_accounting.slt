@@ -41,6 +41,7 @@ mz_cluster_replica_history_ind  CREATE␠INDEX␠"mz_cluster_replica_history_ind
 mz_cluster_replica_metrics_history_ind  CREATE␠INDEX␠"mz_cluster_replica_metrics_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_metrics_history"␠("replica_id")
 mz_cluster_replica_metrics_ind  CREATE␠INDEX␠"mz_cluster_replica_metrics_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_metrics"␠("replica_id")
 mz_cluster_replica_sizes_ind  CREATE␠INDEX␠"mz_cluster_replica_sizes_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_cluster_replica_sizes"␠("size")
+mz_cluster_replica_status_history_ind  CREATE␠INDEX␠"mz_cluster_replica_status_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_status_history"␠("replica_id")
 mz_cluster_replica_statuses_ind  CREATE␠INDEX␠"mz_cluster_replica_statuses_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_statuses"␠("replica_id")
 mz_cluster_replicas_ind  CREATE␠INDEX␠"mz_cluster_replicas_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_cluster_replicas"␠("id")
 mz_clusters_ind  CREATE␠INDEX␠"mz_clusters_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_clusters"␠("id")
@@ -222,6 +223,11 @@ mz_cluster_replica_sizes  memory_bytes
 mz_cluster_replica_sizes  processes
 mz_cluster_replica_sizes  size
 mz_cluster_replica_sizes  workers
+mz_cluster_replica_status_history  occurred_at
+mz_cluster_replica_status_history  process_id
+mz_cluster_replica_status_history  reason
+mz_cluster_replica_status_history  replica_id
+mz_cluster_replica_status_history  status
 mz_cluster_replica_statuses  process_id
 mz_cluster_replica_statuses  reason
 mz_cluster_replica_statuses  replica_id

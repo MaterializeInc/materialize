@@ -137,6 +137,15 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  updated_at  timestamp␠with␠time␠zone
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_status_history' ORDER BY position
+----
+1  replica_id  text
+2  process_id  uint8
+3  status  text
+4  reason  text
+5  occurred_at  timestamp␠with␠time␠zone
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_utilization' ORDER BY position
 ----
 1  replica_id  text
@@ -590,6 +599,7 @@ mz_cluster_replica_frontiers
 mz_cluster_replica_history
 mz_cluster_replica_metrics
 mz_cluster_replica_metrics_history
+mz_cluster_replica_status_history
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
 mz_cluster_replica_utilization_history

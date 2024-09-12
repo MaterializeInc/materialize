@@ -567,6 +567,7 @@ name                                         type    cluster    comment
 mz_aws_privatelink_connection_status_history source  <null>     ""
 mz_cluster_replica_frontiers                 source  <null>     ""
 mz_cluster_replica_metrics_history           source  <null>     ""
+mz_cluster_replica_status_history            source  <null>     ""
 mz_compute_dependencies                      source  <null>     ""
 mz_compute_error_counts_raw_unified          source  <null>     ""
 mz_compute_hydration_times                   source  <null>     ""
@@ -776,7 +777,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-236
+237
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

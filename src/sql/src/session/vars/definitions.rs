@@ -1429,6 +1429,15 @@ pub static KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES: VarDefinition = VarDefinit
     false,
 );
 
+/// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_replica_status_history_entries`].
+pub static KEEP_N_REPLICA_STATUS_HISTORY_ENTRIES: VarDefinition = VarDefinition::new(
+    "keep_n_replica_status_history_entries",
+    value!(usize; 5),
+    "On reboot, truncate all but the last n entries per ID in the mz_cluster_replica_status_history \
+        collection (Materialize).",
+    false,
+);
+
 pub static ENABLE_STORAGE_SHARD_FINALIZATION: VarDefinition = VarDefinition::new(
     "enable_storage_shard_finalization",
     value!(bool; true),

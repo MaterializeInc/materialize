@@ -2857,6 +2857,7 @@ where
             IntrospectionType::SourceStatusHistory
             | IntrospectionType::SinkStatusHistory
             | IntrospectionType::PrivatelinkConnectionStatusHistory
+            | IntrospectionType::ReplicaStatusHistory
             | IntrospectionType::ReplicaMetricsHistory => {
                 if !self.read_only {
                     self.prepare_introspection_collection(
@@ -3015,6 +3016,7 @@ where
                     .partially_truncate_status_history(
                         IntrospectionType::SourceStatusHistory,
                         write_handle,
+                        source_status_history_desc(&self.config.parameters),
                     )
                     .await;
 
@@ -3044,6 +3046,7 @@ where
                     .partially_truncate_status_history(
                         IntrospectionType::SinkStatusHistory,
                         write_handle,
+                        sink_status_history_desc(&self.config.parameters),
                     )
                     .await;
 
@@ -3072,6 +3075,16 @@ where
                 self.partially_truncate_status_history(
                     IntrospectionType::PrivatelinkConnectionStatusHistory,
                     write_handle,
+                    privatelink_status_history_desc(&self.config.parameters),
+                )
+                .await;
+            }
+            IntrospectionType::ReplicaStatusHistory => {
+                let write_handle = write_handle.expect("filled in by caller");
+                self.partially_truncate_status_history(
+                    IntrospectionType::ReplicaStatusHistory,
+                    write_handle,
+                    replica_status_history_desc(&self.config.parameters),
                 )
                 .await;
             }
@@ -3144,7 +3157,7 @@ where
     }
 
     /// Effectively truncates the status history shard except for the most
-    /// recent updates from each ID.
+    /// recent updates from each key.
     ///
     /// NOTE: The history collections are really append-only collections, but
     /// every-now-and-then we want to retract old updates so that the collection
@@ -3152,51 +3165,16 @@ where
     /// collections, they are not derived from a state at some time `t` and we
     /// cannot maintain a desired state for them.
     ///
-    /// Returns a map with latest unpacked row per id.
-    async fn partially_truncate_status_history(
+    /// Returns a map with latest unpacked row per key.
+    async fn partially_truncate_status_history<K>(
         &mut self,
         collection: IntrospectionType,
         write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
-    ) -> BTreeMap<GlobalId, Row> {
-        let (keep_n, occurred_at_col, id_col) = match collection {
-            IntrospectionType::SourceStatusHistory => (
-                self.config.parameters.keep_n_source_status_history_entries,
-                collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from("occurred_at"))
-                    .expect("schema has not changed")
-                    .0,
-                collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from("source_id"))
-                    .expect("schema has not changed")
-                    .0,
-            ),
-            IntrospectionType::SinkStatusHistory => (
-                self.config.parameters.keep_n_sink_status_history_entries,
-                collection_status::MZ_SINK_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from("occurred_at"))
-                    .expect("schema has not changed")
-                    .0,
-                collection_status::MZ_SINK_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from("sink_id"))
-                    .expect("schema has not changed")
-                    .0,
-            ),
-            IntrospectionType::PrivatelinkConnectionStatusHistory => (
-                self.config
-                    .parameters
-                    .keep_n_privatelink_status_history_entries,
-                collection_status::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from("occurred_at"))
-                    .expect("schema has not changed")
-                    .0,
-                collection_status::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from("connection_id"))
-                    .expect("schema has not changed")
-                    .0,
-            ),
-            _ => unreachable!(),
-        };
-
+        status_history_desc: StatusHistoryDesc<K>,
+    ) -> BTreeMap<K, Row>
+    where
+        K: Clone + Debug + Ord,
+    {
         let id = self.introspection_ids.lock().expect("poisoned")[&collection];
 
         let upper = write_handle.fetch_recent_upper().await.clone();
@@ -3212,13 +3190,14 @@ where
             _ => return BTreeMap::new(),
         };
 
-        // BTreeMap<Id, MinHeap<(OccurredAt, Row)>>, to track the
-        // earliest events for each id.
-        let mut last_n_entries_per_id: BTreeMap<Datum, BinaryHeap<Reverse<(Datum, Vec<Datum>)>>> =
-            BTreeMap::new();
+        // BTreeMap to track the earliest events for each key.
+        let mut last_n_entries_per_key: BTreeMap<
+            K,
+            BinaryHeap<Reverse<(CheckedTimestamp<DateTime<Utc>>, Row)>>,
+        > = BTreeMap::new();
 
-        // BTreeMap to keep track of the row with the latest timestamp for each id
-        let mut latest_row_per_id: BTreeMap<Datum, (CheckedTimestamp<DateTime<Utc>>, Vec<Datum>)> =
+        // BTreeMap to keep track of the row with the latest timestamp for each key.
+        let mut latest_row_per_key: BTreeMap<K, (CheckedTimestamp<DateTime<Utc>>, Row)> =
             BTreeMap::new();
 
         // Consolidate the snapshot, so we can process it correctly below.
@@ -3226,35 +3205,30 @@ where
 
         let mut deletions = vec![];
 
-        for (row, diff) in rows.iter() {
-            let status_row = row.unpack();
-            let id = status_row[id_col];
-            let occurred_at = status_row[occurred_at_col];
+        for (row, diff) in rows {
+            let datums = row.unpack();
+            let key = (status_history_desc.extract_key)(&datums);
+            let timestamp = (status_history_desc.extract_time)(&datums);
 
             // Duplicate rows ARE possible if many status changes happen in VERY quick succession,
             // so we go ahead and handle them.
             assert!(
-                *diff > 0,
+                diff > 0,
                 "only know how to operate over consolidated data with diffs > 0, \
-                found diff {} for object {} in {:?}",
-                diff,
-                id,
-                collection
+                found diff {diff} for object {key:?} in {collection:?}",
             );
 
-            // Keep track of the timestamp of the latest row per id
-            let timestamp = occurred_at.unwrap_timestamptz();
-            match latest_row_per_id.get(&id) {
+            // Keep track of the timestamp of the latest row per key.
+            match latest_row_per_key.get(&key) {
                 Some(existing) if &existing.0 > &timestamp => {}
                 _ => {
-                    latest_row_per_id.insert(id, (timestamp, status_row.clone()));
+                    latest_row_per_key.insert(key.clone(), (timestamp, row.clone()));
                 }
             }
 
             // Consider duplicated rows separately.
-            for _ in 0..*diff {
-                let entries = last_n_entries_per_id.entry(id).or_default();
-
+            let entries = last_n_entries_per_key.entry(key).or_default();
+            for _ in 0..diff {
                 // We CAN have multiple statuses (most likely Starting and Running) at the exact same
                 // millisecond, depending on how the `health_operator` is scheduled.
                 //
@@ -3263,12 +3237,12 @@ where
                 // so we don't bother being careful about it.
                 //
                 // TODO(guswynn): unpack these into health-status objects and use
-                // their `Ord1 impl.
-                entries.push(Reverse((occurred_at, status_row.clone())));
+                // their `Ord` impl.
+                entries.push(Reverse((timestamp, row.clone())));
 
                 // Retain some number of entries, using pop to mark the oldest entries for
                 // deletion.
-                while entries.len() > keep_n {
+                while entries.len() > status_history_desc.keep_n {
                     if let Some(Reverse((_, r))) = entries.pop() {
                         deletions.push(r);
                     }
@@ -3283,20 +3257,10 @@ where
         let expected_upper = upper.into_option().expect("checked above");
         let new_upper = TimestampManipulation::step_forward(&expected_upper);
 
-        let mut row_buf = Row::default();
         // Updates are only deletes because everything else is already in the shard.
         let updates = deletions
             .into_iter()
-            .map(|unpacked_row| {
-                // Re-pack all rows
-                let mut packer = row_buf.packer();
-                packer.extend(unpacked_row.into_iter());
-                (
-                    (SourceData(Ok(row_buf.clone())), ()),
-                    expected_upper.clone(),
-                    -1,
-                )
-            })
+            .map(|row| ((SourceData(Ok(row)), ()), expected_upper.clone(), -1))
             .collect::<Vec<_>>();
 
         let res = write_handle
@@ -3320,23 +3284,16 @@ where
                 // NOTE: We might want to attempt these partial
                 // retractions on an interval, instead of only when
                 // starting up!
-                info!(%id, ?expected_upper, current_upper = ?err.current, "failed to append partial truncation");
+                info!(
+                    %id, ?expected_upper, current_upper = ?err.current,
+                    "failed to append partial truncation",
+                );
             }
         }
 
-        latest_row_per_id
+        latest_row_per_key
             .into_iter()
-            .filter_map(|(key, (_, row_vec))| {
-                match GlobalId::from_str(key.unwrap_str()) {
-                    Ok(id) => {
-                        let mut packer = row_buf.packer();
-                        packer.extend(row_vec.into_iter());
-                        Some((id, row_buf.clone()))
-                    }
-                    // Ignore any rows that can't be unwrapped correctly
-                    Err(_) => None,
-                }
-            })
+            .map(|(key, (_, row))| (key, row))
             .collect()
     }
 
@@ -3917,4 +3874,73 @@ struct IngestionState<T: TimelyTimestamp> {
 
     /// The ID of the instance in which the ingestion is running.
     pub instance_id: StorageInstanceId,
+}
+
+/// A description of a status history collection.
+///
+/// Used to inform partial truncation, see [`Controller::partially_truncate_status_history`].
+struct StatusHistoryDesc<K> {
+    keep_n: usize,
+    extract_key: Box<dyn Fn(&[Datum]) -> K>,
+    extract_time: Box<dyn Fn(&[Datum]) -> CheckedTimestamp<DateTime<Utc>>>,
+}
+
+fn source_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<GlobalId> {
+    let desc = &collection_status::MZ_SOURCE_STATUS_HISTORY_DESC;
+    let (key_idx, _) = desc.get_by_name(&"source_id".into()).expect("exists");
+    let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
+
+    StatusHistoryDesc {
+        keep_n: params.keep_n_source_status_history_entries,
+        extract_key: Box::new(move |datums| {
+            GlobalId::from_str(datums[key_idx].unwrap_str()).expect("GlobalId column")
+        }),
+        extract_time: Box::new(move |datums| datums[time_idx].unwrap_timestamptz()),
+    }
+}
+
+fn sink_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<GlobalId> {
+    let desc = &collection_status::MZ_SINK_STATUS_HISTORY_DESC;
+    let (key_idx, _) = desc.get_by_name(&"sink_id".into()).expect("exists");
+    let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
+
+    StatusHistoryDesc {
+        keep_n: params.keep_n_sink_status_history_entries,
+        extract_key: Box::new(move |datums| {
+            GlobalId::from_str(datums[key_idx].unwrap_str()).expect("GlobalId column")
+        }),
+        extract_time: Box::new(move |datums| datums[time_idx].unwrap_timestamptz()),
+    }
+}
+
+fn privatelink_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<GlobalId> {
+    let desc = &collection_status::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC;
+    let (key_idx, _) = desc.get_by_name(&"connection_id".into()).expect("exists");
+    let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
+
+    StatusHistoryDesc {
+        keep_n: params.keep_n_privatelink_status_history_entries,
+        extract_key: Box::new(move |datums| {
+            GlobalId::from_str(datums[key_idx].unwrap_str()).expect("GlobalId column")
+        }),
+        extract_time: Box::new(move |datums| datums[time_idx].unwrap_timestamptz()),
+    }
+}
+
+fn replica_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<(GlobalId, u64)> {
+    let desc = &collection_status::REPLICA_STATUS_HISTORY_DESC;
+    let (replica_idx, _) = desc.get_by_name(&"replica_id".into()).expect("exists");
+    let (process_idx, _) = desc.get_by_name(&"process_id".into()).expect("exists");
+    let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
+
+    StatusHistoryDesc {
+        keep_n: params.keep_n_privatelink_status_history_entries,
+        extract_key: Box::new(move |datums| {
+            (
+                GlobalId::from_str(datums[replica_idx].unwrap_str()).expect("GlobalId column"),
+                datums[process_idx].unwrap_uint64(),
+            )
+        }),
+        extract_time: Box::new(move |datums| datums[time_idx].unwrap_timestamptz()),
+    }
 }

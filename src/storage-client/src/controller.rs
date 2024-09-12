@@ -66,6 +66,7 @@ pub enum IntrospectionType {
     Frontiers,
     ReplicaFrontiers,
 
+    ReplicaStatusHistory,
     ReplicaMetricsHistory,
 
     // Note that this single-shard introspection source will be changed to per-replica,

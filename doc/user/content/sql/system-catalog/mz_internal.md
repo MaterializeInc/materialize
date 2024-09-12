@@ -176,7 +176,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | Field               | Type         | Meaning                                                                                                                                                      |
 | ------------------- | ------------ | --------                                                                                                                                                     |
 | `replica_id`        | [`text`]     | The ID of a cluster replica.                                                                                                                                 |
-| `process_id`        | [`uint8`]    | An identifier of a compute process within a replica.                                                                                                         |
+| `process_id`        | [`uint8`]    | The ID of a process within the replica.                                                                                                         |
 | `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core.                                                                                                         |
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
 | `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes.                                                                                                                             |
@@ -193,7 +193,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | Field            | Type      | Meaning
 | ---------------- | --------- | --------
 | `replica_id`     | [`text`]  | The ID of a cluster replica.
-| `process_id`     | [`uint8`] | An identifier of a process within the replica.
+| `process_id`     | [`uint8`] | The ID of a process within the replica.
 | `cpu_nano_cores` | [`uint8`] | Approximate CPU usage in billionths of a vCPU core.
 | `memory_bytes`   | [`uint8`] | Approximate memory usage in bytes.
 | `disk_bytes`     | [`uint8`] | Approximate disk usage in bytes.
@@ -213,6 +213,21 @@ of each process in each cluster replica in the system.
 | `reason`     | [`text`]                     | If the cluster replica is in a `offline` state, the reason (if available). For example, `oom-killed`.   |
 | `updated_at` | [`timestamp with time zone`] | The time at which the status was last updated.                                                          |
 
+## `mz_cluster_replica_status_history`
+
+{{< warn-if-unreleased v0.116 >}}
+The `mz_cluster_replica_status_history` table records status changes
+for all processes of all extant cluster replicas.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_replica_status_history -->
+| Field         | Type      | Meaning
+|---------------|-----------|--------
+| `replica_id`  | [`text`]  | The ID of a cluster replica.
+| `process_id`  | [`uint8`] | The ID of a process within the replica.
+| `status`      | [`text`]  | The status of the cluster replica: `online` or `offline`.
+| `reason`      | [`text`]  | If the cluster replica is in an `offline` state, the reason (if available). For example, `oom-killed`.
+| `occurred_at` | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
+
 ## `mz_cluster_replica_utilization`
 
 The `mz_cluster_replica_utilization` view gives the last known CPU and RAM utilization statistics
@@ -224,7 +239,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | Field            | Type                 | Meaning                                                                                                                                                                                |
 |------------------|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `replica_id`     | [`text`]             | The ID of a cluster replica.                                                                                                                                                           |
-| `process_id`     | [`uint8`]            | An identifier of a compute process within a replica.                                                                                                                                   |
+| `process_id`     | [`uint8`]            | The ID of a process within the replica.                                                                                                                                   |
 | `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.                                                                                                                              |
 | `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.                                                                                                                              |
 | `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation.                                                                                                                             |
@@ -241,7 +256,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | Field            | Type                 | Meaning
 |------------------|----------------------|--------
 | `replica_id`     | [`text`]             | The ID of a cluster replica.
-| `process_id`     | [`uint8`]            | An identifier of a compute process within the replica.
+| `process_id`     | [`uint8`]            | The ID of a process within the replica.
 | `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.
 | `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.
 | `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation.

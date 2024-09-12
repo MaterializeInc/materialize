@@ -139,6 +139,19 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC: LazyLock<RelationD
             .finish()
     });
 
+pub static REPLICA_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    RelationDesc::builder()
+        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("process_id", ScalarType::UInt64.nullable(false))
+        .with_column("status", ScalarType::String.nullable(false))
+        .with_column("reason", ScalarType::String.nullable(true))
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .finish()
+});
+
 pub static REPLICA_METRICS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
         .with_column("replica_id", ScalarType::String.nullable(false))
