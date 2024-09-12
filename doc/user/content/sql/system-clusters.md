@@ -20,6 +20,8 @@ cluster at any time.
 
 {{< note >}}
 The default value for the `cluster` session parameter is `quickstart`.
+This cluster functions as a default option, pre-created for your convenience.
+It allows you to quickly start running queries without needing to configure a cluster first.
 If the `quickstart` cluster is dropped, you must run [`SET cluster`](/sql/select/#ad-hoc-queries)
 to choose a valid cluster in order to run `SELECT` queries. A _superuser_ (i.e. `Organization Admin`)
 can also run [`ALTER SYSTEM SET cluster`](/sql/alter-system-set) to change the
