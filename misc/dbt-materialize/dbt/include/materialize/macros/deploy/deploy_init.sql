@@ -26,6 +26,13 @@
 
 {{ log("Creating deployment environment for target " ~ current_target_name, info=True) }}
 
+{% if not clusters %}
+    {{ exceptions.raise_compiler_error("No clusters found for deployment") }}
+{% endif %}
+{% if not schemas %}
+    {{ exceptions.raise_compiler_error("No schemas found for deployment") }}
+{% endif %}
+
 -- Check that all production schemas
 -- and clusters already exist
 {% for schema in schemas %}
