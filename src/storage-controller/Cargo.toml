@@ -20,6 +20,7 @@ futures = "0.3.25"
 itertools = { version = "0.10.5" }
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
+mz-controller-types = { path = "../controller-types" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-ore = { path = "../ore", features = ["async", "chrono", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }

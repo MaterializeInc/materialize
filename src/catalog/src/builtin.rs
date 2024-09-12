@@ -54,7 +54,7 @@ use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
     MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
     MZ_SQL_TEXT_DESC, MZ_STATEMENT_EXECUTION_HISTORY_DESC, REPLICA_METRICS_HISTORY_DESC,
-    REPLICA_STATUS_HISTORY_DESC,
+    REPLICA_STATUS_HISTORY_DESC, WALLCLOCK_LAG_HISTORY_DESC,
 };
 use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATISTICS_RAW_DESC};
 use rand::Rng;
@@ -3302,6 +3302,52 @@ FROM mz_internal.mz_frontiers
 WHERE write_frontier IS NOT NULL",
     access: vec![PUBLIC_SELECT],
 });
+
+pub static MZ_WALLCLOCK_LAG_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
+    name: "mz_wallclock_lag_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_WALLCLOCK_LAG_HISTORY_OID,
+    desc: WALLCLOCK_LAG_HISTORY_DESC.clone(),
+    data_source: IntrospectionType::WallclockLagHistory,
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_wallclock_global_lag_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_HISTORY_OID,
+    column_defs: None,
+    sql: "
+WITH times_binned AS (
+    SELECT
+        object_id,
+        lag,
+        date_trunc('minute', occurred_at) AS occurred_at
+    FROM mz_internal.mz_wallclock_lag_history
+)
+SELECT
+    object_id,
+    min(lag) AS lag,
+    occurred_at
+FROM times_binned
+GROUP BY object_id, occurred_at
+OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY: LazyLock<BuiltinView> =
+    LazyLock::new(|| BuiltinView {
+        name: "mz_wallclock_global_lag_recent_history",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_OID,
+        column_defs: None,
+        sql: "
+SELECT object_id, lag, occurred_at
+FROM mz_internal.mz_wallclock_global_lag_history
+WHERE occurred_at + '1 day' > mz_now()",
+        access: vec![PUBLIC_SELECT],
+    });
 
 pub static MZ_MATERIALIZED_VIEW_REFRESHES: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
@@ -7749,6 +7795,15 @@ ON mz_internal.mz_frontiers (object_id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_wallclock_global_lag_recent_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_wallclock_global_lag_recent_history (object_id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_RECENT_ACTIVITY_LOG_THINNED_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_recent_activity_log_thinned_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -8312,6 +8367,9 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Source(&MZ_FRONTIERS),
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
+        Builtin::Source(&MZ_WALLCLOCK_LAG_HISTORY),
+        Builtin::View(&MZ_WALLCLOCK_GLOBAL_LAG_HISTORY),
+        Builtin::View(&MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY),
         Builtin::Source(&MZ_MATERIALIZED_VIEW_REFRESHES),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
@@ -8364,6 +8422,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_FRONTIERS_IND),
+        Builtin::Index(&MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_IND),
         Builtin::Index(&MZ_KAFKA_SOURCES_IND),
         Builtin::Index(&MZ_WEBHOOK_SOURCES_IND),
         Builtin::Index(&MZ_COMMENTS_IND),

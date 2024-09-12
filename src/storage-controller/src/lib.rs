@@ -16,7 +16,7 @@ use std::fmt::{Debug, Display};
 use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
@@ -28,7 +28,8 @@ use futures::FutureExt;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_cluster_client::ReplicaId;
+use mz_cluster_client::{ReplicaId, WallclockLagFn};
+use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -42,6 +43,7 @@ use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_client::client::{
@@ -62,7 +64,9 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
-use mz_storage_types::dyncfgs::REPLICA_METRICS_HISTORY_RETENTION_INTERVAL;
+use mz_storage_types::dyncfgs::{
+    REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
+};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
@@ -201,6 +205,12 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Write frontiers that have been recorded in the `ReplicaFrontiers` collection, kept to be
     /// able to retract old rows.
     recorded_replica_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<T>>,
+
+    /// A function that computes the lag between the given time and wallclock time.
+    #[derivative(Debug = "ignore")]
+    wallclock_lag: WallclockLagFn<T>,
+    /// The last time wallclock lag introspection was refreshed.
+    wallclock_lag_last_refresh: Instant,
 
     /// Handle to a [StorageCollections].
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -725,6 +735,7 @@ where
                 data_source: description.data_source.clone(),
                 collection_metadata: metadata.clone(),
                 extra_state: CollectionStateExtra::None,
+                wallclock_lag_max: Default::default(),
             };
 
             // Install the collection state in the appropriate spot.
@@ -1189,6 +1200,7 @@ where
             read_hold,
             read_policy: cur_export.read_policy.clone(),
             write_frontier: cur_export.write_frontier.clone(),
+            wallclock_lag_max: Default::default(),
         };
         *cur_export = new_export;
 
@@ -2258,6 +2270,7 @@ where
         persist_location: PersistLocation,
         persist_clients: Arc<PersistClientCache>,
         now: NowFn,
+        wallclock_lag: WallclockLagFn<T>,
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
         read_only: bool,
@@ -2359,6 +2372,8 @@ where
             metrics: StorageControllerMetrics::new(metrics_registry),
             recorded_frontiers: BTreeMap::new(),
             recorded_replica_frontiers: BTreeMap::new(),
+            wallclock_lag,
+            wallclock_lag_last_refresh: Instant::now(),
             storage_collections,
             migrated_storage_collections: BTreeSet::new(),
             maintenance_ticker,
@@ -2858,7 +2873,8 @@ where
             | IntrospectionType::SinkStatusHistory
             | IntrospectionType::PrivatelinkConnectionStatusHistory
             | IntrospectionType::ReplicaStatusHistory
-            | IntrospectionType::ReplicaMetricsHistory => {
+            | IntrospectionType::ReplicaMetricsHistory
+            | IntrospectionType::WallclockLagHistory => {
                 if !self.read_only {
                     self.prepare_introspection_collection(
                         id,
@@ -2951,16 +2967,15 @@ where
                 // Differential collections start with an empty
                 // desired state. No need to manually reset.
             }
-            IntrospectionType::ReplicaMetricsHistory => {
+            IntrospectionType::ReplicaMetricsHistory | IntrospectionType::WallclockLagHistory => {
                 let write_handle = write_handle.expect("filled in by caller");
                 let result = self
-                    .partially_truncate_metrics_history(
-                        IntrospectionType::ReplicaMetricsHistory,
-                        write_handle,
-                    )
+                    .partially_truncate_metrics_history(introspection_type, write_handle)
                     .await;
                 if let Err(error) = result {
-                    soft_panic_or_log!("error truncating replica metrics history: {error}");
+                    soft_panic_or_log!(
+                        "error truncating metrics history: {error} (type={introspection_type:?})"
+                    );
                 }
             }
             IntrospectionType::StorageSourceStatistics => {
@@ -3312,6 +3327,13 @@ where
             IntrospectionType::ReplicaMetricsHistory => (
                 REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(self.config.config_set()),
                 collection_status::REPLICA_METRICS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("occurred_at"))
+                    .expect("schema has not changed")
+                    .0,
+            ),
+            IntrospectionType::WallclockLagHistory => (
+                WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(self.config.config_set()),
+                collection_status::WALLCLOCK_LAG_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
                     .0,
@@ -3788,12 +3810,77 @@ where
             .differential_append(id, replica_updates);
     }
 
+    /// Update introspection with the current wallclock lag values.
+    ///
+    /// We measure the lag of write frontiers behind the wallclock time every second and track the
+    /// maximum over 60 measurements (i.e., one minute). Every minute, we emit a new lag event to
+    /// the `WallclockLagHistory` introspection with the current maximum.
+    ///
+    /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
+    /// per second during normal operation.
+    fn update_wallclock_lag_introspection(&mut self) {
+        let refresh_introspection = !self.read_only
+            && self.wallclock_lag_last_refresh.elapsed()
+                >= WALLCLOCK_LAG_REFRESH_INTERVAL.get(self.config.config_set());
+        let mut introspection_updates = refresh_introspection.then(Vec::new);
+
+        let now = mz_ore::now::to_datetime((self.now)());
+        let now_tz = now.try_into().expect("must fit");
+
+        let frontier_lag = |frontier: &Antichain<_>| match frontier.as_option() {
+            Some(ts) => (self.wallclock_lag)(ts),
+            None => Duration::ZERO,
+        };
+        let pack_row = |id: GlobalId, lag: Duration| {
+            let lag_us = i64::try_from(lag.as_micros()).expect("must fit");
+            Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::Null,
+                Datum::Interval(Interval::new(0, 0, lag_us)),
+                Datum::TimestampTz(now_tz),
+            ])
+        };
+
+        for frontiers in self.storage_collections.active_collection_frontiers() {
+            let id = frontiers.id;
+            let Some(collection) = self.collections.get_mut(&id) else {
+                continue;
+            };
+            let lag = frontier_lag(&frontiers.write_frontier);
+            collection.wallclock_lag_max = std::cmp::max(collection.wallclock_lag_max, lag);
+
+            if let Some(updates) = &mut introspection_updates {
+                let lag = std::mem::take(&mut collection.wallclock_lag_max);
+                let row = pack_row(id, lag);
+                updates.push((row, 1));
+            }
+        }
+
+        let active_exports = self.exports.iter_mut().filter(|(_id, e)| !e.is_dropped());
+        for (id, export) in active_exports {
+            let lag = frontier_lag(&export.write_frontier);
+            export.wallclock_lag_max = std::cmp::max(export.wallclock_lag_max, lag);
+
+            if let Some(updates) = &mut introspection_updates {
+                let lag = std::mem::take(&mut export.wallclock_lag_max);
+                let row = pack_row(*id, lag);
+                updates.push((row, 1));
+            }
+        }
+
+        if let Some(updates) = introspection_updates {
+            self.append_introspection_updates(IntrospectionType::WallclockLagHistory, updates);
+            self.wallclock_lag_last_refresh = Instant::now();
+        }
+    }
+
     /// Run periodic tasks.
     ///
     /// This method is invoked roughly once per second during normal operation. It is a good place
     /// for tasks that need to run periodically, such as state cleanup or updating of metrics.
     fn maintain(&mut self) {
         self.update_frontier_introspection();
+        self.update_wallclock_lag_introspection();
     }
 }
 
@@ -3839,6 +3926,9 @@ struct CollectionState<T: TimelyTimestamp> {
     pub collection_metadata: CollectionMetadata,
 
     pub extra_state: CollectionStateExtra<T>,
+
+    /// Maximum frontier wallclock lag since the last introspection update.
+    wallclock_lag_max: Duration,
 }
 
 /// Additional state that the controller maintains for select collection types.

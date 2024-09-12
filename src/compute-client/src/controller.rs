@@ -38,12 +38,13 @@ use differential_dataflow::consolidation::consolidate;
 use futures::{future, Future, FutureExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_cluster_client::ReplicaId;
+use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::ComputeInstanceId;
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
@@ -77,7 +78,6 @@ mod sequential_hydration;
 pub mod error;
 
 type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
-type WallclockLagFn<T> = Arc<dyn Fn(&T) -> Duration>;
 
 /// A composite trait for types that serve as timestamps in the Compute Controller.
 /// `Into<Datum<'a>>` is needed for writing timestamps to introspection collections.
@@ -169,7 +169,9 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     envd_epoch: NonZeroI64,
     /// The compute controller metrics.
     metrics: ComputeControllerMetrics,
-    /// A function that compute the lag between the given time and wallclock time.
+    /// A function that produces the current wallclock time.
+    now: NowFn,
+    /// A function that computes the lag between the given time and wallclock time.
     wallclock_lag: WallclockLagFn<T>,
     /// Dynamic system configuration.
     ///
@@ -201,6 +203,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         envd_epoch: NonZeroI64,
         read_only: bool,
         metrics_registry: MetricsRegistry,
+        now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
     ) -> Self {
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
@@ -263,6 +266,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             stashed_replica_response: None,
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
+            now,
             wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
             response_rx,
@@ -433,6 +437,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             stashed_replica_response,
             envd_epoch,
             metrics: _,
+            now: _,
             wallclock_lag: _,
             dyncfg: _,
             response_rx: _,
@@ -507,6 +512,7 @@ where
                 arranged_logs,
                 self.envd_epoch,
                 self.metrics.for_instance(id),
+                self.now.clone(),
                 Arc::clone(&self.wallclock_lag),
                 Arc::clone(&self.dyncfg),
                 self.response_tx.clone(),
@@ -809,6 +815,8 @@ where
 
     #[mz_ore::instrument(level = "debug")]
     fn record_introspection_updates(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
+        use IntrospectionType::*;
+
         // We could record the contents of `introspection_rx` directly here, but to reduce the
         // pressure on persist we spend some effort consolidating first.
         let mut updates_by_type = BTreeMap::new();
@@ -824,9 +832,23 @@ where
         }
 
         for (type_, updates) in updates_by_type {
-            if !updates.is_empty() {
-                let op = StorageWriteOp::Append { updates };
-                storage.update_introspection_collection(type_, op);
+            if updates.is_empty() {
+                continue;
+            }
+
+            match type_ {
+                Frontiers
+                | ReplicaFrontiers
+                | ComputeDependencies
+                | ComputeOperatorHydrationStatus
+                | ComputeMaterializedViewRefreshes => {
+                    let op = StorageWriteOp::Append { updates };
+                    storage.update_introspection_collection(type_, op);
+                }
+                WallclockLagHistory => {
+                    storage.append_introspection_updates(type_, updates);
+                }
+                _ => panic!("unexpected introspection type: {type_:?}"),
             }
         }
     }

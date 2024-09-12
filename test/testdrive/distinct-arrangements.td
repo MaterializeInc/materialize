@@ -715,7 +715,7 @@ ReduceMinsMaxes
 "Arrange export iterative"                    1
 "Arrange recursive err"                       1
 "Arrange ReduceCollation"                     1
-"Arrange ReduceMinsMaxes"                     2
+"Arrange ReduceMinsMaxes"                     3
 "ArrangeAccumulable [val: empty]"             9
 "ArrangeBy[[Column(0), CallUnary { func: CastInt32ToNumeric(CastInt32ToNumeric(None)), expr: Column(1) }]]" 1
 "ArrangeBy[[Column(0), CallUnary { func: CastUint64ToNumeric(CastUint64ToNumeric(None)), expr: Column(2) }]]" 1
@@ -731,8 +731,8 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(0), Column(1)]]"           1
 "ArrangeBy[[Column(0), Column(2)]]"           3
 "ArrangeBy[[Column(1), Column(2)]]"           1
-"ArrangeBy[[Column(0)]]-errors"              39
-"ArrangeBy[[Column(0)]]"                    142
+"ArrangeBy[[Column(0)]]-errors"              40
+"ArrangeBy[[Column(0)]]"                    143
 "ArrangeBy[[Column(1), Column(3)]]"           1
 "ArrangeBy[[Column(1)]]-errors"               6
 ArrangeBy[[Column(13)]]                       1
@@ -766,7 +766,8 @@ ArrangeBy[[Column(13)]]                       1
 "Reduced TopK input"                         24
 "ReduceInaccumulable Error Check"             2
 "ReduceInaccumulable"                         2
-"ReduceMinsMaxes"                             2
+"ReduceMinsMaxes Error Check"                 1
+"ReduceMinsMaxes"                             3
 "Threshold local"                            10
 
 > SET cluster TO distinct_arrangements
