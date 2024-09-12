@@ -273,6 +273,10 @@ var1 4444 12
 
 > DROP SOURCE mysql_source CASCADE;
 
+# ensure that CASCADE propagates to the tables
+! SELECT * FROM mysql_table_3;
+contains:unknown catalog item 'mysql_table_3'
+
 #
 # Kafka source using source-fed tables
 #
