@@ -304,6 +304,9 @@ pub fn create_statement(
             external_reference: _,
             source: _,
             if_not_exists,
+            format: _,
+            include_metadata: _,
+            envelope: _,
             with_options: _,
         }) => {
             *name = allocate_name(name)?;

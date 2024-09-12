@@ -34,8 +34,8 @@ use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
-    arb_row_for_relation, ColumnType, Datum, GlobalId, ProtoRelationDesc, ProtoRow, RelationDesc,
-    Row, RowColumnarDecoder, RowColumnarEncoder,
+    arb_row_for_relation, Datum, GlobalId, ProtoRelationDesc, ProtoRow, RelationDesc, Row,
+    RowColumnarDecoder, RowColumnarEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
 use proptest::prelude::any;
@@ -665,17 +665,15 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     /// The name of the resource in the external system (e.g kafka topic) if any
     fn external_reference(&self) -> Option<&str>;
 
-    /// The schema of this connection's key rows.
-    // This is mostly setting the stage for the subsequent PRs that will attempt to compute and
-    // typecheck subsequent stages of the pipeline using the types of the earlier stages of the
-    // pipeline.
-    fn key_desc(&self) -> RelationDesc;
+    /// Defines the key schema to use by default for this source connection type.
+    /// This will be used for the primary export of the source and as the default
+    /// pre-encoding key schema for the source.
+    fn default_key_desc(&self) -> RelationDesc;
 
-    /// The schema of this connection's value rows.
-    // This is mostly setting the stage for the subsequent PRs that will attempt to compute and
-    // typecheck subsequent stages of the pipeline using the types of the earlier stages of the
-    // pipeline.
-    fn value_desc(&self) -> RelationDesc;
+    /// Defines the value schema to use by default for this source connection type.
+    /// This will be used for the primary export of the source and as the default
+    /// pre-encoding value schema for the source.
+    fn default_value_desc(&self) -> RelationDesc;
 
     /// The schema of this connection's timestamp type. This will also be the schema of the
     /// progress relation.
@@ -684,10 +682,6 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     /// The id of the connection object (i.e the one obtained from running `CREATE CONNECTION`) in
     /// the catalog, if any.
     fn connection_id(&self) -> Option<GlobalId>;
-
-    /// Returns metadata columns that this connection *instance* will produce once rendered. The
-    /// columns are returned in the order specified by the user.
-    fn metadata_columns(&self) -> Vec<(&str, ColumnType)>;
 
     /// If this source connection can output to a primary collection, contains the source-specific
     /// details of that export, else is set to `SourceExportDetails::None` to indicate that
@@ -1006,21 +1000,21 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         }
     }
 
-    fn key_desc(&self) -> RelationDesc {
+    fn default_key_desc(&self) -> RelationDesc {
         match self {
-            Self::Kafka(conn) => conn.key_desc(),
-            Self::Postgres(conn) => conn.key_desc(),
-            Self::MySql(conn) => conn.key_desc(),
-            Self::LoadGenerator(conn) => conn.key_desc(),
+            Self::Kafka(conn) => conn.default_key_desc(),
+            Self::Postgres(conn) => conn.default_key_desc(),
+            Self::MySql(conn) => conn.default_key_desc(),
+            Self::LoadGenerator(conn) => conn.default_key_desc(),
         }
     }
 
-    fn value_desc(&self) -> RelationDesc {
+    fn default_value_desc(&self) -> RelationDesc {
         match self {
-            Self::Kafka(conn) => conn.value_desc(),
-            Self::Postgres(conn) => conn.value_desc(),
-            Self::MySql(conn) => conn.value_desc(),
-            Self::LoadGenerator(conn) => conn.value_desc(),
+            Self::Kafka(conn) => conn.default_value_desc(),
+            Self::Postgres(conn) => conn.default_value_desc(),
+            Self::MySql(conn) => conn.default_value_desc(),
+            Self::LoadGenerator(conn) => conn.default_value_desc(),
         }
     }
 
@@ -1039,15 +1033,6 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Postgres(conn) => conn.connection_id(),
             Self::MySql(conn) => conn.connection_id(),
             Self::LoadGenerator(conn) => conn.connection_id(),
-        }
-    }
-
-    fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
-        match self {
-            Self::Kafka(conn) => conn.metadata_columns(),
-            Self::Postgres(conn) => conn.metadata_columns(),
-            Self::MySql(conn) => conn.metadata_columns(),
-            Self::LoadGenerator(conn) => conn.metadata_columns(),
         }
     }
 
@@ -1206,6 +1191,7 @@ pub enum SourceExportStatementDetails {
     LoadGenerator {
         output: LoadGeneratorOutput,
     },
+    Kafka {},
 }
 
 impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetails {
@@ -1238,6 +1224,11 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                     )),
                 }
             }
+            SourceExportStatementDetails::Kafka {} => ProtoSourceExportStatementDetails {
+                kind: Some(proto_source_export_statement_details::Kind::Kafka(
+                    kafka::ProtoKafkaSourceExportStatementDetails {},
+                )),
+            },
         }
     }
 
@@ -1261,6 +1252,7 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                     .output
                     .into_rust_if_some("ProtoLoadGeneratorSourceExportStatementDetails::output")?,
             },
+            Some(Kind::Kafka(_details)) => SourceExportStatementDetails::Kafka {},
             None => {
                 return Err(TryFromProtoError::missing_field(
                     "ProtoSourceExportStatementDetails::kind",
@@ -2126,6 +2118,7 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
     fn backward_compatible_migrate_from_common() {
+        use mz_repr::ColumnType;
         fn test_case(old: RelationDesc, diffs: Vec<PropRelationDescDiff>, datas: Vec<SourceData>) {
             // TODO(parkmycar): As we iterate on schema migrations more things should become compatible.
             let should_be_compatible = diffs.iter().all(|diff| match diff {

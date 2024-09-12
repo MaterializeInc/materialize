@@ -4401,11 +4401,36 @@ impl<'a> Parser<'a> {
         self.expect_keywords(&[FROM, SOURCE])?;
 
         let source = self.parse_raw_name()?;
-        self.expect_token(&Token::LParen)?;
-        self.expect_keyword(REFERENCE)?;
-        let _ = self.consume_token(&Token::Eq);
-        let external_reference = self.parse_item_name()?;
-        self.expect_token(&Token::RParen)?;
+
+        let external_reference = if self.consume_token(&Token::LParen) {
+            self.expect_keyword(REFERENCE)?;
+            let _ = self.consume_token(&Token::Eq);
+            let external_reference = self.parse_item_name()?;
+            self.expect_token(&Token::RParen)?;
+            Some(external_reference)
+        } else {
+            None
+        };
+
+        let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
+            Some(KEY) => {
+                self.expect_keyword(FORMAT)?;
+                let key = self.parse_format()?;
+                self.expect_keywords(&[VALUE, FORMAT])?;
+                let value = self.parse_format()?;
+                Some(FormatSpecifier::KeyValue { key, value })
+            }
+            Some(FORMAT) => Some(FormatSpecifier::Bare(self.parse_format()?)),
+            Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
+            None => None,
+        };
+        let include_metadata = self.parse_source_include_metadata()?;
+
+        let envelope = if self.parse_keyword(ENVELOPE) {
+            Some(self.parse_source_envelope()?)
+        } else {
+            None
+        };
 
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
@@ -4424,6 +4449,9 @@ impl<'a> Parser<'a> {
                 if_not_exists,
                 source,
                 external_reference,
+                format,
+                include_metadata,
+                envelope,
                 with_options,
             },
         ))

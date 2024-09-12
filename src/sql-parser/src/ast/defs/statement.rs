@@ -1010,6 +1010,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         f.write_str(" FROM ");
         f.write_node(&self.connection);
         if let Some(format) = &self.format {
+            f.write_str(" ");
             f.write_node(format);
         }
         if !self.include_metadata.is_empty() {
@@ -1263,6 +1264,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         f.write_str(" INTO ");
         f.write_node(&self.connection);
         if let Some(format) = &self.format {
+            f.write_str(" ");
             f.write_node(format);
         }
         if let Some(envelope) = &self.envelope {
@@ -1560,8 +1562,11 @@ pub struct CreateTableFromSourceStatement<T: AstInfo> {
     pub constraints: Vec<TableConstraint<T>>,
     pub if_not_exists: bool,
     pub source: T::ItemName,
-    pub external_reference: UnresolvedItemName,
+    pub external_reference: Option<UnresolvedItemName>,
     pub with_options: Vec<TableFromSourceOption<T>>,
+    pub include_metadata: Vec<SourceIncludeMetadata>,
+    pub format: Option<FormatSpecifier<T>>,
+    pub envelope: Option<SourceEnvelope>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
@@ -1574,6 +1579,9 @@ impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
             external_reference,
             if_not_exists,
             with_options,
+            include_metadata,
+            format,
+            envelope,
         } = self;
         f.write_str("CREATE TABLE ");
         if *if_not_exists {
@@ -1592,10 +1600,24 @@ impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
         }
         f.write_str(" FROM SOURCE ");
         f.write_node(source);
-        f.write_str(" (REFERENCE = ");
-        f.write_node(external_reference);
-        f.write_str(")");
+        if let Some(external_reference) = external_reference {
+            f.write_str(" (REFERENCE = ");
+            f.write_node(external_reference);
+            f.write_str(")");
+        }
 
+        if let Some(format) = &format {
+            f.write_str(" ");
+            f.write_node(format);
+        }
+        if !include_metadata.is_empty() {
+            f.write_str(" INCLUDE ");
+            f.write_node(&display::comma_separated(include_metadata));
+        }
+        if let Some(envelope) = &envelope {
+            f.write_str(" ENVELOPE ");
+            f.write_node(envelope);
+        }
         if !with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(with_options));

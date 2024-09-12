@@ -271,7 +271,7 @@ pub enum PurifiedExportDetails {
     },
     Kafka {},
     LoadGenerator {
-        table: RelationDesc,
+        table: Option<RelationDesc>,
         output: LoadGeneratorOutput,
     },
 }
@@ -643,6 +643,8 @@ async fn purify_create_source(
         SourceReferencePolicy::Required
     };
 
+    let mut format_options = SourceFormatOptions::Default;
+
     match connection {
         CreateSourceConnection::Kafka {
             connection,
@@ -753,6 +755,8 @@ async fn purify_create_source(
                     });
                 }
             }
+
+            format_options = SourceFormatOptions::Kafka { topic };
         }
         CreateSourceConnection::Postgres {
             connection,
@@ -1007,7 +1011,7 @@ async fn purify_create_source(
                             PurifiedSourceExport {
                                 external_reference,
                                 details: PurifiedExportDetails::LoadGenerator {
-                                    table: desc,
+                                    table: Some(desc),
                                     output,
                                 },
                             },
@@ -1104,7 +1108,7 @@ async fn purify_create_source(
     purify_source_format(
         &catalog,
         format,
-        connection,
+        &format_options,
         envelope,
         storage_configuration,
     )
@@ -1338,6 +1342,9 @@ async fn purify_create_table_from_source(
         source: source_name,
         if_not_exists: _,
         external_reference,
+        format,
+        envelope,
+        include_metadata: _,
         with_options,
     } = &mut stmt;
 
@@ -1384,11 +1391,9 @@ async fn purify_create_table_from_source(
         .map(|col| {
             UnresolvedItemName(
                 external_reference
-                    .0
-                    .iter()
-                    .chain_one(col)
-                    .map(|i| i.clone())
-                    .collect(),
+                    .as_ref()
+                    .map(|er| er.0.iter().chain_one(col).map(|i| i.clone()).collect())
+                    .unwrap_or_else(|| vec![col.clone()]),
             )
         })
         .collect_vec();
@@ -1397,21 +1402,15 @@ async fn purify_create_table_from_source(
         .map(|col| {
             UnresolvedItemName(
                 external_reference
-                    .0
-                    .iter()
-                    .chain_one(col)
-                    .map(|i| i.clone())
-                    .collect(),
+                    .as_ref()
+                    .map(|er| er.0.iter().chain_one(col).map(|i| i.clone()).collect())
+                    .unwrap_or_else(|| vec![col.clone()]),
             )
         })
         .collect_vec();
 
-    // The requested external reference for this table which will be resolved below to a
-    // fully-qualified / normalized reference for each source type.
-    let requested_reference = ExternalReferenceExport {
-        reference: external_reference.clone(),
-        alias: None,
-    };
+    // Should be overriden below if a source-specific format is required.
+    let mut format_options = SourceFormatOptions::Default;
 
     // Run purification work specific to each source type: resolve the external reference to
     // a fully qualified name and obtain the appropriate details for the source-export statement
@@ -1423,6 +1422,18 @@ async fn purify_create_table_from_source(
     // When kafka is implemented, likely just the topic-name will be used.
     let purified_export = match desc.connection {
         GenericSourceConnection::Postgres(pg_source_connection) => {
+            let requested_reference = match external_reference {
+                // The requested external reference for this table which will be resolved below to a
+                // fully-qualified / normalized reference for each source type.
+                Some(reference) => ExternalReferenceExport {
+                    reference: reference.clone(),
+                    alias: None,
+                },
+                None => sql_bail!(
+                    "An external reference is required for {} sources",
+                    connection_name
+                ),
+            };
             // Get PostgresConnection for generating subsources.
             let pg_connection = &pg_source_connection.connection;
 
@@ -1480,6 +1491,18 @@ async fn purify_create_table_from_source(
             purified_export
         }
         GenericSourceConnection::MySql(mysql_source_connection) => {
+            let requested_reference = match external_reference {
+                // The requested external reference for this table which will be resolved below to a
+                // fully-qualified / normalized reference for each source type.
+                Some(reference) => ExternalReferenceExport {
+                    reference: reference.clone(),
+                    alias: None,
+                },
+                None => sql_bail!(
+                    "An external reference is required for {} sources",
+                    connection_name
+                ),
+            };
             let mysql_connection = &mysql_source_connection.connection;
             let config = mysql_connection
                 .config(
@@ -1523,39 +1546,113 @@ async fn purify_create_table_from_source(
             purified_export
         }
         GenericSourceConnection::LoadGenerator(load_gen_connection) => {
-            let mut views = load_gen_connection.load_generator.views();
-            // Resolve the desired view reference to a `schema_name.view_name` reference
-            let resolver = SourceReferenceResolver::new(
-                LOAD_GENERATOR_DATABASE_NAME,
-                &views
-                    .iter()
-                    .map(|(view_name, _, _)| {
-                        (load_gen_connection.load_generator.schema_name(), *view_name)
-                    })
-                    .collect_vec(),
-            )?;
-            let (qualified_reference, view_idx) = resolver.resolve(&external_reference.0, 2)?;
+            // TODO(roshan): Refactor KeyValue load generator rendering to support multiple outputs
+            if matches!(
+                load_gen_connection.load_generator,
+                mz_storage_types::sources::load_generator::LoadGenerator::KeyValue(_)
+            ) {
+                sql_bail!(
+                    "{} is a {} source, which does not support CREATE TABLE .. FROM SOURCE.",
+                    scx.catalog.minimal_qualification(qualified_source_name),
+                    connection_name
+                )
+            };
 
-            let (_, desired_view_desc, output) = views.swap_remove(view_idx);
-            PurifiedSourceExport {
-                external_reference: qualified_reference,
-                details: PurifiedExportDetails::LoadGenerator {
-                    table: desired_view_desc,
-                    output,
-                },
+            let mut views = load_gen_connection.load_generator.views();
+            if views.is_empty() {
+                // If there are no views then this load-generator just has a single output
+                // and the external reference specified in the statement should be the same
+                // as the load-generator's schema name or empty.
+                match external_reference {
+                    None => {}
+                    Some(reference) => {
+                        if reference.0.len() != 1
+                            || load_gen_connection.load_generator.schema_name()
+                                != reference.0.last().unwrap().as_str()
+                        {
+                            Err(LoadGeneratorSourcePurificationError::WrongLoadGenerator(
+                                load_gen_connection.load_generator.schema_name().to_string(),
+                                reference.clone(),
+                            ))?;
+                        }
+                    }
+                }
+                PurifiedSourceExport {
+                    external_reference: UnresolvedItemName(vec![Ident::new_unchecked(
+                        load_gen_connection.load_generator.schema_name(),
+                    )]),
+                    details: PurifiedExportDetails::LoadGenerator {
+                        table: None,
+                        output: LoadGeneratorOutput::Default,
+                    },
+                }
+            } else {
+                let external_reference = external_reference.as_ref().ok_or(
+                    LoadGeneratorSourcePurificationError::MultiOutputRequiresExternalReference,
+                )?;
+                // Resolve the desired view reference to a `schema_name.view_name` reference
+                let resolver = SourceReferenceResolver::new(
+                    LOAD_GENERATOR_DATABASE_NAME,
+                    &views
+                        .iter()
+                        .map(|(view_name, _, _)| {
+                            (load_gen_connection.load_generator.schema_name(), *view_name)
+                        })
+                        .collect_vec(),
+                )?;
+                let (qualified_reference, view_idx) = resolver.resolve(&external_reference.0, 2)?;
+
+                let (_, table, output) = views.swap_remove(view_idx);
+                PurifiedSourceExport {
+                    external_reference: qualified_reference,
+                    details: PurifiedExportDetails::LoadGenerator {
+                        table: Some(table),
+                        output,
+                    },
+                }
             }
         }
-        // TODO(roshan): Add support for kafka sources
-        _ => sql_bail!(
-            "{} is a {} source, which does not support CREATE TABLE .. FROM SOURCE.",
-            scx.catalog.minimal_qualification(qualified_source_name),
-            connection_name,
-        ),
+        GenericSourceConnection::Kafka(kafka_conn) => {
+            // Since Kafka sources have a single topic we validate that the specified
+            // external reference is either empty or the same as the Kafka topic
+            // on the referenced source connection.
+            match external_reference {
+                None => {}
+                Some(reference) => {
+                    if reference.0.len() != 1
+                        || &kafka_conn.topic != reference.0.last().unwrap().as_str()
+                    {
+                        Err(KafkaSourcePurificationError::WrongKafkaTopic(
+                            kafka_conn.topic.clone(),
+                            reference.clone(),
+                        ))?;
+                    }
+                }
+            }
+            format_options = SourceFormatOptions::Kafka {
+                topic: kafka_conn.topic.clone(),
+            };
+            PurifiedSourceExport {
+                external_reference: UnresolvedItemName(vec![Ident::new_unchecked(
+                    &kafka_conn.topic,
+                )]),
+                details: PurifiedExportDetails::Kafka {},
+            }
+        }
     };
+
+    purify_source_format(
+        &catalog,
+        format,
+        &format_options,
+        envelope,
+        storage_configuration,
+    )
+    .await?;
 
     // Update the external reference in the statement to the resolved fully-qualified
     // external reference
-    *external_reference = purified_export.external_reference.clone();
+    *external_reference = Some(purified_export.external_reference.clone());
 
     // Update options in the statement using the purified export details
     match &purified_export.details {
@@ -1648,11 +1745,16 @@ async fn purify_create_table_from_source(
                 PurifiedExportDetails::LoadGenerator { table, output } => (table, output),
                 _ => unreachable!("purified export details must be load generator"),
             };
-
-            let (gen_columns, gen_constraints) = scx.relation_desc_into_table_defs(&desc)?;
+            // We only determine the table description for multi-output load generator sources here,
+            // whereas single-output load generators will have their relation description
+            // determined during statment planning as envelope and format options may affect their
+            // schema.
+            if let Some(desc) = desc {
+                let (gen_columns, gen_constraints) = scx.relation_desc_into_table_defs(&desc)?;
+                *columns = gen_columns;
+                *constraints = gen_constraints;
+            }
             let details = SourceExportStatementDetails::LoadGenerator { output };
-            *columns = gen_columns;
-            *constraints = gen_constraints;
             with_options.push(TableFromSourceOption {
                 name: TableFromSourceOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
@@ -1660,23 +1762,37 @@ async fn purify_create_table_from_source(
                 )))),
             })
         }
-        PurifiedExportDetails::Kafka { .. } => {
-            sql_bail!("Kafka sources do not yet support CREATE TABLE .. FROM SOURCE")
+        PurifiedExportDetails::Kafka {} => {
+            // NOTE: Kafka tables have their 'schemas' purified into the statement inside the
+            // format field, so we don't specify any columns or constraints to be stored
+            // on the statement here. The RelationDesc will be determined during planning.
+            let details = SourceExportStatementDetails::Kafka {};
+            with_options.push(TableFromSourceOption {
+                name: TableFromSourceOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            })
         }
     };
 
     Ok(PurifiedStatement::PurifiedCreateTableFromSource { stmt })
 }
 
+enum SourceFormatOptions {
+    Default,
+    Kafka { topic: String },
+}
+
 async fn purify_source_format(
     catalog: &dyn SessionCatalog,
     format: &mut Option<FormatSpecifier<Aug>>,
-    connection: &mut CreateSourceConnection<Aug>,
+    options: &SourceFormatOptions,
     envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
     if matches!(format, Some(FormatSpecifier::KeyValue { .. }))
-        && !matches!(connection, CreateSourceConnection::Kafka { .. })
+        && !matches!(options, SourceFormatOptions::Kafka { .. })
     {
         sql_bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
@@ -1684,20 +1800,14 @@ async fn purify_source_format(
     match format.as_mut() {
         None => {}
         Some(FormatSpecifier::Bare(format)) => {
-            purify_source_format_single(
-                catalog,
-                format,
-                connection,
-                envelope,
-                storage_configuration,
-            )
-            .await?;
+            purify_source_format_single(catalog, format, options, envelope, storage_configuration)
+                .await?;
         }
 
         Some(FormatSpecifier::KeyValue { key, value: val }) => {
-            purify_source_format_single(catalog, key, connection, envelope, storage_configuration)
+            purify_source_format_single(catalog, key, options, envelope, storage_configuration)
                 .await?;
-            purify_source_format_single(catalog, val, connection, envelope, storage_configuration)
+            purify_source_format_single(catalog, val, options, envelope, storage_configuration)
                 .await?;
         }
     }
@@ -1707,7 +1817,7 @@ async fn purify_source_format(
 async fn purify_source_format_single(
     catalog: &dyn SessionCatalog,
     format: &mut Format<Aug>,
-    connection: &mut CreateSourceConnection<Aug>,
+    options: &SourceFormatOptions,
     envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
@@ -1716,7 +1826,7 @@ async fn purify_source_format_single(
             AvroSchema::Csr { csr_connection } => {
                 purify_csr_connection_avro(
                     catalog,
-                    connection,
+                    options,
                     csr_connection,
                     envelope,
                     storage_configuration,
@@ -1729,7 +1839,7 @@ async fn purify_source_format_single(
             ProtobufSchema::Csr { csr_connection } => {
                 purify_csr_connection_proto(
                     catalog,
-                    connection,
+                    options,
                     csr_connection,
                     envelope,
                     storage_configuration,
@@ -1776,6 +1886,8 @@ pub fn generate_subsource_statements(
                     PurifiedExportDetails::LoadGenerator { table, output } => (table, output),
                     _ => unreachable!("purified export details must be load generator"),
                 };
+                let desc =
+                    desc.expect("subsources cannot be generated for single-output load generators");
 
                 let (columns, table_constraints) = scx.relation_desc_into_table_defs(&desc)?;
                 let details = SourceExportStatementDetails::LoadGenerator { output };
@@ -1826,18 +1938,12 @@ pub fn generate_subsource_statements(
 
 async fn purify_csr_connection_proto(
     catalog: &dyn SessionCatalog,
-    connection: &mut CreateSourceConnection<Aug>,
+    options: &SourceFormatOptions,
     csr_connection: &mut CsrConnectionProtobuf<Aug>,
     envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
-    let topic = if let CreateSourceConnection::Kafka { options, .. } = connection {
-        let KafkaSourceConfigOptionExtracted { topic, .. } = options
-            .clone()
-            .try_into()
-            .expect("already verified options valid provided");
-        topic.expect("already validated topic provided")
-    } else {
+    let SourceFormatOptions::Kafka { topic } = options else {
         sql_bail!("Confluent Schema Registry is only supported with Kafka sources")
     };
 
@@ -1881,18 +1987,12 @@ async fn purify_csr_connection_proto(
 
 async fn purify_csr_connection_avro(
     catalog: &dyn SessionCatalog,
-    connection: &mut CreateSourceConnection<Aug>,
+    options: &SourceFormatOptions,
     csr_connection: &mut CsrConnectionAvro<Aug>,
     envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
-    let topic = if let CreateSourceConnection::Kafka { options, .. } = connection {
-        let KafkaSourceConfigOptionExtracted { topic, .. } = options
-            .clone()
-            .try_into()
-            .expect("already verified options valid provided");
-        topic.expect("already validated topic provided")
-    } else {
+    let SourceFormatOptions::Kafka { topic } = options else {
         sql_bail!("Confluent Schema Registry is only supported with Kafka sources")
     };
 
@@ -1975,7 +2075,7 @@ async fn get_remote_csr_schema(
     ccsr_client: &mz_ccsr::Client,
     key_strategy: ReaderSchemaSelectionStrategy,
     value_strategy: ReaderSchemaSelectionStrategy,
-    topic: String,
+    topic: &str,
 ) -> Result<Schema, PlanError> {
     let value_schema_name = format!("{}-value", topic);
     let value_schema =
