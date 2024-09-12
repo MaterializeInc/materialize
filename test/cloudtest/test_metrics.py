@@ -9,12 +9,9 @@
 
 from textwrap import dedent
 
-import pytest
-
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 
-@pytest.mark.skip(reason="Fails occasionally, see materialize#29171")
 def test_replica_metrics(mz: MaterializeApplication) -> None:
     mz.testdrive.run(
         input=dedent(
