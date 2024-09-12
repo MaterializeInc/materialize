@@ -7,38 +7,31 @@ aliases:
   - /connect-sources/debezium/
 ---
 
-{{< tip >}}
-Materialize provides [native support for PostgreSQL
-and MySQL](#postgresql-and-mysql-native-support). If possible, use Materialize's
-native support for these databases instead.
-{{< /tip >}}
+You can use [Debezium](https://debezium.io/) to propagate Change Data Capture
+(CDC) data to Materialize from databases that are not supported via native
+connectors. For PostgreSQL and MySQL databases, we **strongly recommend** using
+the native [PostgreSQL](/sql/create-source/postgres/) and [MySQL](/sql/create-source/mysql/)
+sources instead.
 
-You can use [Debezium](https://debezium.io/) to propagate Change Data Capture (CDC) data from a database to Materialize, for example MySQL or PostgreSQL.
+| Database   | Natively supported? | Integration guide                                                                              |
+|------------|---------------------| ---------------------------------------------------------------------------------------------- |
+| PostgreSQL | ✓                   | {{% ingest-data/postgres-native-support %}}                                                    |
+| MySQL      | ✓                   | {{% ingest-data/mysql-native-support %}}                                                       |
+| SQL Server |                     | [Kafka + Debezium](/ingest-data/cdc-sql-server/)                                               |
+| Oracle     |                     | [Kafka + Debezium](https://debezium.io/documentation/reference/stable/connectors/oracle.html)  |
+| MongoDB    |                     | [Kafka + Debezium](https://debezium.io/documentation/reference/stable/connectors/mongodb.html) |
 
-Debezium emits records using an envelope that contains valuable information about the change captured, like the `before` and `after` values for each record. This envelope is a powerful structure that lets Materialize perform more complex analysis to understand all CRUD-like operations happening in the upstream database. For more details on CDC support in Materialize, check the [documentation](/sql/create-source/kafka/#using-debezium).
+### Using Debezium
+
+For databases that are not yet natively supported, like Oracle, SQL Server, or
+MongoDB, you can use [Debezium](https://debezium.io/) to propagate Change Data
+Capture (CDC) data to Materialize.
 
 {{< debezium-json >}}
 
-### Debezium + Kafka guides
-
-{{< tip >}}
-Materialize provides [native support for PostgreSQL
-and MySQL](#postgresql-and-mysql-native-support). If possible, use Materialize's
-native support for these databases instead.
-{{< /tip >}}
-
-The following Debezium + Kafka guides are available:
-
-* [PostgreSQL](/ingest-data/postgres/postgres-debezium/)
-
-* [MySQL](/integrations/cdc-mysql/)
-
-#### PostgreSQL and MySQL Native Support
-
-Materialize provides native support for PostgreSQL and MySQL.
-When possible, use Materialize's native support for these databases.
-
-|            |               |
-|------------|---------------|
-| PostgreSQL | {{% ingest-data/postgres-native-support %}} |
-| MySQL      | {{% ingest-data/mysql-native-support %}} |
+Debezium captures row-level changes resulting from `INSERT`, `UPDATE`, and
+`DELETE` operations in the upstream database and publishes them as events to
+Kafka (and other Kafka API-compatible brokers) using Kafka Connect-compatible
+connectors. For more details on CDC support in Materialize, check the
+[Kafka source](/sql/create-source/kafka/#using-debezium) reference
+documentation.

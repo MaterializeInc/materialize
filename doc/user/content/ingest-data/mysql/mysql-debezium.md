@@ -1,6 +1,6 @@
 ---
 title: "MySQL CDC using Kafka and Debezium"
-description: "How to propagate Change Data Capture (CDC) data from a MySQL database to Materialize"
+description: "How to propagate Change Data Capture (CDC) data from a MySQL database to Materialize using Kafka and Debezium"
 aliases:
   - /guides/cdc-mysql/
   - /integrations/cdc-mysql/
@@ -13,28 +13,30 @@ menu:
     identifier: "mysql-dbz"
 ---
 
-{{< tip >}}
-- As alternative to using Kafka and Debezium, Materialize also
-  provides native support for MySQL. If possible, use Materialize's native
-  support for MySQL instead.
+{{< warning >}}
+You can use [Debezium](https://debezium.io/) to propagate Change
+Data Capture(CDC) data to Materialize from a MySQL database, but
+we **strongly recommend** using the native [MySQL](/sql/create-source/mysql/)
+source instead.
+{{</ warning >}}
 
-- {{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+{{< guided-tour-blurb-for-ingest-data >}}
 
 Change Data Capture (CDC) allows you to track and propagate changes in a MySQL
 database to downstream consumers based on its binary log (`binlog`). In this
 guide, we'll cover how to use Materialize to create and efficiently maintain
-real-time materialized views on top of CDC data.
+real-time query results on top of CDC data using Kafka and Debezium.
 
 ## Kafka + Debezium
 
 You can use [Debezium](https://debezium.io/) and the [Kafka source](/sql/create-source/kafka/#using-debezium)
-to propagate CDC data from MySQL to Materialize. Debezium captures row-level
-changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the
-upstream database and publishes them as events to Kafka using Kafka
-Connect-compatible connectors.
+to propagate CDC data from MySQL to Materialize in the unlikely event that using
+the [native MySQL source](/sql/create-source/mysql/) is not an option. Debezium
+captures row-level changes resulting from `INSERT`, `UPDATE` and `DELETE`
+operations in the upstream database and publishes them as events to Kafka using
+Kafka Connect-compatible connectors.
 
-### Database setup
+### A. Configure database
 
 Before deploying a Debezium connector, you need to ensure that the upstream
 database is configured to support [row-based replication](https://dev.mysql.com/doc/refman/8.0/en/replication-rbr-usage.html).
@@ -65,7 +67,7 @@ As _root_:
     FLUSH PRIVILEGES;
     ```
 
-### Deploy Debezium
+### B. Deploy Debezium
 
 **Minimum requirements:** Debezium 1.5+
 
@@ -190,7 +192,7 @@ you **must** override the default value of `After-state only` to `false`.
       --topic dbserver1.db1.table1
     ```
 
-### Create a source
+### C. Create a source
 
 {{< debezium-json >}}
 
@@ -214,10 +216,10 @@ cluster, use the `IN CLUSTER` clause.
 Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/mysql.html#mysql-transaction-metadata)
 that can be used to preserve transactional boundaries downstream.
 
-### Create a view on the source
+### D. Create a view on the source
 
 {{% ingest-data/ingest-data-kafka-debezium-view %}}
 
-### Create an index on the view
+### E. Create an index on the view
 
 {{% ingest-data/ingest-data-kafka-debezium-index %}}
