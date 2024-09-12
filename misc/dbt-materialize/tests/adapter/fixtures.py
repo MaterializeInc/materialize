@@ -184,6 +184,7 @@ test_source_index,1,1,,test_source_index_data_idx
 test_view_index,1,1,,test_view_index_primary_idx
 test_table_index,1,1,,test_table_index_a_idx
 test_table_index,2,,pg_catalog.length(a),test_table_index_a_idx
+test_source_table_index,1,4,,test_source_table_index_amount_idx
 """.lstrip()
 
 not_null = """
