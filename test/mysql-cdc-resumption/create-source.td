@@ -19,6 +19,9 @@
 
 > DROP SOURCE IF EXISTS mz_source CASCADE;
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.t0, public.t1, public.t2, public.alter_fail_drop_constraint, public.alter_fail_drop_col);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE t0 FROM SOURCE mz_source (REFERENCE public.t0);
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE public.t2);
+> CREATE TABLE alter_fail_drop_constraint FROM SOURCE mz_source (REFERENCE public.alter_fail_drop_constraint);
+> CREATE TABLE alter_fail_drop_col FROM SOURCE mz_source (REFERENCE public.alter_fail_drop_col);
