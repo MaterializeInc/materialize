@@ -15,7 +15,7 @@ use mz_compute_client::controller::error::{
 };
 use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{exit, soft_assert_no_log};
+use mz_ore::{exit, halt, soft_assert_no_log};
 use mz_repr::{RelationDesc, RowIterator, ScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
@@ -283,15 +283,20 @@ where
     fn unwrap_or_terminate(self, context: &str) -> T {
         match self {
             Ok(t) => t,
-            Err(e) if e.should_terminate_gracefully() => exit!(0, "{context}: {e:?}"),
-            Err(e) => panic!("{context}: {e:?}"),
+            Err(e) => match e.should_terminate_gracefully() {
+                Terminate::Gracefully => exit!(0, "{context}: {e:?}"),
+                Terminate::Halt => halt!("{context}: {e:?}"),
+                Terminate::Panic => panic!("{context}: {e:?}"),
+            },
         }
     }
 
     fn maybe_terminate(self, context: &str) -> Self {
         if let Err(e) = &self {
-            if e.should_terminate_gracefully() {
-                exit!(0, "{context}: {e:?}");
+            match e.should_terminate_gracefully() {
+                Terminate::Gracefully => exit!(0, "{context}: {e:?}"),
+                Terminate::Halt => halt!("{context}: {e:?}"),
+                Terminate::Panic => {}
             }
         }
 
@@ -299,43 +304,50 @@ where
     }
 }
 
-/// A trait for errors that should terminate gracefully rather than panic
-/// the process.
+/// An enum describing how to terminate
+enum Terminate {
+    Gracefully,
+    Halt,
+    Panic,
+}
+
+/// A trait for errors that should halt or terminate gracefully rather than
+/// panic the process.
 trait ShouldTerminateGracefully {
-    /// Reports whether the error should terminate the process gracefully
-    /// rather than panic.
-    fn should_terminate_gracefully(&self) -> bool;
+    /// Reports whether the error should halt of terminate the process
+    /// gracefully rather than panic.
+    fn should_terminate_gracefully(&self) -> Terminate;
 }
 
 impl ShouldTerminateGracefully for AdapterError {
-    fn should_terminate_gracefully(&self) -> bool {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             AdapterError::Catalog(e) => e.should_terminate_gracefully(),
-            _ => false,
+            _ => Terminate::Panic,
         }
     }
 }
 
 impl ShouldTerminateGracefully for mz_catalog::memory::error::Error {
-    fn should_terminate_gracefully(&self) -> bool {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match &self.kind {
             mz_catalog::memory::error::ErrorKind::Durable(e) => e.should_terminate_gracefully(),
-            _ => false,
+            _ => Terminate::Panic,
         }
     }
 }
 
 impl ShouldTerminateGracefully for mz_catalog::durable::CatalogError {
-    fn should_terminate_gracefully(&self) -> bool {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match &self {
             Self::Durable(e) => e.should_terminate_gracefully(),
-            _ => false,
+            _ => Terminate::Panic,
         }
     }
 }
 
 impl ShouldTerminateGracefully for DurableCatalogError {
-    fn should_terminate_gracefully(&self) -> bool {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             DurableCatalogError::Fence(err) => err.should_terminate_gracefully(),
             DurableCatalogError::IncompatibleDataVersion { .. }
@@ -346,22 +358,22 @@ impl ShouldTerminateGracefully for DurableCatalogError {
             | DurableCatalogError::DuplicateKey
             | DurableCatalogError::UniquenessViolation
             | DurableCatalogError::Storage(_)
-            | DurableCatalogError::Internal(_) => false,
+            | DurableCatalogError::Internal(_) => Terminate::Panic,
         }
     }
 }
 
 impl ShouldTerminateGracefully for FenceError {
-    fn should_terminate_gracefully(&self) -> bool {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
-            FenceError::DeployGeneration { .. } => true,
-            FenceError::Epoch { .. } | FenceError::MigrationUpper { .. } => false,
+            FenceError::DeployGeneration { .. } => Terminate::Gracefully,
+            FenceError::Epoch { .. } | FenceError::MigrationUpper { .. } => Terminate::Halt,
         }
     }
 }
 
 impl<T> ShouldTerminateGracefully for StorageError<T> {
-    fn should_terminate_gracefully(&self) -> bool {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             StorageError::ResourceExhausted(_)
             | StorageError::CollectionMetadataAlreadyExists(_)
@@ -384,13 +396,13 @@ impl<T> ShouldTerminateGracefully for StorageError<T> {
             | StorageError::ShuttingDown(_)
             | StorageError::MissingSubsourceReference { .. }
             | StorageError::RtrTimeout(_)
-            | StorageError::RtrDropFailure(_) => false,
+            | StorageError::RtrDropFailure(_) => Terminate::Panic,
         }
     }
 }
 
 impl ShouldTerminateGracefully for DataflowCreationError {
-    fn should_terminate_gracefully(&self) -> bool {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             DataflowCreationError::SinceViolation(_)
             | DataflowCreationError::InstanceMissing(_)
@@ -398,54 +410,54 @@ impl ShouldTerminateGracefully for DataflowCreationError {
             | DataflowCreationError::ReplicaMissing(_)
             | DataflowCreationError::MissingAsOf
             | DataflowCreationError::EmptyAsOfForSubscribe
-            | DataflowCreationError::EmptyAsOfForCopyTo => false,
+            | DataflowCreationError::EmptyAsOfForCopyTo => Terminate::Panic,
         }
     }
 }
 
 impl ShouldTerminateGracefully for CollectionUpdateError {
-    fn should_terminate_gracefully(&self) -> bool {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             CollectionUpdateError::InstanceMissing(_)
-            | CollectionUpdateError::CollectionMissing(_) => false,
+            | CollectionUpdateError::CollectionMissing(_) => Terminate::Panic,
         }
     }
 }
 
 impl ShouldTerminateGracefully for PeekError {
-    fn should_terminate_gracefully(&self) -> bool {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             PeekError::SinceViolation(_)
             | PeekError::InstanceMissing(_)
             | PeekError::CollectionMissing(_)
-            | PeekError::ReplicaMissing(_) => false,
+            | PeekError::ReplicaMissing(_) => Terminate::Panic,
         }
     }
 }
 
 impl ShouldTerminateGracefully for ReadPolicyError {
-    fn should_terminate_gracefully(&self) -> bool {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             ReadPolicyError::InstanceMissing(_)
             | ReadPolicyError::CollectionMissing(_)
-            | ReadPolicyError::WriteOnlyCollection(_) => false,
+            | ReadPolicyError::WriteOnlyCollection(_) => Terminate::Panic,
         }
     }
 }
 
 impl ShouldTerminateGracefully for TransformError {
-    fn should_terminate_gracefully(&self) -> bool {
+    fn should_terminate_gracefully(&self) -> Terminate {
         match self {
             TransformError::Internal(_)
             | TransformError::IdentifierMissing(_)
-            | TransformError::CallerShouldPanic(_) => false,
+            | TransformError::CallerShouldPanic(_) => Terminate::Panic,
         }
     }
 }
 
 impl ShouldTerminateGracefully for InstanceMissing {
-    fn should_terminate_gracefully(&self) -> bool {
-        false
+    fn should_terminate_gracefully(&self) -> Terminate {
+        Terminate::Panic
     }
 }
 

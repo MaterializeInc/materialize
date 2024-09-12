@@ -140,8 +140,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// NB: We may remove this in later iterations of Pv2.
     async fn epoch(&mut self) -> Result<Epoch, CatalogError>;
 
-    /// Get the most recent deployment generation written to the catalog. Not necessarily the
-    /// deploy generation of this instance.
+    /// Get the most recent deployment generation written to the catalog.
     async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError>;
 
     /// Get the `enable_0dt_deployment` config value of this instance.
