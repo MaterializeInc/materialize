@@ -11,8 +11,31 @@
 
 statement ok
 CREATE SOURCE tpch
-              FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001)
-              FOR ALL TABLES;
+              FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001);
+
+statement ok
+CREATE TABLE customer FROM SOURCE tpch (REFERENCE customer);
+
+statement ok
+CREATE TABLE lineitem FROM SOURCE tpch (REFERENCE lineitem);
+
+statement ok
+CREATE TABLE nation FROM SOURCE tpch (REFERENCE nation);
+
+statement ok
+CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
+
+statement ok
+CREATE TABLE part FROM SOURCE tpch (REFERENCE part);
+
+statement ok
+CREATE TABLE partsupp FROM SOURCE tpch (REFERENCE partsupp);
+
+statement ok
+CREATE TABLE region FROM SOURCE tpch (REFERENCE region);
+
+statement ok
+CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
 
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR

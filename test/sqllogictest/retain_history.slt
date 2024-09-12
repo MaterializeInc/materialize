@@ -99,8 +99,23 @@ idx_c  FOR  240000
 # Test subsource propagation. Test sources with and without subsources and view dependencies to
 # ensure the alter code correctly ignores the views.
 statement ok
-CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION
 ----
+
+statement ok
+CREATE TABLE accounts FROM SOURCE auction_house (REFERENCE accounts);
+
+statement ok
+CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);
+
+statement ok
+CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
+
+statement ok
+CREATE TABLE organizations FROM SOURCE auction_house (REFERENCE organizations);
+
+statement ok
+CREATE TABLE users FROM SOURCE auction_house (REFERENCE users);
 
 statement ok
 CREATE VIEW auction_house_view AS SELECT * FROM users
