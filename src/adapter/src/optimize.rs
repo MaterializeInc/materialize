@@ -275,6 +275,8 @@ pub enum OptimizerError {
         func: UnmaterializableFunc,
         context: &'static str,
     },
+    #[error("MfpPlan couldn't be converted into SafeMfpPlan")]
+    UnsafeMfpPlan,
     #[error("internal optimizer error: {0}")]
     Internal(String),
 }

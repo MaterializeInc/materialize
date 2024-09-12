@@ -774,6 +774,23 @@ impl Optimizer {
         }
     }
 
+    /// Builds a tiny optimizer, which is only suitable for optimizing fast-path queries.
+    pub fn fast_path_optimizer(_ctx: &mut TransformCtx) -> Self {
+        let transforms: Vec<Box<dyn Transform>> = vec![
+            Box::new(canonicalization::ReduceScalars),
+            Box::new(literal_constraints::LiteralConstraints),
+            Box::new(canonicalize_mfp::CanonicalizeMfp),
+            // We might have arrived at a constant, e.g., due to contradicting literal constraints.
+            Box::new(fold_constants::FoldConstants {
+                limit: Some(FOLD_CONSTANTS_LIMIT),
+            }),
+        ];
+        Self {
+            name: "fast_path_optimizer",
+            transforms,
+        }
+    }
+
     /// Optimizes the supplied relation expression.
     ///
     /// These optimizations are performed with no information about available arrangements,
