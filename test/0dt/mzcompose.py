@@ -159,8 +159,8 @@ def workflow_read_only(c: Composition) -> None:
         > CREATE SOURCE postgres_source
           IN CLUSTER cluster
           FROM POSTGRES CONNECTION pg
-          (PUBLICATION 'postgres_source')
-          FOR TABLES (postgres_source_table);
+          (PUBLICATION 'postgres_source');
+        > CREATE TABLE postgres_source_table FROM SOURCE postgres_source (REFERENCE postgres_source_table)
         > SELECT * FROM postgres_source_table;
         A 0
 
@@ -182,8 +182,8 @@ def workflow_read_only(c: Composition) -> None:
           PASSWORD SECRET mysqlpass);
         > CREATE SOURCE mysql_source
           IN CLUSTER cluster
-          FROM MYSQL CONNECTION mysql
-          FOR TABLES (public.mysql_source_table AS mysql_source_table);
+          FROM MYSQL CONNECTION mysql;
+        > CREATE TABLE mysql_source_table FROM SOURCE mysql_source (REFERENCE public.mysql_source_table);
         > SELECT * FROM mysql_source_table;
         A 0
 
@@ -441,8 +441,8 @@ def workflow_basic(c: Composition) -> None:
         > CREATE SOURCE postgres_source
           IN CLUSTER cluster
           FROM POSTGRES CONNECTION pg
-          (PUBLICATION 'postgres_source')
-          FOR TABLES (postgres_source_table);
+          (PUBLICATION 'postgres_source');
+        > CREATE TABLE postgres_source_table FROM SOURCE postgres_source (REFERENCE postgres_source_table)
         > SELECT * FROM postgres_source_table;
         A 0
 
@@ -464,8 +464,8 @@ def workflow_basic(c: Composition) -> None:
           PASSWORD SECRET mysqlpass);
         > CREATE SOURCE mysql_source1
           IN CLUSTER cluster
-          FROM MYSQL CONNECTION mysql
-          FOR TABLES (public.mysql_source_table AS mysql_source_table);
+          FROM MYSQL CONNECTION mysql;
+        > CREATE TABLE mysql_source_table FROM SOURCE mysql_source1 (REFERENCE public.mysql_source_table);
         > SELECT * FROM mysql_source_table;
         A 0
 
