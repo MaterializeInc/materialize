@@ -17,6 +17,7 @@ import pg8000
 from pg8000 import Connection, Cursor
 
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
 class TestAnalyticsUploadError(Exception):
@@ -93,7 +94,7 @@ class DatabaseConnector:
         connection.autocommit = autocommit
         connection.run(f"SET database = {self.config.database}")
         connection.run(f"SET search_path = {self.config.search_path}")
-        connection.run(f"SET cluster = '{self.config.cluster}'")
+        connection.run(f"SET cluster = {as_sanitized_literal(self.config.cluster)}")
         connection.run("SET transaction_isolation = serializable")
 
         return connection
@@ -114,7 +115,9 @@ class DatabaseConnector:
                 connection = self.create_connection(autocommit=autocommit)
 
         cursor = connection.cursor()
-        cursor.execute(f"SET statement_timeout = '{statement_timeout}'")
+        cursor.execute(
+            f"SET statement_timeout = {as_sanitized_literal(statement_timeout)}"
+        )
         return cursor
 
     def set_read_only(self) -> None:

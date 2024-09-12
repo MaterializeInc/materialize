@@ -9,7 +9,7 @@
 
 from materialize.github import KnownGitHubIssue
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
-from materialize.test_analytics.util import mz_sql_util
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
 class KnownIssuesStorage(BaseDataStorage):
@@ -23,20 +23,20 @@ class KnownIssuesStorage(BaseDataStorage):
         sql_statements = [
             f"""
             UPDATE issue
-            SET title = {mz_sql_util.as_sanitized_literal(issue.info["title"])},
-                ci_regexp = {mz_sql_util.as_sanitized_literal(issue.regex.pattern.decode("utf-8"))},
-                state = {mz_sql_util.as_sanitized_literal(issue.info["state"])}
-            WHERE issue_id = {mz_sql_util.as_sanitized_literal(issue_str)}
+            SET title = {as_sanitized_literal(issue.info["title"])},
+                ci_regexp = {as_sanitized_literal(issue.regex.pattern.decode("utf-8"))},
+                state = {as_sanitized_literal(issue.info["state"])}
+            WHERE issue_id = {as_sanitized_literal(issue_str)}
             ;
             """,
             f"""
             INSERT INTO issue (issue_id, title, ci_regexp, state)
-                SELECT {mz_sql_util.as_sanitized_literal(issue_str)},
-                       {mz_sql_util.as_sanitized_literal(issue.info["title"])},
-                       {mz_sql_util.as_sanitized_literal(issue.regex.pattern.decode("utf-8"))},
-                       {mz_sql_util.as_sanitized_literal(issue.info["state"])}
+                SELECT {as_sanitized_literal(issue_str)},
+                       {as_sanitized_literal(issue.info["title"])},
+                       {as_sanitized_literal(issue.regex.pattern.decode("utf-8"))},
+                       {as_sanitized_literal(issue.info["state"])}
                 WHERE NOT EXISTS (
-                    SELECT 1 FROM issue WHERE issue_id = {mz_sql_util.as_sanitized_literal(issue_str)}
+                    SELECT 1 FROM issue WHERE issue_id = {as_sanitized_literal(issue_str)}
                 )
             ;
             """,

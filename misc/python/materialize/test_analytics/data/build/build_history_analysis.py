@@ -20,6 +20,7 @@ from materialize.test_analytics.connector.test_analytics_connector import (
     DatabaseConnector,
 )
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
 class BuildHistoryAnalysis(BaseDataStorage):
@@ -46,8 +47,8 @@ class BuildHistoryAnalysis(BaseDataStorage):
                 FROM
                     mv_recent_build_job_success_on_main_v2
                 WHERE
-                    pipeline = '{pipeline}' AND
-                    build_step_key = '{step_key}' AND
+                    pipeline = {as_sanitized_literal(pipeline)} AND
+                    build_step_key = {as_sanitized_literal(step_key)} AND
                     {shard_index_comparison}
                 ORDER BY
                     build_number DESC
