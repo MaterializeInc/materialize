@@ -643,7 +643,7 @@ The output of the queries is not validated in any way. An error during execution
 
 ## Sleeping in the test
 
-#### `$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=N`
+#### `$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="Ns"`
 
 Sleeps for `N` seconds
 
