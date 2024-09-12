@@ -50,6 +50,8 @@ Clusters provide two important properties:
     of the cluster remains available, the cluster can continue to ingest data,
     compute results, and serve queries.
 
+
 ## Related pages
 
 - [`CREATE CLUSTER`](/sql/create-cluster)
+- [System clusters](/sql/system-clusters)

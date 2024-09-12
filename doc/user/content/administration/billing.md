@@ -21,6 +21,15 @@ maintaining up-to-date results while also providing strong [consistency
 guarantees](/get-started/isolation-level/). The credit usage for a cluster is
 measured at a one second granularity.
 
+{{< note >}}
+
+When you enable a Materialize region, various [system
+clusters](/sql/system-clusters/) are pre-installed to improve the user
+experience as well as support system administration tasks. Except for the
+default `quickstart` cluster, you are <red>not billed</red> for these system clusters.
+
+{{</ note >}}
+
 You must provision at least one cluster to power your workloads. You can then
 use the cluster to create the objects ([indexes](/concepts/indexes/) and
 [materialized views](/concepts/views/#materialized-views)) that provide
