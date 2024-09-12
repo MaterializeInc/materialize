@@ -1010,6 +1010,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         f.write_str(" FROM ");
         f.write_node(&self.connection);
         if let Some(format) = &self.format {
+            f.write_str(" ");
             f.write_node(format);
         }
         if !self.include_metadata.is_empty() {
@@ -1263,6 +1264,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         f.write_str(" INTO ");
         f.write_node(&self.connection);
         if let Some(format) = &self.format {
+            f.write_str(" ");
             f.write_node(format);
         }
         if let Some(envelope) = &self.envelope {
@@ -1605,6 +1607,7 @@ impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
         }
 
         if let Some(format) = &format {
+            f.write_str(" ");
             f.write_node(format);
         }
         if !include_metadata.is_empty() {

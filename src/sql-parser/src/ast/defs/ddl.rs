@@ -414,11 +414,11 @@ impl<T: AstInfo> AstDisplay for FormatSpecifier<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             FormatSpecifier::Bare(format) => {
-                f.write_str(" FORMAT ");
+                f.write_str("FORMAT ");
                 f.write_node(format)
             }
             FormatSpecifier::KeyValue { key, value } => {
-                f.write_str(" KEY FORMAT ");
+                f.write_str("KEY FORMAT ");
                 f.write_node(key);
                 f.write_str(" VALUE FORMAT ");
                 f.write_node(value);
