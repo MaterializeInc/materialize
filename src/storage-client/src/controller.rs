@@ -738,6 +738,22 @@ pub trait StorageController: Debug {
     >;
 }
 
+impl DataSource {
+    /// Returns true if the storage controller manages the data shard for this
+    /// source using txn-wal.
+    pub fn in_txns(&self) -> bool {
+        match self {
+            DataSource::Other(DataSourceOther::TableWrites) => true,
+            DataSource::Other(DataSourceOther::Compute)
+            | DataSource::Ingestion(_)
+            | DataSource::IngestionExport { .. }
+            | DataSource::Introspection(_)
+            | DataSource::Progress
+            | DataSource::Webhook => false,
+        }
+    }
+}
+
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
 /// and also allows us to differentiate between a token being present versus being set for the
 /// first time.

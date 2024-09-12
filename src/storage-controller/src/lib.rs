@@ -89,6 +89,7 @@ use tokio::time::error::Elapsed;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
+use crate::collection_mgmt::CollectionManagerKind;
 use crate::instance::{Instance, ReplicaConfig};
 use crate::statistics::StatsState;
 
@@ -574,17 +575,10 @@ where
 
                 // If the shard is being managed by txn-wal (initially, tables), then we need to
                 // pass along the shard id for the txns shard to dataflow rendering.
-                let txns_shard = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites) => {
-                        Some(*self.txns_read.txns_id())
-                    }
-                    DataSource::Ingestion(_)
-                    | DataSource::IngestionExport { .. }
-                    | DataSource::Introspection(_)
-                    | DataSource::Progress
-                    | DataSource::Webhook
-                    | DataSource::Other(DataSourceOther::Compute) => None,
-                };
+                let txns_shard = description
+                    .data_source
+                    .in_txns()
+                    .then(|| *self.txns_read.txns_id());
 
                 let metadata = CollectionMetadata {
                     persist_location: self.persist_location.clone(),
@@ -2819,31 +2813,12 @@ where
 
         let recent_upper = write_handle.shared_upper();
 
-        // Types of storage-managed/introspection collections:
-        //
-        // Append-only: Only accepts blind writes, writes that can
-        // be applied at any timestamp and don’t depend on current
-        // collection contents.
-        //
-        // Pseudo append-only: We treat them largely as append-only
-        // collections but periodically (currently on bootstrap)
-        // retract old updates from them.
-        //
-        // Differential: at any given time `t` , collection contents
-        // mirrors some (small cardinality) state. The cardinality
-        // of the collection stays constant if the thing that is
-        // mirrored doesn’t change in cardinality. At steady state,
-        // updates always come in pairs of retractions/additions.
-        match introspection_type {
+        match CollectionManagerKind::from(&introspection_type) {
             // For these, we first register the collection and then prepare it,
             // because the code that prepares differential collection expects to
             // be able to update desired state via the collection manager
             // already.
-            IntrospectionType::ShardMapping
-            | IntrospectionType::Frontiers
-            | IntrospectionType::ReplicaFrontiers
-            | IntrospectionType::StorageSourceStatistics
-            | IntrospectionType::StorageSinkStatistics => {
+            CollectionManagerKind::Differential => {
                 self.collection_manager.register_differential_collection(
                     id,
                     write_handle,
@@ -2861,7 +2836,6 @@ where
                     .await?;
                 }
             }
-
             // For these, we first have to prepare and then register with
             // collection manager, because the preparation logic wants to read
             // the shard's contents and then do uncontested writes.
@@ -2869,61 +2843,7 @@ where
             // TODO(aljoscha): We should make the truncation/cleanup work that
             // happens when we take over instead be a periodic thing, and make
             // it resilient to the upper moving concurrently.
-            IntrospectionType::SourceStatusHistory
-            | IntrospectionType::SinkStatusHistory
-            | IntrospectionType::PrivatelinkConnectionStatusHistory
-            | IntrospectionType::ReplicaStatusHistory
-            | IntrospectionType::ReplicaMetricsHistory
-            | IntrospectionType::WallclockLagHistory => {
-                if !self.read_only {
-                    self.prepare_introspection_collection(
-                        id,
-                        introspection_type,
-                        recent_upper,
-                        Some(&mut write_handle),
-                    )
-                    .await?;
-                }
-
-                self.collection_manager.register_append_only_collection(
-                    id,
-                    write_handle,
-                    force_writable,
-                );
-            }
-
-            // Same as our other differential collections, but for these the
-            // preparation logic currently doesn't do anything.
-            IntrospectionType::ComputeDependencies
-            | IntrospectionType::ComputeOperatorHydrationStatus
-            | IntrospectionType::ComputeMaterializedViewRefreshes
-            | IntrospectionType::ComputeErrorCounts
-            | IntrospectionType::ComputeHydrationTimes => {
-                self.collection_manager.register_differential_collection(
-                    id,
-                    write_handle,
-                    read_handle_fn,
-                    force_writable,
-                );
-
-                if !self.read_only {
-                    self.prepare_introspection_collection(
-                        id,
-                        introspection_type,
-                        recent_upper,
-                        None,
-                    )
-                    .await?;
-                }
-            }
-
-            // Note [btv] - we don't truncate these, because that uses
-            // a huge amount of memory on environmentd startup.
-            IntrospectionType::PreparedStatementHistory
-            | IntrospectionType::StatementExecutionHistory
-            | IntrospectionType::SessionHistory
-            | IntrospectionType::StatementLifecycleHistory
-            | IntrospectionType::SqlText => {
+            CollectionManagerKind::AppendOnly => {
                 if !self.read_only {
                     self.prepare_introspection_collection(
                         id,
@@ -3881,6 +3801,35 @@ where
     fn maintain(&mut self) {
         self.update_frontier_introspection();
         self.update_wallclock_lag_introspection();
+    }
+}
+
+impl From<&IntrospectionType> for CollectionManagerKind {
+    fn from(value: &IntrospectionType) -> Self {
+        match value {
+            IntrospectionType::ShardMapping
+            | IntrospectionType::Frontiers
+            | IntrospectionType::ReplicaFrontiers
+            | IntrospectionType::StorageSourceStatistics
+            | IntrospectionType::StorageSinkStatistics
+            | IntrospectionType::ComputeDependencies
+            | IntrospectionType::ComputeOperatorHydrationStatus
+            | IntrospectionType::ComputeMaterializedViewRefreshes
+            | IntrospectionType::ComputeErrorCounts
+            | IntrospectionType::ComputeHydrationTimes => CollectionManagerKind::Differential,
+
+            IntrospectionType::SourceStatusHistory
+            | IntrospectionType::SinkStatusHistory
+            | IntrospectionType::PrivatelinkConnectionStatusHistory
+            | IntrospectionType::ReplicaStatusHistory
+            | IntrospectionType::ReplicaMetricsHistory
+            | IntrospectionType::WallclockLagHistory
+            | IntrospectionType::PreparedStatementHistory
+            | IntrospectionType::StatementExecutionHistory
+            | IntrospectionType::SessionHistory
+            | IntrospectionType::StatementLifecycleHistory
+            | IntrospectionType::SqlText => CollectionManagerKind::AppendOnly,
+        }
     }
 }
 
