@@ -859,15 +859,15 @@ class TestDeployGetObjects:
         }
 
     def test_deploy_get_objects(self, project, capsys):
-        run_dbt(["run-operation", "deploy_get_objects", "--args", "{debug: true}"])
+        run_dbt(["run-operation", "deploy_get_objects", "--args", "{dry_run: true}"])
 
         captured = capsys.readouterr()
         output = captured.out
 
-        assert "Debug: Excluded clusters: ['excluded_cluster']" in output
-        assert "Debug: Excluded schemas: ['excluded_schema']" in output
-        assert "Debug: Final cluster list: ['test_cluster']" in output
-        assert "Debug: Final schema list: ['" in output
+        assert "DRY RUN: Excluded clusters: ['excluded_cluster']" in output
+        assert "DRY RUN: Excluded schemas: ['excluded_schema']" in output
+        assert "DRY RUN: Final cluster list: ['test_cluster']" in output
+        assert "DRY RUN: Final schema list: ['" in output
         assert "_test_deploy', '" in output
         assert "_test_deploy_test_schema']" in output
 
@@ -878,7 +878,7 @@ class TestDeployGetObjects:
                 "run-operation",
                 "deploy_get_objects",
                 "--args",
-                "{debug: true}",
+                "{dry_run: true}",
                 "--vars",
                 project_config_no_excludes,
             ]
@@ -887,10 +887,10 @@ class TestDeployGetObjects:
         captured = capsys.readouterr()
         output = captured.out
 
-        assert "Debug: Excluded clusters: []" in output
-        assert "Debug: Excluded schemas: []" in output
-        assert "Debug: Final cluster list: ['test_cluster']" in output
-        assert "Debug: Final schema list: ['" in output
+        assert "DRY RUN: Excluded clusters: []" in output
+        assert "DRY RUN: Excluded schemas: []" in output
+        assert "DRY RUN: Final cluster list: ['test_cluster']" in output
+        assert "DRY RUN: Final schema list: ['" in output
         assert "_test_deploy', '" in output
         assert "_test_deploy_test_schema']" in output
 

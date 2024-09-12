@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro deploy_get_objects(debug=False) %}
+{% macro deploy_get_objects(dry_run=False) %}
     {% set clusters = {} %}
     {% set schemas = {} %}
 
@@ -27,9 +27,9 @@
     {% set exclude_schemas = exclude_schemas if exclude_schemas is iterable and exclude_schemas is not string else [] %}
 
     {% if debug %}
-        {{ log("Debug: Starting deploy_get_objects macro", info=True) }}
-        {{ log("Debug: Excluded clusters: " ~ exclude_clusters, info=True) }}
-        {{ log("Debug: Excluded schemas: " ~ exclude_schemas, info=True) }}
+        {{ log("DRY RUN: Starting deploy_get_objects macro", info=True) }}
+        {{ log("DRY RUN: Excluded clusters: " ~ exclude_clusters, info=True) }}
+        {{ log("DRY RUN: Excluded schemas: " ~ exclude_schemas, info=True) }}
     {% endif %}
 
     {# Add cluster and schema from the current target #}
@@ -57,8 +57,8 @@
     {% set schema_list = schemas.keys() | list %}
 
     {% if debug %}
-        {{ log("Debug: Final cluster list: " ~ cluster_list, info=True) }}
-        {{ log("Debug: Final schema list: " ~ schema_list, info=True) }}
+        {{ log("DRY RUN: Final cluster list: " ~ cluster_list, info=True) }}
+        {{ log("DRY RUN: Final schema list: " ~ schema_list, info=True) }}
     {% endif %}
 
     {% do return({'clusters': cluster_list, 'schemas': schema_list}) %}

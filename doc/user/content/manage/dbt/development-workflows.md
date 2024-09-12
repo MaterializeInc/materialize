@@ -335,10 +335,10 @@ These environments are later swapped transparently.
 1. To preview and validate the list of clusters and schemas that will be
    considered for deployment, use the `run-operation` command to invoke the
    [`deploy_get_objects`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_get_objects.sql)
-   macro with the `debug: True` argument.
+   macro with the `dry_run: True` argument.
 
     ```bash
-    dbt run-operation deploy_get_objects --args '{debug: true}'
+    dbt run-operation deploy_get_objects --args '{dry_run: true}'
     ```
 
 1. Use the [`run-operation`](https://docs.getdbt.com/reference/commands/run-operation)
