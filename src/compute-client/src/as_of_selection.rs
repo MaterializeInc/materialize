@@ -84,7 +84,6 @@ use std::rc::Rc;
 use differential_dataflow::lattice::Lattice;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
-use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
 use mz_repr::{GlobalId, TimestampManipulation};
 use mz_storage_client::storage_collections::StorageCollections;
@@ -96,30 +95,18 @@ use tracing::{info, warn};
 
 /// Runs as-of selection for the given dataflows.
 ///
-/// Assigns the selected as-of to the provided dataflow descriptions and returns a set of
-/// `ReadHold`s that must not be dropped nor downgraded until the dataflows have been installed
-/// with the compute controller.
+/// Assigns the selected as-of to the provided dataflow descriptions.
+///
+/// The provided `storage_read_holds` must contain an entry for each storage collection imported by
+/// any of the provided `dataflows`. After this function returns, the read holds must not be
+/// dropped nor downgraded until the dataflows have been installed with the compute controller.
 pub fn run<T: TimestampManipulation>(
     dataflows: &mut [DataflowDescription<Plan<T>, (), T>],
     read_policies: &BTreeMap<GlobalId, ReadPolicy<T>>,
+    storage_read_holds: &BTreeMap<GlobalId, ReadHold<T>>,
     storage_collections: &dyn StorageCollections<Timestamp = T>,
     current_time: T,
-) -> BTreeMap<GlobalId, ReadHold<T>> {
-    // Get read holds for the storage inputs of the dataflows.
-    // This ensures that storage frontiers don't advance past the selected as-ofs.
-    let mut storage_read_holds = BTreeMap::new();
-    for dataflow in &*dataflows {
-        for id in dataflow.source_imports.keys() {
-            if !storage_read_holds.contains_key(id) {
-                let read_hold = storage_collections
-                    .acquire_read_holds(vec![*id])
-                    .expect("storage collection exists")
-                    .into_element();
-                storage_read_holds.insert(*id, read_hold);
-            }
-        }
-    }
-
+) {
     let mut ctx = Context::new(dataflows, storage_collections, read_policies, current_time);
 
     // Dataflows that sink into a storage collection that has advanced to the empty frontier don't
@@ -128,7 +115,7 @@ pub fn run<T: TimestampManipulation>(
     ctx.prune_sealed_persist_sinks();
 
     // Apply hard constraints from upstream and downstream storage collections.
-    ctx.apply_upstream_storage_constraints(&storage_read_holds);
+    ctx.apply_upstream_storage_constraints(storage_read_holds);
     ctx.apply_downstream_storage_constraints();
 
     // At this point all collections have as-of bounds that reflect what is required for
@@ -157,8 +144,6 @@ pub fn run<T: TimestampManipulation>(
         let as_of = first_export.map_or(Antichain::new(), |id| ctx.best_as_of(id));
         dataflow.as_of = Some(as_of);
     }
-
-    storage_read_holds
 }
 
 /// Bounds for possible as-of values of a dataflow.
@@ -1030,9 +1015,15 @@ mod tests {
                     $($( ($policy_id.parse().unwrap(), $policy), )*)?
                 ]);
 
+
+                let ids = storage_ids.iter().map(|s| s.parse().unwrap()).collect();
+                let holds = storage_frontiers.acquire_read_holds(ids).unwrap();
+                let storage_read_holds = holds.into_iter().map(|r| (r.id(), r)).collect();
+
                 super::run(
                     &mut dataflows,
                     &read_policies,
+                    &storage_read_holds,
                     &storage_frontiers,
                     $current_time.into(),
                 );

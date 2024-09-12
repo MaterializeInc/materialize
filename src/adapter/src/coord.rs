@@ -1810,9 +1810,10 @@ impl Coordinator {
         self.controller
             .set_arrangement_exert_proportionality(exert_prop);
 
-        let mut storage_policies: BTreeMap<GlobalId, CompactionWindow> = Default::default();
-        let mut compute_policies: BTreeMap<GlobalId, (ComputeInstanceId, CompactionWindow)> =
-            Default::default();
+        // Keep read holds for each storage and compute collection we create during bootstrapping.
+        // We need these to pass copies of them to `create_dataflow` commands, and to ensure
+        // collections don't get compacted before we have created all their dependants.
+        let mut read_holds: BTreeMap<GlobalId, ReadHold<_>> = Default::default();
 
         let enable_worker_core_affinity =
             self.catalog().system_config().enable_worker_core_affinity();
@@ -1834,6 +1835,15 @@ impl Coordinator {
                     enable_worker_core_affinity,
                 )?;
             }
+
+            for &log_id in instance.log_indexes.values() {
+                let read_hold = self
+                    .controller
+                    .compute
+                    .acquire_read_hold(instance.id, log_id)
+                    .expect("log index was created with the cluster");
+                read_holds.insert(log_id, read_hold);
+            }
         }
 
         info!(
@@ -1843,8 +1853,10 @@ impl Coordinator {
 
         let init_storage_collections_start = Instant::now();
         info!("startup: coordinator init: bootstrap: storage collections init beginning");
-        self.bootstrap_storage_collections(&migrated_storage_collections_0dt)
+        let storage_holds = self
+            .bootstrap_storage_collections(&migrated_storage_collections_0dt)
             .await;
+        read_holds.extend(storage_holds.into_iter().map(|r| (r.id(), r)));
         info!(
             "startup: coordinator init: bootstrap: storage collections init complete in {:?}",
             init_storage_collections_start.elapsed()
@@ -1864,7 +1876,7 @@ impl Coordinator {
         // `bootstrap_dataflow_plans`.
         let bootstrap_as_ofs_start = Instant::now();
         info!("startup: coordinator init: bootstrap: dataflow as-of bootstrapping beginning");
-        let dataflow_read_holds = self.bootstrap_dataflow_as_ofs().await;
+        self.bootstrap_dataflow_as_ofs(&read_holds).await;
         info!(
             "startup: coordinator init: bootstrap: dataflow as-of bootstrapping complete in {:?}",
             bootstrap_as_ofs_start.elapsed()
@@ -1932,19 +1944,16 @@ impl Coordinator {
                         }
                     }
                     let cw = policy.expect("sources have a compaction window");
-                    storage_policies.insert(entry.id, cw);
+                    self.initialize_storage_read_policy(entry.id, cw).await;
                 }
                 CatalogItem::Table(_) => {
                     let cw = policy.expect("tables have a compaction window");
-                    storage_policies.insert(entry.id, cw);
+                    self.initialize_storage_read_policy(entry.id, cw).await;
                 }
                 CatalogItem::Index(idx) => {
                     let id = entry.id;
-                    let cw = policy.expect("indexes have a compaction window");
 
-                    if logs.contains(&idx.on) {
-                        compute_policies.insert(id, (idx.cluster_id, cw));
-                    } else {
+                    if !logs.contains(&idx.on) {
                         let df_desc = self
                             .catalog()
                             .try_get_physical_plan(&id)
@@ -1965,20 +1974,27 @@ impl Coordinator {
                             );
                         }
 
-                        // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
-                        // but we cannot call that as it will also downgrade the read hold on the index.
-                        compute_policies.insert(id, (idx.cluster_id, cw));
-
                         self.controller
                             .compute
                             .create_dataflow(idx.cluster_id, df_desc, None)
                             .unwrap_or_terminate("cannot fail to create dataflows");
+
+                        let read_hold = self
+                            .controller
+                            .compute
+                            .acquire_read_hold(idx.cluster_id, id)
+                            .expect("collection just created");
+                        read_holds.insert(id, read_hold);
                     }
+
+                    let cw = policy.expect("indexes have a compaction window");
+                    self.initialize_compute_read_policy(id, idx.cluster_id, cw)
+                        .await;
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
                     let cw = policy.expect("materialized views have a compaction window");
-                    storage_policies.insert(entry.id, cw);
+                    self.initialize_storage_read_policy(entry.id, cw).await;
 
                     let mut df_desc = self
                         .catalog()
@@ -2061,16 +2077,8 @@ impl Coordinator {
             }
         }
 
-        // Having installed all entries, creating all constraints, we can now drop read holds and
-        // relax read policies.
-        drop(dataflow_read_holds);
-        for (id, cw) in storage_policies {
-            self.initialize_storage_read_policy(id, cw).await;
-        }
-        for (id, (cluster_id, cw)) in compute_policies {
-            self.initialize_compute_read_policy(id, cluster_id, cw)
-                .await;
-        }
+        // Having installed all entries, creating all constraints, we can now drop the read holds.
+        drop(read_holds);
 
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(
@@ -2368,7 +2376,7 @@ impl Coordinator {
     async fn bootstrap_storage_collections(
         &mut self,
         migrated_storage_collections: &BTreeSet<GlobalId>,
-    ) {
+    ) -> Vec<ReadHold<Timestamp>> {
         let catalog = self.catalog();
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
@@ -2461,6 +2469,8 @@ impl Coordinator {
             })
             .collect();
 
+        let collection_ids: Vec<_> = collections.iter().map(|(id, _)| *id).collect();
+
         let register_ts = if self.controller.read_only() {
             self.get_local_read_ts().await
         } else {
@@ -2485,6 +2495,11 @@ impl Coordinator {
         if !self.controller.read_only() {
             self.apply_local_write(register_ts).await;
         }
+
+        self.controller
+            .storage_collections
+            .acquire_read_holds(collection_ids)
+            .expect("collections created above")
     }
 
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
@@ -2635,14 +2650,13 @@ impl Coordinator {
 
     /// Selects for each compute dataflow an as-of suitable for bootstrapping it.
     ///
-    /// Returns a set of [`ReadHold`]s that ensures the read frontiers of involved collections stay
-    /// in place and that must not be dropped before all compute dataflows have been created with
-    /// the compute controller.
-    ///
     /// This method expects all storage collections and dataflow plans to be available, so it must
     /// run after [`Coordinator::bootstrap_storage_collections`] and
     /// [`Coordinator::bootstrap_dataflow_plans`].
-    async fn bootstrap_dataflow_as_ofs(&mut self) -> BTreeMap<GlobalId, ReadHold<Timestamp>> {
+    async fn bootstrap_dataflow_as_ofs(
+        &mut self,
+        read_holds: &BTreeMap<GlobalId, ReadHold<Timestamp>>,
+    ) {
         let mut catalog_ids = Vec::new();
         let mut dataflows = Vec::new();
         let mut read_policies = BTreeMap::new();
@@ -2659,9 +2673,10 @@ impl Coordinator {
         }
 
         let read_ts = self.get_local_read_ts().await;
-        let read_holds = as_of_selection::run(
+        as_of_selection::run(
             &mut dataflows,
             &read_policies,
+            read_holds,
             &*self.controller.storage_collections,
             read_ts,
         );
@@ -2670,8 +2685,6 @@ impl Coordinator {
         for (id, plan) in catalog_ids.into_iter().zip(dataflows) {
             catalog.set_physical_plan(id, plan);
         }
-
-        read_holds
     }
 
     /// Serves the coordinator, receiving commands from users over `cmd_rx`
