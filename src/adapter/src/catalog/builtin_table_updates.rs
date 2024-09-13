@@ -1929,6 +1929,7 @@ impl CatalogState {
                 Datum::Uuid(conn.uuid()),
                 Datum::UInt32(conn.conn_id().unhandled()),
                 Datum::String(&conn.authenticated_role_id().to_string()),
+                Datum::from(conn.client_ip().map(|ip| ip.to_string()).as_deref()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
             ]),
             diff,

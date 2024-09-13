@@ -4376,6 +4376,7 @@ dependencies = [
  "openssl",
  "postgres",
  "prometheus",
+ "proxy-header",
  "reqwest",
  "semver",
  "tempfile",
@@ -6169,6 +6170,7 @@ dependencies = [
  "mz-dyncfg",
  "mz-ore",
  "openssl",
+ "proxy-header",
  "scopeguard",
  "socket2 0.5.7",
  "tokio",
@@ -8120,6 +8122,12 @@ checksum = "e1ed294a835b0f30810e13616b1cd34943c6d1e84a8f3b0dcfe466d256c3e7e7"
 dependencies = [
  "thiserror",
 ]
+
+[[package]]
+name = "proxy-header"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc1493f63ddddfba840c3169e997c2905d09538ace72d64e84af6324c6e0e065"
 
 [[package]]
 name = "psm"

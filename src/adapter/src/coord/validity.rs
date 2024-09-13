@@ -220,6 +220,7 @@ mod tests {
                     conn_id,
                     uuid: Uuid::new_v4(),
                     user,
+                    client_ip: None,
                     external_metadata_rx: None,
                 },
                 metrics.session_metrics(),

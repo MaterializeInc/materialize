@@ -8,14 +8,17 @@
 // by the Apache License, Version 2.0.
 
 use std::future::Future;
+use std::net::IpAddr;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
+use anyhow::Context;
 use async_trait::async_trait;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_pgwire_common::{
     decode_startup, Conn, FrontendStartupMessage, ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY,
-    REJECT_ENCRYPTION,
+    MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION,
 };
 use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
 use mz_sql::session::vars::ConnectionCounter;
@@ -138,7 +141,28 @@ impl Server {
                                 conn_uuid_handle.set(conn_uuid);
                                 debug!(conn_uuid = %conn_uuid_handle.display(), conn_uuid_forwarded, "starting new pgwire connection in adapter");
 
-                                let mut conn = FramedConn::new(conn_id.clone(), conn);
+                                let direct_peer_addr = conn
+                                    .inner_mut()
+                                    .peer_addr()
+                                    .context("fetching peer addr")?
+                                    .ip();
+                                let peer_addr= match params.remove(MZ_FORWARDED_FOR_KEY) {
+                                    Some(ip_str) => {
+                                        match IpAddr::from_str(&ip_str) {
+                                            Ok(ip) => Some(ip),
+                                            Err(e) => {
+                                                error!("pgwire connection with invalid mz_forwarded_for address: {e}");
+                                                None
+                                            }
+                                        }
+                                    }
+                                    None => Some(direct_peer_addr)
+                                };
+                                let mut conn = FramedConn::new(
+                                    conn_id.clone(),
+                                    peer_addr,
+                                    conn,
+                                );
 
                                 protocol::run(protocol::RunParams {
                                     tls_mode: tls.as_ref().map(|tls| tls.mode),

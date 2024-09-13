@@ -27,6 +27,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use axum::response::IntoResponse;
 use axum::{routing, Router};
 use bytes::BytesMut;
@@ -50,7 +51,7 @@ use mz_ore::tracing::TracingHandle;
 use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
-    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, REJECT_ENCRYPTION, VERSION_3,
+    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, VERSION_3,
 };
 use mz_server_core::{
     listen, Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
@@ -58,6 +59,7 @@ use mz_server_core::{
 };
 use openssl::ssl::{NameType, Ssl};
 use prometheus::{IntCounterVec, IntGaugeVec};
+use proxy_header::{ProxiedAddress, ProxyHeader};
 use semver::Version;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -70,7 +72,9 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
-use crate::dyncfgs::{has_tracing_config_update, tracing_config, SIGTERM_WAIT};
+use crate::dyncfgs::{
+    has_tracing_config_update, tracing_config, INJECT_PROXY_PROTOCOL_HEADER_HTTP, SIGTERM_WAIT,
+};
 
 /// Balancer build information.
 pub const BUILD_INFO: BuildInfo = build_info!();
@@ -98,6 +102,7 @@ pub struct BalancerConfig {
     cloud_provider: Option<String>,
     cloud_provider_region: Option<String>,
     tracing_handle: TracingHandle,
+    default_configs: Vec<(String, String)>,
 }
 
 impl BalancerConfig {
@@ -118,6 +123,7 @@ impl BalancerConfig {
         cloud_provider: Option<String>,
         cloud_provider_region: Option<String>,
         tracing_handle: TracingHandle,
+        default_configs: Vec<(String, String)>,
     ) -> Self {
         Self {
             build_version: build_info.semver_version(),
@@ -136,6 +142,7 @@ impl BalancerConfig {
             cloud_provider,
             cloud_provider_region,
             tracing_handle,
+            default_configs,
         }
     }
 }
@@ -182,6 +189,7 @@ impl BalancerService {
         let metrics = BalancerMetrics::new(&cfg);
         let mut configs = ConfigSet::default();
         configs = dyncfgs::all_dyncfgs(configs);
+        dyncfgs::set_defaults(&mut configs, cfg.default_configs.clone())?;
         let tracing_handle = cfg.tracing_handle.clone();
         if let Err(err) = mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
             configs.clone(),
@@ -306,6 +314,7 @@ impl BalancerService {
                 resolve_template: Arc::from(addr),
                 port,
                 metrics: Arc::from(ServerMetrics::new(metrics, "https")),
+                configs: self.configs.clone(),
             };
             let (handle, stream) = self.https;
             server_handles.push(handle);
@@ -697,6 +706,7 @@ impl mz_server_core::Server for PgwireBalancer {
         let outer_metrics = self.metrics.clone();
         let cancellation_resolver = self.cancellation_resolver.clone();
         let conn_uuid = Uuid::new_v4();
+        let peer_addr = conn.peer_addr();
         conn.uuid_handle().set(conn_uuid);
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
@@ -717,8 +727,19 @@ impl mz_server_core::Server for PgwireBalancer {
                             mut params,
                         }) => {
                             let mut conn = FramedConn::new(conn);
-
-                            debug!(%conn_uuid, "starting new pgwire connection in balancer");
+                            let peer_addr = match peer_addr {
+                                Ok(addr) => addr.ip(),
+                                Err(e) => {
+                                    error!("Invalid peer_addr {:?}", e);
+                                    return Ok(conn
+                                        .send(ErrorResponse::fatal(
+                                            SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                                            "invalid peer address",
+                                        ))
+                                        .await?);
+                                }
+                            };
+                            debug!(%conn_uuid, %peer_addr,  "starting new pgwire connection in balancer");
                             let prev =
                                 params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
                             if prev.is_some() {
@@ -729,6 +750,15 @@ impl mz_server_core::Server for PgwireBalancer {
                                     ))
                                     .await?);
                             }
+
+                            if let Some(_) = params.insert(MZ_FORWARDED_FOR_KEY.to_string(), peer_addr.to_string().clone()) {
+                                return Ok(conn
+                                    .send(ErrorResponse::fatal(
+                                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                                        format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
+                                    ))
+                                    .await?);
+                            };
 
                             Self::run(
                                 &mut conn,
@@ -933,6 +963,7 @@ struct HttpsBalancer {
     resolve_template: Arc<str>,
     port: u16,
     metrics: Arc<ServerMetrics>,
+    configs: ConfigSet,
 }
 
 impl HttpsBalancer {
@@ -1036,9 +1067,12 @@ impl mz_server_core::Server for HttpsBalancer {
         let port = self.port;
         let inner_metrics = Arc::clone(&self.metrics);
         let outer_metrics = Arc::clone(&self.metrics);
+        let peer_addr = conn.peer_addr();
+        let inject_proxy_headers = INJECT_PROXY_PROTOCOL_HEADER_HTTP.get(&self.configs);
         Box::pin(async move {
             let active_guard = inner_metrics.active_connections();
             let result: Result<_, anyhow::Error> = Box::pin(async move {
+                let peer_addr = peer_addr.context("fetching peer addr")?;
                 let (client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
                     match tls_context {
                         Some(tls_context) => {
@@ -1061,7 +1095,6 @@ impl mz_server_core::Server for HttpsBalancer {
                         }
                         _ => (Box::new(conn), None),
                     };
-
                 let resolved =
                     Self::resolve(&resolver, &resolve_template, port, servername.as_deref())
                         .await?;
@@ -1071,7 +1104,17 @@ impl mz_server_core::Server for HttpsBalancer {
                     .map(|tenant| inner_metrics.tenant_connections(tenant));
 
                 let mut mz_stream = TcpStream::connect(resolved.addr).await?;
+
                 let mut client_counter = CountingConn::new(client_stream);
+
+                if inject_proxy_headers {
+                    // Write the tcp proxy header
+                    let addrs = ProxiedAddress::stream(peer_addr, resolved.addr);
+                    let header = ProxyHeader::with_address(addrs);
+                    let mut buf = [0u8; 1024];
+                    let len = header.encode_to_slice_v2(&mut buf)?;
+                    mz_stream.write_all(&buf[..len]).await?;
+                }
 
                 // Now blindly shuffle bytes back and forth until closed.
                 // TODO: Limit total memory use.

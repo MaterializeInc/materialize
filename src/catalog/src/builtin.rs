@@ -3400,6 +3400,7 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column("id", ScalarType::Uuid.nullable(false))
         .with_column("connection_id", ScalarType::UInt32.nullable(false))
         .with_column("role_id", ScalarType::String.nullable(false))
+        .with_column("client_ip", ScalarType::String.nullable(true))
         .with_column(
             "connected_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),

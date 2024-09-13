@@ -18,14 +18,17 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt::Debug;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{DefaultBodyLimit, FromRequestParts, Query, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Query, Request, State};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{routing, Extension, Json, Router};
@@ -217,8 +220,16 @@ impl Server for HttpServer {
     fn handle_connection(&self, conn: Connection) -> ConnectionHandler {
         let router = self.router.clone();
         let tls_config = self.tls.clone();
-        let conn = TokioIo::new(conn);
+        let mut conn = TokioIo::new(conn);
         Box::pin(async {
+            let direct_peer_addr = conn.inner().peer_addr().context("fetching peer addr")?;
+            let peer_addr = conn
+                .inner_mut()
+                .take_proxy_header_address()
+                .await
+                .map(|a| a.source)
+                .unwrap_or(direct_peer_addr);
+
             let (conn, conn_protocol) = match tls_config {
                 Some(tls_config) => {
                     let mut ssl_stream =
@@ -231,7 +242,10 @@ impl Server for HttpServer {
                 }
                 _ => (MaybeHttpsStream::Http(conn), ConnProtocol::Http),
             };
-            let tower_svc = router.layer(Extension(conn_protocol));
+            let mut make_tower_svc = router
+                .layer(Extension(conn_protocol))
+                .into_make_service_with_connect_info::<SocketAddr>();
+            let tower_svc = make_tower_svc.call(peer_addr).await.unwrap();
             let hyper_svc = hyper::service::service_fn(|req| tower_svc.clone().call(req));
             let http = hyper::server::conn::http1::Builder::new();
             http.serve_connection(conn, hyper_svc)
@@ -434,11 +448,19 @@ async fn internal_http_auth(mut req: Request, next: Next) -> impl IntoResponse {
 impl Server for InternalHttpServer {
     const NAME: &'static str = "internal_http";
 
-    fn handle_connection(&self, conn: Connection) -> ConnectionHandler {
+    fn handle_connection(&self, mut conn: Connection) -> ConnectionHandler {
         let router = self.router.clone();
-        let service = hyper::service::service_fn(move |req| router.clone().call(req));
 
         Box::pin(async {
+            let mut make_tower_svc = router.into_make_service_with_connect_info::<SocketAddr>();
+            let direct_peer_addr = conn.peer_addr().context("fetching peer addr")?;
+            let peer_addr = conn
+                .take_proxy_header_address()
+                .await
+                .map(|a| a.source)
+                .unwrap_or(direct_peer_addr);
+            let tower_svc = make_tower_svc.call(peer_addr).await?;
+            let service = hyper::service::service_fn(|req| tower_svc.clone().call(req));
             let http = hyper::server::conn::http1::Builder::new();
             http.serve_connection(TokioIo::new(conn), service)
                 .with_upgrades()
@@ -473,6 +495,7 @@ impl AuthedClient {
     async fn new<F>(
         adapter_client: &Client,
         user: AuthedUser,
+        peer_addr: IpAddr,
         active_connection_count: SharedConnectionCounter,
         session_config: F,
         options: BTreeMap<String, String>,
@@ -485,6 +508,7 @@ impl AuthedClient {
             conn_id,
             uuid: Uuid::new_v4(),
             user: user.name,
+            client_ip: Some(peer_addr),
             external_metadata_rx: user.external_metadata_rx,
         });
         let drop_connection =
@@ -530,6 +554,13 @@ where
             .await
             .unwrap_or_default();
 
+        let peer_addr = req
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .expect("ConnectInfo extension guaranteed to exist")
+            .0
+            .ip();
+
         let user = req.extensions.get::<AuthedUser>().unwrap();
         let adapter_client = req
             .extensions
@@ -560,6 +591,7 @@ where
         let client = AuthedClient::new(
             &adapter_client,
             user.clone(),
+            peer_addr,
             Arc::clone(active_connection_count),
             |session| {
                 session
@@ -667,6 +699,7 @@ async fn init_ws(
         active_connection_count,
     }: &WsState,
     existing_user: Option<AuthedUser>,
+    peer_addr: IpAddr,
     ws: &mut WebSocket,
 ) -> Result<AuthedClient, anyhow::Error> {
     // TODO: Add a timeout here to prevent resource leaks by clients that
@@ -742,6 +775,7 @@ async fn init_ws(
     let client = AuthedClient::new(
         &adapter_client_rx.clone().await?,
         user,
+        peer_addr,
         Arc::clone(active_connection_count),
         |_session| (),
         options,

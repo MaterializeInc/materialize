@@ -17,6 +17,7 @@ openssl = { version = "0.10.48", features = ["vendored"] }
 scopeguard = "1.1.0"
 socket2 = "0.5.3"
 tokio-stream = "0.1.11"
+proxy-header = "0.1.2"
 tracing = "0.1.37"
 futures = "0.3.25"
 mz-dyncfg = { path = "../dyncfg" }

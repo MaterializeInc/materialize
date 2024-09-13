@@ -647,12 +647,13 @@ Field                  | Type                         | Meaning
 The `mz_sessions` table contains a row for each active session in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_sessions -->
-| Field           | Type                           | Meaning                                                                                                                   |
-| --------------- | ------------------------------ | --------                                                                                                                  |
-| `id`            | [`uuid`]                       | The globally unique ID of the session. |
-| `connection_id` | [`uint4`]                      | The connection ID of the session. Unique only for active sessions and can be recycled. Corresponds to [`pg_backend_pid()`](/sql/functions/#pg_backend_pid). |
-| `role_id`       | [`text`]                       | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles). |
-| `connected_at`  | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
+| Field            | Type                           | Meaning                                                                                                                   |
+| -----------------| ------------------------------ | --------                                                                                                                  |
+| `id`             | [`uuid`]                       | The globally unique ID of the session. |
+| `connection_id`  | [`uint4`]                      | The connection ID of the session. Unique only for active sessions and can be recycled. Corresponds to [`pg_backend_pid()`](/sql/functions/#pg_backend_pid). |
+| `role_id`        | [`text`]                       | The role ID of the role that the session is logged in as. Corresponds to [`mz_catalog.mz_roles`](../mz_catalog#mz_roles). |
+| `client_ip`      | [`text`]                       | The IP address of the client that initiated the session.                                                                  |
+| `connected_at`   | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
 
 ## `mz_show_all_privileges`
 

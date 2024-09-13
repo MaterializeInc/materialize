@@ -9,6 +9,7 @@
 
 #![allow(missing_docs)]
 
+use std::error::Error;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -40,7 +41,7 @@ pub struct Args {
     #[clap(long, value_name = "HOST:PORT")]
     static_resolver_addr: Option<String>,
     /// Frontegg resolver address template. `{}` is replaced with the user's frontegg tenant id to
-    /// get a DNS address. The first IP that address resolves to is the proxy destinaiton.
+    /// get a DNS address. The first IP that address resolves to is the proxy destinations.
     #[clap(long,
         value_name = "HOST.{}.NAME:PORT",
         requires_all = &["frontegg-api-token-url", "frontegg-admin-role"],
@@ -48,7 +49,7 @@ pub struct Args {
     frontegg_resolver_template: Option<String>,
     /// HTTPS resolver address template. `{}` is replaced with the first subdomain of the HTTPS SNI
     /// host address to get a DNS address. The first IP that address resolves to is the proxy
-    /// destinaiton.
+    /// destinations.
     #[clap(long, value_name = "HOST.{}.NAME:PORT")]
     https_resolver_template: String,
     /// Cancellation resolver configmap directory. The org id part of the incoming connection id
@@ -115,6 +116,23 @@ pub struct Args {
     /// The cloud provider region where the balancer is running.
     #[clap(long, env = "CLOUD_PROVIDER_REGION")]
     cloud_provider_region: Option<String>,
+    /// Set startup defaults for dynconfig
+    #[clap(long, value_parser = parse_key_val::<String, String>, value_delimiter = ',')]
+    default_config: Option<Vec<(String, String)>>,
+}
+
+/// Parse a single key-value pair
+fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Sync + 'static>>
+where
+    T: std::str::FromStr,
+    T::Err: Error + Send + Sync + 'static,
+    U: std::str::FromStr,
+    U::Err: Error + Send + Sync + 'static,
+{
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
+    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }
 
 pub async fn run(args: Args, tracing_handle: TracingHandle) -> Result<(), anyhow::Error> {
@@ -185,6 +203,7 @@ pub async fn run(args: Args, tracing_handle: TracingHandle) -> Result<(), anyhow
         args.cloud_provider,
         args.cloud_provider_region,
         tracing_handle,
+        args.default_config.unwrap_or(vec![]),
     );
     let service = BalancerService::new(config).await?;
     service.serve().await?;

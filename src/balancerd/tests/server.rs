@@ -192,6 +192,7 @@ async fn test_balancer() {
             None,
             None,
             TracingHandle::disabled(),
+            vec![],
         );
         let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
         let balancer_pgwire_listen = balancer_server.pgwire.0.local_addr();
