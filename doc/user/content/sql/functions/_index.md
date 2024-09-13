@@ -43,7 +43,7 @@ clauses to the `SELECT` statement (e.g., `FROM`, `WHERE`).
 
 Side-effecting functions are marked as such in the table below.
 
-{{< fnlist >}}
+{{% fnlist %}}
 
 ## Operators
 
