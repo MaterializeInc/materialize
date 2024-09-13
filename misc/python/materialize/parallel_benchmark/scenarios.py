@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from copy import deepcopy
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mysql import MySql
@@ -1085,4 +1086,76 @@ class ReadReplicaBenchmark(Scenario):
                     ],
                 ),
             ]
+        )
+
+
+class StagingBench(Scenario):
+    # TODO: Reenable queries other than SELECT 1
+    # TODO: Kafka source + sink
+    # TODO: Webhook source
+    @staticmethod
+    def enabled_by_default() -> bool:
+        return False
+
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        conn_infos = deepcopy(conn_infos)
+        conn_infos["materialized"].cluster = "quickstart"
+        self.init(
+            [
+                LoadPhase(
+                    duration=82800,
+                    actions=[
+                        OpenLoop(
+                            action=PooledQuery(
+                                "SELECT 1", conn_info=conn_infos["materialized"]
+                            ),
+                            dist=Periodic(per_second=500),
+                        ),
+                        # TODO: Reenable when database-issues#5511 is fixed
+                        # ClosedLoop(
+                        #     action=ReuseConnQuery(
+                        #         "SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge > 0",
+                        #         conn_info=conn_infos["materialized"],
+                        #     ),
+                        # ),
+                        # ClosedLoop(
+                        #     action=ReuseConnQuery(
+                        #         "SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate <= '2023-01-01'",
+                        #         conn_info=conn_infos["materialized"],
+                        #     ),
+                        # ),
+                        # ClosedLoop(
+                        #    action=ReuseConnQuery(
+                        #        "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 1",
+                        #        conn_info=conn_infos["materialized"],
+                        #    ),
+                        # ),
+                        # ClosedLoop(
+                        #    action=ReuseConnQuery(
+                        #        "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_mysql_cdc.mysql_wmr WHERE degree > 1",
+                        #        conn_info=conn_infos["materialized"],
+                        #    ),
+                        # ),
+                        # ClosedLoop(
+                        #    action=ReuseConnQuery(
+                        #        "SELECT COUNT(DISTINCT count_star) FROM qa_canary_environment.public_loadgen.sales_product_product_category WHERE count_distinct_product_id > 0",
+                        #        conn_info=conn_infos["materialized"],
+                        #    ),
+                        # ),
+                        # ClosedLoop(
+                        #    action=ReuseConnQuery(
+                        #        "SELECT * FROM qa_canary_environment.public_table.table_mv",
+                        #        conn_info=conn_infos["materialized"],
+                        #    ),
+                        # ),
+                        # ClosedLoop(
+                        #    action=ReuseConnQuery(
+                        #        "SELECT min(c), max(c), count(*) FROM qa_canary_environment.public_table.table",
+                        #        conn_info=conn_infos["materialized"],
+                        #    ),
+                        # ),
+                    ],
+                ),
+            ],
+            conn_pool_size=100,
         )
