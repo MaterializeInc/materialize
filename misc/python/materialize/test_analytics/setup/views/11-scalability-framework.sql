@@ -38,7 +38,9 @@ CREATE OR REPLACE VIEW v_scalability_framework_result_per_day AS
         date_trunc('day', b.date)
 ;
 
-CREATE INDEX v_scalability_framework_result_per_day_idx ON v_scalability_framework_result_per_day
+CREATE INDEX v_scalability_framework_result_per_day_idx
+IN CLUSTER test_analytics
+ON v_scalability_framework_result_per_day
 (
     branch,
     workload_name,
