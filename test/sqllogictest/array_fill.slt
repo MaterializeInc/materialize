@@ -37,7 +37,7 @@ SELECT array_fill(INTERVAL '1d', array[3])
 query T
 SELECT array_fill('[1,)'::int4range, array[3])
 ----
-{[1,),[1,),[1,)}
+{"[1,)","[1,)","[1,)"}
 
 query T
 SELECT (array_fill(5, array[3]))[1]

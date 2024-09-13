@@ -165,6 +165,8 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_CORRECTNESS_REGRESSIONS: dict
     str, MzVersion
 ] = {
     # insert newer commits at the top
+    # PR#29179: Add client_address to session
+    "deb8beb77ddb69895aad899cf2eab90a0a78585d": MzVersion.parse_mz("v0.118.0"),
     # PR#24497 (Make sure variance never returns a negative number) changes DFR or CTF handling compared to v0.84.0
     "82a5130a8466525c5b3bdb3eff845c7c34585774": MzVersion.parse_mz("v0.85.0"),
 }

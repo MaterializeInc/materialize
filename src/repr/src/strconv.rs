@@ -1534,7 +1534,7 @@ where
     let range = match &r.inner {
         None => {
             buf.write_str("empty");
-            return Ok(Nestable::Yes);
+            return Ok(Nestable::MayNeedEscaping);
         }
         Some(i) => i,
     };
@@ -1567,7 +1567,7 @@ where
         buf.write_char(')');
     }
 
-    Ok(Nestable::Yes)
+    Ok(Nestable::MayNeedEscaping)
 }
 
 /// A helper for `format_range` that formats a single record element.
