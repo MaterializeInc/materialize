@@ -329,8 +329,8 @@ These environments are later swapped transparently.
             - <schema_to_exclude>
     ```
 
-   If your dbt project includes [sinks](/manage/dbt/#sinks), you **must**
-   exclude the schema(s) and cluster(s) hosting these objects.
+   If your dbt project includes [sinks](/manage/dbt/#sinks), the schema(s) and
+   cluster(s) hosting these objects are automatically excluded from cloning.
 
 1. To preview and validate the list of clusters and schemas that will be
    considered for deployment, use the `run-operation` command to invoke the
