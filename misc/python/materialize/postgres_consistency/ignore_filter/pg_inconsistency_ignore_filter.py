@@ -568,6 +568,11 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Not supported by pg")
 
+        if "invalid regular expression: parentheses () not balanced" in pg_error_msg:
+            return YesIgnore(
+                "Materialize regular expressions are similar to, but not identical to, PostgreSQL regular expressions."
+            )
+
         if 'invalid input syntax for type time: ""' in pg_error_msg:
             return YesIgnore("#24736: different handling of empty time string")
 
