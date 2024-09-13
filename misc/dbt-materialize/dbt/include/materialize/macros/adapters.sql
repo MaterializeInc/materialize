@@ -101,7 +101,17 @@
 
   {{ sql }}
   ;
-  {%- endmacro %}
+{%- endmacro %}
+
+{% macro materialize__create_source_table(relation, sql) %}
+  {% set contract_config = config.get('contract') %}
+  {% if contract_config.enforced %}
+    {{exceptions.warn("Model contracts cannot be enforced for custom materializations (see dbt-core #7213)")}}
+  {%- endif %}
+
+  create table {{ relation }}
+  {{ sql }}
+{% endmacro %}
 
 {% macro materialize__create_sink(relation, sql) -%}
   {% set contract_config = config.get('contract') %}
@@ -144,9 +154,7 @@
     {% elif relation.type == 'index' %}
       drop index if exists {{ relation }}
     -- Tables are not supported as a materialization type in dbt-materialize,
-    -- but seeds are materialized as tables. This is needed to enable full
-    -- refreshes for seeds.
-    -- See: https://github.com/dbt-labs/dbt-adapters/blob/main/dbt/include/global_project/macros/materializations/seeds/helpers.sql
+    -- but seeds and source tables are materialized as tables.
     {% elif relation.type == 'table' %}
       drop table if exists {{ relation }}
     {% endif %}

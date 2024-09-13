@@ -34,6 +34,7 @@ class MaterializeRelationType(StrEnum):
 
     # Materialize-specific materialization types.
     Source = "source"
+    SourceTable = "source_table"
     Sink = "sink"
     # NOTE(morsapaes): dbt supports materialized views as a built-in
     # materialization since v1.6.0, so we deprecate the legacy materialization
@@ -66,6 +67,10 @@ class MaterializeRelation(PostgresRelation):
     @property
     def is_source(self) -> bool:
         return self.type == MaterializeRelationType.Source
+
+    @property
+    def is_source_table(self) -> bool:
+        return self.type == MaterializeRelationType.SourceTable
 
     @property
     def is_sink(self) -> bool:
