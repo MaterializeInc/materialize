@@ -2458,6 +2458,10 @@ impl RowArena {
         }
     }
 
+    pub fn reserve(&self, additional: usize) {
+        self.inner.borrow_mut().reserve(additional);
+    }
+
     /// Take ownership of `bytes` for the lifetime of the arena.
     #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn push_bytes<'a>(&'a self, bytes: Vec<u8>) -> &'a [u8] {

@@ -194,15 +194,32 @@ impl Arbitrary for ReducePlan {
             any::<bool>(),
             any::<bool>(),
             any_group_size(),
+            any::<bool>(),
         )
             .prop_map(
-                |(exprs, monotonic, any_expected_size, expected_group_size)| {
+                |(
+                    exprs,
+                    monotonic,
+                    any_expected_size,
+                    expected_group_size,
+                    mut fused_unnest_list,
+                )| {
                     let expected_group_size = if any_expected_size {
                         Some(expected_group_size)
                     } else {
                         None
                     };
-                    ReducePlan::create_from(exprs, monotonic, expected_group_size)
+                    if !(exprs.len() == 1
+                        && matches!(reduction_type(&exprs[0].func), ReductionType::Basic))
+                    {
+                        fused_unnest_list = false;
+                    }
+                    ReducePlan::create_from(
+                        exprs,
+                        monotonic,
+                        expected_group_size,
+                        fused_unnest_list,
+                    )
                 },
             )
             .boxed()
@@ -463,10 +480,8 @@ impl RustType<ProtoBucketedPlan> for BucketedPlan {
 /// directly.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum BasicPlan {
-    /// Plan for rendering a single basic aggregation. Here, the
-    /// first element denotes the index in the set of inputs
-    /// that we are aggregating over.
-    Single(usize, AggregateExpr),
+    /// Plan for rendering a single basic aggregation.
+    Single(SingleBasicPlan),
     /// Plan for rendering multiple basic aggregations.
     /// These need to then be collated together in an additional
     /// reduction. Each element represents the:
@@ -475,21 +490,55 @@ pub enum BasicPlan {
     Multiple(Vec<(usize, AggregateExpr)>),
 }
 
-impl RustType<proto_basic_plan::ProtoSingleBasicPlan> for (usize, AggregateExpr) {
-    fn into_proto(&self) -> proto_basic_plan::ProtoSingleBasicPlan {
-        proto_basic_plan::ProtoSingleBasicPlan {
+/// Plan for rendering a single basic aggregation, with possibly fusing a `FlatMap UnnestList` with
+/// this aggregation.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+pub struct SingleBasicPlan {
+    /// The index in the set of inputs that we are aggregating over.
+    pub index: usize,
+    /// The aggregation that we should perform.
+    pub expr: AggregateExpr,
+    /// Whether we fused a `FlatMap UnnestList` with this aggregation.
+    pub fused_unnest_list: bool,
+}
+
+impl RustType<proto_basic_plan::ProtoSimpleSingleBasicPlan> for (usize, AggregateExpr) {
+    fn into_proto(&self) -> proto_basic_plan::ProtoSimpleSingleBasicPlan {
+        proto_basic_plan::ProtoSimpleSingleBasicPlan {
             index: self.0.into_proto(),
             expr: Some(self.1.into_proto()),
         }
     }
 
     fn from_proto(
-        proto: proto_basic_plan::ProtoSingleBasicPlan,
+        proto: proto_basic_plan::ProtoSimpleSingleBasicPlan,
     ) -> Result<Self, TryFromProtoError> {
         Ok((
             proto.index.into_rust()?,
-            proto.expr.into_rust_if_some("ProtoSingleBasicPlan::expr")?,
+            proto
+                .expr
+                .into_rust_if_some("ProtoSimpleSingleBasicPlan::expr")?,
         ))
+    }
+}
+
+impl RustType<proto_basic_plan::ProtoSingleBasicPlan> for SingleBasicPlan {
+    fn into_proto(&self) -> proto_basic_plan::ProtoSingleBasicPlan {
+        proto_basic_plan::ProtoSingleBasicPlan {
+            index: self.index.into_proto(),
+            expr: Some(self.expr.into_proto()),
+            fused_unnest_list: self.fused_unnest_list.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto_basic_plan::ProtoSingleBasicPlan,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(SingleBasicPlan {
+            index: proto.index.into_rust()?,
+            expr: proto.expr.into_rust_if_some("ProtoSingleBasicPlan::expr")?,
+            fused_unnest_list: proto.fused_unnest_list.into_rust()?,
+        })
     }
 }
 
@@ -499,12 +548,7 @@ impl RustType<ProtoBasicPlan> for BasicPlan {
 
         ProtoBasicPlan {
             kind: Some(match self {
-                BasicPlan::Single(index, expr) => Kind::Single({
-                    ProtoSingleBasicPlan {
-                        index: index.into_proto(),
-                        expr: Some(expr.into_proto()),
-                    }
-                }),
+                BasicPlan::Single(plan) => Kind::Single(plan.into_proto()),
                 BasicPlan::Multiple(aggrs) => Kind::Multiple(ProtoMultipleBasicPlan {
                     aggrs: aggrs.into_proto(),
                 }),
@@ -519,10 +563,7 @@ impl RustType<ProtoBasicPlan> for BasicPlan {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoBasicPlan::kind"))?;
 
         Ok(match kind {
-            Kind::Single(x) => BasicPlan::Single(
-                x.index.into_rust()?,
-                x.expr.into_rust_if_some("ProtoSingleBasicPlan.expr")?,
-            ),
+            Kind::Single(plan) => BasicPlan::Single(plan.into_rust()?),
             Kind::Multiple(x) => BasicPlan::Multiple(x.aggrs.into_rust()?),
         })
     }
@@ -587,6 +628,7 @@ impl ReducePlan {
         aggregates: Vec<AggregateExpr>,
         monotonic: bool,
         expected_group_size: Option<u64>,
+        fused_unnest_list: bool,
     ) -> Self {
         // If we don't have any aggregations we are just computing a distinct.
         if aggregates.is_empty() {
@@ -608,7 +650,13 @@ impl ReducePlan {
         let plan: Vec<_> = reduction_types
             .into_iter()
             .map(|(typ, aggregates_list)| {
-                ReducePlan::create_inner(typ, aggregates_list, monotonic, expected_group_size)
+                ReducePlan::create_inner(
+                    typ,
+                    aggregates_list,
+                    monotonic,
+                    expected_group_size,
+                    fused_unnest_list,
+                )
             })
             .collect();
 
@@ -668,7 +716,13 @@ impl ReducePlan {
         aggregates_list: Vec<(usize, AggregateExpr)>,
         monotonic: bool,
         expected_group_size: Option<u64>,
+        fused_unnest_list: bool,
     ) -> Self {
+        assert!(if fused_unnest_list {
+            matches!(typ, ReductionType::Basic) && aggregates_list.len() == 1
+        } else {
+            true
+        });
         assert!(
             aggregates_list.len() > 0,
             "error: tried to render a reduce dataflow with no aggregates"
@@ -736,10 +790,11 @@ impl ReducePlan {
             }
             ReductionType::Basic => {
                 if aggregates_list.len() == 1 {
-                    ReducePlan::Basic(BasicPlan::Single(
-                        aggregates_list[0].0,
-                        aggregates_list[0].1.clone(),
-                    ))
+                    ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
+                        index: aggregates_list[0].0,
+                        expr: aggregates_list[0].1.clone(),
+                        fused_unnest_list,
+                    }))
                 } else {
                     ReducePlan::Basic(BasicPlan::Multiple(aggregates_list))
                 }
