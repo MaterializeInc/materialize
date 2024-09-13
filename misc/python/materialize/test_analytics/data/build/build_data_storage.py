@@ -89,9 +89,9 @@ class BuildDataStorage(BaseDataStorage):
             BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB, "NULL::INT"
         )
         retry_count = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_RETRY_COUNT)
-        aws_instance_type = buildkite.get_var(
+        instance_type = buildkite.get_var(
             BuildkiteEnvVar.BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE
-        )
+        ) or buildkite.get_var(BuildkiteEnvVar.BUILDKITE_AGENT_META_DATA_INSTANCE_TYPE)
 
         start_time_with_tz = os.getenv("STEP_START_TIMESTAMP_WITH_TZ")
         if buildkite.is_in_buildkite():
@@ -134,7 +134,7 @@ class BuildDataStorage(BaseDataStorage):
               now(),
               TRUE,
               {was_successful},
-              {as_sanitized_literal(aws_instance_type)}
+              {as_sanitized_literal(instance_type)}
             WHERE NOT EXISTS
             (
                 SELECT 1
