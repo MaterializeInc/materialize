@@ -44,7 +44,9 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_day AS
         date_trunc('day', b.date)
 ;
 
-CREATE INDEX v_feature_benchmark_result_per_day_idx ON v_feature_benchmark_result_per_day
+CREATE INDEX v_feature_benchmark_result_per_day_idx
+IN CLUSTER test_analytics
+ON v_feature_benchmark_result_per_day
 (
     branch,
     scenario_name,
