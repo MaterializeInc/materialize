@@ -45,7 +45,7 @@ _select&lowbar;pred_ | The predicating [`SELECT`](/sql/select) clauses you want 
 _join\_type_ | The type of `JOIN` you want to use _(`INNER` is implied default)_.
 _select\_stmt_ | A [`SELECT` statement](/sql/select).
 _table\_ref_ | The table expression you want to join, i.e. the right-hand table.
-_table\_func\_call_ | A call to a [table function](/sql/functions/#table).
+_table\_func\_call_ | A call to a [table function](/sql/functions/#table-functions).
 **USING (** _col\_ref..._ **)** | If the join condition does not require table-level qualification (i.e. joining tables on columns with the same name), the columns to join the tables on. For example, `USING (customer_id)`.
 _join\_using\_alias_ | A table alias for the join columns specified in the `USING` clause. The columns will remain referenceable by their original names. For example, given `lhs JOIN rhs USING (c) AS joint`, the column `c` will be referenceable as `lhs.c`, `rhs.c`, and `joint.c`.
 **ON** _expression_ | The condition on which to join the tables. For example `ON purchase.customer_id = customer.id`.

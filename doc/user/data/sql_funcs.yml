@@ -456,11 +456,11 @@
   description: Scalar functions take a list of scalar expressions
   functions:
   - signature: 'expression bool_op ALL(s: Scalars) -> bool'
-    description: "`true` if applying [bool_op](#boolean) to `expression` and every
+    description: "`true` if applying [bool_op](#boolean-operators) to `expression` and every
       value of `s` evaluates to `true`."
 
   - signature: 'expression bool_op ANY(s: Scalars) -> bool'
-    description: "`true` if applying [bool_op](#boolean) to `expression` and any value
+    description: "`true` if applying [bool_op](#boolean-operators) to `expression` and any value
       of `s` evaluates to `true`."
 
   - signature: 'expression IN(s: Scalars) -> bool'
@@ -472,18 +472,18 @@
       of `s`."
 
   - signature: 'expression bool_op SOME(s: Scalars) -> bool'
-    description: "`true` if applying [bool_op](#boolean) to `expression` and any value
+    description: "`true` if applying [bool_op](#boolean-operators) to `expression` and any value
       of `s` evaluates to `true`."
 
 - type: Subquery
   description: Subquery functions take a query, e.g. [`SELECT`](/sql/select)
   functions:
   - signature: 'expression bool_op ALL(s: Query) -> bool'
-    description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
+    description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean-operators)
       to `expression` and every value of `s` evaluates to `true`."
 
   - signature: 'expression bool_op ANY(s: Query) -> bool'
-    description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
+    description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean-operators)
       to `expression` and any value of `s` evaluates to `true`."
 
   - signature: 'csv_extract(num_csv_col: int, col_name: string) -> col1: string, ... coln: string'
@@ -505,7 +505,7 @@
       if it does not match any elements of `s`."
 
   - signature: 'expression bool_op SOME(s: Query) -> bool'
-    description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
+    description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean-operators)
       to `expression` and any value of `s` evaluates to `true`."
 
 - type: Date and time
@@ -785,6 +785,14 @@
 
 - type: Window
   description: |
+    {{< tip >}}
+
+    For some window function query patterns, rewriting your query to not use
+    window functions can yield better performance.  See [Patterns: Window
+    functions](/transform-data/patterns/window-functions/) for details.
+
+    {{</ tip >}}
+
     Window functions compute values across sets of rows related to the current row.
     For example, you can use a window aggregation to smooth measurement data by computing the average of the last 5
     measurements before every row as follows:
@@ -796,10 +804,16 @@
     ```
 
     Window functions always need an `OVER` clause. For the `OVER` clause, Materialize supports the same
-    [syntax as PostgreSQL](https://www.postgresql.org/docs/current/tutorial-window.html), but currently
-    only with the `ROWS` frame mode (except for the default frame, which is
-    `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`, and is supported).
-    In addition to the below window functions, you can use the `OVER` clause with any aggregation function
+    [syntax as
+    PostgreSQL](https://www.postgresql.org/docs/current/tutorial-window.html),
+    but supports only the following frame modes:
+
+    - the `ROWS` frame mode.
+
+    - the default frame, which is `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT
+    ROW`.
+
+    In addition to the below window functions, you can use the `OVER` clause with any [aggregation function](#aggregate-functions)
     (e.g., `sum`, `avg`) as well. Using an aggregation with an `OVER` clause is called a _window aggregation_. A
     window aggregation computes the aggregate not on the groups specified by the `GROUP BY` clause, but on the frames
     specified inside the `OVER` clause. (Note that a window aggregation produces exactly one output value _for each input

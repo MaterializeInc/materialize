@@ -475,8 +475,8 @@ as follows:
      the remainder as the message's partition (i.e., `partition_id = hash %
      partition_count`).
 
-Materialize provides several [hash functions](/sql/functions/#hash) which
-are commonly used in Kafka partition assignment:
+Materialize provides several [hash functions](/sql/functions/#hash-functions)
+which are commonly used in Kafka partition assignment:
 
   * `crc32`
   * `kafka_murmur2`

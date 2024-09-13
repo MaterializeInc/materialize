@@ -8,7 +8,7 @@ menu:
     parent: 'sql-patterns'
 ---
 
-Materialize offers a wide range of [window functions](/sql/functions/#window), such as `LAG`, `LEAD`, `ROW_NUMBER`, and `FIRST_VALUE`, to support a variety of complex query patterns. This page discusses certain window function query patterns where rewriting your query to not use window functions can yield a better performance.
+Materialize offers a wide range of [window functions](/sql/functions/#window-functions), such as `LAG`, `LEAD`, `ROW_NUMBER`, and `FIRST_VALUE`, to support a variety of complex query patterns. This page discusses certain window function query patterns where rewriting your query to not use window functions can yield a better performance.
 
 Currently, Materialize implements window functions by recomputing results for an entire window partition when an input record is added, removed or changed in the partition. This means that when a new batch of input data arrives (that is, every second) the system has to perform an amount of computation proportional to the total size of the touched partitions (where the partitions are determined by the `PARTITION BY` clause inside the `OVER` clause of your window function call). For example, if in a certain second 20 input records change, and these records belong to 10 different partitions, and the average sizes of these partitions is 100, then the system will perform work proportional to computing window function results for 10\*100=1000 rows.
 

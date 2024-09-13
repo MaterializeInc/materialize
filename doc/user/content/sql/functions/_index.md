@@ -47,13 +47,13 @@ Side-effecting functions are marked as such in the table below.
 
 ## Operators
 
-### Generic
+### Generic operators
 
 Operator | Computes
 ---------|---------
 `val::type` | Cast of `val` as `type` ([docs](cast))
 
-### Boolean
+### Boolean operators
 
 Operator | Computes
 ---------|---------
@@ -80,7 +80,7 @@ Operator | Computes
 `a LIKE match_expr [ ESCAPE escape_char ]` | `a` matches `match_expr`, using [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
 `a ILIKE match_expr [ ESCAPE escape_char ]` | `a` matches `match_expr`, using case-insensitive [SQL LIKE matching](https://www.postgresql.org/docs/13/functions-matching.html#FUNCTIONS-LIKE)
 
-### Numbers
+### Numbers operators
 
 Operator | Computes
 ---------|---------
@@ -96,7 +96,7 @@ Operator | Computes
 `<<`| Bitwise left shift
 `>>`| Bitwise right shift
 
-### String
+### String operators
 
 Operator | Computes
 ---------|---------
@@ -118,7 +118,7 @@ Materialize regular expressions are similar to, but not identical to, PostgreSQL
 regular expressions.
 {{< /warning >}}
 
-### Time-like
+### Time-like operators
 
 Operation | Computes
 ----------|------------
@@ -133,15 +133,15 @@ Operation | Computes
 [`time`](../types/time) `-` [`interval`](../types/interval) | `time`
 [`time`](../types/time) `-` [`time`](../types/time) | [`interval`](../types/interval)
 
-### JSON
+### JSON operators
 
 {{% json-operators %}}
 
-### Map
+### Map operators
 
 {{% map-operators %}}
 
-### List
+### List operators
 
 List operators are [polymorphic](../types/list/#polymorphism).
 
