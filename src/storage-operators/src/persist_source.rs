@@ -33,7 +33,9 @@ use mz_persist_client::fetch::{SerdeLeasedBatchPart, ShardSourcePart};
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationType, Row, RowArena, Timestamp};
+use mz_repr::{
+    Datum, DatumVec, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp,
+};
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
@@ -141,6 +143,7 @@ pub fn persist_source<G>(
     // dataflow.
     worker_dyncfgs: &ConfigSet,
     metadata: CollectionMetadata,
+    read_schema: Option<RelationDesc>,
     as_of: Option<Antichain<Timestamp>>,
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
@@ -204,6 +207,7 @@ where
             source_id,
             Arc::clone(&persist_clients),
             metadata.clone(),
+            read_schema,
             as_of.clone(),
             snapshot_mode,
             until.clone(),
@@ -274,6 +278,7 @@ pub fn persist_source_core<'g, G>(
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
+    read_schema: Option<RelationDesc>,
     as_of: Option<Antichain<Timestamp>>,
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
@@ -350,7 +355,7 @@ where
         snapshot_mode,
         until.clone(),
         desc_transformer,
-        Arc::new(metadata.relation_desc),
+        Arc::new(read_schema.unwrap_or_else(|| metadata.relation_desc.clone())),
         Arc::new(UnitSchema),
         move |stats, frontier| {
             let Some(lower) = frontier.as_option().copied() else {
