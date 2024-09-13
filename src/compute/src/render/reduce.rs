@@ -26,7 +26,7 @@ use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Diff as _};
 use mz_compute_types::plan::reduce::{
     reduction_type, AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan,
-    MonotonicPlan, ReducePlan, ReductionType,
+    MonotonicPlan, ReducePlan, ReductionType, SingleBasicPlan,
 };
 use mz_expr::{
     AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
@@ -230,10 +230,27 @@ where
                 errors.push(errs);
                 MzArrangement::RowRow(output)
             }
-            ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
-                let (output, errs) = self
-                    .build_basic_aggregate(collection, index, &aggr, true, key_arity, mfp_after);
-                errors.push(errs.expect("validation should have occurred as it was requested"));
+            ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
+                index,
+                expr,
+                fused_unnest_list,
+            })) => {
+                // Note that we skip validating for negative diffs when we have a fused unnest list,
+                // because this is already a CPU-intensive situation due to the non-incrementalness
+                // of window functions.
+                let validating = !fused_unnest_list;
+                let (output, errs) = self.build_basic_aggregate(
+                    collection,
+                    index,
+                    &expr,
+                    validating,
+                    key_arity,
+                    mfp_after,
+                    fused_unnest_list,
+                );
+                if validating {
+                    errors.push(errs.expect("validation should have occurred as it was requested"));
+                }
                 MzArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
@@ -628,6 +645,7 @@ where
                 err_output.is_none(),
                 key_arity,
                 None,
+                false,
             );
             if errs.is_some() {
                 err_output = errs
@@ -711,6 +729,7 @@ where
         validating: bool,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
+        fused_unnest_list: bool,
     ) -> (
         RowRowArrangement<S>,
         Option<Collection<S, DataflowError, Diff>>,
@@ -767,21 +786,27 @@ where
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
         let func2 = func.clone();
 
-        let arranged = partial.mz_arrange::<RowRowSpine<_, _>>("Arranged ReduceInaccumulable");
-        let oks =
-            arranged.mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>("ReduceInaccumulable", {
-                move |key, source, target| {
-                    // We respect the multiplicity here (unlike in hierarchical aggregation)
-                    // because we don't know that the aggregation method is not sensitive
-                    // to the number of records.
-                    let iter = source.iter().flat_map(|(v, w)| {
-                        // Note that in the non-positive case, this is wrong, but harmless because
-                        // our other reduction will produce an error.
-                        let count = usize::try_from(*w).unwrap_or(0);
-                        std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
-                    });
+        let name = if !fused_unnest_list {
+            "ReduceInaccumulable"
+        } else {
+            "FusedReduceUnnestList"
+        };
+        let arranged =
+            partial.mz_arrange::<RowRowSpine<_, _>>(("Arranged ".to_owned() + name).as_str());
+        let oks = arranged.mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>(name, {
+            move |key, source, target| {
+                // We respect the multiplicity here (unlike in hierarchical aggregation)
+                // because we don't know that the aggregation method is not sensitive
+                // to the number of records.
+                let iter = source.iter().flat_map(|(v, w)| {
+                    // Note that in the non-positive case, this is wrong, but harmless because
+                    // our other reduction will produce an error.
+                    let count = usize::try_from(*w).unwrap_or(0);
+                    std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
+                });
 
-                    let temp_storage = RowArena::new();
+                let temp_storage = RowArena::new();
+                if !fused_unnest_list {
                     let datum_iter = key.to_datum_iter();
                     let mut datums_local = datums1.borrow();
                     datums_local.extend(datum_iter);
@@ -800,8 +825,30 @@ where
                     {
                         target.push((row, 1));
                     }
+                } else {
+                    for datum in func
+                        .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
+                            iter,
+                            &temp_storage,
+                        )
+                    {
+                        let datum_iter = key.to_datum_iter();
+                        let mut datums_local = datums1.borrow();
+                        datums_local.extend(datum_iter);
+                        let key_len = datums_local.len();
+                        datums_local.push(datum);
+                        if let Some(row) = evaluate_mfp_after(
+                            &mfp_after1,
+                            &mut datums_local,
+                            &temp_storage,
+                            key_len,
+                        ) {
+                            target.push((row, 1));
+                        }
+                    }
                 }
-            });
+            }
+        });
 
         // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here, but
         // we then wouldn't be able to do this error check conditionally.  See its documentation for the
@@ -812,7 +859,7 @@ where
 
             let errs = arranged
                 .mz_reduce_abelian::<_, _, _, RowErrSpine<_, _>>(
-                    "ReduceInaccumulable Error Check",
+                    (name.to_owned() + " Error Check").as_str(),
                     move |key, source, target| {
                         // Negative counts would be surprising, but until we are 100% certain we won't
                         // see them, we should report when we do. We may want to bake even more info
@@ -841,18 +888,31 @@ where
                         });
 
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.to_datum_iter();
-                        let mut datums_local = datums2.borrow();
-                        datums_local.extend(datum_iter);
-                        datums_local.push(
-                            func2.eval_with_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
-                                iter,
-                                &temp_storage,
-                            ),
-                        );
-                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                        {
-                            target.push((e.into(), 1));
+                        if !fused_unnest_list {
+                            let datum_iter = key.to_datum_iter();
+                            let mut datums_local = datums2.borrow();
+                            datums_local.extend(datum_iter);
+                            datums_local.push(
+                                func2.eval_with_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
+                                    iter,
+                                    &temp_storage,
+                                ),
+                            );
+                            if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                            {
+                                target.push((e.into(), 1));
+                            }
+                        } else {
+                            for datum in func2.eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(iter, &temp_storage) {
+                                let datum_iter = key.to_datum_iter();
+                                let mut datums_local = datums2.borrow();
+                                datums_local.extend(datum_iter);
+                                datums_local.push(datum);
+                                if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                                {
+                                    target.push((e.into(), 1));
+                                }
+                            }
                         }
                     },
                 )

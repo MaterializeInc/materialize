@@ -9,6 +9,8 @@
 
 // See https://developers.google.com/protocol-buffers for what's going on here.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
+
 syntax = "proto3";
 
 import "expr/src/linear.proto";
@@ -64,12 +66,17 @@ message ProtoBasicPlan {
     message ProtoSingleBasicPlan {
         uint64 index = 1;
         mz_expr.relation.ProtoAggregateExpr expr = 2;
+        bool fused_unnest_list = 3;
+    };
+
+    message ProtoSimpleSingleBasicPlan {
+        uint64 index = 1;
+        mz_expr.relation.ProtoAggregateExpr expr = 2;
     };
 
     message ProtoMultipleBasicPlan {
-        repeated ProtoSingleBasicPlan aggrs = 1;
+        repeated ProtoSimpleSingleBasicPlan aggrs = 1;
     }
-
 
     oneof kind {
         ProtoSingleBasicPlan single = 1;

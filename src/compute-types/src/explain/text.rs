@@ -36,7 +36,9 @@ use mz_repr::explain::{
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
 use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
-use crate::plan::reduce::{AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan};
+use crate::plan::reduce::{
+    AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan, SingleBasicPlan,
+};
 use crate::plan::{AvailableCollections, LirId, Plan};
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
@@ -756,9 +758,22 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for BasicPlan {
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
-            BasicPlan::Single(idx, agg) => {
-                let agg = mode.expr(agg, None);
-                writeln!(f, "{}aggr=({}, {})", ctx.indent, idx, agg)?;
+            BasicPlan::Single(SingleBasicPlan {
+                index,
+                expr,
+                fused_unnest_list,
+            }) => {
+                let agg = mode.expr(expr, None);
+                let fused_unnest_list = if *fused_unnest_list {
+                    ", fused_unnest_list=true"
+                } else {
+                    ""
+                };
+                writeln!(
+                    f,
+                    "{}aggr=({}, {}{})",
+                    ctx.indent, index, agg, fused_unnest_list
+                )?;
             }
             BasicPlan::Multiple(aggs) => {
                 for (i, (i_datum, agg)) in aggs.iter().enumerate() {
