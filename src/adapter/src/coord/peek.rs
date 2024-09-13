@@ -152,7 +152,7 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
                 if redacted {
                     writeln!(f, "{}Error █", ctx.as_mut())
                 } else {
-                    writeln!(f, "{}Error {}", ctx.as_mut(), err.to_string().quoted())
+                    writeln!(f, "{}Error {}", ctx.as_mut(), err.to_string().escaped())
                 }
             }
             FastPathPlan::PeekExisting(coll_id, idx_id, literal_constraints, mfp) => {

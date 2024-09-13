@@ -3733,7 +3733,7 @@ impl fmt::Display for BinaryFunc {
                 Ok((regex, limit)) => write!(
                     f,
                     "regexp_replace[{}, case_insensitive={}, limit={}]",
-                    regex.pattern.quoted(),
+                    regex.pattern.escaped(),
                     regex.case_insensitive,
                     limit
                 ),
