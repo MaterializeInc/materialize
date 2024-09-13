@@ -966,13 +966,20 @@ where
         self.apply_read_hold_changes();
         self.cleanup_collections();
 
-        assert!(
-            self.replicas.is_empty(),
-            "cannot drop instances with provisioned replicas"
+        let stray_replicas: Vec<_> = self.replicas.into_keys().collect();
+        soft_assert_or_log!(
+            stray_replicas.is_empty(),
+            "dropped instance still has provisioned replicas: {stray_replicas:?}",
         );
-        assert!(
-            self.collections.values().all(|c| c.log_collection),
-            "cannot drop instances with installed collections"
+
+        let collections = self.collections.into_iter();
+        let stray_collections: Vec<_> = collections
+            .filter(|(_, c)| !c.log_collection)
+            .map(|(id, _)| id)
+            .collect();
+        soft_assert_or_log!(
+            stray_collections.is_empty(),
+            "dropped instance still has installed collections: {stray_collections:?}",
         );
     }
 
