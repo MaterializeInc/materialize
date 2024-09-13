@@ -16,6 +16,7 @@ from materialize.test_analytics.connector.test_analytics_connector import (
     DatabaseConnector,
 )
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
 class BuildDataStorage(BaseDataStorage):
@@ -51,20 +52,20 @@ class BuildDataStorage(BaseDataStorage):
                data_version
             )
             SELECT
-              '{pipeline}',
+              {as_sanitized_literal(pipeline)},
               {build_number},
-              '{build_id}',
-              '{branch}',
-              '{commit_hash}',
-              '{main_ancestor_commit_hash}',
-              '{mz_version}',
+              {as_sanitized_literal(build_id)},
+              {as_sanitized_literal(branch)},
+              {as_sanitized_literal(commit_hash)},
+              {as_sanitized_literal(main_ancestor_commit_hash)},
+              {as_sanitized_literal(str(mz_version))},
               now(),
               {self.data_version}
             WHERE NOT EXISTS
             (
                 SELECT 1
                 FROM build
-                WHERE build_id = '{build_id}'
+                WHERE build_id = {as_sanitized_literal(build_id)}
             );
             """
         )
@@ -97,7 +98,9 @@ class BuildDataStorage(BaseDataStorage):
             assert (
                 start_time_with_tz is not None
             ), "STEP_START_TIMESTAMP_WITH_TZ is not set"
-            start_time_with_tz = f"'{start_time_with_tz}'::TIMESTAMPTZ"
+            start_time_with_tz = (
+                f"{as_sanitized_literal(start_time_with_tz)}::TIMESTAMPTZ"
+            )
         else:
             start_time_with_tz = "NULL::TIMESTAMPTZ"
 
@@ -120,10 +123,10 @@ class BuildDataStorage(BaseDataStorage):
                 aws_instance_type
             )
             SELECT
-              '{job_id}',
-              '{step_id}',
-              '{build_id}',
-              '{step_key}',
+              {as_sanitized_literal(job_id)},
+              {as_sanitized_literal(step_id)},
+              {as_sanitized_literal(build_id)},
+              {as_sanitized_literal(step_key)},
               {shard_index},
               {retry_count},
               {start_time_with_tz},
@@ -131,12 +134,12 @@ class BuildDataStorage(BaseDataStorage):
               now(),
               TRUE,
               {was_successful},
-              '{aws_instance_type}'
+              {as_sanitized_literal(aws_instance_type)}
             WHERE NOT EXISTS
             (
                 SELECT 1
                 FROM build_job
-                WHERE build_job_id = '{job_id}'
+                WHERE build_job_id = {as_sanitized_literal(job_id)}
             );
             """
         )
@@ -145,9 +148,9 @@ class BuildDataStorage(BaseDataStorage):
             f"""
             UPDATE build_job
             SET is_latest_retry = FALSE
-            WHERE build_step_id = '{step_id}'
+            WHERE build_step_id = {as_sanitized_literal(step_id)}
             AND (shard_index = {shard_index} OR shard_index IS NULL)
-            AND build_job_id <> '{job_id}'
+            AND build_job_id <> {as_sanitized_literal(job_id)}
             ;
             """
         )
@@ -165,7 +168,7 @@ class BuildDataStorage(BaseDataStorage):
             f"""
             UPDATE build_job
             SET success = {was_successful}
-            WHERE build_job_id = '{job_id}';
+            WHERE build_job_id = {as_sanitized_literal(job_id)};
             """
         )
 

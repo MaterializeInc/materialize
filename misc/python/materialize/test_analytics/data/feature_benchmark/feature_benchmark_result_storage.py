@@ -12,6 +12,7 @@ from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
 from materialize.feature_benchmark.benchmark import ReportMeasurement
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
 @dataclass
@@ -61,13 +62,13 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     wallclock_variance
                 )
                 SELECT
-                    '{job_id}',
-                    '{framework_version}',
-                    '{result_entry.scenario_name}',
-                    '{result_entry.scenario_group}',
-                    '{result_entry.scenario_version}',
+                    {as_sanitized_literal(job_id)},
+                    {as_sanitized_literal(framework_version)},
+                    {as_sanitized_literal(result_entry.scenario_name)},
+                    {as_sanitized_literal(result_entry.scenario_group)},
+                    {as_sanitized_literal(result_entry.scenario_version)},
                     {result_entry.cycle},
-                    '{result_entry.scale}',
+                    {as_sanitized_literal(result_entry.scale)},
                     {result_entry.wallclock.result or 'NULL::DOUBLE'},
                     {result_entry.messages.result or 'NULL::INT'},
                     {result_entry.memory_mz.result or 'NULL::DOUBLE'},
@@ -112,8 +113,8 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     wallclock_variance
                 )
                 SELECT
-                    '{job_id}',
-                    '{discarded_entry.scenario_name}',
+                    {as_sanitized_literal(job_id)},
+                    {as_sanitized_literal(discarded_entry.scenario_name)},
                     {discarded_entry.cycle},
                     {discarded_entry.wallclock.result or 'NULL::DOUBLE'},
                     {discarded_entry.messages.result or 'NULL::INT'},

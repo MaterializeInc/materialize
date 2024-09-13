@@ -16,6 +16,7 @@ from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_credentials,
 )
 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
+from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 ANY_PIPELINE_VALUE = "*"
 ANY_BRANCH_VALUE = "*"
@@ -48,14 +49,20 @@ class TestAnalyticsDataSource:
         only_failed_builds: bool,
     ) -> list[tuple[Build, BuildAnnotation]]:
         pipeline_clause = (
-            f" AND bae.pipeline = '{pipeline}'"
+            f" AND bae.pipeline = {as_sanitized_literal(pipeline)}"
             if pipeline != ANY_PIPELINE_VALUE
             else ""
         )
-        branch_clause = f" AND bae.branch = '{branch}'" if branch is not None else ""
+        branch_clause = (
+            f" AND bae.branch = {as_sanitized_literal(branch)}"
+            if branch is not None
+            else ""
+        )
         failed_builds_clause = " AND bsu.has_failed_steps" if only_failed_builds else ""
         if len(build_step_keys) > 0:
-            in_build_step_keys = ",".join(f"'{key}'" for key in build_step_keys)
+            in_build_step_keys = ",".join(
+                as_sanitized_literal(key) for key in build_step_keys
+            )
             build_steps_keys_clause = (
                 f" AND bae.build_step_key IN ({in_build_step_keys})"
             )
@@ -88,7 +95,7 @@ class TestAnalyticsDataSource:
             FROM v_build_annotation_error bae
             INNER JOIN v_build_success bsu
             ON bae.build_id = bsu.build_id
-            WHERE bae.content ILIKE '{like_pattern}'
+            WHERE bae.content ILIKE {as_sanitized_literal(like_pattern)}
             {pipeline_clause}
             {branch_clause}
             {failed_builds_clause}
