@@ -89,7 +89,7 @@ class BuildDataStorage(BaseDataStorage):
             BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB, "NULL::INT"
         )
         retry_count = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_RETRY_COUNT)
-        aws_instance_type = buildkite.get_var(
+        agent_type = buildkite.get_var(
             BuildkiteEnvVar.BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE
         )
 
@@ -120,7 +120,7 @@ class BuildDataStorage(BaseDataStorage):
                 insert_date,
                 is_latest_retry,
                 success,
-                aws_instance_type
+                agent_type
             )
             SELECT
               {as_sanitized_literal(job_id)},
@@ -134,7 +134,7 @@ class BuildDataStorage(BaseDataStorage):
               now(),
               TRUE,
               {was_successful},
-              {as_sanitized_literal(aws_instance_type)}
+              {as_sanitized_literal(agent_type)}
             WHERE NOT EXISTS
             (
                 SELECT 1
