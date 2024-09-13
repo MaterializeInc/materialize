@@ -249,6 +249,27 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
             all_involved_characteristics,
         )
 
+    def _shall_ignore_error_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        if (
+            self.lower_version < MZ_VERSION_0_117_0 <= self.higher_version
+        ) and query_template.matches_any_expression(
+            is_any_date_time_expression,
+            True,
+        ):
+            # this causes different errors
+            return YesIgnore(
+                "Added support for implicit cast from date to mz_timestamp with PR#29494"
+            )
+
+        return super()._shall_ignore_error_mismatch(
+            error, query_template, contains_aggregation
+        )
+
     def _shall_ignore_explain_plan_mismatch(
         self,
         error: ValidationError,
