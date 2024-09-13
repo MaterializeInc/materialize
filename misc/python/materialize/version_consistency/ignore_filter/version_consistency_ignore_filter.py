@@ -214,6 +214,17 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Evaluation order changed with PR 28144")
 
+        if (
+            self.lower_version < MZ_VERSION_0_117_0 <= self.higher_version
+        ) and query_template.matches_any_expression(
+            is_any_date_time_expression,
+            True,
+        ):
+            # the older version may fail where the newer no longer does
+            return YesIgnore(
+                "Added support for implicit cast from date to mz_timestamp with PR#29494"
+            )
+
         return super()._shall_ignore_success_mismatch(
             error, query_template, contains_aggregation
         )
