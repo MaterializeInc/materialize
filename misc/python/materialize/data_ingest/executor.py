@@ -331,22 +331,22 @@ class MySqlExecutor(Executor):
         )
 
         values = [
-            f"{identifier(field.name)} {str(field.data_type.name(Backend.MYSQL)).lower()}"
+            f"`{field.name}` {str(field.data_type.name(Backend.MYSQL)).lower()}"
             for field in self.fields
         ]
         keys = [field.name for field in self.fields if field.is_key]
 
         self.mysql_conn.autocommit(True)
         with self.mysql_conn.cursor() as cur:
-            self.execute(cur, f"DROP TABLE IF EXISTS {identifier(self.table)};")
+            self.execute(cur, f"DROP TABLE IF EXISTS `{self.table}`;")
             primary_key = (
-                f", PRIMARY KEY ({', '.join([identifier(key) for key in keys])})"
+                f", PRIMARY KEY ({', '.join([f'`{key}`' for key in keys])})"
                 if keys
                 else ""
             )
             self.execute(
                 cur,
-                f"CREATE TABLE {identifier(self.table)} ({', '.join(values)} {primary_key});",
+                f"CREATE TABLE `{self.table}` ({', '.join(values)} {primary_key});",
             )
         self.mysql_conn.autocommit(False)
 
@@ -381,7 +381,7 @@ class MySqlExecutor(Executor):
                         )
                         self.execute(
                             cur,
-                            f"""INSERT INTO {identifier(self.table)}
+                            f"""INSERT INTO `{self.table}`
                                 VALUES ({values_str})
                             """,
                         )
@@ -390,17 +390,15 @@ class MySqlExecutor(Executor):
                             str(formatted_value(value)) for value in row.values
                         )
                         ", ".join(
-                            identifier(field.name)
-                            for field in row.fields
-                            if field.is_key
+                            f"`{field.name}`" for field in row.fields if field.is_key
                         )
                         update_str = ", ".join(
-                            f"{identifier(field.name)} = VALUES({identifier(field.name)})"
+                            f"`{field.name}` = VALUES(`{field.name}`)"
                             for field in row.fields
                         )
                         self.execute(
                             cur,
-                            f"""INSERT INTO {identifier(self.table)}
+                            f"""INSERT INTO `{self.table}`
                                 VALUES ({values_str})
                                 ON DUPLICATE KEY
                                 UPDATE {update_str}
@@ -408,13 +406,13 @@ class MySqlExecutor(Executor):
                         )
                     elif row.operation == Operation.DELETE:
                         cond_str = " AND ".join(
-                            f"{identifier(field.name)} = {formatted_value(value)}"
+                            f"`{field.name}` = {formatted_value(value)}"
                             for field, value in zip(row.fields, row.values)
                             if field.is_key
                         )
                         self.execute(
                             cur,
-                            f"""DELETE FROM {identifier(self.table)}
+                            f"""DELETE FROM `{self.table}`
                                 WHERE {cond_str}
                             """,
                         )
