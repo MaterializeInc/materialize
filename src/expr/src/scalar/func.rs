@@ -8672,6 +8672,7 @@ mod test {
 
         let interesting_strs: Vec<Datum<'static>> =
             ScalarType::String.interesting_datums().collect();
+        #[allow(clippy::disallowed_macros)]
         let str_datums = prop_oneof![
             proptest::string::string_regex("[A-Z]{0,10}")
                 .expect("valid regex")
@@ -8681,6 +8682,7 @@ mod test {
 
         let interesting_i32s: Vec<Datum<'static>> =
             ScalarType::Int32.interesting_datums().collect();
+        #[allow(clippy::disallowed_macros)]
         let i32_datums = prop_oneof![
             any::<i32>().prop_map(Datum::from),
             (0..interesting_i32s.len()).prop_map(|i| interesting_i32s[i]),
