@@ -69,7 +69,7 @@ SELECT
     b.branch,
     b.build_id,
     b.build_number,
-    b.build_url,
+    concat('https://buildkite.com/materialize/', b.pipeline, '/builds/', b.build_number) as build_url,
     -- only considers the latest retry
     SUM(CASE WHEN bj.success OR NOT bj.is_latest_retry THEN 0 ELSE 1 END) > 0 AS has_failed_steps,
     -- only considers the latest retry
@@ -83,5 +83,4 @@ GROUP BY
     b.pipeline,
     b.branch,
     b.build_id,
-    b.build_number,
-    b.build_url;
+    b.build_number;

@@ -17,9 +17,7 @@ CREATE TABLE build (
    main_ancestor_commit_hash TEXT, -- nullable for now not to break earlier versions
    mz_version TEXT NOT NULL,
    date TIMESTAMPTZ NOT NULL,
-   build_url TEXT, -- nullable, will eventually be removed
-   data_version UINT4 NOT NULL,
-   remarks TEXT -- not in use, will eventually be removed
+   data_version UINT4 NOT NULL
 );
 
 CREATE INDEX IN CLUSTER test_analytics ON build (build_id);
