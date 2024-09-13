@@ -26,6 +26,7 @@ T = TypeVar("T")
 class BuildkiteEnvVar(Enum):
     # environment
     BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE = auto()
+    BUILDKITE_AGENT_META_DATA_INSTANCE_TYPE = auto()
 
     # build
     BUILDKITE_PULL_REQUEST = auto()
