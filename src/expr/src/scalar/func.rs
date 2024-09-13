@@ -8585,4 +8585,131 @@ mod test {
             assert!(!func.could_error())
         }
     }
+
+    #[mz_ore::test]
+    fn test_is_monotone() {
+        use proptest::prelude::*;
+
+        /// Asserts that the function is either monotonically increasing or decreasing over
+        /// the given sets of arguments.
+        fn assert_monotone<'a, const N: usize>(
+            expr: &MirScalarExpr,
+            arena: &'a RowArena,
+            datums: &[[Datum<'a>; N]],
+        ) {
+            // TODO: assertions for nulls, errors
+            let Ok(results) = datums
+                .iter()
+                .map(|args| expr.eval(args.as_slice(), arena))
+                .collect::<Result<Vec<_>, _>>()
+            else {
+                return;
+            };
+
+            let forward = results.iter().tuple_windows().all(|(a, b)| a <= b);
+            let reverse = results.iter().tuple_windows().all(|(a, b)| a >= b);
+            assert!(
+                forward || reverse,
+                "expected {expr} to be monotone, but passing {datums:?} returned {results:?}"
+            );
+        }
+
+        fn proptest_unary<'a>(
+            func: UnaryFunc,
+            arena: &'a RowArena,
+            arg: impl Strategy<Value = Datum<'a>>,
+        ) {
+            let is_monotone = func.is_monotone();
+            let expr = MirScalarExpr::CallUnary {
+                func,
+                expr: Box::new(MirScalarExpr::Column(0)),
+            };
+            if is_monotone {
+                proptest!(|(
+                    mut arg in proptest::array::uniform3(arg),
+                )| {
+                    arg.sort();
+                    let args = arg.map(|a| [a]);
+                    assert_monotone(&expr, arena, &args);
+                });
+            }
+        }
+
+        fn proptest_binary<'a>(
+            func: BinaryFunc,
+            arena: &'a RowArena,
+            left: impl Strategy<Value = Datum<'a>>,
+            right: impl Strategy<Value = Datum<'a>>,
+        ) {
+            let (left_monotone, right_monotone) = func.is_monotone();
+            let expr = MirScalarExpr::CallBinary {
+                func,
+                expr1: Box::new(MirScalarExpr::Column(0)),
+                expr2: Box::new(MirScalarExpr::Column(1)),
+            };
+            proptest!(|(
+                mut left in proptest::array::uniform3(left),
+                mut right in proptest::array::uniform3(right),
+            )| {
+                left.sort();
+                right.sort();
+                if left_monotone {
+                    for r in right {
+                        let args = left.map(|l| [l, r]);
+                        assert_monotone(&expr, arena, &args);
+                    }
+                }
+                if right_monotone {
+                    for l in left {
+                        let args = right.map(|r| [l, r]);
+                        assert_monotone(&expr, arena, &args);
+                    }
+                }
+            });
+        }
+
+        let arena = RowArena::new();
+
+        let interesting_strs: Vec<Datum<'static>> =
+            ScalarType::String.interesting_datums().collect();
+        let str_datums = prop_oneof![
+            proptest::string::string_regex("[A-Z]{0,10}")
+                .expect("valid regex")
+                .prop_map(|s| Datum::from(arena.push_string(s))),
+            (0..interesting_strs.len()).prop_map(|i| interesting_strs[i]),
+        ];
+
+        let interesting_i32s: Vec<Datum<'static>> =
+            ScalarType::Int32.interesting_datums().collect();
+        let i32_datums = prop_oneof![
+            any::<i32>().prop_map(Datum::from),
+            (0..interesting_i32s.len()).prop_map(|i| interesting_i32s[i]),
+            (-10i32..10).prop_map(Datum::from)
+        ];
+
+        // It would be interesting to test all funcs here, but we currently need to hardcode
+        // the generators for the argument types, which makes this tedious. Choose an interesting
+        // subset for now.
+        proptest_unary(
+            UnaryFunc::CastInt32ToNumeric(CastInt32ToNumeric(None)),
+            &arena,
+            &i32_datums,
+        );
+        proptest_unary(
+            UnaryFunc::CastInt32ToUint16(CastInt32ToUint16),
+            &arena,
+            &i32_datums,
+        );
+        proptest_unary(
+            UnaryFunc::CastInt32ToString(CastInt32ToString),
+            &arena,
+            &i32_datums,
+        );
+        proptest_binary(BinaryFunc::AddInt32, &arena, &i32_datums, &i32_datums);
+        proptest_binary(BinaryFunc::SubInt32, &arena, &i32_datums, &i32_datums);
+        proptest_binary(BinaryFunc::MulInt32, &arena, &i32_datums, &i32_datums);
+        proptest_binary(BinaryFunc::DivInt32, &arena, &i32_datums, &i32_datums);
+        proptest_binary(BinaryFunc::TextConcat, &arena, &str_datums, &str_datums);
+        proptest_binary(BinaryFunc::Left, &arena, &str_datums, &i32_datums);
+    }
 }
