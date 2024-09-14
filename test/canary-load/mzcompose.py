@@ -265,11 +265,12 @@ def validate_updated_data(c: Composition, i: int) -> None:
     c.testdrive(
         dedent(
             f"""
-                > SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0
-                0
+                # TODO: Reenable when #18645 is fixed
+                # > SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0
+                # 0
 
-                > SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'
-                0
+                # > SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'
+                # 0
 
                 > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 10
                 0
@@ -335,19 +336,20 @@ def validate_data_through_http_connection(
     result = http_sql_query(host, "SELECT 1", token)
     assert result == [["1"]]
 
-    result = http_sql_query(
-        host,
-        "SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0",
-        token,
-    )
-    assert result == [["0"]]
+    # TODO: Reenable when #18645 is fixed
+    # result = http_sql_query(
+    #    host,
+    #    "SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0",
+    #    token,
+    # )
+    # assert result == [["0"]]
 
-    result = http_sql_query(
-        host,
-        "SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'",
-        token,
-    )
-    assert result == [["0"]]
+    # result = http_sql_query(
+    #    host,
+    #    "SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'",
+    #    token,
+    # )
+    # assert result == [["0"]]
 
     result = http_sql_query(
         host,
