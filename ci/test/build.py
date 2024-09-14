@@ -162,7 +162,7 @@ def maybe_upload_debuginfo(
             print(f"Constructing source tarball for {bin}...")
             with tempfile.NamedTemporaryFile() as tarball:
                 p1 = subprocess.Popen(
-                    ["llvm-dwarfdump", "--show-sources", bin_path],
+                    [*repo.rd.tool("llvm-dwarfdump"), "--show-sources", bin_path],
                     stdout=subprocess.PIPE,
                 )
                 p2 = subprocess.Popen(

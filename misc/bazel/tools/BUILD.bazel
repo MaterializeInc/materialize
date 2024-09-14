@@ -42,26 +42,51 @@ sh_binary(
 # tools and removes the need for the wrapper, but this is an incremental step.
 
 alias(
-    name = "dwarfdump",
+    name = "llvm-dwarfdump",
     actual = "@llvm_toolchain_llvm//:bin/llvm-dwarfdump",
 )
 
 alias(
-    name = "objcopy",
+    name = "dwarfdump",
+    actual = ":llvm-dwarfdump",
+)
+
+alias(
+    name = "llvm-objcopy",
     actual = "@llvm_toolchain_llvm//:bin/llvm-objcopy",
 )
 
 alias(
-    name = "objdump",
+    name = "objcopy",
+    actual = ":llvm-objcopy",
+)
+
+alias(
+    name = "llvm-objdump",
     actual = "@llvm_toolchain_llvm//:bin/llvm-objdump",
 )
 
 alias(
-    name = "profdata",
+    name = "objdump",
+    actual = ":llvm-objdump",
+)
+
+alias(
+    name = "llvm-profdata",
     actual = "@llvm_toolchain_llvm//:bin/llvm-profdata",
 )
 
 alias(
-    name = "strip",
+    name = "profdata",
+    actual = ":llvm-profdata",
+)
+
+alias(
+    name = "llvm-strip",
     actual = "@llvm_toolchain_llvm//:bin/llvm-strip",
+)
+
+alias(
+    name = "strip",
+    actual = ":llvm-strip",
 )
