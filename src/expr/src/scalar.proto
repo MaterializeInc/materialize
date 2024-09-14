@@ -672,6 +672,7 @@ message ProtoBinaryFunc {
         ProtoRegexpReplaceResult regexp_replace = 192;
         bool list_contains_list = 193;
         bool array_contains_array = 194;
+        google.protobuf.Empty starts_with = 195;
     }
 }
 

@@ -416,6 +416,9 @@
   - signature: 'split_part(s: str, d: s, i: int) -> str'
     description: Split `s` on delimiter `d`. Return the `str` at index `i`, counting from 1.
 
+  - signature: 'starts_with(s: str, prefix: str) -> bool'
+    description: Report whether `s` starts with `prefix`.
+
   - signature: 'substring(s: str, start_pos: int) -> str'
     description: Substring of `s` starting at `start_pos`
     url: /sql/functions/substring
