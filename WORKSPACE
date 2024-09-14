@@ -237,8 +237,8 @@ llvm_toolchain(
     llvm_version = LLVM_VERSION,
     sha256 = {
         "darwin-aarch64": "510541536527d9d4264e48e254c231487cdc1631cb30920da8a68adf41fdbb91",
-        "linux-aarch64": "738ab939ae9b6351413947758661058c101ff2e4708bf8df984de6035ab29745",
-        "linux-x86_64": "9d72a68e9c3d56fc68af25e8fe95aa2aea1049a135a5b35d395c4fe4aaed6f16",
+        "linux-aarch64": "fe8f9e283ab43e963daf9ffb18742e134ad239b56078d61ef9a289ff642784ed",
+        "linux-x86_64": "8b725ec14e48bc1cb3698309506e29cd94ff3b823976ebb306e9c3ef84480c16",
     },
     sysroot = {
         "darwin-aarch64": "@sysroot_darwin_universal//:sysroot",
@@ -248,8 +248,8 @@ llvm_toolchain(
     },
     urls = {
         "darwin-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/darwin_aarch64.tar.zst".format(LLVM_VERSION)],
-        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-3/linux_aarch64.tar.zst".format(LLVM_VERSION)],
-        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-3/linux_x86_64.tar.zst".format(LLVM_VERSION)],
+        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-4/linux_aarch64.tar.zst".format(LLVM_VERSION)],
+        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-4/linux_x86_64.tar.zst".format(LLVM_VERSION)],
     },
 )
 

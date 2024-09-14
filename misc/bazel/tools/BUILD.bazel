@@ -32,3 +32,36 @@ sh_binary(
         no_match_error = "`buildifier` is not supported on the current platform.",
     ),
 )
+
+# We alias some tools from the Clang toolchain for easy consumption from other
+# parts of our build system, e.g. `mzbuild.py`.
+#
+# To see all of the available tools, run `bazel cquery @llvm_toolchain_llvm//:bin --output=files`
+#
+# Note: In a _perfect_ Bazel world, we would have some rule that invokes these
+# tools and removes the need for the wrapper, but this is an incremental step.
+
+alias(
+    name = "dwarfdump",
+    actual = "@llvm_toolchain_llvm//:bin/llvm-dwarfdump",
+)
+
+alias(
+    name = "objcopy",
+    actual = "@llvm_toolchain_llvm//:bin/llvm-objcopy",
+)
+
+alias(
+    name = "objdump",
+    actual = "@llvm_toolchain_llvm//:bin/llvm-objdump",
+)
+
+alias(
+    name = "profdata",
+    actual = "@llvm_toolchain_llvm//:bin/llvm-profdata",
+)
+
+alias(
+    name = "strip",
+    actual = "@llvm_toolchain_llvm//:bin/llvm-strip",
+)
