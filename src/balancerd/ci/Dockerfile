@@ -9,7 +9,7 @@
 
 MZFROM prod-base
 
-COPY mz-balancerd /usr/local/bin/balancerd
+COPY balancerd /usr/local/bin/balancerd
 
 USER materialize
 
