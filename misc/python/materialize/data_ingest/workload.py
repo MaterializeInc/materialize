@@ -305,6 +305,8 @@ def execute_workload(
         with conn.cursor() as cur:
             try:
                 cur.execute("SET REAL_TIME_RECENCY TO TRUE")
+                # TODO: Remove when #29452 is merged
+                cur.execute("SET real_time_recency_timeout = '60s'")
                 cur.execute(f"SELECT * FROM {executor.table} ORDER BY {order_str}")
                 actual_result = cur.fetchall()
                 cur.execute("SET REAL_TIME_RECENCY TO FALSE")
