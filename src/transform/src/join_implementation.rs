@@ -882,12 +882,13 @@ fn implement_arrangements<'a>(
     let mut combined_project = Vec::new();
     for (index, lifted_mfp) in lifted_mfps.into_iter().enumerate() {
         if let Some(mut lifted_mfp) = lifted_mfp {
-            lifted_mfp.permute(
+            let column_map = new_join_mapper
+                .local_columns(index)
+                .zip(new_join_mapper.global_columns(index))
+                .collect::<BTreeMap<_, _>>();
+            lifted_mfp.permute_fn(
                 // globalize all input column references
-                new_join_mapper
-                    .local_columns(index)
-                    .zip(new_join_mapper.global_columns(index))
-                    .collect(),
+                |c| column_map[&c],
                 // shift the position of scalars to be after the last input
                 // column
                 arity,
