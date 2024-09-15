@@ -435,7 +435,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
 
         let mut instances_dump = BTreeMap::new();
         for (id, instance) in instances {
-            let dump = instance.call_sync(|i| i.dump()).await?;
+            let dump = instance.dump().await?;
             instances_dump.insert(id.to_string(), dump);
         }
 
@@ -1070,6 +1070,39 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
 
         let hold = ReadHold::new(id, since, self.read_holds_tx.clone());
         Ok(hold)
+    }
+
+    /// Returns the [`InstanceState`] formatted as JSON.
+    pub async fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+        // Destructure `self` here so we don't forget to consider dumping newly added fields.
+        let Self {
+            client: _,
+            replicas,
+            collections,
+            read_holds_tx: _,
+        } = self;
+
+        let instance = self.call_sync(|i| i.dump()).await?;
+        let replicas: Vec<_> = replicas.iter().map(|id| id.to_string()).collect();
+        let collections: BTreeMap<_, _> = collections
+            .iter()
+            .map(|(id, c)| (id.to_string(), format!("{c:?}")))
+            .collect();
+
+        fn field(
+            key: &str,
+            value: impl Serialize,
+        ) -> Result<(String, serde_json::Value), anyhow::Error> {
+            let value = serde_json::to_value(value)?;
+            Ok((key.to_string(), value))
+        }
+
+        let map = serde_json::Map::from_iter([
+            field("instance", instance)?,
+            field("replicas", replicas)?,
+            field("collections", collections)?,
+        ]);
+        Ok(serde_json::Value::Object(map))
     }
 }
 

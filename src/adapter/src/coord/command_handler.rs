@@ -235,7 +235,7 @@ impl Coordinator {
                 }
 
                 Command::Dump { tx } => {
-                    let _ = tx.send(self.dump());
+                    let _ = tx.send(self.dump().await);
                 }
             }
         }
