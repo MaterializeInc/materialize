@@ -286,6 +286,7 @@ where
                                 id,
                                 persist_clients,
                                 description.ingestion_metadata,
+                                None,
                                 Some(as_of),
                                 SnapshotMode::Include,
                                 Antichain::new(),

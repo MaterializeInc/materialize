@@ -1147,7 +1147,7 @@ impl RowColumnarDecoder {
         let mut decoders = Vec::with_capacity(desc_columns.len());
 
         // The columns of the `StructArray` are named with their column index.
-        for (col_idx, (col_name, col_type)) in desc.iter().enumerate() {
+        for (col_idx, col_name, col_type) in desc.iter_with_index() {
             let field_name = col_idx.to_string();
             let column = col.column_by_name(&field_name).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1236,9 +1236,8 @@ impl RowColumnarEncoder {
         }
 
         let (col_names, encoders): (Vec<_>, Vec<_>) = desc
-            .iter()
-            .enumerate()
-            .map(|(idx, (col_name, col_type))| {
+            .iter_with_index()
+            .map(|(idx, col_name, col_type)| {
                 let encoder = scalar_type_to_encoder(&col_type.scalar_type)
                     .expect("failed to create encoder");
                 let encoder = DatumEncoder {

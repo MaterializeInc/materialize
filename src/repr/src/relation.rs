@@ -685,6 +685,25 @@ impl RelationDesc {
         self.metadata.values().map(|meta| &meta.name)
     }
 
+    /// WIP
+    pub fn iter_with_index(&self) -> impl Iterator<Item = (usize, &ColumnName, &ColumnType)> {
+        self.metadata
+            .iter()
+            .zip(self.iter_types())
+            .map(|((idx, meta), typ)| (idx.0, &meta.name, typ))
+    }
+
+    /// WIP drop columns instead?
+    pub fn apply_demand(&mut self, demand: &BTreeSet<usize>) {
+        self.metadata.retain(|idx, _| demand.contains(&idx.0));
+        let mut idx = 0;
+        self.typ.column_types.retain(|_| {
+            let keep = demand.contains(&idx);
+            idx += 1;
+            keep
+        });
+    }
+
     /// Returns an iterator over the names of the columns in this relation that are "similar" to
     /// the provided `name`.
     pub fn iter_similar_names<'a>(
