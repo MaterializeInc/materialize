@@ -36,13 +36,12 @@ Explained Query:
   Return
     Union
       Get l0
-      Map (0)
-        Union
-          Negate
-            Project ()
-              Get l0
-          Constant
-            - ()
+      Negate
+        Project (#1)
+          Map (0)
+            Get l0
+      Constant
+        - (0)
   With
     cte l0 =
       Reduce aggregates=[count(*)]

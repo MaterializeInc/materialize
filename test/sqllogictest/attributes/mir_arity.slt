@@ -49,20 +49,20 @@ Explained Query:
         Negate // { arity: 4 }
           Distinct project=[#0..=#3] // { arity: 4 }
             TopK order_by=[#1 asc nulls_last] limit=10 offset=1 // { arity: 4 }
-              Project (#0..=#2, #4) // { arity: 4 }
-                Map ((#3 + 1)) // { arity: 5 }
-                  Union // { arity: 4 }
-                    Map (null) // { arity: 4 }
-                      Union // { arity: 3 }
-                        Negate // { arity: 3 }
-                          Project (#0..=#2) // { arity: 3 }
-                            Join on=(#0 = #3) type=differential // { arity: 4 }
-                              Get l1 // { arity: 3 }
-                              ArrangeBy keys=[[#0]] // { arity: 1 }
-                                Distinct project=[#0] // { arity: 1 }
-                                  Project (#0) // { arity: 1 }
-                                    Get l2 // { arity: 4 }
-                        Get l0 // { arity: 3 }
+              Union // { arity: 4 }
+                Negate // { arity: 4 }
+                  Project (#0..=#2, #4) // { arity: 4 }
+                    Map (null) // { arity: 5 }
+                      Join on=(#0 = #3) type=differential // { arity: 4 }
+                        Get l1 // { arity: 3 }
+                        ArrangeBy keys=[[#0]] // { arity: 1 }
+                          Distinct project=[#0] // { arity: 1 }
+                            Project (#0) // { arity: 1 }
+                              Get l2 // { arity: 4 }
+                Map (null) // { arity: 4 }
+                  Get l0 // { arity: 3 }
+                Project (#0..=#2, #4) // { arity: 4 }
+                  Map ((#3 + 1)) // { arity: 5 }
                     Get l2 // { arity: 4 }
         Constant // { arity: 4 }
           - (1, 2, 11, 12)

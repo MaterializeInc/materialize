@@ -891,48 +891,81 @@ impl MirRelationExpr {
                 // and who knows what is true (not expected, but again
                 // who knows what the query plan might look like).
 
-                let arity = input_arities.next().unwrap();
-                let (base_projection, base_with_project_stripped) =
-                    if let MirRelationExpr::Project { input, outputs } = &**base {
-                        (outputs.clone(), &**input)
-                    } else {
-                        // A input without a project is equivalent to an input
-                        // with the project being all columns in the input in order.
-                        ((0..arity).collect::<Vec<_>>(), &**base)
-                    };
+                // Accumulate all discovered keys here.
                 let mut result = Vec::new();
-                if let MirRelationExpr::Get {
-                    id: first_id,
-                    typ: _,
-                    ..
-                } = base_with_project_stripped
-                {
-                    if inputs.len() == 1 {
-                        if let MirRelationExpr::Map { input, .. } = &inputs[0] {
-                            if let MirRelationExpr::Union { base, inputs } = &**input {
-                                if inputs.len() == 1 {
-                                    if let Some((input, outputs)) = base.is_negated_project() {
-                                        if let MirRelationExpr::Get {
-                                            id: second_id,
-                                            typ: _,
-                                            ..
-                                        } = input
-                                        {
-                                            if first_id == second_id {
-                                                result.extend(
-                                                    inputs[0].typ().keys.drain(..).filter(|key| {
-                                                        key.iter().all(|c| {
-                                                            outputs.get(*c) == Some(c)
-                                                                && base_projection.get(*c)
-                                                                    == Some(c)
-                                                        })
-                                                    }),
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
+
+                // All inputs laid out in order, so that others can reference them without `base` v `inputs` work.
+                let all_inputs = std::iter::once(&**base).chain(inputs).collect::<Vec<_>>();
+
+                // We are looking for a pattern of `B + (A - A.proj(..).map(..))*`, for key columns of `B`
+                // that comes from `A` rather than from the `map(..)`. When this happens, the sum of diffs
+                // for each key is that from B (0 or 1) plus that from `(A - A..)` which is zero. If we also
+                // confirm that the expression itself is non-negative, then all sums should be 0 or 1.
+
+                // For each input expression, a map-filter-project around some root expression.
+                // Every expression either is or is not a filter-free MFP around a Get, and for these we are
+                // interested in 1. the projection, and 2. the get identifier.
+                //
+                // For each `Get::id`, a pair of list of positive and negative inputs, with associated MFPs.
+                let mut gets_pos_neg = BTreeMap::default();
+                for (index, expr) in all_inputs.iter().enumerate() {
+                    if let MirRelationExpr::Negate { input } = expr {
+                        let (mfp, expr) =
+                            crate::MapFilterProject::extract_from_expression(&**input);
+                        if let MirRelationExpr::Get { id, .. } = expr {
+                            if mfp.predicates.is_empty() {
+                                gets_pos_neg
+                                    .entry(id)
+                                    .or_insert_with(|| (Vec::new(), Vec::new()))
+                                    .1
+                                    .push((index, mfp));
                             }
+                        }
+                    } else {
+                        let (mfp, expr) = crate::MapFilterProject::extract_from_expression(&**expr);
+                        if let MirRelationExpr::Get { id, .. } = expr {
+                            if mfp.predicates.is_empty() {
+                                gets_pos_neg
+                                    .entry(id)
+                                    .or_insert_with(|| (Vec::new(), Vec::new()))
+                                    .0
+                                    .push((index, mfp));
+                            }
+                        }
+                    }
+                }
+
+                for (index, expr) in all_inputs.iter().enumerate() {
+                    // Retain keys for which all remaining inputs can be paired off as pos-neg pairs whose values on key columns are equal.
+                    for key in expr.typ().keys {
+                        // We want to sum across `gets_pos_neg` the pairs that cancel under `key`, not counting `expr` itself.
+                        // If this adds up to `all_inputs.len() - 1`, then everything except `expr` cancels out when projected onto `key`.
+                        let sum: usize = gets_pos_neg
+                            .iter()
+                            .map(|(_id, (pos, neg))| {
+                                // As a first cut, get the number of folks in each of `pos` and `neg` that leave each key column in place.
+                                // More generally, we could try and solve for a matching where columns line up exactly, even if 1. not in
+                                // exactly the same location, and 2. potentially the result of a mapped literal.
+                                let pos_count = pos
+                                    .iter()
+                                    .filter(|(i, mfp)| {
+                                        index != *i
+                                            && key.iter().all(|c| mfp.projection.get(*c) == Some(c))
+                                    })
+                                    .count();
+                                let neg_count = neg
+                                    .iter()
+                                    .filter(|(i, mfp)| {
+                                        index != *i
+                                            && key.iter().all(|c| mfp.projection.get(*c) == Some(c))
+                                    })
+                                    .count();
+                                2 * std::cmp::min(pos_count, neg_count)
+                            })
+                            .sum();
+
+                        if sum + 1 == all_inputs.len() {
+                            result.push(key);
                         }
                     }
                 }

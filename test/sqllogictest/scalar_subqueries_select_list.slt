@@ -60,14 +60,13 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 1 }
           Union // { arity: 1 }
             Get l0 // { arity: 1 }
-            Map (null) // { arity: 1 }
-              Union // { arity: 0 }
-                Negate // { arity: 0 }
-                  Distinct project=[] // { arity: 0 }
-                    Project () // { arity: 0 }
-                      Get l0 // { arity: 1 }
-                Constant // { arity: 0 }
-                  - ()
+            Negate // { arity: 1 }
+              Map (null) // { arity: 1 }
+                Distinct project=[] // { arity: 0 }
+                  Project () // { arity: 0 }
+                    Get l0 // { arity: 1 }
+            Constant // { arity: 1 }
+              - (null)
   With
     cte l0 =
       Union // { arity: 1 }
@@ -104,13 +103,13 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Union // { arity: 2 }
             Get l2 // { arity: 2 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l2 // { arity: 2 }
             Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0] // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Get l2 // { arity: 2 }
-                Get l0 // { arity: 1 }
+              Get l0 // { arity: 1 }
   With
     cte l2 =
       Union // { arity: 2 }
@@ -169,13 +168,13 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Union // { arity: 2 }
             Get l4 // { arity: 2 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l4 // { arity: 2 }
             Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0] // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Get l4 // { arity: 2 }
-                Get l0 // { arity: 1 }
+              Get l0 // { arity: 1 }
   With
     cte l4 =
       Union // { arity: 2 }
@@ -239,24 +238,25 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Union // { arity: 2 }
             Get l4 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0] // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Get l4 // { arity: 2 }
-                Get l0 // { arity: 1 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l4 // { arity: 2 }
+            Get l7 // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Union // { arity: 2 }
             Get l6 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0] // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Get l6 // { arity: 2 }
-                Get l0 // { arity: 1 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l6 // { arity: 2 }
+            Get l7 // { arity: 2 }
   With
+    cte l7 =
+      Map (null) // { arity: 2 }
+        Get l0 // { arity: 1 }
     cte l6 =
       Union // { arity: 2 }
         Get l5 // { arity: 2 }
@@ -335,24 +335,25 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Union // { arity: 2 }
             Get l3 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0] // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Get l3 // { arity: 2 }
-                Get l0 // { arity: 1 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l3 // { arity: 2 }
+            Get l5 // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Union // { arity: 2 }
             Get l4 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0] // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Get l4 // { arity: 2 }
-                Get l0 // { arity: 1 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l4 // { arity: 2 }
+            Get l5 // { arity: 2 }
   With
+    cte l5 =
+      Map (null) // { arity: 2 }
+        Get l0 // { arity: 1 }
     cte l4 =
       Union // { arity: 2 }
         Map ((#0 + 2)) // { arity: 2 }
@@ -413,44 +414,43 @@ Explained Query:
           ReadStorage materialize.public.t2 // { arity: 1 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Union // { arity: 2 }
+            Get l4 // { arity: 2 }
+            Negate // { arity: 2 }
+              Project (#0, #2) // { arity: 2 }
+                Map (null) // { arity: 3 }
+                  Get l4 // { arity: 2 }
             Get l3 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Project (#0) // { arity: 1 }
-                    Get l3 // { arity: 2 }
-                Get l0 // { arity: 1 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Union // { arity: 2 }
-            Get l5 // { arity: 2 }
-            Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Project (#0) // { arity: 1 }
-                    Get l5 // { arity: 2 }
-                Get l0 // { arity: 1 }
+            Get l6 // { arity: 2 }
+            Negate // { arity: 2 }
+              Project (#0, #2) // { arity: 2 }
+                Map (null) // { arity: 3 }
+                  Get l6 // { arity: 2 }
+            Get l3 // { arity: 2 }
   With
-    cte l5 =
+    cte l6 =
       Union // { arity: 2 }
-        Get l4 // { arity: 2 }
-        Map (null) // { arity: 2 }
-          Union // { arity: 1 }
-            Negate // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Get l4 // { arity: 2 }
-            Get l0 // { arity: 1 }
-    cte l4 =
+        Get l5 // { arity: 2 }
+        Negate // { arity: 2 }
+          Project (#0, #2) // { arity: 2 }
+            Map (null) // { arity: 3 }
+              Get l5 // { arity: 2 }
+        Get l3 // { arity: 2 }
+    cte l5 =
       Reduce group_by=[#0] aggregates=[max(#0)] // { arity: 2 }
         Get l1 // { arity: 1 }
-    cte l3 =
+    cte l4 =
       Union // { arity: 2 }
         Get l2 // { arity: 2 }
-        Map (null) // { arity: 2 }
-          Union // { arity: 1 }
-            Negate // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Get l2 // { arity: 2 }
-            Get l0 // { arity: 1 }
+        Negate // { arity: 2 }
+          Project (#0, #2) // { arity: 2 }
+            Map (null) // { arity: 3 }
+              Get l2 // { arity: 2 }
+        Get l3 // { arity: 2 }
+    cte l3 =
+      Map (null) // { arity: 2 }
+        Get l0 // { arity: 1 }
     cte l2 =
       Reduce group_by=[#0] aggregates=[min(#0)] // { arity: 2 }
         Get l1 // { arity: 1 }
@@ -501,13 +501,13 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Union // { arity: 2 }
             Get l6 // { arity: 2 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l6 // { arity: 2 }
             Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0] // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Get l6 // { arity: 2 }
-                Get l0 // { arity: 1 }
+              Get l0 // { arity: 1 }
   With
     cte l6 =
       Union // { arity: 2 }
@@ -528,13 +528,13 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Union // { arity: 2 }
               Get l4 // { arity: 2 }
+              Negate // { arity: 2 }
+                Map (null) // { arity: 2 }
+                  Distinct project=[#0] // { arity: 1 }
+                    Project (#0) // { arity: 1 }
+                      Get l4 // { arity: 2 }
               Map (null) // { arity: 2 }
-                Union // { arity: 1 }
-                  Negate // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Project (#0) // { arity: 1 }
-                        Get l4 // { arity: 2 }
-                  Get l2 // { arity: 1 }
+                Get l2 // { arity: 1 }
     cte l4 =
       Union // { arity: 2 }
         Project (#0, #0) // { arity: 2 }
@@ -599,13 +599,12 @@ Explained Query:
   Return // { arity: 2 }
     Union // { arity: 2 }
       Get l8 // { arity: 2 }
-      Map (null, null) // { arity: 2 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l8 // { arity: 2 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 2 }
+        Project (#2, #3) // { arity: 2 }
+          Map (null, null) // { arity: 4 }
+            Get l8 // { arity: 2 }
+      Constant // { arity: 2 }
+        - (null, null)
   With
     cte l8 =
       Reduce aggregates=[min(#0), max(#1)] // { arity: 2 }
@@ -618,13 +617,13 @@ Explained Query:
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Union // { arity: 2 }
                 Get l7 // { arity: 2 }
+                Negate // { arity: 2 }
+                  Map (null) // { arity: 2 }
+                    Distinct project=[#0] // { arity: 1 }
+                      Project (#0) // { arity: 1 }
+                        Get l7 // { arity: 2 }
                 Map (null) // { arity: 2 }
-                  Union // { arity: 1 }
-                    Negate // { arity: 1 }
-                      Distinct project=[#0] // { arity: 1 }
-                        Project (#0) // { arity: 1 }
-                          Get l7 // { arity: 2 }
-                    Get l5 // { arity: 1 }
+                  Get l5 // { arity: 1 }
     cte l7 =
       Union // { arity: 2 }
         Project (#0, #0) // { arity: 2 }
@@ -656,13 +655,13 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Union // { arity: 2 }
               Get l3 // { arity: 2 }
+              Negate // { arity: 2 }
+                Map (null) // { arity: 2 }
+                  Distinct project=[#0] // { arity: 1 }
+                    Project (#0) // { arity: 1 }
+                      Get l3 // { arity: 2 }
               Map (null) // { arity: 2 }
-                Union // { arity: 1 }
-                  Negate // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Project (#0) // { arity: 1 }
-                        Get l3 // { arity: 2 }
-                  Get l0 // { arity: 1 }
+                Get l0 // { arity: 1 }
     cte l3 =
       Union // { arity: 2 }
         Project (#0, #0) // { arity: 2 }
@@ -723,13 +722,13 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Union // { arity: 2 }
             Get l2 // { arity: 2 }
+            Negate // { arity: 2 }
+              Map (null) // { arity: 2 }
+                Distinct project=[#0] // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Get l2 // { arity: 2 }
             Map (null) // { arity: 2 }
-              Union // { arity: 1 }
-                Negate // { arity: 1 }
-                  Distinct project=[#0] // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Get l2 // { arity: 2 }
-                Get l0 // { arity: 1 }
+              Get l0 // { arity: 1 }
   With
     cte l2 =
       Union // { arity: 2 }
@@ -801,13 +800,13 @@ Explained Query:
         ArrangeBy keys=[[#0, #1]] // { arity: 3 }
           Union // { arity: 3 }
             Get l3 // { arity: 3 }
+            Negate // { arity: 3 }
+              Map (null) // { arity: 3 }
+                Distinct project=[#0, #1] // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Get l3 // { arity: 3 }
             Map (null) // { arity: 3 }
-              Union // { arity: 2 }
-                Negate // { arity: 2 }
-                  Distinct project=[#0, #1] // { arity: 2 }
-                    Project (#0, #1) // { arity: 2 }
-                      Get l3 // { arity: 3 }
-                Get l1 // { arity: 2 }
+              Get l1 // { arity: 2 }
   With
     cte l3 =
       Union // { arity: 3 }

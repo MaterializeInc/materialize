@@ -572,13 +572,12 @@ Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l0 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l0 =
       Reduce aggregates=[sum(#0)] // { arity: 1 }
@@ -1015,15 +1014,15 @@ Explained Query:
         Project (#1) // { arity: 1 }
           Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
             Union // { arity: 2 }
-              Map (null) // { arity: 2 }
-                Union // { arity: 1 }
-                  Negate // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Distinct project=[#0..=#2] // { arity: 3 }
-                        Project (#0..=#2) // { arity: 3 }
-                          Get l0 // { arity: 4 }
-                  Project (#0) // { arity: 1 }
-                    ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
+              Negate // { arity: 2 }
+                Project (#0, #3) // { arity: 2 }
+                  Map (null) // { arity: 4 }
+                    Distinct project=[#0..=#2] // { arity: 3 }
+                      Project (#0..=#2) // { arity: 3 }
+                        Get l0 // { arity: 4 }
+              Project (#0, #22) // { arity: 2 }
+                Map (null) // { arity: 23 }
+                  ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
               Project (#0, #3) // { arity: 2 }
                 Get l0 // { arity: 4 }
     With
@@ -1059,17 +1058,16 @@ AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 ----
 Explained Query:
   Return // { arity: 1 }
-    Project (#2) // { arity: 1 }
-      Map (((100 * #0) / (1 + #1))) // { arity: 3 }
-        Union // { arity: 2 }
+    Union // { arity: 1 }
+      Project (#2) // { arity: 1 }
+        Map (((100 * #0) / (1 + #1))) // { arity: 3 }
           Get l0 // { arity: 2 }
-          Map (null, null) // { arity: 2 }
-            Union // { arity: 0 }
-              Negate // { arity: 0 }
-                Project () // { arity: 0 }
-                  Get l0 // { arity: 2 }
-              Constant // { arity: 0 }
-                - ()
+      Negate // { arity: 1 }
+        Project (#2) // { arity: 1 }
+          Map (null) // { arity: 3 }
+            Get l0 // { arity: 2 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l0 =
       Reduce aggregates=[sum(case when like["PR%"](padchar(#1)) then #0 else 0 end), sum(#0)] // { arity: 2 }
@@ -1256,17 +1254,16 @@ AND ol_quantity < t.a
 ----
 Explained Query:
   Return // { arity: 1 }
-    Project (#1) // { arity: 1 }
-      Map ((#0 / 2)) // { arity: 2 }
-        Union // { arity: 1 }
+    Union // { arity: 1 }
+      Project (#1) // { arity: 1 }
+        Map ((#0 / 2)) // { arity: 2 }
           Get l1 // { arity: 1 }
-          Map (null) // { arity: 1 }
-            Union // { arity: 0 }
-              Negate // { arity: 0 }
-                Project () // { arity: 0 }
-                  Get l1 // { arity: 1 }
-              Constant // { arity: 0 }
-                - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l1 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l1 =
       Reduce aggregates=[sum(#0)] // { arity: 1 }
@@ -1378,26 +1375,25 @@ Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (null) // { arity: 2 }
+            Get l0 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (null)
   With
     cte l0 =
       Reduce aggregates=[sum(#0)] // { arity: 1 }
         Project (#8) // { arity: 1 }
-          Filter (#7 <= 10) AND (#7 >= 1) AND (#12 OR #13 OR #14 OR #15 OR #16) AND ((like["%a"](#17) AND (#12 OR #13 OR #14)) OR (like["%b"](#17) AND (#12 OR #13 OR #15)) OR (like["%c"](#17) AND (#12 OR #14 OR #16))) // { arity: 18 }
-            Map ((#2 = 1), (#2 = 2), (#2 = 3), (#2 = 4), (#2 = 5), padchar(#11)) // { arity: 18 }
+          Filter (#7 <= 10) AND (#7 >= 1) AND (#12 OR #13 OR #14 OR #15 OR #16) AND ((like["%a"](#11) AND (#12 OR #13 OR #14)) OR (like["%b"](#11) AND (#12 OR #13 OR #15)) OR (like["%c"](#11) AND (#12 OR #14 OR #16))) // { arity: 17 }
+            Map ((#2 = 1), (#2 = 2), (#2 = 3), (#2 = 4), (#2 = 5)) // { arity: 17 }
               Join on=(#4 = #10) type=differential // { arity: 12 }
                 implementation
                   %1:item[#0]UKliif » %0:orderline[#4]KAeliiiif
                 ArrangeBy keys=[[#4]] // { arity: 10 }
                   ReadIndex on=orderline fk_orderline_item=[differential join] // { arity: 10 }
                 ArrangeBy keys=[[#0]] // { arity: 2 }
-                  Project (#0, #4) // { arity: 2 }
+                  Project (#0, #5) // { arity: 2 }
                     Filter (#3 <= 400000) AND (#3 >= 1) AND (like["%a"](#5) OR like["%b"](#5) OR like["%c"](#5)) // { arity: 6 }
                       Map (padchar(#4)) // { arity: 6 }
                         ReadStorage materialize.public.item // { arity: 5 }

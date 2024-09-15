@@ -487,25 +487,22 @@ FROM t
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, 0)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, 0)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, 0)
   With
     cte l0 =
       Reduce::Accumulable
@@ -591,25 +588,22 @@ MATERIALIZED VIEW hierarchical_global_mv
 ----
 materialize.public.hierarchical_global_mv:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -641,25 +635,22 @@ SELECT * FROM hierarchical_global
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Hierarchical
@@ -727,25 +718,22 @@ FROM t
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#2, #3)
+          map=(null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Constant
+        - (null, null)
   With
     cte l0 =
       Reduce::Basic
@@ -850,25 +838,22 @@ MATERIALIZED VIEW collated_global_mv
 ----
 materialize.public.collated_global_mv:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
-      Mfp
-        project=(#0..=#5)
-        map=(0, null, null, null, null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#6..=#11)
+          map=(0, null, null, null, null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
+      Constant
+        - (0, null, null, null, null, null)
   With
     cte l0 =
       Reduce::Collation
@@ -909,25 +894,22 @@ SELECT * FROM collated_global
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
-      Mfp
-        project=(#0..=#5)
-        map=(0, null, null, null, null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#6..=#11)
+          map=(0, null, null, null, null, null)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
+      Constant
+        - (0, null, null, null, null, null)
   With
     cte l0 =
       Reduce::Collation

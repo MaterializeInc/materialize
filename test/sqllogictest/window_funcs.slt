@@ -6875,17 +6875,16 @@ Explained Query:
     Project (#2) // { keys: "()" }
       Map (record_get[0](#1)) // { keys: "()" }
         FlatMap unnest_list(#0) // { keys: "()" }
-          Project (#1) // { keys: "([])" }
-            Map (list[row(bigint_to_numeric(#0), row(#0))]) // { keys: "([])" }
-              Union // { keys: "([])" }
+          Union // { keys: "([])" }
+            Project (#1) // { keys: "([])" }
+              Map (list[row(bigint_to_numeric(#0), row(#0))]) // { keys: "([])" }
                 Get l0 // { keys: "([])" }
-                Map (null) // { keys: "()" }
-                  Union // { keys: "()" }
-                    Negate // { keys: "()" }
-                      Project () // { keys: "([])" }
-                        Get l0 // { keys: "([])" }
-                    Constant // { keys: "([])" }
-                      - ()
+            Negate // { keys: "()" }
+              Project (#1) // { keys: "([])" }
+                Map ([[null, [null]]]) // { keys: "([])" }
+                  Get l0 // { keys: "([])" }
+            Constant // { keys: "([])" }
+              - ([[null, [null]]])
   With
     cte l0 =
       Reduce aggregates=[sum(#0)] // { keys: "([])" }

@@ -431,24 +431,24 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c1
 ----
 Explained Query:
-  Return // { non_negative: true }
-    Get l0 // { non_negative: true }
+  Return // { non_negative: false }
+    Get l1 // { non_negative: false }
   With Mutually Recursive
+    cte l1 =
+      Distinct project=[#0, #1] // { non_negative: false }
+        Union // { non_negative: false }
+          Project (#0, #4) // { non_negative: true }
+            Get l0 // { non_negative: true }
+          Negate // { non_negative: false }
+            Project (#0, #4) // { non_negative: true }
+              Filter (#0 > 1) // { non_negative: true }
+                Get l0 // { non_negative: true }
+          Project (#0, #2) // { non_negative: false }
+            Map ((#1 || "_iter")) // { non_negative: false }
+              Get l1 // { non_negative: false }
     cte l0 =
-      Distinct project=[#0, #1] // { non_negative: true }
-        Union // { non_negative: true }
-          Project (#0, #2) // { non_negative: true }
-            Map ((#1 || "_init")) // { non_negative: true }
-              Union // { non_negative: true }
-                Project (#0, #1) // { non_negative: true }
-                  ReadStorage materialize.public.people // { non_negative: true }
-                Negate // { non_negative: false }
-                  Project (#0, #1) // { non_negative: true }
-                    Filter (#0 > 1) // { non_negative: true }
-                      ReadStorage materialize.public.people // { non_negative: true }
-          Project (#0, #2) // { non_negative: true }
-            Map ((#1 || "_iter")) // { non_negative: true }
-              Get l0 // { non_negative: true }
+      Map ((#1 || "_init")) // { non_negative: true }
+        ReadStorage materialize.public.people // { non_negative: true }
 
 Source materialize.public.people
 

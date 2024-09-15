@@ -126,13 +126,12 @@ Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
-      Map (0) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
+      Negate // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Map (0) // { arity: 2 }
+            Get l0 // { arity: 1 }
+      Constant // { arity: 1 }
+        - (0)
   With
     cte l0 =
       Reduce aggregates=[count(*)] // { arity: 1 }
@@ -160,25 +159,22 @@ WHERE a = 2 AND b = 'l2' OR a = 1 + 1 + 1 AND b = 'l3'
 ----
 Explained Query:
   Return
-    Union
+    Union consolidate_output=true
       ArrangeBy
         input_key=[]
         raw=true
         Get::PassArrangements l0
           raw=false
           arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Mfp
-        project=(#0)
-        map=(0)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-          Constant
-            - ()
+      Negate
+        Get::Arrangement l0
+          project=(#1)
+          map=(0)
+          key=
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Constant
+        - (0)
   With
     cte l0 =
       Reduce::Accumulable
@@ -1255,13 +1251,12 @@ Explained Query:
   Return // { arity: 1, types: "(bigint?)", keys: "([])" }
     Union // { arity: 1, types: "(bigint?)", keys: "([])" }
       Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
-      Map (null) // { arity: 1, types: "(bigint?)", keys: "()" }
-        Union // { arity: 0, types: "()", keys: "()" }
-          Negate // { arity: 0, types: "()", keys: "()" }
-            Project () // { arity: 0, types: "()", keys: "([])" }
-              Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
-          Constant // { arity: 0, types: "()", keys: "([])" }
-            - ()
+      Negate // { arity: 1, types: "(bigint?)", keys: "()" }
+        Project (#1) // { arity: 1, types: "(bigint?)", keys: "([])" }
+          Map (null) // { arity: 2, types: "(bigint?, bigint?)", keys: "([])" }
+            Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
+      Constant // { arity: 1, types: "(bigint?)", keys: "([])" }
+        - (null)
   With
     cte l0 =
       Reduce aggregates=[sum((((#0 * #1) * #2) * #3))] // { arity: 1, types: "(bigint?)", keys: "([])" }
