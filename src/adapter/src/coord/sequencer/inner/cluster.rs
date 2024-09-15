@@ -531,31 +531,29 @@ impl Coordinator {
                 }
             }
         }
-        let hydrated = match self.controller.compute.collections_hydrated_for_replicas(
-            cluster.id,
-            pending_replicas,
-            &[].into(),
-        ) {
-            Err(e) => {
-                return Err(AdapterError::internal("Failed to check hydration", e));
-            }
-            Ok(b) => b,
-        };
-        if hydrated {
-            // We're done
-            Ok(StageResult::Immediate(Box::new(ClusterStage::Finalize(
-                AlterClusterFinalize {
-                    validity,
-                    plan,
-                    new_config,
-                },
-            ))))
-        } else {
-            // Check later
-            let span = Span::current();
-            Ok(StageResult::Handle(mz_ore::task::spawn(
-                || "Finalize Alter Cluster",
-                async move {
+        let hydrated_fut = self
+            .controller
+            .compute
+            .collections_hydrated_for_replicas(cluster.id, pending_replicas, [].into())
+            .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
+
+        let span = Span::current();
+        Ok(StageResult::Handle(mz_ore::task::spawn(
+            || "Alter Cluster: wait for hydrated",
+            async move {
+                let hydrated = hydrated_fut
+                    .await
+                    .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
+
+                if hydrated {
+                    // We're done
+                    Ok(Box::new(ClusterStage::Finalize(AlterClusterFinalize {
+                        validity,
+                        plan,
+                        new_config,
+                    })))
+                } else {
+                    // Check later
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     let stage = ClusterStage::WaitForHydrated(AlterClusterWaitForHydrated {
                         validity,
@@ -566,8 +564,8 @@ impl Coordinator {
                     });
                     Ok(Box::new(stage))
                 }
-                .instrument(span),
-            )))
-        }
+            }
+            .instrument(span),
+        )))
     }
 }

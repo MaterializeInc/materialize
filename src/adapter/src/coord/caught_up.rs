@@ -52,7 +52,7 @@ impl Coordinator {
         if enable_caught_up_check {
             self.maybe_check_caught_up_new().await
         } else {
-            self.maybe_check_caught_up_legacy()
+            self.maybe_check_caught_up_legacy().await
         }
     }
 
@@ -300,7 +300,7 @@ impl Coordinator {
         Ok(all_caught_up)
     }
 
-    fn maybe_check_caught_up_legacy(&mut self) {
+    async fn maybe_check_caught_up_legacy(&mut self) {
         let Some(ctx) = &self.caught_up_check else {
             return;
         };
@@ -308,7 +308,8 @@ impl Coordinator {
         let compute_hydrated = self
             .controller
             .compute
-            .clusters_hydrated(&ctx.exclude_collections);
+            .clusters_hydrated(&ctx.exclude_collections)
+            .await;
         tracing::info!(%compute_hydrated, "checked hydration status of clusters");
 
         if compute_hydrated {

@@ -61,8 +61,8 @@ use uuid::Uuid;
 
 use crate::controller::error::{
     CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError,
-    ReplicaDropError,
+    HydrationCheckBadTarget, InstanceExists, InstanceMissing, PeekError, ReadPolicyError,
+    ReplicaCreationError, ReplicaDropError,
 };
 use crate::controller::instance::{Instance, SharedCollectionState};
 use crate::controller::replica::ReplicaConfig;
@@ -384,20 +384,29 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// For this check, zero-replica clusters are always considered hydrated.
     /// Their collections would never normally be considered hydrated but it's
     /// clearly intentional that they have no replicas.
-    pub async fn collections_hydrated_for_replicas(
+    pub fn collections_hydrated_for_replicas(
         &self,
-        cluster: ComputeInstanceId,
+        instance_id: ComputeInstanceId,
         replicas: Vec<ReplicaId>,
-        exclude_collections: &BTreeSet<GlobalId>,
-    ) -> Result<bool, anyhow::Error> {
-        let instance = self.instance(cluster)?;
-        let exclude_collections = exclude_collections.clone();
-        let hydrated = instance
-            .call_sync(move |i| {
-                i.collections_hydrated_on_replicas(Some(replicas), &exclude_collections)
-            })
-            .await?;
-        Ok(hydrated)
+        exclude_collections: BTreeSet<GlobalId>,
+    ) -> Result<oneshot::Receiver<bool>, anyhow::Error> {
+        let instance = self.instance(instance_id)?;
+
+        // Validation
+        if instance.replicas.is_empty() && !replicas.iter().any(|id| instance.replicas.contains(id))
+        {
+            return Err(HydrationCheckBadTarget(replicas).into());
+        }
+
+        let (tx, rx) = oneshot::channel();
+        instance.call(move |i| {
+            let result = i
+                .collections_hydrated_on_replicas(Some(replicas), &exclude_collections)
+                .expect("validated");
+            let _ = tx.send(result);
+        });
+
+        Ok(rx)
     }
 
     /// Returns the state of the [`ComputeController`] formatted as JSON.
