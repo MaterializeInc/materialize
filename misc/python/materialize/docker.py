@@ -149,7 +149,7 @@ def _resolve_image_name_by_commit_hash(commit_hash: str) -> str:
 
 
 def _search_docker_hub_for_image_name(
-    search_value: str, remaining_retries: int = 3
+    search_value: str, remaining_retries: int = 10
 ) -> list[str]:
     try:
         json_response = requests.get(
