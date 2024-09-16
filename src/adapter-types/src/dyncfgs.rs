@@ -111,6 +111,13 @@ pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
     "Use a cache to store optimized expressions to help speed up start times.",
 );
 
+/// Whether to enable the migration to convert all sources to use tables.
+pub const ENABLE_SOURCE_TABLE_MIGRATION: Config<bool> = Config::new(
+    "enable_source_table_migration",
+    false,
+    "Whether to enable the migration to convert all sources to use tables.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -128,4 +135,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&DEFAULT_SINK_PARTITION_STRATEGY)
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
+        .add(&ENABLE_SOURCE_TABLE_MIGRATION)
 }
