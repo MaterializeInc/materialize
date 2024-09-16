@@ -35,6 +35,9 @@ INSERT INTO t1 VALUES (1, ST_GeomFromText('LINESTRING(0 0,1 1,2 2)'), ST_GeomFro
 ! CREATE TABLE t1 FROM SOURCE da (REFERENCE public.t1);
 contains: unsupported type
 
+! CREATE TABLE t1 FROM SOURCE da (REFERENCE public.t1) WITH (TEXT COLUMNS (f2), EXCLUDE COLUMNS (f2, f3));
+contains: duplicated column name references in table
+
 > CREATE TABLE t1 FROM SOURCE da (REFERENCE public.t1) WITH (EXCLUDE COLUMNS (f2, f3));
 
 # Insert the same data post-snapshot
