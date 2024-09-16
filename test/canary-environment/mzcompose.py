@@ -17,6 +17,7 @@ import pg8000
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.dbt import Dbt
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.util import pg8000_close
 
 # The actual values are stored as Pulumi secrets in the i2 repository
 MATERIALIZE_PROD_SANDBOX_HOSTNAME = os.environ["MATERIALIZE_PROD_SANDBOX_HOSTNAME"]
@@ -213,7 +214,7 @@ def workflow_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             result[0][0] == 1
         ), f"RDS Postgres has wrong number of pg_replication_slots {result[0][0]}, please fix manually to prevent Postgres from going out of disk from stalled Materialize connections"
     finally:
-        con.close()
+        pg8000_close(con)
 
     c.exec("dbt", "dbt", "test", workdir="/workdir")
 

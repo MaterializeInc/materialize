@@ -69,6 +69,7 @@ from materialize.parallel_workload.database import (
 from materialize.parallel_workload.executor import Executor, Http
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.sqlsmith import known_errors
+from materialize.util import pg8000_close
 
 if TYPE_CHECKING:
     from materialize.parallel_workload.worker import Worker
@@ -130,7 +131,6 @@ class Action:
         result = [
             "permission denied for",
             "must be owner of",
-            "network error",  # TODO: Remove when #21954 is fixed
             "HTTP read timeout",
             "result exceeds max size of",
         ]
@@ -1054,7 +1054,7 @@ class FlipFlagsAction(Action):
             return True
         except InterfaceError:
             if conn is not None:
-                conn.close()
+                pg8000_close(conn)
 
             # ignore it
             return False
@@ -1466,10 +1466,7 @@ class ReconnectAction(Action):
             exe.cur.close()
         except:
             pass
-        try:
-            conn.close()
-        except:
-            pass
+        pg8000_close(conn)
 
         NUM_ATTEMPTS = 20
         if exe.ws:
@@ -1841,7 +1838,7 @@ class DropKafkaSourceAction(Action):
             query = f"DROP SOURCE {source}"
             exe.execute(query, http=Http.RANDOM)
             exe.db.kafka_sources.remove(source)
-            source.executor.mz_conn.close()
+            pg8000_close(source.executor.mz_conn)
         return True
 
 
@@ -1913,7 +1910,7 @@ class DropMySqlSourceAction(Action):
             query = f"DROP SOURCE {source.executor.source}"
             exe.execute(query, http=Http.RANDOM)
             exe.db.mysql_sources.remove(source)
-            source.executor.mz_conn.close()
+            pg8000_close(source.executor.mz_conn)
         return True
 
 
@@ -1985,7 +1982,7 @@ class DropPostgresSourceAction(Action):
             query = f"DROP SOURCE {source.executor.source}"
             exe.execute(query, http=Http.RANDOM)
             exe.db.postgres_sources.remove(source)
-            source.executor.mz_conn.close()
+            pg8000_close(source.executor.mz_conn)
         return True
 
 

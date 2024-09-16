@@ -31,6 +31,7 @@ from materialize.mzcompose.test_result import (
     TestFailureDetails,
 )
 from materialize.ui import CommandFailureCausedUIError
+from materialize.util import pg8000_close
 
 SERVICES = [
     Testdrive(),  # Overridden below
@@ -219,7 +220,7 @@ def close_connection_and_cursor(
     cursor.execute(f"CLOSE {object_to_close}")
     cursor.execute("ROLLBACK")
     cursor.close()
-    connection.close()
+    pg8000_close(connection)
 
 
 def perform_test(

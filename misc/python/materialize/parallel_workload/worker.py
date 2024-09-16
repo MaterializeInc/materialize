@@ -25,6 +25,7 @@ from materialize.parallel_workload.action import (
 )
 from materialize.parallel_workload.database import Database
 from materialize.parallel_workload.executor import Executor
+from materialize.util import pg8000_close
 
 
 class Worker:
@@ -132,6 +133,6 @@ class Worker:
                 self.occurred_exception = e
                 raise e
 
-        self.exe.cur._c.close()
+        pg8000_close(self.exe.cur._c)
         if self.exe.ws:
             self.exe.ws.close()

@@ -40,6 +40,7 @@ from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.redpanda_cloud import RedpandaCloud
 from materialize.ui import UIError
+from materialize.util import pg8000_close
 
 REDPANDA_RESOURCE_GROUP = "ci-resource-group"
 REDPANDA_NETWORK = "ci-network"
@@ -160,7 +161,7 @@ class Redpanda:
         )
         privatelink_principal = cloud_cursor.fetchone()[0]
         cloud_cursor.close()
-        cloud_conn.close()
+        pg8000_close(cloud_conn)
 
         result = self.cloud.patch(
             f"clusters/{self.cluster_info['id']}",

@@ -16,6 +16,7 @@ import pytest
 from pg8000 import Connection
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
+from materialize.util import pg8000_close
 
 
 def query(conn: Connection, sql: str) -> None:
@@ -172,6 +173,6 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
     # We need all the above threads to finish for the test to succeed.Close the
     # connections from this thread because pg8000 doesn't support cancellation
     # and dropping the table in mz doesn't complete the queries either.
-    c_select.close()
-    c_subscribe.close()
-    c_copy.close()
+    pg8000_close(c_select)
+    pg8000_close(c_subscribe)
+    pg8000_close(c_copy)

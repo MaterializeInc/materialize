@@ -574,7 +574,7 @@ class CommandQueryResponsibilitySegregation(Scenario):
                                 conn_infos["postgres"],
                                 strict_serializable=False,
                             ),
-                            dist=Periodic(per_second=50),
+                            dist=Periodic(per_second=100),
                             report_regressions=False,
                         ),
                         OpenLoop(
@@ -583,7 +583,7 @@ class CommandQueryResponsibilitySegregation(Scenario):
                                 conn_infos["postgres"],
                                 strict_serializable=False,
                             ),
-                            dist=Periodic(per_second=5),
+                            dist=Periodic(per_second=10),
                             report_regressions=False,
                         ),
                         OpenLoop(
@@ -592,11 +592,9 @@ class CommandQueryResponsibilitySegregation(Scenario):
                                 conn_infos["postgres"],
                                 strict_serializable=False,
                             ),
-                            dist=Periodic(per_second=0.5),
+                            dist=Periodic(per_second=1),
                             report_regressions=False,
                         ),
-                    ]
-                    + [
                         ClosedLoop(
                             action=ReuseConnQuery(
                                 "SELECT * FROM mv_cqrs",
@@ -604,7 +602,7 @@ class CommandQueryResponsibilitySegregation(Scenario):
                                 strict_serializable=True,
                             ),
                             report_regressions=False,  # TODO: Currently not stable enough
-                        )
+                        ),
                     ],
                 ),
             ],

@@ -55,7 +55,12 @@ from materialize.test_analytics.data.parallel_benchmark import (
     parallel_benchmark_result_storage,
 )
 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
-from materialize.util import PgConnInfo, all_subclasses, parse_pg_conn_string
+from materialize.util import (
+    PgConnInfo,
+    all_subclasses,
+    parse_pg_conn_string,
+    pg8000_close,
+)
 from materialize.version_list import resolve_ancestor_image_tag
 
 PARALLEL_BENCHMARK_FRAMEWORK_VERSION = "1.1.0"
@@ -290,7 +295,7 @@ def run_once(
                 with conn.cursor() as cur:
                     cur.execute("SELECT mz_version()")
                     mz_version = cur.fetchall()[0][0]
-                conn.close()
+                pg8000_close(conn)
                 mz_string = f"{mz_version} ({target.host})"
             else:
                 c.up(*service_names)

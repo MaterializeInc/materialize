@@ -19,7 +19,7 @@ from textwrap import dedent
 import pg8000
 
 from materialize.mzcompose.composition import Composition
-from materialize.util import PgConnInfo
+from materialize.util import PgConnInfo, pg8000_close
 
 
 class Measurement:
@@ -104,7 +104,7 @@ class StandaloneQuery(Action):
             if not self.strict_serializable:
                 cur.execute("SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'")
             execute_query(cur, self.query)
-        conn.close()
+        pg8000_close(conn)
 
     def __str__(self) -> str:
         return f"{self.query} (standalone)"
@@ -377,7 +377,7 @@ class Scenario:
     def teardown(self) -> None:
         while not self.conns.empty():
             conn = self.conns.get()
-            conn.close()
+            pg8000_close(conn)
             self.conns.task_done()
         for i in range(len(self.thread_pool)):
             # Indicate to every thread to stop working

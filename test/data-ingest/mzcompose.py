@@ -37,6 +37,7 @@ from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import pg8000_close
 
 SERVICES = [
     Postgres(),
@@ -133,7 +134,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                URL 'http://schema-registry:8081'"""
         )
     conn.autocommit = False
-    conn.close()
+    pg8000_close(conn)
 
     ports = {s: c.default_port(s) for s in services}
     ports["materialized2"] = 26875

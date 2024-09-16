@@ -35,7 +35,7 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mysql import MySql
 from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
-from materialize.util import naughty_strings
+from materialize.util import naughty_strings, pg8000_close
 
 MAX_COLUMNS = 5
 MAX_INCLUDE_HEADERS = 5
@@ -1049,11 +1049,11 @@ class Database:
             db.drop(exe)
 
         for src in self.kafka_sources:
-            src.executor.mz_conn.close()
+            pg8000_close(src.executor.mz_conn)
         for src in self.postgres_sources:
-            src.executor.mz_conn.close()
+            pg8000_close(src.executor.mz_conn)
         for src in self.mysql_sources:
-            src.executor.mz_conn.close()
+            pg8000_close(src.executor.mz_conn)
 
     def update_sqlsmith_state(self, composition: Composition) -> None:
         if False:  # Questionable use

@@ -30,6 +30,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import pg8000
 import xxhash
 import zstandard
+from pg8000.exceptions import InterfaceError
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
 
@@ -184,3 +185,13 @@ def parse_pg_conn_string(conn_string: str) -> PgConnInfo:
         database=url.path.lstrip("/"),
         ssl=query_params.get("sslmode", ["disable"])[-1] != "disable",
     )
+
+
+def pg8000_close(conn: pg8000.Connection) -> None:
+    """Ignore network errors in pg8000's close, see https://github.com/sqlalchemy/sqlalchemy/discussions/10795"""
+    try:
+        conn.close()
+    except InterfaceError as e:
+        msg = str(e)
+        if not ("network error" in msg or "connection is closed" in msg):
+            raise e

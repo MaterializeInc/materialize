@@ -53,6 +53,7 @@ from materialize.parallel_workload.executor import Executor, initialize_logging
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.parallel_workload.worker import Worker
 from materialize.parallel_workload.worker_exception import WorkerFailedException
+from materialize.util import pg8000_close
 
 SEED_RANGE = 1_000_000
 REPORT_TIME = 10
@@ -132,7 +133,7 @@ def run(
             system_exe.execute(
                 f"ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON {object_type} TO PUBLIC"
             )
-        system_conn.close()
+        pg8000_close(system_conn)
         conn = pg8000.connect(
             host=host,
             port=ports["materialized"],
@@ -143,7 +144,7 @@ def run(
         with conn.cursor() as cur:
             assert composition
             database.create(Executor(rng, cur, None, database), composition)
-        conn.close()
+        pg8000_close(conn)
 
     workers = []
     threads = []
@@ -401,7 +402,7 @@ def run(
             )
         else:
             raise ValueError("Sessions did not clean up within 30s of threads stopping")
-    conn.close()
+    pg8000_close(conn)
     print_stats(num_queries, workers, num_threads)
 
 
@@ -508,7 +509,7 @@ def main() -> int:
         # more settings and shuffle them
         for key, value in get_default_system_parameters().items():
             cur.execute(f"ALTER SYSTEM SET {key} = '{value}'")
-    system_conn.close()
+    pg8000_close(system_conn)
 
     random.seed(args.seed)
 
