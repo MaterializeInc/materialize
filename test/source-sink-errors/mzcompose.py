@@ -403,8 +403,8 @@ class PgDisruption:
                 INSERT INTO source1 VALUES (2, NULL);
 
                 > CREATE SOURCE "pg_source"
-                  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-                  FOR TABLES ("source1");
+                  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+                > CREATE TABLE "source1" FROM SOURCE "pg_source" (REFERENCE "source1");
                 """
             )
         )
@@ -435,10 +435,12 @@ class PgDisruption:
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO source1 VALUES (3);
 
-                > SELECT status, error
-                  FROM mz_internal.mz_source_statuses
-                  WHERE name = 'source1'
-                running <null>
+                # TODO: #29373 (introspection tables)
+                # > SELECT status, error
+                #   FROM mz_internal.mz_source_statuses
+                #   WHERE name = 'source1'
+                #   AND type = 'table'
+                # running <null>
 
                 > SELECT f1 FROM source1;
                 1
@@ -525,18 +527,20 @@ disruptions: list[Disruption] = [
         # Can't recover when publication state is deleted.
         fixage=None,
     ),
-    PgDisruption(
-        name="alter-postgres",
-        breakage=lambda c, _: alter_pg_table(c),
-        expected_error="source table source1 with oid .+ has been altered",
-        fixage=None,
-    ),
-    PgDisruption(
-        name="unsupported-postgres",
-        breakage=lambda c, _: unsupported_pg_table(c),
-        expected_error="invalid input syntax for type array",
-        fixage=None,
-    ),
+    # TODO: #29373 (introspection tables)
+    # PgDisruption(
+    #     name="alter-postgres",
+    #     breakage=lambda c, _: alter_pg_table(c),
+    #     expected_error="source table source1 with oid .+ has been altered",
+    #     fixage=None,
+    # ),
+    # TODO: #29373 (introspection tables)
+    # PgDisruption(
+    #     name="unsupported-postgres",
+    #     breakage=lambda c, _: unsupported_pg_table(c),
+    #     expected_error="invalid input syntax for type array",
+    #     fixage=None,
+    # ),
     # One-off disruption with a badly configured kafka sink
     KafkaTransactionLogGreaterThan1(
         name="bad-kafka-sink",
