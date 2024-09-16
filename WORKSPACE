@@ -217,6 +217,9 @@ http_archive(
 # We build our own clang toolchain, see the <https://github.com/MaterializeInc/toolchains> repository.
 LLVM_VERSION = "18.1.8"
 
+# We have a few variants of our clang toolchain, either improving how it's built or adding new tools.
+LLVM_VERSION_SUFFIX = "4"
+
 maybe(
     http_archive,
     name = "toolchains_llvm",
@@ -236,9 +239,10 @@ llvm_toolchain(
     name = "llvm_toolchain",
     llvm_version = LLVM_VERSION,
     sha256 = {
-        "darwin-aarch64": "510541536527d9d4264e48e254c231487cdc1631cb30920da8a68adf41fdbb91",
-        "linux-aarch64": "738ab939ae9b6351413947758661058c101ff2e4708bf8df984de6035ab29745",
-        "linux-x86_64": "9d72a68e9c3d56fc68af25e8fe95aa2aea1049a135a5b35d395c4fe4aaed6f16",
+        "darwin-aarch64": "41d8dea52d18c4e8b90c4fcd31965f9f297df9f40a38a33d60748dbe7f8330b8",
+        "darwin-x86_64": "291b8dd844aa896b98393c5d3beaee57f294768039eacdf9ef5e96ed9d3f62d7",
+        "linux-aarch64": "fe8f9e283ab43e963daf9ffb18742e134ad239b56078d61ef9a289ff642784ed",
+        "linux-x86_64": "8b725ec14e48bc1cb3698309506e29cd94ff3b823976ebb306e9c3ef84480c16",
     },
     sysroot = {
         "darwin-aarch64": "@sysroot_darwin_universal//:sysroot",
@@ -247,9 +251,10 @@ llvm_toolchain(
         "linux-aarch64": "@linux_sysroot-aarch64//:sysroot",
     },
     urls = {
-        "darwin-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/darwin_aarch64.tar.zst".format(LLVM_VERSION)],
-        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-3/linux_aarch64.tar.zst".format(LLVM_VERSION)],
-        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-3/linux_x86_64.tar.zst".format(LLVM_VERSION)],
+        "darwin-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-{1}/darwin_aarch64.tar.zst".format(LLVM_VERSION, LLVM_VERSION_SUFFIX)],
+        "darwin-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-{1}/darwin_x86_64.tar.zst".format(LLVM_VERSION, LLVM_VERSION_SUFFIX)],
+        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-{1}/linux_aarch64.tar.zst".format(LLVM_VERSION, LLVM_VERSION_SUFFIX)],
+        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-{1}/linux_x86_64.tar.zst".format(LLVM_VERSION, LLVM_VERSION_SUFFIX)],
     },
 )
 
@@ -353,7 +358,13 @@ rust_toolchains(
             "llvm-tools": "86e441024b0e538ed69fa0098be48592caae6fc28097f7630b906be276c79622",
             "rust-std": "e7b766fce1cd89c02bde33f8cc3a81f341c52677258a546df2bee1c7090e9fc5",
         },
-        "x86_64-apple-darwin": {},
+        "x86_64-apple-darwin": {
+            "rustc": "f0adfff86a9d5055f537dab26f6d0b7a81efe087f90b7e16c42698d58af0ffca",
+            "clippy": "5b6e393a7784839a1554188df2d87481696a0e0be242d1d2982e442b43199c08",
+            "cargo": "e3d03157061987be0c7cddf1e708f376929273779a65459a9b3a7ebc6ccadaae",
+            "llvm-tools": "3c443d068464c95a0a02072082bff6661cee5568dbbedbb82dcb6737147f3d6c",
+            "rust-std": "c9e366e76ee470d11afadbd70b200976ef4b34e626b568f19e429d4d23dead86",
+        },
     },
 )
 

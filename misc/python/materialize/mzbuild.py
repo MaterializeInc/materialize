@@ -128,7 +128,10 @@ class RepositoryDetails:
 
     def tool(self, name: str) -> list[str]:
         """Start a binutils tool invocation for the configured architecture."""
-        return xcompile.tool(self.arch, name)
+        if self.bazel:
+            return ["bazel", "run", f"@//misc/bazel/tools:{name}", "--"]
+        else:
+            return xcompile.tool(self.arch, name)
 
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
