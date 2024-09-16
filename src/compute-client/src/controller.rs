@@ -43,6 +43,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::ComputeInstanceId;
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
+use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -52,7 +53,8 @@ use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use timely::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
 use uuid::Uuid;
@@ -494,6 +496,8 @@ where
             logs.push((log, id, shared));
         }
 
+        let (read_holds_tx, read_holds_rx) = mpsc::unbounded_channel();
+
         let client = instance::Client::spawn(
             id,
             self.build_info,
@@ -506,10 +510,12 @@ where
             Arc::clone(&self.dyncfg),
             self.response_tx.clone(),
             self.introspection_tx.clone(),
+            read_holds_tx.clone(),
+            read_holds_rx,
         );
 
-        self.instances
-            .insert(id, InstanceState::new(client, collections));
+        let instance = InstanceState::new(client, collections, read_holds_tx);
+        self.instances.insert(id, instance);
 
         self.instance_workload_classes
             .lock()
@@ -702,14 +708,12 @@ where
         Ok(())
     }
 
-    /// Create and maintain the described dataflows, and initialize state for their output.
+    /// Creates the described dataflow and initializes state for its output.
     ///
-    /// This method creates dataflows whose inputs are still readable at the dataflow `as_of`
-    /// frontier, and initializes the outputs as readable from that frontier onward.
-    /// It installs read dependencies from the outputs to the inputs, so that the input read
-    /// capabilities will be held back to the output read capabilities, ensuring that we are
-    /// always able to return to a state that can serve the output read capabilities.
-    pub async fn create_dataflow(
+    /// If a `subscribe_target_replica` is given, any subscribes exported by the dataflow are
+    /// configured to target that replica, i.e., only subscribe responses sent by that replica are
+    /// considered.
+    pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
@@ -717,9 +721,45 @@ where
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
 
-        let instance = self.instance_mut(instance_id)?;
+        let instance = self.instance(instance_id)?;
 
+        // Validation: target replica
+        if let Some(replica_id) = subscribe_target_replica {
+            if !instance.replicas.contains(&replica_id) {
+                return Err(ReplicaMissing(replica_id));
+            }
+        }
+
+        // Validation: as_of
         let as_of = dataflow.as_of.as_ref().ok_or(MissingAsOf)?;
+        if as_of.is_empty() && dataflow.subscribe_ids().next().is_some() {
+            return Err(EmptyAsOfForSubscribe);
+        }
+        if as_of.is_empty() && dataflow.copy_to_ids().next().is_some() {
+            return Err(EmptyAsOfForCopyTo);
+        }
+
+        // Validation: input collections
+        let storage_ids = dataflow.imported_source_ids().collect();
+        let mut import_read_holds = self.storage_collections.acquire_read_holds(storage_ids)?;
+        for id in dataflow.imported_index_ids() {
+            let read_hold = instance.acquire_read_hold(id)?;
+            import_read_holds.push(read_hold);
+        }
+        for hold in &import_read_holds {
+            if PartialOrder::less_than(as_of, hold.since()) {
+                return Err(SinceViolation(hold.id()));
+            }
+        }
+
+        // Validation: storage sink collections
+        for id in dataflow.persist_sink_ids() {
+            if self.storage_collections.check_exists(id).is_err() {
+                return Err(CollectionMissing(id));
+            }
+        }
+
+        let instance = self.instance_mut(instance_id).expect("validated");
 
         let mut shared_collection_state = BTreeMap::new();
         for id in dataflow.export_ids() {
@@ -733,11 +773,16 @@ where
             shared_collection_state.insert(id, shared);
         }
 
-        self.instance(instance_id)?
-            .call_sync(move |i| {
-                i.create_dataflow(dataflow, subscribe_target_replica, shared_collection_state)
-            })
-            .await?;
+        instance.call(move |i| {
+            i.create_dataflow(
+                dataflow,
+                import_read_holds,
+                subscribe_target_replica,
+                shared_collection_state,
+            )
+            .expect("validated")
+        });
+
         Ok(())
     }
 
@@ -765,7 +810,7 @@ where
     }
 
     /// Initiate a peek request for the contents of the given collection at `timestamp`.
-    pub async fn peek(
+    pub fn peek(
         &mut self,
         instance_id: ComputeInstanceId,
         peek_target: PeekTarget,
@@ -776,19 +821,43 @@ where
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), PeekError> {
-        self.instance(instance_id)?
-            .call_sync(move |i| {
-                i.peek(
-                    peek_target,
-                    literal_constraints,
-                    uuid,
-                    timestamp,
-                    finishing,
-                    map_filter_project,
-                    target_replica,
-                )
-            })
-            .await?;
+        use PeekError::*;
+
+        let instance = self.instance(instance_id)?;
+
+        // Validation: target replica
+        if let Some(replica_id) = target_replica {
+            if !instance.replicas.contains(&replica_id) {
+                return Err(ReplicaMissing(replica_id));
+            }
+        }
+
+        // Validation: peek target
+        let read_hold = match &peek_target {
+            PeekTarget::Index { id } => instance.acquire_read_hold(*id)?,
+            PeekTarget::Persist { id, .. } => self
+                .storage_collections
+                .acquire_read_holds(vec![*id])?
+                .into_element(),
+        };
+        if !read_hold.since().less_equal(&timestamp) {
+            return Err(SinceViolation(peek_target.id()));
+        }
+
+        instance.call(move |i| {
+            i.peek(
+                peek_target,
+                literal_constraints,
+                uuid,
+                timestamp,
+                finishing,
+                map_filter_project,
+                read_hold,
+                target_replica,
+            )
+            .expect("validated")
+        });
+
         Ok(())
     }
 
@@ -846,21 +915,15 @@ where
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
-    pub async fn acquire_read_hold(
-        &mut self,
+    pub fn acquire_read_hold(
+        &self,
         instance_id: ComputeInstanceId,
         collection_id: GlobalId,
     ) -> Result<ReadHold<T>, CollectionUpdateError> {
-        let instance = self.instance(instance_id)?;
-
-        // Validation
-        instance.collection(collection_id)?;
-
-        let hold = instance
-            .call_sync(move |i| i.acquire_read_hold(collection_id).expect("validated"))
-            .await;
-
-        Ok(hold)
+        let read_hold = self
+            .instance(instance_id)?
+            .acquire_read_hold(collection_id)?;
+        Ok(read_hold)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -941,14 +1004,24 @@ struct InstanceState<T: ComputeControllerTimestamp> {
     client: instance::Client<T>,
     replicas: BTreeSet<ReplicaId>,
     collections: BTreeMap<GlobalId, Collection<T>>,
+    /// Sender for updates to collection read holds.
+    ///
+    /// Copies of this sender are given to [`ReadHold`]s that are created in
+    /// [`InstanceState::acquire_read_hold`].
+    read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
 }
 
 impl<T: ComputeControllerTimestamp> InstanceState<T> {
-    fn new(client: instance::Client<T>, collections: BTreeMap<GlobalId, Collection<T>>) -> Self {
+    fn new(
+        client: instance::Client<T>,
+        collections: BTreeMap<GlobalId, Collection<T>>,
+        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
+    ) -> Self {
         Self {
             client,
             replicas: Default::default(),
             collections,
+            read_holds_tx,
         }
     }
 
@@ -975,6 +1048,28 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         }));
 
         rx.await.expect("instance not dropped")
+    }
+
+    /// Acquires a [`ReadHold`] for the identified compute collection.
+    pub fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+        // We acquire read holds at the earliest possible time rather than returning a copy
+        // of the implied read hold. This is so that in `create_dataflow` we can acquire read holds
+        // on compute dependencies at frontiers that are held back by other read holds the caller
+        // has previously taken.
+        //
+        // If/when we change the compute API to expect callers to pass in the `ReadHold`s rather
+        // than acquiring them ourselves, we might tighten this up and instead acquire read holds
+        // at the implied capability.
+
+        let collection = self.collection(id)?;
+        let since = collection.shared.lock_read_capabilities(|caps| {
+            let since = caps.frontier().to_owned();
+            caps.update_iter(since.iter().map(|t| (t.clone(), 1)));
+            since
+        });
+
+        let hold = ReadHold::new(id, since, self.read_holds_tx.clone());
+        Ok(hold)
     }
 }
 

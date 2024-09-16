@@ -18,9 +18,10 @@
 //! of each method and make it easy for callers to ensure that all possible errors are handled.
 
 use mz_repr::GlobalId;
+use mz_storage_types::read_holds::ReadHoldError;
 use thiserror::Error;
 
-use crate::controller::{instance, ComputeInstanceId, ReplicaId};
+use crate::controller::{ComputeInstanceId, ReplicaId};
 
 /// The error returned by replica-targeted peeks and subscribes when the target replica
 /// disconnects.
@@ -138,16 +139,17 @@ impl From<InstanceMissing> for DataflowCreationError {
     }
 }
 
-impl From<instance::DataflowCreationError> for DataflowCreationError {
-    fn from(error: instance::DataflowCreationError) -> Self {
-        use instance::DataflowCreationError::*;
+impl From<CollectionMissing> for DataflowCreationError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
+    }
+}
+
+impl From<ReadHoldError> for DataflowCreationError {
+    fn from(error: ReadHoldError) -> Self {
         match error {
-            CollectionMissing(id) => Self::CollectionMissing(id),
-            ReplicaMissing(id) => Self::ReplicaMissing(id),
-            MissingAsOf => Self::MissingAsOf,
-            SinceViolation(id) => Self::SinceViolation(id),
-            EmptyAsOfForSubscribe => Self::EmptyAsOfForSubscribe,
-            EmptyAsOfForCopyTo => Self::EmptyAsOfForCopyTo,
+            ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
+            ReadHoldError::SinceViolation(id) => Self::SinceViolation(id),
         }
     }
 }
@@ -175,13 +177,17 @@ impl From<InstanceMissing> for PeekError {
     }
 }
 
-impl From<instance::PeekError> for PeekError {
-    fn from(error: instance::PeekError) -> Self {
-        use instance::PeekError::*;
+impl From<CollectionMissing> for PeekError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
+    }
+}
+
+impl From<ReadHoldError> for PeekError {
+    fn from(error: ReadHoldError) -> Self {
         match error {
-            CollectionMissing(id) => Self::CollectionMissing(id),
-            ReplicaMissing(id) => Self::ReplicaMissing(id),
-            SinceViolation(id) => Self::SinceViolation(id),
+            ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
+            ReadHoldError::SinceViolation(id) => Self::SinceViolation(id),
         }
     }
 }
