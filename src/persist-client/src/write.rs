@@ -611,6 +611,7 @@ where
         let builder = BatchBuilderInternal::new(
             BatchBuilderConfig::new(&self.cfg, &self.writer_id, false),
             Arc::clone(&self.metrics),
+            self.write_schemas.clone(),
             Arc::clone(&self.machine.applier.shard_metrics),
             self.metrics.user.clone(),
             lower,
@@ -623,7 +624,6 @@ where
         );
         BatchBuilder {
             builder,
-            stats_schemas: self.write_schemas.clone(),
             metrics: Arc::clone(&self.metrics),
             key_buf: vec![],
             val_buf: vec![],

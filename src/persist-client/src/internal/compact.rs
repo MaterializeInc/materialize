@@ -660,7 +660,7 @@ where
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
-        real_schemas: Schemas<K, V>,
+        write_schemas: Schemas<K, V>,
     ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
         // Currently, we give any excess budget to write parallelism. If we had
@@ -676,6 +676,7 @@ where
         let mut batch = BatchBuilderInternal::<K, V, T, D>::new(
             cfg.batch.clone(),
             Arc::clone(&metrics),
+            write_schemas.clone(),
             Arc::clone(&shard_metrics),
             metrics.compaction.batch.clone(),
             desc.lower().clone(),
@@ -700,7 +701,7 @@ where
                     desc.upper().elements()
                 ),
                 *shard_id,
-                StructuredSort::<K, V, T, D>::new(real_schemas.clone()),
+                StructuredSort::<K, V, T, D>::new(write_schemas.clone()),
                 blob,
                 Arc::clone(&metrics),
                 shard_metrics,
@@ -739,13 +740,7 @@ where
                     val_vec.extend_from_slice(v);
                     crate::batch::validate_schema(&real_schemas, &key_vec, &val_vec, None, None);
                     batch
-                        .add(
-                            &real_schemas,
-                            &key_vec,
-                            &val_vec,
-                            &T::decode(t),
-                            &D::decode(d),
-                        )
+                        .add(&key_vec, &val_vec, &T::decode(t), &D::decode(d))
                         .await?;
                 }
                 tokio::task::yield_now().await;
@@ -793,13 +788,13 @@ where
                     key_vec.extend_from_slice(k);
                     val_vec.clear();
                     val_vec.extend_from_slice(v);
-                    crate::batch::validate_schema(&real_schemas, &key_vec, &val_vec, None, None);
-                    batch.add(&real_schemas, &key_vec, &val_vec, &t, &d).await?;
+                    crate::batch::validate_schema(&write_schemas, &key_vec, &val_vec, None, None);
+                    batch.add(&key_vec, &val_vec, &t, &d).await?;
                 }
                 tokio::task::yield_now().await;
             }
         }
-        let mut batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
+        let mut batch = batch.finish(desc.upper().clone()).await?;
 
         // We use compaction as a method of getting inline writes out of state,
         // to make room for more inline writes. This happens in
@@ -814,7 +809,7 @@ where
                     &cfg.batch,
                     &metrics.compaction.batch,
                     &isolated_runtime,
-                    &real_schemas,
+                    &write_schemas,
                 )
                 .await;
         }
