@@ -15,7 +15,7 @@
 
 load("@rules_rust//rust:repositories.bzl", "DEFAULT_TOOLCHAIN_TRIPLES", "rust_repository_set")
 
-def rust_toolchains(version, targets):
+def rust_toolchains(versions, targets):
     """
     Macro that registers Rust toolchains for the provided targets.
 
@@ -25,33 +25,62 @@ def rust_toolchains(version, targets):
     abstract it away into this macro.
     """
 
-    for (target, resources) in targets.items():
-        # Support cross compiling to all other targets we specify.
-        extra_targets = [t for t in targets.keys()]
-        extra_targets.remove(target)
+    for version in versions:
+        # Release channel for the current version.
+        if version.startswith("nightly"):
+            channel = "nightly"
+        elif version.startswith("beta"):
+            channel = "beta"
+        else:
+            channel = "stable"
 
-        integrity = {}
-        for (resource, sha256) in resources.items():
-            key = "{0}-{1}-{2}".format(resource, version, target)
-            integrity[key] = sha256
+        # Namespace for the GitHub release URLs.
+        if channel == "stable":
+            url_namespace = version
+        else:
+            url_namespace = channel
 
-        CROSS_COMPILING_COMPONENTS = ["rust-std"]
-        for extra_target in extra_targets:
-            for component in CROSS_COMPILING_COMPONENTS:
-                sha256 = targets[extra_target].get(component)
-                if not sha256:
-                    continue
-                key = "{0}-{1}-{2}".format(component, version, extra_target)
+        for (target, versioned_components) in targets.items():
+            # Support cross compiling to all other targets we specify.
+            extra_targets = [t for t in targets.keys()]
+            extra_targets.remove(target)
+
+            # Get the hashes for the current version.
+            components = versioned_components[channel]
+
+            integrity = {}
+            for (component, sha256) in components.items():
+                key = _integrity_key(version, target, component)
                 integrity[key] = sha256
 
-        rust_repository_set(
-            name = DEFAULT_TOOLCHAIN_TRIPLES[target],
-            edition = "2021",
-            exec_triple = target,
-            extra_target_triples = extra_targets,
-            versions = [version],
-            sha256s = integrity,
-            urls = [
-                "https://github.com/MaterializeInc/toolchains/releases/download/rust-{VERSION}/{{}}.tar.zst".format(VERSION = version),
-            ],
-        )
+            # These components are used when cross compiling and so we include
+            # their hashes in the integrity for every target.
+            CROSS_COMPILING_COMPONENTS = ["rust-std"]
+            for extra_target in extra_targets:
+                for component in CROSS_COMPILING_COMPONENTS:
+                    sha256 = targets[extra_target][channel].get(component)
+                    if not sha256:
+                        continue
+                    key = _integrity_key(version, extra_target, component)
+                    integrity[key] = sha256
+
+            rust_repository_set(
+                name = DEFAULT_TOOLCHAIN_TRIPLES[target],
+                edition = "2021",
+                exec_triple = target,
+                extra_target_triples = extra_targets,
+                versions = [version],
+                sha256s = integrity,
+                urls = [
+                    "https://github.com/MaterializeInc/toolchains/releases/download/rust-{NS}/{{}}.tar.zst".format(NS = url_namespace),
+                ],
+            )
+
+def _integrity_key(version, target, component):
+    if version.startswith("nightly") or version.startswith("beta"):
+        parts = version.split("/", 1)
+        channel = parts[0]
+        date = parts[1]
+        return "{0}/{1}-{2}-{3}".format(date, component, channel, target)
+    else:
+        return "{0}-{1}-{2}".format(component, version, target)
