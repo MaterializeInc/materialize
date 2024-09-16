@@ -393,19 +393,6 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
-      - id: mysql-cdc-old-syntax
-        label: MySQL CDC tests %N (before source versioning)
-        parallelism: 2
-        depends_on: build-aarch64
-        timeout_in_minutes: 30
-        inputs: [test/mysql-cdc-old-syntax]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: mysql-cdc-old-syntax
-              args: ["--mysql-version=8.4.0"]
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-
       - id: mysql-cdc-resumption
         label: "MySQL CDC resumption tests %N"
         parallelism: 3
@@ -418,18 +405,6 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
-      - id: mysql-cdc-resumption-old-syntax
-        label: MySQL CDC resumption tests %N (before source versioning)
-        parallelism: 3
-        depends_on: build-aarch64
-        timeout_in_minutes: 30
-        inputs: [test/mysql-cdc-resumption-old-syntax]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: mysql-cdc-resumption-old-syntax
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-
       - id: mysql-rtr
         label: "MySQL RTR tests"
         depends_on: build-aarch64
@@ -438,17 +413,6 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-rtr
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-
-      - id: mysql-rtr-old-syntax
-        label: MySQL RTR tests (before source versioning)
-        depends_on: build-aarch64
-        timeout_in_minutes: 30
-        inputs: [test/mysql-rtr-old-syntax]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: mysql-rtr-old-syntax
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
@@ -467,18 +431,6 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
-      - id: pg-cdc-old-syntax
-        label: Postgres CDC tests (before source versioning)
-        depends_on: build-aarch64
-        timeout_in_minutes: 30
-        inputs: [test/pg-cdc-old-syntax]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: pg-cdc-old-syntax
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-        # the mzbuild postgres version will be used, which depends on the Dockerfile specification
-
       - id: pg-cdc-resumption
         label: "Postgres CDC resumption tests %N"
         parallelism: 2
@@ -491,18 +443,6 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
-      - id: pg-cdc-resumption-old-syntax
-        label: Postgres CDC resumption tests %N (before source versioning)
-        parallelism: 2
-        depends_on: build-aarch64
-        timeout_in_minutes: 30
-        inputs: [test/pg-cdc-resumption-old-syntax]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: pg-cdc-resumption-old-syntax
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-
       - id: pg-rtr
         label: "Postgres RTR tests"
         depends_on: build-aarch64
@@ -511,17 +451,6 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-rtr
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-
-      - id: pg-rtr-old-syntax
-        label: Postgres RTR tests (before source versioning)
-        depends_on: build-aarch64
-        timeout_in_minutes: 30
-        inputs: [test/pg-rtr-old-syntax]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: pg-rtr-old-syntax
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
