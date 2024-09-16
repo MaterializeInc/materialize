@@ -10,28 +10,33 @@
 # Default priority, just set to be explicit
 priority: 0
 
+env:
+  CI_BUILD_WITH_BAZEL: 1
+  CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
+
 steps:
   - group: Builds
     key: builds
     steps:
       - id: build-x86_64
-        label: Build x86_64
+        label: ":bazel: Build x86_64"
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
+        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
-        priority: 50
         agents:
           queue: builder-linux-x86_64
 
       - id: build-aarch64
-        label: Build aarch64
+        label: ":bazel: Build aarch64"
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
-        # For releases we trigger nightly from the test job directly, no need to build again
-        branches: "!v*.*"
         agents:
           queue: builder-linux-aarch64
 
@@ -58,9 +63,11 @@ steps:
         sanitizer: skip
 
   - id: miri-test
-    label: Miri test (full)
+    label: ":rust: Miri test (full)"
     depends_on: []
     timeout_in_minutes: 600
+    env:
+      CI_BUILD_WITH_BAZEL: 0
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cargo-test

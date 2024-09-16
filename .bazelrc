@@ -47,6 +47,10 @@ build:macos --experimental_inprocess_symlink_creation
 #
 # Bazel's sandbox performance on macOS doesn't scale very well, see: <https://github.com/bazelbuild/bazel/issues/8230>
 build:macos --experimental_inmemory_sandbox_stashes
+# `/dev/shm` is a RAM backed temporary filesystem, it should speedup sandbox creation.
+#
+# TODO(parkmycar): This would be great to enable but leads to out-of-disk errors.
+#build:ci --sandbox_base=/dev/shm
 
 # Always have Bazel output why it rebuilt something, should make debugging builds easier.
 #
@@ -61,6 +65,8 @@ common --experimental_remote_cache_compression_threshold=2097152
 common --experimental_remote_merkle_tree_cache
 # Number of merkle trees to memoize (default 1000).
 common --experimental_remote_merkle_tree_cache_size=5000
+# Don't make the user wait for uploading artifacts to complete, finish it in the background.
+common --bes_upload_mode=fully_async
 # Tells `xz` to use all available cores.
 action_env=XZ_OPT=-T0
 
@@ -71,17 +77,32 @@ build:debug --cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG"
 build:debug --host_cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG"
 build:debug --@rules_rust//:extra_rustc_flag="-Csplit-debuginfo=unpacked"
 
+
 # Common Build Configuration
-build --linkopt="-Wl,-O2"
 build --linkopt="-fuse-ld=lld"
-build --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,-O2"
 build --@rules_rust//:extra_rustc_flag="-Clink-arg=-fuse-ld=lld"
 build --@rules_rust//:extra_rustc_flag="-Csymbol-mangling-version=v0"
+# We use 64 because it's enough to totally saturate a CI builder so our builds
+# are as fast as possible, and it's less than the default of 256 used with
+# Cargo when incremental compilation is enabled.
+#
+# TODO(parkmycar): Investigate a "super release" build with codegen-units=1
+build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=64"
 
 # TODO(parkmycar): toolchains_llvm uses ld64 for macOS which doesn't support
 # compressing debug sections.
 build:linux --linkopt="-Wl,--compress-debug-sections=zlib"
+build:linux --linkopt="-Wl,-O2"
 build:linux --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,--compress-debug-sections=zlib"
+build:linux --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,-O2"
+
+# Match the DWARF version used by Rust
+#
+# See: <https://doc.rust-lang.org/stable/unstable-book/compiler-flags/dwarf-version.html>
+build:linux --copt="-gdwarf-4"
+build:linux --linkopt="-gdwarf-4"
+build:macos --copt="-gdwarf-2"
+build:macos --linkopt="-gdwarf-2"
 
 # As of Jan 2024 all of the x86-64 and aarch64 hardware we run on support these
 # CPU targets.
@@ -92,19 +113,33 @@ build:linux-arm64 --copt="-mcpu=neoverse-n1"
 build:linux-arm64 --@rules_rust//:extra_rustc_flag="-Ctarget-cpu=neoverse-n1"
 
 # Release Build Configuration
-build:release --cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST"
-build:release --copt="-O3"
-build:release --copt="-DNDEBUG"
-build:release --copt="-flto=thin"
-build:release --linkopt="-flto=thin"
-build:release --@rules_rust//:extra_rustc_flag="-Clto=thin"
-build:release -c opt
+build:release --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
+build:release --copt=-O3
+build:release --copt=-DNDEBUG
+build:release --compilation_mode=opt
+build:release --copt=-flto=thin
+build:release --linkopt=-flto=thin
+build:release --@rules_rust//:extra_rustc_flag=-Clto=thin
+# Emit full debug info, allowing us to easily analyze core dumps from staging
+# (and, in an emergency, also prod).
+build:release --@rules_rust//:extra_rustc_flag=-Cdebuginfo=2
+build:release --copt=-g
+# `rules_rust` defaults to stripping debug symbols for release builds, undo that.
+build:release --strip=never
+build:release --@rules_rust//:extra_rustc_flag=-Cstrip=none
 
 # Cross Language LTO
 #
 # <https://blog.llvm.org/2019/09/closing-gap-cross-language-lto-between.html>
 #
-# TODO(parkmycar): Measure the tradeoff between compile time and runtime performance.
-# TODO(parkmycar): Experiment with a different number of codegen units.
-build:x-lang-lto --@rules_rust//:extra_rustc_flag="-Clinker-plugin-lto"
-build:x-lang-lto --@rules_rust//:extra_rustc_flag="-Clinker=external/llvm_toolchain_llvm/bin/clang"
+# TODO(parkmycar): Re-enable these. They eiter cause a compilation failure because of
+# missing object files, or (seemingly) makes the number of codegen units 1 which compiles
+# way too slow.
+#build:release --@rules_rust//:extra_rustc_flag="-Clinker-plugin-lto"
+#build:linux --@rules_rust//rust/settings:experimental_use_cc_common_link=True
+
+# This 'features' option comes from the `unix_cc_toolchain_config` in Bazel core and sets all the
+# right flags.
+#
+# See: <https://github.com/bazelbuild/bazel/blob/master/tools/cpp/unix_cc_toolchain_config.bzl>
+#build:release --features=thin_lto

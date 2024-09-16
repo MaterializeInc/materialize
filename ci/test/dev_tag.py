@@ -9,21 +9,35 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 from pathlib import Path
 
-from materialize import ci_util, git, mzbuild
+from materialize import ci_util, git, mzbuild, ui
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
 
 
 def main() -> None:
+    bazel = ui.env_is_truthy("CI_BUILD_WITH_BAZEL")
+    bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+
     mz_version = ci_util.get_mz_version()
     repos = [
         mzbuild.Repository(
-            Path("."), Arch.X86_64, coverage=False, sanitizer=Sanitizer.none
+            Path("."),
+            Arch.X86_64,
+            coverage=False,
+            sanitizer=Sanitizer.none,
+            bazel=bazel,
+            bazel_remote_cache=bazel_remote_cache,
         ),
         mzbuild.Repository(
-            Path("."), Arch.AARCH64, coverage=False, sanitizer=Sanitizer.none
+            Path("."),
+            Arch.AARCH64,
+            coverage=False,
+            sanitizer=Sanitizer.none,
+            bazel=bazel,
+            bazel_remote_cache=bazel_remote_cache,
         ),
     ]
     print("--- Tagging development Docker images")

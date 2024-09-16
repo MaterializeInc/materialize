@@ -237,8 +237,8 @@ llvm_toolchain(
     llvm_version = LLVM_VERSION,
     sha256 = {
         "darwin-aarch64": "510541536527d9d4264e48e254c231487cdc1631cb30920da8a68adf41fdbb91",
-        "linux-aarch64": "6117a28376d91d331fbacbac3cf9ef4e21ad255e3cbd6fcbfc260e3f437be533",
-        "linux-x86_64": "6aa8a3c61de78e95134261b6d0e3a1907e1fee5b41a3baa62b185ec8326c0753",
+        "linux-aarch64": "738ab939ae9b6351413947758661058c101ff2e4708bf8df984de6035ab29745",
+        "linux-x86_64": "9d72a68e9c3d56fc68af25e8fe95aa2aea1049a135a5b35d395c4fe4aaed6f16",
     },
     sysroot = {
         "darwin-aarch64": "@sysroot_darwin_universal//:sysroot",
@@ -248,8 +248,8 @@ llvm_toolchain(
     },
     urls = {
         "darwin-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/darwin_aarch64.tar.zst".format(LLVM_VERSION)],
-        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-1/linux_aarch64.tar.zst".format(LLVM_VERSION)],
-        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-1/linux_x86_64.tar.zst".format(LLVM_VERSION)],
+        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-3/linux_aarch64.tar.zst".format(LLVM_VERSION)],
+        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-3/linux_x86_64.tar.zst".format(LLVM_VERSION)],
     },
 )
 
@@ -367,6 +367,14 @@ load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
 crates_repository(
     name = "crates_io",
     annotations = {
+        # `crates_repository` fails to automatically add the depenency on `tracing` when
+        # `tokio_unstable` is enabled, so we manually specify it.
+        "tokio": [
+            crate.annotation(
+                rustc_flags = ["--cfg=tokio_unstable"],
+                deps = ["@crates_io//:tracing"],
+            ),
+        ],
         "decnumber-sys": [crate.annotation(
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.decnumber.bazel",
             gen_build_script = False,

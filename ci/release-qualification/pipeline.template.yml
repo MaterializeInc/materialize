@@ -10,13 +10,20 @@
 # Runs long, but can block a release
 priority: 40
 
+env:
+  CI_BUILD_WITH_BAZEL: 1
+  CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
+
 steps:
   - group: Builds
     key: builds
     steps:
       - id: build-aarch64
-        label: Build aarch64
+        label: ":bazel: Build aarch64"
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
@@ -27,9 +34,15 @@ steps:
         # sure we use the exact same version for testing here as was tagged and
         # will be released, and don't build our own version just for the tests.
         if: build.source == "ui" || build.source == "schedule" || build.source == "api"
+
       - id: build-x86_64
-        label: Build x86_64
+        label: ":bazel: Build x86_64"
+        env:
+          CI_BUILD_WITH_BAZEL: "1"
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
