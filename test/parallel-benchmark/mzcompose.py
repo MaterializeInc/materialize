@@ -222,11 +222,11 @@ def report(
     plt.ylabel("CCDF")
     plt.xlabel("latency [ms]")
     for key, m in measurements.items():
-        durations = numpy.array([x.duration * 1000.0 for x in m])
+        durations = [x.duration * 1000.0 for x in m]
         durations.sort()
-        (durations, counts) = numpy.unique(durations, return_counts=True)
+        (uniqu_durations, counts) = numpy.unique(durations, return_counts=True)
         counts = numpy.cumsum(counts)
-        plt.plot(durations, 1 - counts / counts.max())
+        plt.plot(uniqu_durations, 1 - counts / counts.max(), label=key)
 
     plot_path = f"plots/{scenario_name}_{suffix}_ccdf.png"
     plt.savefig(MZ_ROOT / plot_path, dpi=300)
