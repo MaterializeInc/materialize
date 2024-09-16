@@ -177,8 +177,8 @@ database_objects = [
             ALTER TABLE pg_table REPLICA IDENTITY FULL;
 
             > CREATE SOURCE obj
-              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-              FOR TABLES (pg_table);
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+            > CREATE TABLE pg_table FROM SOURCE obj (REFERENCE pg_table);
             """
         ),
         expected_size=4 * 1024,
@@ -204,8 +204,8 @@ database_objects = [
             ALTER TABLE pg_table3 REPLICA IDENTITY FULL;
 
             > CREATE SOURCE pg_source
-              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-              FOR TABLES (pg_table1 AS obj);
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+            > CREATE TABLE obj FROM SOURCE pg_source (REFERENCE pg_table1);
 
             > SELECT COUNT(*) FROM obj;
             1024

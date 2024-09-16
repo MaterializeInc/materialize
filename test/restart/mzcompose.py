@@ -115,7 +115,12 @@ def workflow_github_17578(c: Composition) -> None:
         service="testdrive_no_reset",
         input=dedent(
             """
-            > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+            > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION;
+            > CREATE TABLE accounts FROM SOURCE with_subsources (REFERENCE accounts);
+            > CREATE TABLE auctions FROM SOURCE with_subsources (REFERENCE auctions);
+            > CREATE TABLE bids FROM SOURCE with_subsources (REFERENCE bids);
+            > CREATE TABLE organizations FROM SOURCE with_subsources (REFERENCE organizations);
+            > CREATE TABLE users FROM SOURCE with_subsources (REFERENCE users);
 
             > SELECT DISTINCT
               top_level_s.name as source,
@@ -126,12 +131,22 @@ def workflow_github_17578(c: Composition) -> None:
               WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
             source          subsource
             -------------------------
-            with_subsources accounts
-            with_subsources auctions
-            with_subsources bids
-            with_subsources organizations
-            with_subsources users
             with_subsources with_subsources_progress
+
+            > SELECT DISTINCT
+              s.name AS source,
+              t.name AS table
+              FROM mz_internal.mz_object_dependencies AS d
+              JOIN mz_sources AS s ON s.id = d.referenced_object_id
+              JOIN mz_tables AS t ON t.id = d.object_id
+              WHERE s.name = 'with_subsources';
+            source            table
+            -------------------------
+            with_subsources   bids
+            with_subsources   users
+            with_subsources   accounts
+            with_subsources   auctions
+            with_subsources   organizations
             """
         ),
     )
@@ -153,12 +168,23 @@ def workflow_github_17578(c: Composition) -> None:
               WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
             source          subsource
             -------------------------
-            with_subsources accounts
-            with_subsources auctions
-            with_subsources bids
-            with_subsources organizations
-            with_subsources users
             with_subsources with_subsources_progress
+
+            > SELECT DISTINCT
+              s.name AS source,
+              t.name AS table
+              FROM mz_internal.mz_object_dependencies AS d
+              JOIN mz_sources AS s ON s.id = d.referenced_object_id
+              JOIN mz_tables AS t ON t.id = d.object_id
+              WHERE s.name = 'with_subsources';
+            source            table
+            -------------------------
+            with_subsources   bids
+            with_subsources   users
+            with_subsources   accounts
+            with_subsources   auctions
+            with_subsources   organizations
+
             """
         ),
     )
