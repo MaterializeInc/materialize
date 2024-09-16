@@ -28,7 +28,7 @@ ADD https://api.github.com/repos/MaterializeInc/RQG/git/refs/heads/main version.
 
 RUN git clone --single-branch https://github.com/MaterializeInc/RQG.git \
     && cd RQG \
-    && git checkout 720346b8b8bea7329b443dcfdb72c8b0591eb6d2
+    && git checkout bb026d4bb1a4e6d1fd70b9adc9d1f31e6ec76770
 
 ENTRYPOINT ["/usr/bin/perl"]
 
