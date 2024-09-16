@@ -23,7 +23,8 @@ use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::Transaction;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterConfig, StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
+    CatalogItem, ClusterConfig, DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind,
+    TemporaryItem,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
@@ -1037,18 +1038,51 @@ impl Catalog {
                     );
                     let details = match &item {
                         CatalogItem::Source(s) => {
-                            EventDetails::CreateSourceSinkV3(mz_audit_log::CreateSourceSinkV3 {
+                            let cluster_id = match s.data_source {
+                                // Ingestion exports don't have their own cluster, but
+                                // run on their ingestion's cluster.
+                                DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                                    match state.get_entry(&ingestion_id).cluster_id() {
+                                        Some(cluster_id) => Some(cluster_id.to_string()),
+                                        None => None,
+                                    }
+                                }
+                                _ => match item.cluster_id() {
+                                    Some(cluster_id) => Some(cluster_id.to_string()),
+                                    None => None,
+                                },
+                            };
+
+                            EventDetails::CreateSourceSinkV4(mz_audit_log::CreateSourceSinkV4 {
                                 id: id.to_string(),
+                                cluster_id,
                                 name,
                                 external_type: s.source_type().to_string(),
                             })
                         }
                         CatalogItem::Sink(s) => {
-                            EventDetails::CreateSourceSinkV3(mz_audit_log::CreateSourceSinkV3 {
+                            EventDetails::CreateSourceSinkV4(mz_audit_log::CreateSourceSinkV4 {
                                 id: id.to_string(),
+                                cluster_id: Some(s.cluster_id.to_string()),
                                 name,
                                 external_type: s.sink_type().to_string(),
                             })
+                        }
+                        CatalogItem::Index(i) => {
+                            EventDetails::CreateIndexV1(mz_audit_log::CreateIndexV1 {
+                                id: id.to_string(),
+                                name,
+                                cluster_id: i.cluster_id.to_string(),
+                            })
+                        }
+                        CatalogItem::MaterializedView(mv) => {
+                            EventDetails::CreateMaterializedViewV1(
+                                mz_audit_log::CreateMaterializedViewV1 {
+                                    id: id.to_string(),
+                                    name,
+                                    cluster_id: mv.cluster_id.to_string(),
+                                },
+                            )
                         }
                         _ => EventDetails::IdFullNameV1(IdFullNameV1 {
                             id: id.to_string(),
