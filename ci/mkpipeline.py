@@ -91,7 +91,7 @@ so it is executed.""",
     parser.add_argument("pipeline", type=str)
     parser.add_argument(
         "--bazel",
-        default=ui.env_is_truthy("CI_BAZEL_BUILD"),
+        default=ui.env_is_truthy("CI_BAZEL_BUILD", "1"),
         action="store_true",
     )
     parser.add_argument(
