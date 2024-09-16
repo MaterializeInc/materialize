@@ -44,6 +44,7 @@ pub fn create_stmt_rename_schema_refs(
         | stmt @ Statement::CreateView(_)
         | stmt @ Statement::CreateMaterializedView(_)
         | stmt @ Statement::CreateTable(_)
+        | stmt @ Statement::CreateTableFromSource(_)
         | stmt @ Statement::CreateIndex(_)
         | stmt @ Statement::CreateType(_)
         | stmt @ Statement::CreateSecret(_) => {
@@ -208,6 +209,7 @@ pub fn create_stmt_rename_refs(
         Statement::CreateSource(_)
         | Statement::CreateSubsource(_)
         | Statement::CreateTable(_)
+        | Statement::CreateTableFromSource(_)
         | Statement::CreateSecret(_)
         | Statement::CreateConnection(_)
         | Statement::CreateWebhookSource(_) => {}
