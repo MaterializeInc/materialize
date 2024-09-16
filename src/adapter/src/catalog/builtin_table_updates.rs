@@ -535,7 +535,8 @@ impl CatalogState {
                                 // Load generator sources don't have any special
                                 // updates.
                                 "load-generator" => vec![],
-                                // TODO(roshan): Add support for kafka source tables.
+                                // TODO(29373): Add catalog introspection table for kafka source tables.
+                                "kafka" => vec![],
                                 s => unreachable!("{s} sources do not have tables"),
                             }
                         }
