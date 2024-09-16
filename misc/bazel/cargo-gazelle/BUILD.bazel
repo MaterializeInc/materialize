@@ -9,79 +9,80 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
 
+load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test", "rust_binary")
+
 rust_library(
-    name = "cargo_gazelle",
-    srcs = glob(["src/**/*.rs"]),
-    aliases = aliases(
-        normal = True,
-        proc_macro = True,
-    ),
-    compile_data = [],
-    crate_features = ["default"],
-    data = [],
-    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-    rustc_env = {},
-    rustc_flags = [],
-    version = "0.0.0",
-    deps = [] + all_crate_deps(normal = True),
+	name = "cargo_gazelle",
+	version = "0.0.0",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = ["default"],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [] + all_crate_deps(normal = True),
+	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+	compile_data = [],
+	data = [],
+	rustc_flags = [],
+	rustc_env = {},
 )
 
 rust_test(
-    name = "cargo_gazelle_lib_tests",
-    size = "medium",
-    aliases = aliases(
-        normal = True,
-        normal_dev = True,
-        proc_macro = True,
-        proc_macro_dev = True,
-    ),
-    compile_data = [],
-    crate = ":cargo_gazelle",
-    crate_features = ["default"],
-    data = [],
-    env = {},
-    proc_macro_deps = [] + all_crate_deps(
-        proc_macro = True,
-        proc_macro_dev = True,
-    ),
-    rustc_env = {},
-    rustc_flags = [],
-    version = "0.0.0",
-    deps = [] + all_crate_deps(
-        normal = True,
-        normal_dev = True,
-    ),
+	name = "cargo_gazelle_lib_tests",
+	version = "0.0.0",
+	crate = ":cargo_gazelle",
+	crate_features = ["default"],
+	aliases = aliases(
+		normal = True,
+		normal_dev = True,
+		proc_macro = True,
+		proc_macro_dev = True,
+	),
+	deps = [] + all_crate_deps(
+		normal = True,
+		normal_dev = True,
+	),
+	proc_macro_deps = [] + all_crate_deps(
+		proc_macro = True,
+		proc_macro_dev = True,
+	),
+	size = "medium",
+	compile_data = [],
+	data = [],
+	env = {},
+	rustc_flags = [],
+	rustc_env = {},
 )
 
 rust_doc_test(
-    name = "cargo_gazelle_doc_test",
-    crate = ":cargo_gazelle",
-    deps = [] + all_crate_deps(
-        normal = True,
-        normal_dev = True,
-    ),
+	name = "cargo_gazelle_doc_test",
+	crate = ":cargo_gazelle",
+	deps = [] + all_crate_deps(
+		normal = True,
+		normal_dev = True,
+	),
 )
 
 rust_binary(
-    name = "main",
-    srcs = glob(["src/**/*.rs"]),
-    aliases = aliases(
-        normal = True,
-        proc_macro = True,
-    ),
-    compile_data = [],
-    crate_root = "src/bin/main.rs",
-    data = [],
-    env = {},
-    features = [],
-    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-    rustc_env = {},
-    rustc_flags = [],
-    version = "0.0.0",
-    deps = [":cargo_gazelle"] + all_crate_deps(normal = True),
+	name = "main",
+	version = "0.0.0",
+	crate_root = "src/bin/main.rs",
+	srcs = glob(["src/**/*.rs"]),
+	features = [],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [":cargo_gazelle"] + all_crate_deps(normal = True),
+	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+	compile_data = [],
+	data = [],
+	env = {},
+	rustc_flags = [],
+	rustc_env = {},
 )

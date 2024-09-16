@@ -9,116 +9,117 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
 
+load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test", "rust_binary")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+
 rust_library(
-    name = "mz_fivetran_destination",
-    srcs = glob(["src/**/*.rs"]),
-    aliases = aliases(
-        normal = True,
-        proc_macro = True,
-    ),
-    compile_data = [],
-    crate_features = ["default"],
-    data = [],
-    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-    rustc_env = {},
-    rustc_flags = [],
-    version = "0.0.0",
-    deps = [
-        ":mz_fivetran_destination_build_script",
-        "//src/ore:mz_ore",
-        "//src/pgrepr:mz_pgrepr",
-        "//src/sql-parser:mz_sql_parser",
-    ] + all_crate_deps(normal = True),
+	name = "mz_fivetran_destination",
+	version = "0.0.0",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = ["default"],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		":mz_fivetran_destination_build_script",
+		"//src/ore:mz_ore",
+		"//src/pgrepr:mz_pgrepr",
+		"//src/sql-parser:mz_sql_parser",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+	compile_data = [],
+	data = [],
+	rustc_flags = [],
+	rustc_env = {},
 )
 
 rust_test(
-    name = "mz_fivetran_destination_lib_tests",
-    size = "medium",
-    aliases = aliases(
-        normal = True,
-        normal_dev = True,
-        proc_macro = True,
-        proc_macro_dev = True,
-    ),
-    compile_data = [],
-    crate = ":mz_fivetran_destination",
-    crate_features = ["default"],
-    data = [],
-    env = {"INSTA_WORKSPACE_ROOT": "."},
-    proc_macro_deps = [] + all_crate_deps(
-        proc_macro = True,
-        proc_macro_dev = True,
-    ),
-    rustc_env = {},
-    rustc_flags = [],
-    version = "0.0.0",
-    deps = [
-        "//src/ore:mz_ore",
-        "//src/pgrepr:mz_pgrepr",
-        "//src/sql-parser:mz_sql_parser",
-    ] + all_crate_deps(
-        normal = True,
-        normal_dev = True,
-    ),
+	name = "mz_fivetran_destination_lib_tests",
+	version = "0.0.0",
+	crate = ":mz_fivetran_destination",
+	crate_features = ["default"],
+	aliases = aliases(
+		normal = True,
+		normal_dev = True,
+		proc_macro = True,
+		proc_macro_dev = True,
+	),
+	deps = [
+		"//src/ore:mz_ore",
+		"//src/pgrepr:mz_pgrepr",
+		"//src/sql-parser:mz_sql_parser",
+	] + all_crate_deps(
+		normal = True,
+		normal_dev = True,
+	),
+	proc_macro_deps = [] + all_crate_deps(
+		proc_macro = True,
+		proc_macro_dev = True,
+	),
+	size = "medium",
+	compile_data = [],
+	data = [],
+	env = { "INSTA_WORKSPACE_ROOT": "." },
+	rustc_flags = [],
+	rustc_env = {},
 )
 
 rust_doc_test(
-    name = "mz_fivetran_destination_doc_test",
-    crate = ":mz_fivetran_destination",
-    deps = [
-        "//src/ore:mz_ore",
-        "//src/pgrepr:mz_pgrepr",
-        "//src/sql-parser:mz_sql_parser",
-    ] + all_crate_deps(
-        normal = True,
-        normal_dev = True,
-    ),
+	name = "mz_fivetran_destination_doc_test",
+	crate = ":mz_fivetran_destination",
+	deps = [
+		"//src/ore:mz_ore",
+		"//src/pgrepr:mz_pgrepr",
+		"//src/sql-parser:mz_sql_parser",
+	] + all_crate_deps(
+		normal = True,
+		normal_dev = True,
+	),
 )
 
 cargo_build_script(
-    name = "mz_fivetran_destination_build_script",
-    srcs = ["build.rs"],
-    build_script_env = {},
-    compile_data = [],
-    data = ["@fivetran_sdk//:all_protos"],
-    proc_macro_deps = [] + all_crate_deps(
-        build_proc_macro = True,
-        proc_macro = True,
-    ),
-    rustc_env = {},
-    rustc_flags = [],
-    deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
-        build = True,
-        normal = True,
-    ),
+	name = "mz_fivetran_destination_build_script",
+	srcs = ["build.rs"],
+	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
+		normal = True,
+		build = True,
+	),
+	proc_macro_deps = [] + all_crate_deps(
+		proc_macro = True,
+		build_proc_macro = True,
+	),
+	build_script_env = {},
+	data = ["@fivetran_sdk//:all_protos"],
+	compile_data = [],
+	rustc_flags = [],
+	rustc_env = {},
 )
 
 rust_binary(
-    name = "mz_fivetran_destination_bin",
-    srcs = glob(["src/**/*.rs"]),
-    aliases = aliases(
-        normal = True,
-        proc_macro = True,
-    ),
-    compile_data = [],
-    crate_root = "src/bin/mz-fivetran-destination.rs",
-    data = [],
-    env = {},
-    features = [],
-    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-    rustc_env = {},
-    rustc_flags = [],
-    version = "0.0.0",
-    deps = [
-        ":mz_fivetran_destination",
-        "//src/ore:mz_ore",
-        "//src/pgrepr:mz_pgrepr",
-        "//src/sql-parser:mz_sql_parser",
-    ] + all_crate_deps(normal = True),
+	name = "mz_fivetran_destination_bin",
+	version = "0.0.0",
+	crate_root = "src/bin/mz-fivetran-destination.rs",
+	srcs = glob(["src/**/*.rs"]),
+	features = [],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		":mz_fivetran_destination",
+		"//src/ore:mz_ore",
+		"//src/pgrepr:mz_pgrepr",
+		"//src/sql-parser:mz_sql_parser",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+	compile_data = [],
+	data = [],
+	env = {},
+	rustc_flags = [],
+	rustc_env = {},
 )

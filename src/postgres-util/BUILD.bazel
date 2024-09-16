@@ -9,137 +9,138 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
-load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
 
+load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+
 rust_library(
-    name = "mz_postgres_util",
-    srcs = glob(["src/**/*.rs"]),
-    aliases = aliases(
-        normal = True,
-        proc_macro = True,
-    ),
-    compile_data = [],
-    crate_features = [
-        "default",
-        "mz-cloud-resources",
-        "mz-ore",
-        "mz-proto",
-        "mz-repr",
-        "mz-ssh-util",
-        "openssh",
-        "proptest",
-        "prost",
-        "replication",
-        "schemas",
-        "serde",
-        "tunnel",
-    ],
-    data = [],
-    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-    rustc_env = {},
-    rustc_flags = [],
-    version = "0.0.0",
-    deps = [
-        ":mz_postgres_util_build_script",
-        "//src/cloud-resources:mz_cloud_resources",
-        "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
-        "//src/repr:mz_repr",
-        "//src/ssh-util:mz_ssh_util",
-        "//src/tls-util:mz_tls_util",
-    ] + all_crate_deps(normal = True),
+	name = "mz_postgres_util",
+	version = "0.0.0",
+	srcs = glob(["src/**/*.rs"]),
+	crate_features = [
+		"default",
+		"mz-cloud-resources",
+		"mz-ore",
+		"mz-proto",
+		"mz-repr",
+		"mz-ssh-util",
+		"openssh",
+		"proptest",
+		"prost",
+		"replication",
+		"schemas",
+		"serde",
+		"tunnel",
+	],
+	aliases = aliases(
+		normal = True,
+		proc_macro = True,
+	),
+	deps = [
+		":mz_postgres_util_build_script",
+		"//src/cloud-resources:mz_cloud_resources",
+		"//src/ore:mz_ore",
+		"//src/proto:mz_proto",
+		"//src/repr:mz_repr",
+		"//src/ssh-util:mz_ssh_util",
+		"//src/tls-util:mz_tls_util",
+	] + all_crate_deps(normal = True),
+	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+	compile_data = [],
+	data = [],
+	rustc_flags = [],
+	rustc_env = {},
 )
 
 rust_test(
-    name = "mz_postgres_util_lib_tests",
-    size = "medium",
-    aliases = aliases(
-        normal = True,
-        normal_dev = True,
-        proc_macro = True,
-        proc_macro_dev = True,
-    ),
-    compile_data = [],
-    crate = ":mz_postgres_util",
-    crate_features = [
-        "default",
-        "mz-cloud-resources",
-        "mz-ore",
-        "mz-proto",
-        "mz-repr",
-        "mz-ssh-util",
-        "openssh",
-        "proptest",
-        "prost",
-        "replication",
-        "schemas",
-        "serde",
-        "tunnel",
-    ],
-    data = [],
-    env = {},
-    proc_macro_deps = [] + all_crate_deps(
-        proc_macro = True,
-        proc_macro_dev = True,
-    ),
-    rustc_env = {},
-    rustc_flags = [],
-    version = "0.0.0",
-    deps = [
-        "//src/cloud-resources:mz_cloud_resources",
-        "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
-        "//src/repr:mz_repr",
-        "//src/ssh-util:mz_ssh_util",
-        "//src/tls-util:mz_tls_util",
-    ] + all_crate_deps(
-        normal = True,
-        normal_dev = True,
-    ),
+	name = "mz_postgres_util_lib_tests",
+	version = "0.0.0",
+	crate = ":mz_postgres_util",
+	crate_features = [
+		"default",
+		"mz-cloud-resources",
+		"mz-ore",
+		"mz-proto",
+		"mz-repr",
+		"mz-ssh-util",
+		"openssh",
+		"proptest",
+		"prost",
+		"replication",
+		"schemas",
+		"serde",
+		"tunnel",
+	],
+	aliases = aliases(
+		normal = True,
+		normal_dev = True,
+		proc_macro = True,
+		proc_macro_dev = True,
+	),
+	deps = [
+		"//src/cloud-resources:mz_cloud_resources",
+		"//src/ore:mz_ore",
+		"//src/proto:mz_proto",
+		"//src/repr:mz_repr",
+		"//src/ssh-util:mz_ssh_util",
+		"//src/tls-util:mz_tls_util",
+	] + all_crate_deps(
+		normal = True,
+		normal_dev = True,
+	),
+	proc_macro_deps = [] + all_crate_deps(
+		proc_macro = True,
+		proc_macro_dev = True,
+	),
+	size = "medium",
+	compile_data = [],
+	data = [],
+	env = {},
+	rustc_flags = [],
+	rustc_env = {},
 )
 
 rust_doc_test(
-    name = "mz_postgres_util_doc_test",
-    crate = ":mz_postgres_util",
-    deps = [
-        "//src/cloud-resources:mz_cloud_resources",
-        "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
-        "//src/repr:mz_repr",
-        "//src/ssh-util:mz_ssh_util",
-        "//src/tls-util:mz_tls_util",
-    ] + all_crate_deps(
-        normal = True,
-        normal_dev = True,
-    ),
+	name = "mz_postgres_util_doc_test",
+	crate = ":mz_postgres_util",
+	deps = [
+		"//src/cloud-resources:mz_cloud_resources",
+		"//src/ore:mz_ore",
+		"//src/proto:mz_proto",
+		"//src/repr:mz_repr",
+		"//src/ssh-util:mz_ssh_util",
+		"//src/tls-util:mz_tls_util",
+	] + all_crate_deps(
+		normal = True,
+		normal_dev = True,
+	),
 )
 
 filegroup(
-    name = "all_protos",
-    srcs = [
-        "src/desc.proto",
-        "src/tunnel.proto",
-    ],
+	name = "all_protos",
+	srcs = [
+		"src/desc.proto",
+		"src/tunnel.proto",
+	],
 )
 
 cargo_build_script(
-    name = "mz_postgres_util_build_script",
-    srcs = ["build.rs"],
-    build_script_env = {},
-    compile_data = [],
-    data = [":all_protos"],
-    proc_macro_deps = [] + all_crate_deps(
-        build_proc_macro = True,
-        proc_macro = True,
-    ),
-    rustc_env = {},
-    rustc_flags = [],
-    deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
-        build = True,
-        normal = True,
-    ),
+	name = "mz_postgres_util_build_script",
+	srcs = ["build.rs"],
+	deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
+		normal = True,
+		build = True,
+	),
+	proc_macro_deps = [] + all_crate_deps(
+		proc_macro = True,
+		build_proc_macro = True,
+	),
+	build_script_env = {},
+	data = [":all_protos"],
+	compile_data = [],
+	rustc_flags = [],
+	rustc_env = {},
 )
