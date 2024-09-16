@@ -9,97 +9,96 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
 
-load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test", "rust_doc_test")
-
 rust_library(
-	name = "mz_pgwire",
-	version = "0.0.0",
-	srcs = glob(["src/**/*.rs"]),
-	crate_features = [],
-	aliases = aliases(
-		normal = True,
-		proc_macro = True,
-	),
-	deps = [
-		"//src/adapter-types:mz_adapter_types",
-		"//src/adapter:mz_adapter",
-		"//src/expr:mz_expr",
-		"//src/frontegg-auth:mz_frontegg_auth",
-		"//src/ore:mz_ore",
-		"//src/pgcopy:mz_pgcopy",
-		"//src/pgrepr:mz_pgrepr",
-		"//src/pgwire-common:mz_pgwire_common",
-		"//src/repr:mz_repr",
-		"//src/server-core:mz_server_core",
-		"//src/sql:mz_sql",
-	] + all_crate_deps(normal = True),
-	proc_macro_deps = [] + all_crate_deps(proc_macro = True),
-	compile_data = [],
-	data = [],
-	rustc_flags = [],
-	rustc_env = {},
+    name = "mz_pgwire",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(
+        normal = True,
+        proc_macro = True,
+    ),
+    compile_data = [],
+    crate_features = [],
+    data = [],
+    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.0.0",
+    deps = [
+        "//src/adapter:mz_adapter",
+        "//src/adapter-types:mz_adapter_types",
+        "//src/expr:mz_expr",
+        "//src/frontegg-auth:mz_frontegg_auth",
+        "//src/ore:mz_ore",
+        "//src/pgcopy:mz_pgcopy",
+        "//src/pgrepr:mz_pgrepr",
+        "//src/pgwire-common:mz_pgwire_common",
+        "//src/repr:mz_repr",
+        "//src/server-core:mz_server_core",
+        "//src/sql:mz_sql",
+    ] + all_crate_deps(normal = True),
 )
 
 rust_test(
-	name = "mz_pgwire_lib_tests",
-	version = "0.0.0",
-	crate = ":mz_pgwire",
-	crate_features = [],
-	aliases = aliases(
-		normal = True,
-		normal_dev = True,
-		proc_macro = True,
-		proc_macro_dev = True,
-	),
-	deps = [
-		"//src/adapter-types:mz_adapter_types",
-		"//src/adapter:mz_adapter",
-		"//src/expr:mz_expr",
-		"//src/frontegg-auth:mz_frontegg_auth",
-		"//src/ore:mz_ore",
-		"//src/pgcopy:mz_pgcopy",
-		"//src/pgrepr:mz_pgrepr",
-		"//src/pgwire-common:mz_pgwire_common",
-		"//src/repr:mz_repr",
-		"//src/server-core:mz_server_core",
-		"//src/sql:mz_sql",
-	] + all_crate_deps(
-		normal = True,
-		normal_dev = True,
-	),
-	proc_macro_deps = [] + all_crate_deps(
-		proc_macro = True,
-		proc_macro_dev = True,
-	),
-	size = "medium",
-	compile_data = [],
-	data = [],
-	env = {},
-	rustc_flags = [],
-	rustc_env = {},
+    name = "mz_pgwire_lib_tests",
+    size = "medium",
+    aliases = aliases(
+        normal = True,
+        normal_dev = True,
+        proc_macro = True,
+        proc_macro_dev = True,
+    ),
+    compile_data = [],
+    crate = ":mz_pgwire",
+    crate_features = [],
+    data = [],
+    env = {},
+    proc_macro_deps = [] + all_crate_deps(
+        proc_macro = True,
+        proc_macro_dev = True,
+    ),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.0.0",
+    deps = [
+        "//src/adapter:mz_adapter",
+        "//src/adapter-types:mz_adapter_types",
+        "//src/expr:mz_expr",
+        "//src/frontegg-auth:mz_frontegg_auth",
+        "//src/ore:mz_ore",
+        "//src/pgcopy:mz_pgcopy",
+        "//src/pgrepr:mz_pgrepr",
+        "//src/pgwire-common:mz_pgwire_common",
+        "//src/repr:mz_repr",
+        "//src/server-core:mz_server_core",
+        "//src/sql:mz_sql",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
 )
 
 rust_doc_test(
-	name = "mz_pgwire_doc_test",
-	crate = ":mz_pgwire",
-	deps = [
-		"//src/adapter-types:mz_adapter_types",
-		"//src/adapter:mz_adapter",
-		"//src/expr:mz_expr",
-		"//src/frontegg-auth:mz_frontegg_auth",
-		"//src/ore:mz_ore",
-		"//src/pgcopy:mz_pgcopy",
-		"//src/pgrepr:mz_pgrepr",
-		"//src/pgwire-common:mz_pgwire_common",
-		"//src/repr:mz_repr",
-		"//src/server-core:mz_server_core",
-		"//src/sql:mz_sql",
-	] + all_crate_deps(
-		normal = True,
-		normal_dev = True,
-	),
+    name = "mz_pgwire_doc_test",
+    crate = ":mz_pgwire",
+    deps = [
+        "//src/adapter:mz_adapter",
+        "//src/adapter-types:mz_adapter_types",
+        "//src/expr:mz_expr",
+        "//src/frontegg-auth:mz_frontegg_auth",
+        "//src/ore:mz_ore",
+        "//src/pgcopy:mz_pgcopy",
+        "//src/pgrepr:mz_pgrepr",
+        "//src/pgwire-common:mz_pgwire_common",
+        "//src/repr:mz_repr",
+        "//src/server-core:mz_server_core",
+        "//src/sql:mz_sql",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
 )
