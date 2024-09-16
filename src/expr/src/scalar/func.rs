@@ -2141,6 +2141,12 @@ fn pretty_sql<'a>(
     Ok(Datum::String(pretty))
 }
 
+fn starts_with<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let a = a.unwrap_str();
+    let b = b.unwrap_str();
+    Datum::from(a.starts_with(b))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
     AddInt16,
@@ -2355,6 +2361,7 @@ pub enum BinaryFunc {
     RegexpReplace {
         regex: Result<(Regex, usize), EvalError>,
     },
+    StartsWith,
 }
 
 impl BinaryFunc {
@@ -2625,6 +2632,7 @@ impl BinaryFunc {
                 Ok((regex, limit)) => regexp_replace_static(a, b, regex, *limit, temp_storage),
                 Err(err) => Err(err.clone()),
             },
+            BinaryFunc::StartsWith => Ok(starts_with(a, b)),
         }
     }
 
@@ -2817,6 +2825,8 @@ impl BinaryFunc {
             ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable),
             PrettySql => ScalarType::String.nullable(in_nullable),
             RegexpReplace { .. } => ScalarType::String.nullable(in_nullable),
+
+            StartsWith => ScalarType::Bool.nullable(in_nullable),
         }
     }
 
@@ -3020,7 +3030,8 @@ impl BinaryFunc {
             | MzAclItemContainsPrivilege
             | ParseIdent
             | PrettySql
-            | RegexpReplace { .. } => false,
+            | RegexpReplace { .. }
+            | StartsWith => false,
 
             JsonbGetInt64 { .. }
             | JsonbGetString { .. }
@@ -3227,7 +3238,8 @@ impl BinaryFunc {
             | ConstantTimeEqString
             | ParseIdent
             | PrettySql
-            | RegexpReplace { .. } => false,
+            | RegexpReplace { .. }
+            | StartsWith => false,
         }
     }
 
@@ -3497,6 +3509,7 @@ impl BinaryFunc {
             BinaryFunc::ConstantTimeEqBytes | BinaryFunc::ConstantTimeEqString => (false, false),
             BinaryFunc::PrettySql => (false, false),
             BinaryFunc::RegexpReplace { .. } => (false, false),
+            BinaryFunc::StartsWith => (false, false),
         }
     }
 }
@@ -3718,6 +3731,7 @@ impl fmt::Display for BinaryFunc {
                 ),
                 Err(err) => write!(f, "regexp_replace[EvalError]: {err}"),
             },
+            BinaryFunc::StartsWith => f.write_str("starts_with"),
         }
     }
 }
@@ -4146,6 +4160,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                     }),
                 })
             }
+            BinaryFunc::StartsWith => StartsWith(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -4372,6 +4387,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                         },
                     })
                 }
+                StartsWith(()) => Ok(BinaryFunc::StartsWith),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))

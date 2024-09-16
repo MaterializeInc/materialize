@@ -3847,6 +3847,9 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String) => UnaryFunc::SeahashString(func::SeahashString) => UInt32, oid::FUNC_SEAHASH_STRING_OID;
             params!(Bytes) => UnaryFunc::SeahashBytes(func::SeahashBytes) => UInt32, oid::FUNC_SEAHASH_BYTES_OID;
         },
+        "starts_with" => Scalar {
+            params!(String, String) => BinaryFunc::StartsWith => Bool, 3696;
+        },
         "timezone_offset" => Scalar {
             params!(String, TimestampTz) => BinaryFunc::TimezoneOffset => RecordAny, oid::FUNC_TIMEZONE_OFFSET;
         },

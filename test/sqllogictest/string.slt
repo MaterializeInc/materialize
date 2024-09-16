@@ -1707,3 +1707,38 @@ query T
 SELECT initcap('Let''s go')
 ----
 Let'S Go
+
+query T
+SELECT starts_with('abc', 'ab')
+----
+true
+
+query T
+SELECT starts_with('abc', 'ba')
+----
+false
+
+query T
+SELECT starts_with('abc', '')
+----
+true
+
+query T
+SELECT starts_with('abc', NULL)
+----
+NULL
+
+query T
+SELECT starts_with('abc', '%')
+----
+false
+
+query T
+SELECT starts_with(NULL, NULL)
+----
+NULL
+
+query T
+SELECT starts_with(NULL, 'ab')
+----
+NULL

@@ -531,6 +531,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 3465  jsonb_array_elements_text
 3538  string_agg
 3545  string_agg
+3696  starts_with
 3778  pg_tablespace_location
 3787  to_jsonb
 3802  jsonb
