@@ -149,6 +149,23 @@ class Statistics:
         ]
 
 
+def upload_plot(
+    plot_path: str,
+    scenario_name: str,
+    variant: str,
+):
+    if buildkite.is_in_buildkite():
+        buildkite.upload_artifact(plot_path, cwd=MZ_ROOT)
+        print(f"+++ Plot for {scenario_name} ({variant})")
+        print(
+            buildkite.inline_image(
+                f"artifact://{plot_path}", f"Plot for {scenario_name} ({variant})"
+            )
+        )
+    else:
+        print(f"Saving plot to {plot_path}")
+
+
 def report(
     mz_string: str,
     scenario: Scenario,
@@ -192,18 +209,28 @@ def report(
     plt.legend(loc="best")
     plt.grid(True)
     plt.ylim(bottom=0)
-    plot_path = f"plots/{scenario_name}_{suffix}.png"
+    plot_path = f"plots/{scenario_name}_{suffix}_timeline.png"
     plt.savefig(MZ_ROOT / plot_path, dpi=300)
-    if buildkite.is_in_buildkite():
-        buildkite.upload_artifact(plot_path, cwd=MZ_ROOT)
-        print(f"+++ Plot for {scenario_name}")
-        print(
-            buildkite.inline_image(
-                f"artifact://{plot_path}", f"Plot for {scenario_name}"
-            )
-        )
-    else:
-        print(f"Saving plot to {plot_path}")
+    upload_plot(plot_path, scenario_name, "timeline")
+
+    plt.clf()
+
+    # Plot CCDF
+    plt.grid(True, which="both")
+    plt.xscale("log")
+    plt.yscale("log")
+    plt.ylabel("CCDF")
+    plt.xlabel("latency [ms]")
+    for key, m in measurements.items():
+        durations = numpy.array([x.duration * 1000.0 for x in m])
+        durations.sort()
+        (durations, counts) = numpy.unique(durations, return_counts=True)
+        counts = numpy.cumsum(counts)
+        plt.plot(durations, 1 - counts / counts.max())
+
+    plot_path = f"plots/{scenario_name}_{suffix}_ccdf.png"
+    plt.savefig(MZ_ROOT / plot_path, dpi=300)
+    upload_plot(plot_path, scenario_name, "ccdf")
 
     return stats, failures
 
