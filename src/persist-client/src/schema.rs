@@ -290,6 +290,13 @@ impl<I: Clone + Ord, S: PartialEq + Debug> SchemaCacheMap<I, S> {
     }
 }
 
+impl<I, K> Drop for SchemaCacheMap<I, K> {
+    fn drop(&mut self) {
+        let map = self.map.read().expect("lock");
+        self.metrics.dropped_count.inc_by(u64::cast_from(map.len()));
+    }
+}
+
 #[derive(Debug, Clone)]
 struct MigrationCacheMap {
     metrics: SchemaCacheMetrics,
