@@ -104,6 +104,13 @@ pub const ENABLE_CONTINUAL_TASK_BUILTINS: Config<bool> = Config::new(
     "Create system builtin continual tasks on boot.",
 );
 
+/// Whether to enable the migration to convert all sources to use tables.
+pub const ENABLE_SOURCE_TABLE_MIGRATION: Config<bool> = Config::new(
+    "enable_source_table_migration",
+    false,
+    "Whether to enable the migration to convert all sources to use tables.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -120,4 +127,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&DEFAULT_SINK_PARTITION_STRATEGY)
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
+        .add(&ENABLE_SOURCE_TABLE_MIGRATION)
 }
