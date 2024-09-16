@@ -72,14 +72,13 @@ tbl          <null> true  true
   FROM mz_internal.mz_wallclock_global_lag_history l
   JOIN mz_objects o ON o.id = l.object_id
   WHERE l.object_id LIKE 'u%'
+  AND o.name NOT LIKE 'src%'
   ORDER BY o.name, l.occurred_at DESC
 idx          true  true
 idx_const    false true
 mv           true  true
 mv_const     false true
 snk          true  true
-src          true  true
-src_progress true  true
 tbl          true  true
 
 > SELECT DISTINCT ON(o.name)
@@ -87,12 +86,11 @@ tbl          true  true
   FROM mz_internal.mz_wallclock_global_lag_recent_history l
   JOIN mz_objects o ON o.id = l.object_id
   WHERE l.object_id LIKE 'u%'
+  AND o.name NOT LIKE 'src%'
   ORDER BY o.name, l.occurred_at DESC
 idx          true  true
 idx_const    false true
 mv           true  true
 mv_const     false true
 snk          true  true
-src          true  true
-src_progress true  true
 tbl          true  true
