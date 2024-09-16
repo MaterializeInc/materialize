@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.mysql import MySql
@@ -29,6 +29,7 @@ class TableFromSourceBase(Check):
         )
 
 
+@externally_idempotent(False)
 class TableFromPgSource(TableFromSourceBase):
     suffix = "tbl_from_pg_source"
 
@@ -129,6 +130,7 @@ class TableFromPgSource(TableFromSourceBase):
         )
 
 
+@externally_idempotent(False)
 class TableFromMySqlSource(TableFromSourceBase):
     suffix = "tbl_from_mysql_source"
 
