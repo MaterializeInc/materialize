@@ -552,7 +552,7 @@ async fn upgrade_check(
             system_parameter_defaults: Default::default(),
             remote_system_parameters: None,
             availability_zones: vec![],
-            egress_ips: vec![],
+            egress_addresses: vec![],
             aws_principal_context: None,
             aws_privatelink_availability_zones: None,
             http_host_name: None,

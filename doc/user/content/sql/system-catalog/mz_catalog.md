@@ -189,9 +189,11 @@ The `mz_egress_ips` table contains a row for each potential IP address that the
 system may connect to external systems from.
 
 <!-- RELATION_SPEC mz_catalog.mz_egress_ips -->
-Field       | Type     | Meaning
-------------|----------|--------
-`egress_ip` | [`text`] | The IP address.
+Field           | Type        | Meaning
+----------------|-------------|--------
+`egress_ip`     | [`text`]    | The start of the range of IP addresses.
+`prefix_length` | [`integer`] | The number of leading bits in the CIDR netmask.
+`cidr`          | [`text`]    | The CIDR representation.
 
 ### `mz_functions`
 
@@ -518,7 +520,7 @@ Field            | Type                 | Meaning
 
 {{< warning >}}
 This view is not indexed in the `mz_catalog_server` cluster. Querying this view
-can be slow due to the amount of unindexed data that must be scaned.
+can be slow due to the amount of unindexed data that must be scanned.
 {{< /warning >}}
 
 The `mz_storage_usage` table describes the historical storage utilization of

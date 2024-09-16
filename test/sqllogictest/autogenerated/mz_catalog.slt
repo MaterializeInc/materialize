@@ -141,6 +141,8 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_egress_ips' ORDER BY position
 ----
 1  egress_ip  text
+2  prefix_length  integer
+3  cidr  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_functions' ORDER BY position

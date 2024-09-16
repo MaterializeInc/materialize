@@ -23,6 +23,7 @@ use std::{env, io};
 
 use anyhow::{anyhow, Context};
 use derivative::Derivative;
+use ipnet::IpNet;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_adapter::{load_remote_system_parameters, AdapterError};
@@ -88,7 +89,7 @@ pub struct Config {
     pub cors_allowed_origin: AllowOrigin,
     /// Public IP addresses which the cloud environment has configured for
     /// egress.
-    pub egress_ips: Vec<Ipv4Addr>,
+    pub egress_addresses: Vec<IpNet>,
     /// The external host name to connect to the HTTP server of this
     /// environment.
     ///
@@ -604,7 +605,7 @@ impl Listeners {
             storage_usage_collection_interval: config.storage_usage_collection_interval,
             storage_usage_retention_period: config.storage_usage_retention_period,
             segment_client: segment_client.clone(),
-            egress_ips: config.egress_ips,
+            egress_addresses: config.egress_addresses,
             remote_system_parameters,
             aws_account_id: config.aws_account_id,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,

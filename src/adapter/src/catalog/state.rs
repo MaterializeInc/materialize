@@ -12,11 +12,11 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Instant;
 
+use ipnet::IpNet;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
@@ -135,7 +135,10 @@ pub struct CatalogState {
     pub(super) cluster_replica_sizes: ClusterReplicaSizeMap,
     #[serde(skip)]
     pub(crate) availability_zones: Vec<String>,
-    pub(super) egress_ips: Vec<Ipv4Addr>,
+
+    // Read-only not derived from the durable catalog.
+    #[serde(skip)]
+    pub(super) egress_addresses: Vec<IpNet>,
     pub(super) aws_principal_context: Option<AwsPrincipalContext>,
     pub(super) aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     pub(super) http_host_name: Option<String>,
@@ -184,7 +187,7 @@ impl CatalogState {
             cluster_replica_sizes: Default::default(),
             availability_zones: Default::default(),
             system_configuration: Default::default(),
-            egress_ips: Default::default(),
+            egress_addresses: Default::default(),
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),
             http_host_name: Default::default(),

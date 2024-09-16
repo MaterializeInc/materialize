@@ -9,9 +9,8 @@
 
 mod notice;
 
-use std::net::Ipv4Addr;
-
 use bytesize::ByteSize;
+use ipnet::IpNet;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_catalog::builtin::{
@@ -1805,10 +1804,15 @@ impl CatalogState {
 
     pub fn pack_egress_ip_update(
         &self,
-        ip: &Ipv4Addr,
+        ip: &IpNet,
     ) -> Result<BuiltinTableUpdate<&'static BuiltinTable>, Error> {
         let id = &MZ_EGRESS_IPS;
-        let row = Row::pack_slice(&[Datum::String(&ip.to_string())]);
+        let addr = ip.addr();
+        let row = Row::pack_slice(&[
+            Datum::String(&addr.to_string()),
+            Datum::Int32(ip.prefix_len().into()),
+            Datum::String(&format!("{}/{}", addr, ip.prefix_len())),
+        ]);
         Ok(BuiltinTableUpdate { id, row, diff: 1 })
     }
 
