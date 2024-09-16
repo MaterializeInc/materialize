@@ -21,7 +21,6 @@ from materialize.parallel_benchmark.framework import (
     StandaloneQuery,
     TdAction,
     TdPhase,
-    disabled,
 )
 from materialize.util import PgConnInfo
 
@@ -530,7 +529,6 @@ class InsertsSelects(Scenario):
 # TODO Try these scenarios' scaling behavior against cc sizes (locally and remote)
 
 
-@disabled("#29572 Currently causes 'network error' with many queries hanging")
 class CommandQueryResponsibilitySegregation(Scenario):
     # TODO: Have one Postgres source with many inserts/updates/deletes and multiple complex materialized view on top of it, read from Mz
     # This should be blocked by materialized view performance
@@ -576,7 +574,7 @@ class CommandQueryResponsibilitySegregation(Scenario):
                                 conn_infos["postgres"],
                                 strict_serializable=False,
                             ),
-                            dist=Periodic(per_second=100),
+                            dist=Periodic(per_second=50),
                             report_regressions=False,
                         ),
                         OpenLoop(
@@ -585,7 +583,7 @@ class CommandQueryResponsibilitySegregation(Scenario):
                                 conn_infos["postgres"],
                                 strict_serializable=False,
                             ),
-                            dist=Periodic(per_second=10),
+                            dist=Periodic(per_second=5),
                             report_regressions=False,
                         ),
                         OpenLoop(
@@ -594,7 +592,7 @@ class CommandQueryResponsibilitySegregation(Scenario):
                                 conn_infos["postgres"],
                                 strict_serializable=False,
                             ),
-                            dist=Periodic(per_second=1),
+                            dist=Periodic(per_second=0.5),
                             report_regressions=False,
                         ),
                     ]
