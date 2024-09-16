@@ -39,8 +39,8 @@ from typing import IO, Any, cast
 
 import yaml
 
-from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize import bazel as bazel_utils
+from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
