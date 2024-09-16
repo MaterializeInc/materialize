@@ -128,6 +128,9 @@ build:release --copt=-g
 build:release --strip=never
 build:release --@rules_rust//:extra_rustc_flag=-Cstrip=none
 
+# Build with the Rust Nightly Toolchain
+build:rust-nightly --@rules_rust//rust/toolchain/channel=nightly
+
 # Cross Language LTO
 #
 # <https://blog.llvm.org/2019/09/closing-gap-cross-language-lto-between.html>
