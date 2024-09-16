@@ -9,9 +9,7 @@
 
 {{ if not (isset $.Params 0) }}
 
-<h3 id="{{ lower .type | replaceRE "[^a-zA-Z0-9]+" "-" }}-func">
-  {{.type}}
-</h3>
+### {{.type}} functions
 
 <p>{{ if .description }} {{ .description | $.Page.RenderString }} {{ end }}</p>
 
@@ -19,67 +17,69 @@
 
 {{ if or (eq ($.Get 0) .type) (not (isset $.Params 0)) }}
 
+<!-- Keep table left-aligned to render since mix of md + html-->
+
 <table class="inline-headings">
-  <tr>
-    <th>
-      <p class="heading">Function</p>
-    </th>
-  </tr>
-  {{ range .functions }}
-  <tr>
-    {{/*  Extract the function's name from its signature and use it as the ID
-          to facilitate deeplinking. The `docsearch_l3` class is a special
-          class that is scraped by our Algolia DocSearch configuration.  */}}
-    <td>
-      {{/*  We use clojure highlighting simply because it looks best with the
-      components we want to highlight. In the future, this should be customized
-      in some way.  */}}
-      <div class="heading {{if (not (isset $.Params 0))}}docsearch_l3{{end}}" id="{{ index (split .signature "(") 0 | urlize }}">
-        {{ highlight .signature "clojure" "hl_inline=false" }}
-      </div>
+<tr>
+<th>
+<p class="heading">Function</p>
+</th>
+</tr>
+{{ range .functions }}
+<tr>
+{{/*  Extract the function's name from its signature and use it as the ID
+    to facilitate deeplinking. The `docsearch_l3` class is a special
+    class that is scraped by our Algolia DocSearch configuration.  */}}
+<td>
+{{/*  We use clojure highlighting simply because it looks best with the
+components we want to highlight. In the future, this should be customized
+in some way.  */}}
+<div class="heading {{if (not (isset $.Params 0))}}docsearch_l3{{end}}" id="{{ index (split .signature "(") 0 | urlize }}">
+  {{ highlight .signature "clojure" "hl_inline=false" }}
+</div>
 
-      <p>
-        {{ .description | $.Page.RenderString }}
+<p>
+  {{ .description | $.Page.RenderString }}
 
-        {{ if .url }}
-        <a href="{{ $parentPath }}{{ .url | relURL }}">(docs)</a>.
-        {{ end }}
+  {{ if .url }}
+  <a href="{{ $parentPath }}{{ .url | relURL }}">(docs)</a>.
+  {{ end }}
 
-      </p>
+</p>
 
-      {{ if .unmaterializable }}
-        <p><b>Note:</b> This function is <a href="#unmaterializable-functions">unmaterializable</a>.</p>
-      {{ end }}
+{{ if .unmaterializable }}
+  <p><b>Note:</b> This function is <a href="#unmaterializable-functions">unmaterializable</a>.</p>
+{{ end }}
 
-      {{ if .unmaterializable_unless_temporal_filter }}
-        <p><b>Note:</b> This function is <a href="#unmaterializable-functions">unmaterializable</a>, but
-        can be used in limited contexts in materialized views as a <a href="{{ $parentPath }}{{ "/transform-data/patterns/temporal-filters/" | relURL }}">temporal filter</a>.</p>
-      {{ end }}
+{{ if .unmaterializable_unless_temporal_filter }}
+  <p><b>Note:</b> This function is <a href="#unmaterializable-functions">unmaterializable</a>, but
+  can be used in limited contexts in materialized views as a <a href="{{ $parentPath }}{{ "/transform-data/patterns/temporal-filters/" | relURL }}">temporal filter</a>.</p>
+{{ end }}
 
-      {{ if .known_time_zone_limitation_cast }}
-        <p><b>Known limitation:</b> You must explicitly cast the type for the time zone.</p>
-      {{ end }}
+{{ if .known_time_zone_limitation_cast }}
+  <p><b>Known limitation:</b> You must explicitly cast the type for the time zone.</p>
+{{ end }}
 
-      {{ if .side_effecting }}
-        <p><b>Note:</b> This function is <a href="#side-effecting-functions">side-effecting</a>.</p>
-      {{ end }}
+{{ if .side_effecting }}
+  <p><b>Note:</b> This function is <a href="#side-effecting-functions">side-effecting</a>.</p>
+{{ end }}
 
-      {{ $versionAdded := index . "version-added" }}
-      {{ if $versionAdded }}
-        {{ $releasePage := index $releasedVersions $versionAdded }}
-        {{ if not $releasePage.Params.released }}
-          <p>
-            <b>Unreleased: </b> This function will be released in
-            <a href="{{ printf "%s/releases#release-notes" $parentPath | relURL }}"><strong>{{$versionAdded}}</strong></a>.
-            It may not be available in your region yet.
-            The release is scheduled to complete by <strong>{{dateFormat "January 2, 2006" $releasePage.Params.date}}</strong>.
-          </p>
-        {{ end }}
-      {{ end }}
+{{ $versionAdded := index . "version-added" }}
+{{ if $versionAdded }}
+  {{ $releasePage := index $releasedVersions $versionAdded }}
+  {{ if not $releasePage.Params.released }}
+    <p>
+      <b>Unreleased: </b> This function will be released in
+      <a href="{{ printf "%s/releases#release-notes" $parentPath | relURL }}"><strong>{{$versionAdded}}</strong></a>.
+      It may not be available in your region yet.
+      The release is scheduled to complete by <strong>{{dateFormat "January 2, 2006" $releasePage.Params.date}}</strong>.
+    </p>
+  {{ end }}
+{{ end }}
 
-    </td>
-  </tr>
-  {{ end }} {{/*  {{ range .functions }} */}}
+</td>
+</tr>
+{{ end }} {{/*  {{ range .functions }} */}}
 </table>
 
 {{end}}
