@@ -601,12 +601,17 @@ impl Coordinator {
                     assert_eq!(should_be_empty, became_empty, "emptiness did not match!");
                 }
             }
-            if !sources_to_drop.is_empty() {
-                self.drop_sources(sources_to_drop);
-            }
             if !tables_to_drop.is_empty() {
                 let ts = self.get_local_write_ts().await;
                 self.drop_tables(tables_to_drop, ts.timestamp);
+            }
+            // Note that we drop tables before sources since there can be a weak dependency
+            // on sources from tables in the storage controller that will result in error
+            // logging that we'd prefer to avoid. This isn't an actual dependency issue but
+            // we'd like to keep that error logging around to indicate when an actual
+            // dependency error might occur.
+            if !sources_to_drop.is_empty() {
+                self.drop_sources(sources_to_drop);
             }
             if !webhook_sources_to_restart.is_empty() {
                 self.restart_webhook_sources(webhook_sources_to_restart);

@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::str::StrExt;
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::CreateTableFromSourceStatement;
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
@@ -147,6 +148,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
         })
         | Statement::CreateMaterializedView(CreateMaterializedViewStatement { name, .. })
         | Statement::CreateTable(CreateTableStatement { name, .. })
+        | Statement::CreateTableFromSource(CreateTableFromSourceStatement { name, .. })
         | Statement::CreateSecret(CreateSecretStatement { name, .. })
         | Statement::CreateConnection(CreateConnectionStatement { name, .. })
         | Statement::CreateWebhookSource(CreateWebhookSourceStatement { name, .. }) => {
