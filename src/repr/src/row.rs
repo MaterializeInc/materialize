@@ -139,20 +139,13 @@ impl Row {
             }
         }
 
-        // HACK(parkmycar): Only validate that the decoded Row matches the RelationDesc if it was
-        // non-empty. We have an optimization for queries like COUNT(*) that returns a fake empty
-        // Part instead of decoding the data, which this assertion will fail on.
-        //
-        // TODO(#28146): Remove the check for if the num_columns is 0.
-        if num_columns != 0 && col_idx != 0 {
-            mz_ore::soft_assert_eq_or_log!(
-                col_idx,
-                num_columns,
-                "wrong number of columns when decoding a Row!, got {row:?}, expected {desc:?}",
-                row = self,
-                desc = desc,
-            );
-        }
+        mz_ore::soft_assert_eq_or_log!(
+            col_idx,
+            num_columns,
+            "wrong number of columns when decoding a Row!, got {row:?}, expected {desc:?}",
+            row = self,
+            desc = desc,
+        );
 
         Ok(())
     }
