@@ -26,6 +26,7 @@ class Postgres(Service):
         volumes: list[str] = [],
         max_wal_senders: int = 100,
         max_replication_slots: int = 100,
+        max_connections: int = 5000,
     ) -> None:
         command: list[str] = [
             "postgres",
@@ -36,7 +37,7 @@ class Postgres(Service):
             "-c",
             f"max_replication_slots={max_replication_slots}",
             "-c",
-            "max_connections=5000",
+            f"max_connections={max_connections}",
         ] + extra_command
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
 

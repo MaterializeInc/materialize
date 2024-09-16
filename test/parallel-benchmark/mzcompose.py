@@ -97,7 +97,7 @@ SERVICES = [
     Cockroach(setup_materialize=True),
     Minio(setup_materialize=True),
     KgenService(),
-    Postgres(),
+    Postgres(max_connections=10000),
     MySql(),
     Balancerd(),
     # Overridden below

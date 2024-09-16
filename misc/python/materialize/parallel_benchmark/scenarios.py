@@ -191,15 +191,14 @@ class PgReadReplicaRTR(Scenario):
                                 "INSERT INTO t2 VALUES (1)",
                                 conn_infos["postgres"],
                             ),
-                            dist=Periodic(per_second=100),
+                            dist=Periodic(per_second=10),
                         ),
-                        OpenLoop(
-                            action=StandaloneQuery(
+                        ClosedLoop(
+                            action=ReuseConnQuery(
                                 "SET REAL_TIME_RECENCY TO TRUE; SELECT * FROM mv_sum",
                                 conn_infos["materialized"],
                                 strict_serializable=False,
                             ),
-                            dist=Periodic(per_second=125),
                             report_regressions=False,  # TODO: Currently not stable enough, reenable when RTR becomes more consistent
                         ),
                     ],
@@ -574,7 +573,7 @@ class CommandQueryResponsibilitySegregation(Scenario):
                                 conn_infos["postgres"],
                                 strict_serializable=False,
                             ),
-                            dist=Periodic(per_second=100),
+                            dist=Periodic(per_second=50),
                             report_regressions=False,
                         ),
                         OpenLoop(
@@ -583,7 +582,7 @@ class CommandQueryResponsibilitySegregation(Scenario):
                                 conn_infos["postgres"],
                                 strict_serializable=False,
                             ),
-                            dist=Periodic(per_second=10),
+                            dist=Periodic(per_second=5),
                             report_regressions=False,
                         ),
                         OpenLoop(
