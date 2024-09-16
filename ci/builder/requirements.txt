@@ -44,7 +44,7 @@ pyelftools==0.29
 pyjwt==2.8.0
 PyMySQL==1.1.1
 pytest==8.3.3
-pytest-split==0.8.0
+pytest-split==0.9.0
 pyyaml==6.0.1
 requests==2.32.3
 ruff==0.0.292
