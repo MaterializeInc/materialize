@@ -202,6 +202,11 @@ pub enum BlobTraceUpdates {
 }
 
 impl BlobTraceUpdates {
+    /// The number of updates.
+    pub fn len(&self) -> usize {
+        self.records().len()
+    }
+
     /// Return the [`ColumnarRecords`] of the blob.
     pub fn records(&self) -> &ColumnarRecords {
         match self {
@@ -216,6 +221,14 @@ impl BlobTraceUpdates {
             BlobTraceUpdates::Row(_) => None,
             BlobTraceUpdates::Both(_, structured) => Some(structured),
         }
+    }
+
+    /// Return the estimated memory usage of the raw data.
+    pub fn goodbytes(&self) -> usize {
+        self.records().goodbytes()
+            + self.structured().map_or(0, |e| {
+                e.key.get_buffer_memory_size() + e.val.get_buffer_memory_size()
+            })
     }
 
     /// Return the [`ColumnarRecordsStructuredExt`] of the blob.

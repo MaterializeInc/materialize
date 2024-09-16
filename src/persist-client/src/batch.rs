@@ -814,16 +814,16 @@ where
     async fn flush_part<StatsK: Codec, StatsV: Codec>(
         &mut self,
         stats_schemas: &Schemas<StatsK, StatsV>,
-        columnar: ColumnarRecords,
+        columnar: BlobTraceUpdates,
     ) {
         let key_lower = {
-            let keys = columnar.keys();
-            if keys.is_empty() {
+            let key_bytes = columnar.records().keys();
+            if key_bytes.is_empty() {
                 &[]
             } else if self.parts.cfg.expected_order == RunOrder::Codec {
-                columnar.keys().value(0)
+                key_bytes.value(0)
             } else {
-                ::arrow::compute::min_binary(columnar.keys()).expect("min of nonempty array")
+                ::arrow::compute::min_binary(key_bytes).expect("min of nonempty array")
             }
         };
         let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
@@ -833,10 +833,11 @@ where
         if num_updates == 0 {
             return;
         }
-        let diffs_sum = diffs_sum::<D>(&columnar).expect("part is non empty");
+        let diffs_sum = diffs_sum::<D>(columnar.records()).expect("part is non empty");
 
         match self.parts.cfg.expected_order {
             RunOrder::Codec => {
+                let columnar = columnar.records();
                 // if our parts are written in codec order, we can rely on their sorted order to
                 // appropriately determine runs of ordered parts
                 let ((min_part_k, min_part_v), min_part_t, _d) =
@@ -969,7 +970,7 @@ impl BatchBuffer {
         val: &[u8],
         ts: T,
         diff: D,
-    ) -> Option<ColumnarRecords> {
+    ) -> Option<BlobTraceUpdates> {
         let update = ((key, val), ts.encode(), diff.encode());
         assert!(
             self.records_builder.push(update),
@@ -984,12 +985,12 @@ impl BatchBuffer {
         }
     }
 
-    fn drain(&mut self) -> ColumnarRecords {
+    fn drain(&mut self) -> BlobTraceUpdates {
         // TODO: we're in a position to do a very good estimate here, instead of using the default.
         let builder = mem::take(&mut self.records_builder);
         let records = builder.finish(&self.metrics.columnar);
         assert_eq!(self.records_builder.len(), 0);
-        records
+        BlobTraceUpdates::Row(records)
     }
 }
 
@@ -1038,7 +1039,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         &mut self,
         write_schemas: &Schemas<K, V>,
         key_lower: Vec<u8>,
-        updates: ColumnarRecords,
+        updates: BlobTraceUpdates,
         upper: Antichain<T>,
         since: Antichain<T>,
         diffs_sum: D,
@@ -1069,8 +1070,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             mz_ore::task::spawn(
                 || "batch::inline_part",
                 async move {
-                    // Wrap our updates just so the types match.
-                    let updates = BlobTraceUpdates::Row(updates);
                     let structured_ext = if part_write_columnar_data {
                         let result = metrics
                             .columnar
@@ -1115,7 +1114,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         } else {
             let part = BlobTraceBatchPart {
                 desc,
-                updates: BlobTraceUpdates::Row(updates),
+                updates,
                 index,
             };
             let write_span =
