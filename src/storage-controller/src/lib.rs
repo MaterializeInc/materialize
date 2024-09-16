@@ -519,11 +519,12 @@ where
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
+    ) -> Result<Vec<ReadHold<T>>, StorageError<Self::Timestamp>> {
         self.migrated_storage_collections
             .clone_from(migrated_storage_collections);
 
-        self.storage_collections
+        let read_holds = self
+            .storage_collections
             .create_collections_for_bootstrap(
                 storage_metadata,
                 register_ts.clone(),
@@ -914,7 +915,7 @@ where
             };
         }
 
-        Ok(())
+        Ok(read_holds)
     }
 
     fn check_alter_ingestion_source_desc(

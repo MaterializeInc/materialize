@@ -37,6 +37,7 @@ use mz_ore::instrument;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
+use mz_storage_types::read_holds::ReadHold;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::time;
@@ -338,15 +339,18 @@ where
     /// A cluster is a combination of a storage instance and a compute instance.
     /// A cluster has zero or more replicas; each replica colocates the storage
     /// and compute layers on the same physical resources.
+    ///
+    /// Returns a [`ReadHold`] for each log index installed on the cluster.
     pub fn create_cluster(
         &mut self,
         id: ClusterId,
         config: ClusterConfig,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<Vec<ReadHold<T>>, anyhow::Error> {
         self.storage.create_instance(id);
-        self.compute
-            .create_instance(id, config.arranged_logs, config.workload_class)?;
-        Ok(())
+        let read_holds =
+            self.compute
+                .create_instance(id, config.arranged_logs, config.workload_class)?;
+        Ok(read_holds)
     }
 
     /// Updates the workload class for a cluster.

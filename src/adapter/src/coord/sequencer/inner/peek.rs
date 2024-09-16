@@ -52,10 +52,13 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+use crate::optimize::dataflows::{
+    dataflow_import_id_bundle, prep_scalar_expr, EvalTime, ExprPrepStyle,
+};
 use crate::optimize::{self, Optimize};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
+use crate::ReadHolds;
 
 impl Staged for PeekStage {
     type Ctx = ExecuteContext;
@@ -482,7 +485,7 @@ impl Coordinator {
         // sufficient collections for safety.
         validity.extend_dependencies(id_bundle.iter());
 
-        let determination = self.sequence_peek_timestamp(
+        let (determination, read_holds) = self.sequence_peek_timestamp(
             session,
             &plan.when,
             cluster_id,
@@ -502,6 +505,7 @@ impl Coordinator {
             id_bundle,
             target_replica,
             determination,
+            read_holds,
             optimizer,
             explain_ctx,
         });
@@ -520,6 +524,7 @@ impl Coordinator {
             id_bundle,
             target_replica,
             determination,
+            read_holds,
             mut optimizer,
             explain_ctx,
         }: PeekStageOptimize,
@@ -634,6 +639,7 @@ impl Coordinator {
                                         target_replica,
                                         source_ids,
                                         determination,
+                                        read_holds,
                                         cluster_id: optimizer.cluster_id(),
                                         finishing: optimizer.finishing().clone(),
                                         plan_insights_optimizer_trace: Some(optimizer_trace),
@@ -650,6 +656,7 @@ impl Coordinator {
                                     target_replica,
                                     source_ids,
                                     determination,
+                                    read_holds,
                                     cluster_id: optimizer.cluster_id(),
                                     finishing: optimizer.finishing().clone(),
                                     plan_insights_optimizer_trace: None,
@@ -686,6 +693,7 @@ impl Coordinator {
                                 global_lir_plan,
                                 optimization_finished_at,
                                 source_ids,
+                                read_holds,
                             })
                         }
                         // Internal optimizer errors are handled differently
@@ -800,6 +808,7 @@ impl Coordinator {
             target_replica,
             source_ids,
             determination,
+            read_holds,
             cluster_id,
             finishing,
             plan_insights_optimizer_trace,
@@ -903,11 +912,12 @@ impl Coordinator {
         // Implement the peek, and capture the response.
         let resp = self
             .implement_peek_plan(
-                ctx.extra_mut(),
+                ctx,
                 planned_peek,
                 finishing,
                 cluster_id,
                 target_replica,
+                read_holds,
                 max_result_size,
                 max_query_result_size,
             )
@@ -940,6 +950,7 @@ impl Coordinator {
             global_lir_plan,
             optimization_finished_at,
             source_ids,
+            read_holds,
         }: PeekStageCopyTo,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         if let Some(id) = ctx.extra.contents() {
@@ -971,8 +982,12 @@ impl Coordinator {
                 .await,
         );
 
+        let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
+        let import_read_holds = read_holds.clone_for(&id_bundle).into();
+
         // Ship dataflow.
-        self.ship_dataflow(df_desc, cluster_id, None).await;
+        self.ship_dataflow(df_desc, cluster_id, import_read_holds, None)
+            .await;
 
         let span = Span::current();
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(
@@ -1085,7 +1100,7 @@ impl Coordinator {
         source_ids: &BTreeSet<GlobalId>,
         real_time_recency_ts: Option<Timestamp>,
         requires_linearization: RequireLinearization,
-    ) -> Result<TimestampDetermination<Timestamp>, AdapterError> {
+    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
         let in_immediate_multi_stmt_txn = session.transaction().in_immediate_multi_stmt_txn(when);
         let timedomain_bundle;
 
@@ -1200,6 +1215,19 @@ impl Coordinator {
             })?;
         };
 
-        Ok(determination)
+        // Collect the read holds we'll pass to the compute controller when executing the peek.
+        // Usually those will be available in `txn_read_holds` (see above), except if we read from
+        // indexes over constant collections.
+        let read_holds = if determination.timestamp_context.timestamp().is_some() {
+            let txn_holds = self
+                .txn_read_holds
+                .get(session.conn_id())
+                .expect("set above");
+            txn_holds.clone_for(source_bundle)
+        } else {
+            self.acquire_read_holds(source_bundle)
+        };
+
+        Ok((determination, read_holds))
     }
 }

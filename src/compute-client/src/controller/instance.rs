@@ -37,7 +37,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::storage_collections::StorageCollections;
-use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
 use thiserror::Error;
@@ -83,58 +83,24 @@ pub(super) enum DataflowCreationError {
     ReplicaMissing(ReplicaId),
     #[error("dataflow definition lacks an as_of value")]
     MissingAsOf,
-    #[error("dataflow has an as_of not beyond the since of collection: {0}")]
-    SinceViolation(GlobalId),
     #[error("subscribe dataflow has an empty as_of")]
     EmptyAsOfForSubscribe,
     #[error("copy to dataflow has an empty as_of")]
     EmptyAsOfForCopyTo,
-}
-
-impl From<CollectionMissing> for DataflowCreationError {
-    fn from(error: CollectionMissing) -> Self {
-        Self::CollectionMissing(error.0)
-    }
-}
-
-impl From<ReadHoldError> for DataflowCreationError {
-    fn from(error: ReadHoldError) -> Self {
-        match error {
-            ReadHoldError::CollectionMissing(id) => DataflowCreationError::CollectionMissing(id),
-            ReadHoldError::SinceViolation(id) => DataflowCreationError::SinceViolation(id),
-        }
-    }
+    #[error("no read hold provided for dataflow import: {0}")]
+    ReadHoldMissing(GlobalId),
+    #[error("insufficient read hold provided for dataflow import: {0}")]
+    ReadHoldInsufficient(GlobalId),
 }
 
 #[derive(Error, Debug)]
 pub(super) enum PeekError {
-    #[error("collection does not exist: {0}")]
-    CollectionMissing(GlobalId),
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
-    #[error("peek timestamp is not beyond the since of collection: {0}")]
-    SinceViolation(GlobalId),
-}
-
-impl From<CollectionMissing> for PeekError {
-    fn from(error: CollectionMissing) -> Self {
-        Self::CollectionMissing(error.0)
-    }
-}
-
-impl From<ReadHoldError> for PeekError {
-    fn from(error: ReadHoldError) -> Self {
-        match error {
-            ReadHoldError::CollectionMissing(id) => PeekError::CollectionMissing(id),
-            ReadHoldError::SinceViolation(id) => PeekError::SinceViolation(id),
-        }
-    }
-}
-
-impl From<CollectionMissing> for ReadHoldError {
-    fn from(error: CollectionMissing) -> Self {
-        ReadHoldError::CollectionMissing(error.0)
-    }
+    #[error("read hold ID does not match peeked collection: {0}")]
+    ReadHoldIdMismatch(GlobalId),
+    #[error("insufficient read hold provided: {0}")]
+    ReadHoldInsufficient(GlobalId),
 }
 
 #[derive(Error, Debug)]
@@ -369,20 +335,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         }
 
         self.replicas.insert(id, replica);
-    }
-
-    fn acquire_storage_read_hold_at(
-        &self,
-        id: GlobalId,
-        frontier: Antichain<T>,
-    ) -> Result<ReadHold<T>, ReadHoldError> {
-        let mut hold = self
-            .storage_collections
-            .acquire_read_holds(vec![id])?
-            .into_element();
-        hold.try_downgrade(frontier)
-            .map_err(|_| ReadHoldError::SinceViolation(id))?;
-        Ok(hold)
     }
 
     /// Enqueue the given response for delivery to the controller clients.
@@ -1143,7 +1095,10 @@ where
         }
     }
 
-    /// Create the described dataflows and initializes state for their output.
+    /// Creates the described dataflow and initializes state for its output.
+    ///
+    /// This method expects a `DataflowDescription` with an `as_of` frontier specified, as well as
+    /// for each imported collection a read hold in `import_read_holds` at at least the `as_of`.
     ///
     /// If a `subscribe_target_replica` is given, any subscribes exported by the dataflow are
     /// configured to target that replica, i.e., only subscribe responses sent by that replica are
@@ -1151,11 +1106,14 @@ where
     pub fn create_dataflow(
         &mut self,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        import_read_holds: Vec<ReadHold<T>>,
         subscribe_target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
+        use DataflowCreationError::*;
+
         if let Some(replica_id) = subscribe_target_replica {
             if !self.replica_exists(replica_id) {
-                return Err(DataflowCreationError::ReplicaMissing(replica_id));
+                return Err(ReplicaMissing(replica_id));
             }
         }
 
@@ -1165,48 +1123,51 @@ where
             .as_ref()
             .ok_or(DataflowCreationError::MissingAsOf)?;
         if as_of.is_empty() && dataflow.subscribe_ids().next().is_some() {
-            return Err(DataflowCreationError::EmptyAsOfForSubscribe);
+            return Err(EmptyAsOfForSubscribe);
         }
         if as_of.is_empty() && dataflow.copy_to_ids().next().is_some() {
-            return Err(DataflowCreationError::EmptyAsOfForCopyTo);
+            return Err(EmptyAsOfForCopyTo);
         }
 
-        // Validate the dataflow as having inputs whose `since` is less or equal to the dataflow's `as_of`.
-        // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
+        // Collect all dependencies of the dataflow, and read holds on them at the `as_of`.
+        let mut import_read_holds: BTreeMap<_, _> =
+            import_read_holds.into_iter().map(|r| (r.id(), r)).collect();
+
+        let mut prepare_read_hold = |id| {
+            let mut read_hold = import_read_holds.remove(&id).ok_or(ReadHoldMissing(id))?;
+            read_hold
+                .try_downgrade(as_of.clone())
+                .map_err(|_| ReadHoldInsufficient(id))?;
+            Ok(read_hold)
+        };
+
+        let mut storage_dependencies = BTreeMap::new();
+        for &id in dataflow.source_imports.keys() {
+            storage_dependencies.insert(id, prepare_read_hold(id)?);
+        }
+        let mut compute_dependencies = BTreeMap::new();
+        for &id in dataflow.index_imports.keys() {
+            compute_dependencies.insert(id, prepare_read_hold(id)?);
+        }
 
         // When we install per-replica input read holds, we cannot use the `as_of` because of
         // reconciliation: Existing slow replicas might be reading from the inputs at times before
         // the `as_of` and we would rather not crash them by allowing their inputs to compact too
         // far. So instead we take read holds at the least time available.
-        let mut replica_input_read_holds = Vec::new();
-
-        // Collect all dependencies of the dataflow, and read holds on them.
-        let mut storage_dependencies = BTreeMap::new();
-        let mut compute_dependencies = BTreeMap::new();
-
-        for &id in dataflow.source_imports.keys() {
-            let mut read_hold = self
-                .storage_collections
-                .acquire_read_holds(vec![id])?
-                .into_element();
-            replica_input_read_holds.push(read_hold.clone());
-
-            read_hold
-                .try_downgrade(as_of.clone())
-                .map_err(|_| DataflowCreationError::SinceViolation(id))?;
-            storage_dependencies.insert(id, read_hold);
-        }
-
-        for &id in dataflow.index_imports.keys() {
-            let as_of_read_hold = self.acquire_read_hold_at(id, as_of.clone())?;
-            compute_dependencies.insert(id, as_of_read_hold);
-        }
-
-        // If the `as_of` is empty, we are not going to create a dataflow, so replicas won't read
-        // from the inputs.
-        if as_of.is_empty() {
-            replica_input_read_holds = Default::default();
-        }
+        let replica_input_read_holds: Vec<_> = if as_of.is_empty() {
+            // We are not going to create a dataflow, so replicas won't read from the inputs.
+            Default::default()
+        } else {
+            let storage_ids = dataflow.source_imports.keys().copied();
+            storage_ids
+                .map(|id| {
+                    self.storage_collections
+                        .acquire_read_holds(vec![id])
+                        .expect("we already have a read hold on this collection")
+                        .into_element()
+                })
+                .collect()
+        };
 
         // Install collection state for each of the exports.
         for export_id in dataflow.export_ids() {
@@ -1243,7 +1204,7 @@ where
             let collection_metadata = self
                 .storage_collections
                 .collection_metadata(id)
-                .map_err(|_| DataflowCreationError::CollectionMissing(id))?;
+                .expect("we have a read hold on this collection");
 
             let desc = SourceInstanceDesc {
                 storage_metadata: collection_metadata.clone(),
@@ -1449,21 +1410,23 @@ where
         timestamp: T,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
+        mut read_hold: ReadHold<T>,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), PeekError> {
-        // Install a compaction hold on `id` at `timestamp`.
-        let read_hold = match &peek_target {
-            PeekTarget::Index { id } => {
-                self.acquire_read_hold_at(*id, Antichain::from_elem(timestamp.clone()))?
-            }
-            PeekTarget::Persist { id, .. } => {
-                self.acquire_storage_read_hold_at(*id, Antichain::from_elem(timestamp.clone()))?
-            }
-        };
+        use PeekError::*;
+
+        // Downgrade the provided read hold to the peek time.
+        let target_id = peek_target.id();
+        if read_hold.id() != target_id {
+            return Err(ReadHoldIdMismatch(read_hold.id()));
+        }
+        read_hold
+            .try_downgrade(Antichain::from_elem(timestamp.clone()))
+            .map_err(|_| ReadHoldInsufficient(target_id))?;
 
         if let Some(target) = target_replica {
             if !self.replica_exists(target) {
-                return Err(PeekError::ReplicaMissing(target));
+                return Err(ReplicaMissing(target));
             }
         }
 
@@ -1570,18 +1533,6 @@ where
             .update_iter(since.iter().map(|t| (t.clone(), 1)));
 
         let hold = ReadHold::new(id, since, self.read_holds_tx.clone());
-        Ok(hold)
-    }
-
-    /// Acquires a [`ReadHold`] for the identified compute collection at the desired frontier.
-    fn acquire_read_hold_at(
-        &mut self,
-        id: GlobalId,
-        frontier: Antichain<T>,
-    ) -> Result<ReadHold<T>, ReadHoldError> {
-        let mut hold = self.acquire_read_hold(id)?;
-        hold.try_downgrade(frontier)
-            .map_err(|_| ReadHoldError::SinceViolation(id))?;
         Ok(hold)
     }
 

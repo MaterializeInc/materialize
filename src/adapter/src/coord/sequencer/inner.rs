@@ -19,7 +19,6 @@ use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
 use futures::{future, Future, FutureExt};
 use itertools::Itertools;
-use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::ReplicaId;
@@ -594,12 +593,15 @@ impl Coordinator {
 
                 let storage_metadata = coord.catalog.state().storage_metadata();
 
-                coord
+                let read_holds = coord
                     .controller
                     .storage
                     .create_collections(storage_metadata, None, collections)
                     .await
                     .unwrap_or_terminate("cannot fail to create collections");
+
+                let mut read_holds: BTreeMap<_, _> =
+                    read_holds.into_iter().map(|r| (r.id(), r)).collect();
 
                 // It is _very_ important that we only initialize read policies
                 // after we have created all the sources/collections. Some of
@@ -620,10 +622,13 @@ impl Coordinator {
                     .catalog()
                     .state()
                     .source_compaction_windows(source_ids);
-                for (compaction_window, storage_policies) in read_policies {
-                    coord
-                        .initialize_storage_read_policies(storage_policies, compaction_window)
-                        .await;
+                for (compaction_window, ids) in read_policies {
+                    for id in ids {
+                        let hold = read_holds.remove(&id).expect("collection just created");
+                        coord
+                            .initialize_storage_read_policy(hold, compaction_window)
+                            .await;
+                    }
                 }
             })
             .await;
@@ -957,7 +962,7 @@ impl Coordinator {
                             DataSourceOther::TableWrites,
                         );
                         let storage_metadata = coord.catalog.state().storage_metadata();
-                        coord
+                        let read_hold = coord
                             .controller
                             .storage
                             .create_collections(
@@ -966,17 +971,14 @@ impl Coordinator {
                                 vec![(table_id, collection_desc)],
                             )
                             .await
-                            .unwrap_or_terminate("cannot fail to create collections");
+                            .unwrap_or_terminate("cannot fail to create collections")
+                            .into_element();
                         coord.apply_local_write(register_ts).await;
 
-                        coord
-                            .initialize_storage_read_policies(
-                                btreeset![table_id],
-                                table
-                                    .custom_logical_compaction_window
-                                    .unwrap_or(CompactionWindow::Default),
-                            )
-                            .await;
+                        let cw = table
+                            .custom_logical_compaction_window
+                            .unwrap_or(CompactionWindow::Default);
+                        coord.initialize_storage_read_policy(read_hold, cw).await;
                     }
                     TableDataSource::DataSource(data_source) => {
                         match data_source {
@@ -1005,7 +1007,7 @@ impl Coordinator {
                                     status_collection_id,
                                 };
                                 let storage_metadata = coord.catalog.state().storage_metadata();
-                                coord
+                                let read_holds = coord
                                     .controller
                                     .storage
                                     .create_collections(
@@ -1016,17 +1018,22 @@ impl Coordinator {
                                     .await
                                     .unwrap_or_terminate("cannot fail to create collections");
 
+                                let mut read_holds: BTreeMap<_, _> =
+                                    read_holds.into_iter().map(|r| (r.id(), r)).collect();
+
                                 let read_policies = coord
                                     .catalog()
                                     .state()
                                     .source_compaction_windows(vec![table_id]);
-                                for (compaction_window, storage_policies) in read_policies {
-                                    coord
-                                        .initialize_storage_read_policies(
-                                            storage_policies,
-                                            compaction_window,
-                                        )
-                                        .await;
+                                for (compaction_window, ids) in read_policies {
+                                    for id in ids {
+                                        let hold = read_holds
+                                            .remove(&id)
+                                            .expect("collection just created");
+                                        coord
+                                            .initialize_storage_read_policy(hold, compaction_window)
+                                            .await;
+                                    }
                                 }
                             }
                             _ => unreachable!("CREATE TABLE data source got {:?}", data_source),
@@ -3899,14 +3906,15 @@ impl Coordinator {
 
                 let storage_metadata = self.catalog.state().storage_metadata();
 
-                self.controller
+                let read_holds = self
+                    .controller
                     .storage
                     .create_collections(storage_metadata, None, collections)
                     .await
                     .unwrap_or_terminate("cannot fail to create collections");
 
                 self.initialize_storage_read_policies(
-                    source_ids,
+                    read_holds,
                     source_compaction_window.unwrap_or(CompactionWindow::Default),
                 )
                 .await;

@@ -404,13 +404,14 @@ impl<T> ShouldTerminateGracefully for StorageError<T> {
 impl ShouldTerminateGracefully for DataflowCreationError {
     fn should_terminate_gracefully(&self) -> Terminate {
         match self {
-            DataflowCreationError::SinceViolation(_)
-            | DataflowCreationError::InstanceMissing(_)
+            DataflowCreationError::InstanceMissing(_)
             | DataflowCreationError::CollectionMissing(_)
             | DataflowCreationError::ReplicaMissing(_)
             | DataflowCreationError::MissingAsOf
             | DataflowCreationError::EmptyAsOfForSubscribe
-            | DataflowCreationError::EmptyAsOfForCopyTo => Terminate::Panic,
+            | DataflowCreationError::EmptyAsOfForCopyTo
+            | DataflowCreationError::ReadHoldMissing(_)
+            | DataflowCreationError::ReadHoldInsufficient(_) => Terminate::Panic,
         }
     }
 }
@@ -427,10 +428,10 @@ impl ShouldTerminateGracefully for CollectionUpdateError {
 impl ShouldTerminateGracefully for PeekError {
     fn should_terminate_gracefully(&self) -> Terminate {
         match self {
-            PeekError::SinceViolation(_)
-            | PeekError::InstanceMissing(_)
-            | PeekError::CollectionMissing(_)
-            | PeekError::ReplicaMissing(_) => Terminate::Panic,
+            PeekError::InstanceMissing(_)
+            | PeekError::ReplicaMissing(_)
+            | PeekError::ReadHoldIdMismatch(_)
+            | PeekError::ReadHoldInsufficient(_) => Terminate::Panic,
         }
     }
 }

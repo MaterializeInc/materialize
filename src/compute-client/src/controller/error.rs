@@ -131,7 +131,7 @@ pub enum DataflowCreationError {
     /// The given instance does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// One of the imported collections does not exist.
+    /// One of the referenced collections does not exist.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
     /// The targeted replica does not exist.
@@ -140,9 +140,6 @@ pub enum DataflowCreationError {
     /// The dataflow definition has doesn't have an `as_of` set.
     #[error("dataflow definition lacks an as_of value")]
     MissingAsOf,
-    /// One of the imported collections has a read frontier greater than the dataflow `as_of`.
-    #[error("dataflow has an as_of not beyond the since of collection: {0}")]
-    SinceViolation(GlobalId),
     /// We skip dataflow creation for empty `as_of`s, which would be a problem for a SUBSCRIBE,
     /// because an initial response is expected.
     #[error("subscribe dataflow has an empty as_of")]
@@ -151,6 +148,13 @@ pub enum DataflowCreationError {
     /// because it should always have an external side effect.
     #[error("copy to dataflow has an empty as_of")]
     EmptyAsOfForCopyTo,
+    /// Caller did not provide a read hold for one of the imported collections.
+    #[error("no read hold provided for dataflow import: {0}")]
+    ReadHoldMissing(GlobalId),
+    /// Caller provided a read hold with a `since` > the dataflow `as_of` for one of the imported
+    /// collections.
+    #[error("insufficient read hold provided for dataflow import: {0}")]
+    ReadHoldInsufficient(GlobalId),
 }
 
 impl From<InstanceMissing> for DataflowCreationError {
@@ -166,9 +170,10 @@ impl From<instance::DataflowCreationError> for DataflowCreationError {
             CollectionMissing(id) => Self::CollectionMissing(id),
             ReplicaMissing(id) => Self::ReplicaMissing(id),
             MissingAsOf => Self::MissingAsOf,
-            SinceViolation(id) => Self::SinceViolation(id),
             EmptyAsOfForSubscribe => Self::EmptyAsOfForSubscribe,
             EmptyAsOfForCopyTo => Self::EmptyAsOfForCopyTo,
+            ReadHoldMissing(id) => Self::ReadHoldMissing(id),
+            ReadHoldInsufficient(id) => Self::ReadHoldInsufficient(id),
         }
     }
 }
@@ -176,18 +181,18 @@ impl From<instance::DataflowCreationError> for DataflowCreationError {
 /// Errors arising during peek processing.
 #[derive(Error, Debug)]
 pub enum PeekError {
-    /// TODO(#25239): Add documentation.
+    /// The given instance does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(#25239): Add documentation.
-    #[error("collection does not exist: {0}")]
-    CollectionMissing(GlobalId),
-    /// TODO(#25239): Add documentation.
+    /// The targeted replica does not exist.
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
-    /// TODO(#25239): Add documentation.
-    #[error("peek timestamp is not beyond the since of collection: {0}")]
-    SinceViolation(GlobalId),
+    /// Caller provided a read hold for a collection that's not the peeked collect.
+    #[error("read hold ID does not match peeked collection: {0}")]
+    ReadHoldIdMismatch(GlobalId),
+    /// Caller provided a read hold with a `since` > the peek timestamp.
+    #[error("insufficient read hold provided: {0}")]
+    ReadHoldInsufficient(GlobalId),
 }
 
 impl From<InstanceMissing> for PeekError {
@@ -200,9 +205,9 @@ impl From<instance::PeekError> for PeekError {
     fn from(error: instance::PeekError) -> Self {
         use instance::PeekError::*;
         match error {
-            CollectionMissing(id) => Self::CollectionMissing(id),
             ReplicaMissing(id) => Self::ReplicaMissing(id),
-            SinceViolation(id) => Self::SinceViolation(id),
+            ReadHoldIdMismatch(id) => Self::ReadHoldIdMismatch(id),
+            ReadHoldInsufficient(id) => Self::ReadHoldInsufficient(id),
         }
     }
 }

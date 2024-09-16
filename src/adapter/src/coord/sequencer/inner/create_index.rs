@@ -460,14 +460,6 @@ impl Coordinator {
 
                 // Timestamp selection
                 let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
-
-                // We're putting in place read holds, such that ship_dataflow,
-                // below, which calls update_read_capabilities, can successfully
-                // do so. Otherwise, the since of dependencies might move along
-                // concurrently, pulling the rug from under us!
-                //
-                // TODO: Maybe in the future, pass those holds on to compute, to
-                // hold on to them and downgrade when possible?
                 let read_holds = coord.acquire_read_holds(&id_bundle);
                 let since = coord.least_valid_read(&read_holds);
                 df_desc.set_as_of(since);
@@ -476,13 +468,10 @@ impl Coordinator {
                     .ship_dataflow_and_notice_builtin_table_updates(
                         df_desc,
                         cluster_id,
+                        read_holds.into(),
                         notice_builtin_updates_fut,
                     )
                     .await;
-
-                // Drop read holds after the dataflow has been shipped, at which
-                // point compute will have put in its own read holds.
-                drop(read_holds);
 
                 coord.update_compute_read_policy(
                     cluster_id,
