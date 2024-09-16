@@ -276,6 +276,7 @@ async fn test_debug_edit_fencing<'a>(state_builder: TestCatalogStateBuilder) {
         .unwrap();
 
     let mut debug_state = state_builder
+        .clone()
         .unwrap_build()
         .await
         .open_debug()
@@ -317,6 +318,36 @@ async fn test_debug_edit_fencing<'a>(state_builder: TestCatalogStateBuilder) {
         ),
         "unexpected err: {err:?}"
     );
+
+    // Open another state to fence the debug state.
+    let _state = state_builder
+        .clone()
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    // Now debug state should be fenced.
+    let err = debug_state
+        .edit::<SettingCollection>(
+            proto::SettingKey {
+                name: "joe".to_string(),
+            },
+            proto::SettingValue {
+                value: "koshakow".to_string(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ),
+        "unexpected err: {err:?}"
+    );
 }
 
 #[mz_ore::test(tokio::test)]
@@ -344,6 +375,7 @@ async fn test_debug_delete_fencing<'a>(state_builder: TestCatalogStateBuilder) {
     txn.commit().await.unwrap();
 
     let mut debug_state = state_builder
+        .clone()
         .unwrap_build()
         .await
         .open_debug()
@@ -373,6 +405,31 @@ async fn test_debug_delete_fencing<'a>(state_builder: TestCatalogStateBuilder) {
     );
 
     let err = state.transaction().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
+        ),
+        "unexpected err: {err:?}"
+    );
+
+    // Open another state to fence the debug state.
+    let _state = state_builder
+        .clone()
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    // Now debug state should be fenced.
+    let err = debug_state
+        .delete::<SettingCollection>(proto::SettingKey {
+            name: "joe".to_string(),
+        })
+        .await
+        .unwrap_err();
     assert!(
         matches!(
             err,
