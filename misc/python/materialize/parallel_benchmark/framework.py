@@ -318,6 +318,9 @@ def run_job(jobs: queue.Queue) -> None:
 
 
 class Scenario:
+    # Has to be set for the class already, not just in the constructor, so that
+    # we can change the value for the entire class in the decorator
+    enabled: bool = True
     phases: list[Phase]
     thread_pool_size: int
     conn_pool_size: int
@@ -382,3 +385,11 @@ class Scenario:
         for thread in self.thread_pool:
             thread.join()
         self.jobs.join()
+
+
+def disabled(ignore_reason: str):
+    def decorator(cls):
+        cls.enabled = False
+        return cls
+
+    return decorator

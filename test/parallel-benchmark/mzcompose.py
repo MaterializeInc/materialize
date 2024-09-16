@@ -584,7 +584,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             globals()[scenario] for scenario in args.scenario
         ]
     else:
-        scenarios = list(all_subclasses(Scenario))
+        scenarios = [
+            scenario for scenario in all_subclasses(Scenario) if scenario.enabled
+        ]
 
     sharded_scenarios = buildkite.shard_list(scenarios, lambda s: s.name())
 
