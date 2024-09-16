@@ -161,14 +161,14 @@ rust_test(
 )
 
 rust_binary(
-    name = "mz_balancerd_bin",
+    name = "balancerd",
     srcs = glob(["src/**/*.rs"]),
     aliases = aliases(
         normal = True,
         proc_macro = True,
     ),
     compile_data = [],
-    crate_root = "src/main.rs",
+    crate_root = "src/bin/balancerd.rs",
     data = [],
     env = {},
     features = [],

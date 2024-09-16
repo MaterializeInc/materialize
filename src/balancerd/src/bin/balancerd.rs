@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![allow(missing_docs)]
+//! Manages a single Materialize environment.
+//!
+//! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
+//! on port 6876.
 
 use std::error::Error;
 use std::net::SocketAddr;
@@ -21,13 +24,31 @@ use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
     DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
+use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
+use mz_ore::cli::{self, CliConfig};
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_server_core::TlsCliArgs;
-use tracing::warn;
+use tracing::{info_span, warn, Instrument};
 
 #[derive(Debug, clap::Parser)]
-pub struct Args {
+#[clap(about = "Balancer service", long_about = None)]
+struct Args {
+    #[clap(subcommand)]
+    command: Command,
+
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum Command {
+    Service(ServiceArgs),
+}
+
+#[derive(Debug, clap::Parser)]
+pub struct ServiceArgs {
     #[clap(long, value_name = "HOST:PORT")]
     pgwire_listen_addr: SocketAddr,
     #[clap(long, value_name = "HOST:PORT")]
@@ -121,21 +142,42 @@ pub struct Args {
     default_config: Option<Vec<(String, String)>>,
 }
 
-/// Parse a single key-value pair
-fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Sync + 'static>>
-where
-    T: std::str::FromStr,
-    T::Err: Error + Send + Sync + 'static,
-    U: std::str::FromStr,
-    U::Err: Error + Send + Sync + 'static,
-{
-    let pos = s
-        .find('=')
-        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
-    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
+fn main() {
+    let args: Args = cli::parse_args(CliConfig::default());
+
+    // Mirror the tokio Runtime configuration in our production binaries.
+    let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(ncpus_useful)
+        .enable_all()
+        .build()
+        .expect("Failed building the Runtime");
+
+    let metrics_registry = MetricsRegistry::new();
+    let (tracing_handle, _tracing_guard) = runtime
+        .block_on(args.tracing.configure_tracing(
+            StaticTracingConfig {
+                service_name: "balancerd",
+                build_info: BUILD_INFO,
+            },
+            metrics_registry.clone(),
+        ))
+        .expect("failed to init tracing");
+
+    runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
+
+    let root_span = info_span!("balancer");
+    let res = match args.command {
+        Command::Service(args) => runtime.block_on(run(args, tracing_handle).instrument(root_span)),
+    };
+
+    if let Err(err) = res {
+        panic!("balancer: fatal: {}", err.display_with_causes());
+    }
+    drop(_tracing_guard);
 }
 
-pub async fn run(args: Args, tracing_handle: TracingHandle) -> Result<(), anyhow::Error> {
+pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
     let resolver = match (args.static_resolver_addr, args.frontegg_resolver_template) {
         (None, Some(addr_template)) => {
@@ -209,4 +251,18 @@ pub async fn run(args: Args, tracing_handle: TracingHandle) -> Result<(), anyhow
     service.serve().await?;
     warn!("balancer service exited");
     Ok(())
+}
+
+/// Parse a single key-value pair
+fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Sync + 'static>>
+where
+    T: std::str::FromStr,
+    T::Err: Error + Send + Sync + 'static,
+    U: std::str::FromStr,
+    U::Err: Error + Send + Sync + 'static,
+{
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
+    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }
