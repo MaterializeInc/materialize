@@ -168,11 +168,6 @@ CREATE SOURCE kafka_repl
 By default, the source will be created in the active cluster; to use a different
 cluster, use the `IN CLUSTER` clause.
 
-#### Transaction support
-
-Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/sqlserver.html#sqlserver-transaction-metadata)
-that can be used to preserve transactional boundaries downstream.
-
 ### Create a view
 
 {{% ingest-data/ingest-data-kafka-debezium-view %}}
@@ -197,6 +192,11 @@ match` error in Materialize.
 To work around this limitation, we recommend halting any updates to the tables
 marked for replication until the Debezium connector is fully configured and the
 initial snapshot for all tables has been completed.
+
+##### Transaction support
+
+Materialize does **not** support [transaction
+metadata](https://debezium.io/documentation/reference/connectors/sqlserver.html#sqlserver-transaction-metadata).https://github.com/MaterializeInc/materialize/issues/7537.
 
 ##### Supported types
 
