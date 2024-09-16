@@ -376,7 +376,7 @@ rust_toolchains(
         },
         "x86_64-unknown-linux-gnu": {
             "stable": {
-                "rustc": "58c7fce7a0323b8669b4e17ec370b38a5f207fcdcd5c66b83c877b72e252d561e",
+                "rustc": "5c7fce7a0323b8669b4e17ec370b38a5f207fcdcd5c66b83c877b72e252d561e",
                 "clippy": "39253ce4ecb036977686f5a8cc183de295cf280766678201f919c5655e3dd063",
                 "cargo": "863c016fc458b1fa8809d7b66dcccd272f8b6b2e8a42c89b7dff4b619f3d3940",
                 "llvm-tools": "86e441024b0e538ed69fa0098be48592caae6fc28097f7630b906be276c79622",
