@@ -2116,6 +2116,12 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_reduce_unnest_list_fusion,
+        desc: "Enables fusing `Reduce` with `FlatMap UnnestList` for better window function performance",
+        default: false,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2132,6 +2138,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
+            enable_reduce_unnest_list_fusion: vars.enable_reduce_unnest_list_fusion(),
         }
     }
 }
