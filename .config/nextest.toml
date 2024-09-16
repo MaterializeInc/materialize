@@ -13,6 +13,10 @@ threads-required = 8
 slow-timeout = { period = "300s", terminate-after = 2 }
 
 [[profile.default.overrides]]
+filter = "package(mz-environmentd) and test(test_storage_usage_collection_interval)"
+slow-timeout = { period = "300s", terminate-after = 2 }
+
+[[profile.default.overrides]]
 filter = "package(mz-environmentd)"
 threads-required = 8
 slow-timeout = { period = "120s", terminate-after = 2 }
@@ -31,10 +35,6 @@ slow-timeout = { period = "300s", terminate-after = 2 }
 
 [[profile.default.overrides]]
 filter = "package(mz-adapter) and test(test_smoketest_all_builtins)"
-slow-timeout = { period = "300s", terminate-after = 2 }
-
-[[profile.default.overrides]]
-filter = "package(mz-environmentd) and test(test_storage_usage_collection_interval)"
 slow-timeout = { period = "300s", terminate-after = 2 }
 
 [profile.ci]
