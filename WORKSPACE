@@ -217,6 +217,9 @@ http_archive(
 # We build our own clang toolchain, see the <https://github.com/MaterializeInc/toolchains> repository.
 LLVM_VERSION = "18.1.8"
 
+# We have a few variants of our clang toolchain, either improving how it's built or adding new tools.
+LLVM_VERSION_SUFFIX = "4"
+
 maybe(
     http_archive,
     name = "toolchains_llvm",
@@ -248,10 +251,10 @@ llvm_toolchain(
         "linux-aarch64": "@linux_sysroot-aarch64//:sysroot",
     },
     urls = {
-        "darwin-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-4/darwin_aarch64.tar.zst".format(LLVM_VERSION)],
-        "darwin-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-4/darwin_x86_64.tar.zst".format(LLVM_VERSION)],
-        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-4/linux_aarch64.tar.zst".format(LLVM_VERSION)],
-        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-4/linux_x86_64.tar.zst".format(LLVM_VERSION)],
+        "darwin-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-{1}/darwin_aarch64.tar.zst".format(LLVM_VERSION, LLVM_VERSION_SUFFIX)],
+        "darwin-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-{1}/darwin_x86_64.tar.zst".format(LLVM_VERSION, LLVM_VERSION_SUFFIX)],
+        "linux-aarch64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-{1}/linux_aarch64.tar.zst".format(LLVM_VERSION, LLVM_VERSION_SUFFIX)],
+        "linux-x86_64": ["https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}-{1}/linux_x86_64.tar.zst".format(LLVM_VERSION, LLVM_VERSION_SUFFIX)],
     },
 )
 
