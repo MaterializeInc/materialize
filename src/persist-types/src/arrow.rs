@@ -27,8 +27,10 @@ use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::buffer::{BooleanBuffer, NullBuffer, OffsetBuffer};
-use arrow::datatypes::{ArrowNativeType, DataType, Field, Fields};
+use arrow::datatypes::{ArrowNativeType, DataType, Field, FieldRef, Fields};
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
+use mz_ore::soft_assert_eq_no_log;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use prost::Message;
 
@@ -38,49 +40,152 @@ mod proto {
 }
 pub use proto::ProtoArrayData;
 
+/// Extract the list of fields for our recursive datatypes.
+fn fields_for_type(data_type: &DataType) -> &[FieldRef] {
+    match data_type {
+        DataType::Struct(fields) => fields,
+        DataType::List(field) => std::slice::from_ref(field),
+        DataType::Map(field, _) => std::slice::from_ref(field),
+        DataType::Null
+        | DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Timestamp(_, _)
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Duration(_)
+        | DataType::Interval(_)
+        | DataType::Binary
+        | DataType::FixedSizeBinary(_)
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => &[],
+        DataType::ListView(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::LargeList(_)
+        | DataType::LargeListView(_)
+        | DataType::Union(_, _)
+        | DataType::Dictionary(_, _)
+        | DataType::RunEndEncoded(_, _) => unimplemented!("not supported"),
+    }
+}
+
+/// Encode the array into proto.
+/// We omit the data type if it matches the expected type, to save space.
+fn into_proto_with_type(data: &ArrayData, expected_type: Option<&DataType>) -> ProtoArrayData {
+    let data_type = match expected_type {
+        Some(expected) => {
+            // Equality is recursive, and this function is itself called recursively,
+            // skip the call in production to avoid a quadratic overhead.
+            soft_assert_eq_no_log!(
+                expected,
+                data.data_type(),
+                "actual type should match expected type"
+            );
+            // TODO(bkirwi): return None here in a future release, assuming the types match
+            Some(expected.into_proto())
+        }
+        None => Some(data.data_type().into_proto()),
+    };
+
+    ProtoArrayData {
+        data_type,
+        length: u64::cast_from(data.len()),
+        offset: u64::cast_from(data.offset()),
+        buffers: data.buffers().iter().map(|b| b.into_proto()).collect(),
+        children: data
+            .child_data()
+            .iter()
+            .zip_eq(fields_for_type(expected_type.unwrap_or(data.data_type())))
+            .map(|(child, expect)| into_proto_with_type(child, Some(expect.data_type())))
+            .collect(),
+        nulls: data.nulls().map(|n| n.inner().into_proto()),
+    }
+}
+
+/// Decode the array data.
+/// If the data type is omitted from the proto, we decode it as the expected type.
+fn from_proto_with_type(
+    proto: ProtoArrayData,
+    expected_type: Option<&DataType>,
+) -> Result<ArrayData, TryFromProtoError> {
+    let ProtoArrayData {
+        data_type,
+        length,
+        offset,
+        buffers,
+        children,
+        nulls,
+    } = proto;
+    let data_type: Option<DataType> = data_type.into_rust()?;
+    let data_type = match (data_type, expected_type) {
+        (Some(data_type), None) => data_type,
+        (Some(data_type), Some(expected_type)) => {
+            // Equality is recursive, and this function is itself called recursively,
+            // skip the call in production to avoid a quadratic overhead.
+            soft_assert_eq_no_log!(
+                data_type,
+                *expected_type,
+                "expected type should match actual type"
+            );
+            data_type
+        }
+        (None, Some(expected_type)) => expected_type.clone(),
+        (None, None) => {
+            return Err(TryFromProtoError::MissingField(
+                "ProtoArrayData::data_type".to_string(),
+            ))
+        }
+    };
+    let nulls = nulls
+        .map(|n| n.into_rust())
+        .transpose()?
+        .map(NullBuffer::new);
+
+    let mut builder = ArrayDataBuilder::new(data_type.clone())
+        .len(usize::cast_from(length))
+        .offset(usize::cast_from(offset))
+        .nulls(nulls);
+
+    for b in buffers.into_iter().map(|b| b.into_rust()) {
+        builder = builder.add_buffer(b?);
+    }
+    for c in children
+        .into_iter()
+        .zip_eq(fields_for_type(&data_type))
+        .map(|(c, field)| from_proto_with_type(c, Some(field.data_type())))
+    {
+        builder = builder.add_child_data(c?);
+    }
+
+    // Construct the builder which validates all inputs and aligns data.
+    builder
+        .build_aligned()
+        .map_err(|e| TryFromProtoError::RowConversionError(e.to_string()))
+}
+
 impl RustType<ProtoArrayData> for arrow::array::ArrayData {
     fn into_proto(&self) -> ProtoArrayData {
-        ProtoArrayData {
-            data_type: Some(self.data_type().into_proto()),
-            length: u64::cast_from(self.len()),
-            offset: u64::cast_from(self.offset()),
-            buffers: self.buffers().iter().map(|b| b.into_proto()).collect(),
-            children: self.child_data().iter().map(|c| c.into_proto()).collect(),
-            nulls: self.nulls().map(|n| n.inner().into_proto()),
-        }
+        into_proto_with_type(self, None)
     }
 
     fn from_proto(proto: ProtoArrayData) -> Result<Self, TryFromProtoError> {
-        let ProtoArrayData {
-            data_type,
-            length,
-            offset,
-            buffers,
-            children,
-            nulls,
-        } = proto;
-        let data_type = data_type.into_rust_if_some("data_type")?;
-        let nulls = nulls
-            .map(|n| n.into_rust())
-            .transpose()?
-            .map(NullBuffer::new);
-
-        let mut builder = ArrayDataBuilder::new(data_type)
-            .len(usize::cast_from(length))
-            .offset(usize::cast_from(offset))
-            .nulls(nulls);
-
-        for b in buffers.into_iter().map(|b| b.into_rust()) {
-            builder = builder.add_buffer(b?);
-        }
-        for c in children.into_iter().map(|c| c.into_rust()) {
-            builder = builder.add_child_data(c?);
-        }
-
-        // Construct the builder which validates all inputs and aligns data.
-        builder
-            .build_aligned()
-            .map_err(|e| TryFromProtoError::RowConversionError(e.to_string()))
+        from_proto_with_type(proto, None)
     }
 }
 
