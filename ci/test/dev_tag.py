@@ -18,7 +18,7 @@ from materialize.xcompile import Arch
 
 
 def main() -> None:
-    bazel = ui.env_is_truthy("CI_BUILD_WITH_BAZEL")
+    bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
     bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
 
     mz_version = ci_util.get_mz_version()

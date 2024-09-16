@@ -44,7 +44,11 @@ class CloudtestApplicationBase(Application):
 
     def acquire_images(self) -> None:
         repo = mzbuild.Repository(
-            self.mz_root, release_mode=self.release_mode, coverage=self.coverage_mode()
+            self.mz_root,
+            release_mode=self.release_mode,
+            coverage=self.coverage_mode(),
+            bazel=self.bazel(),
+            bazel_remote_cache=self.bazel_remote_cache(),
         )
         for image in self.images:
             self._acquire_image(repo, image)

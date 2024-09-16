@@ -93,7 +93,12 @@ def main() -> None:
 
     os.chdir(MZ_ROOT)
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
-    repo = mzbuild.Repository(MZ_ROOT, coverage=coverage)
+    bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
+    bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+
+    repo = mzbuild.Repository(
+        MZ_ROOT, coverage=coverage, bazel=bazel, bazel_remote_cache=bazel_remote_cache
+    )
 
     wait_for_confluent(args.confluent_host)
 

@@ -32,7 +32,7 @@ from typing import Any
 
 import yaml
 
-from materialize import mzbuild, spawn
+from materialize import mzbuild, spawn, ui
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
 from materialize.rustc_flags import Sanitizer
@@ -89,6 +89,16 @@ so it is executed.""",
         default=os.getenv("CI_PRIORITY", 0),
     )
     parser.add_argument("pipeline", type=str)
+    parser.add_argument(
+        "--bazel",
+        default=ui.env_is_truthy("CI_BAZEL_BUILD"),
+        action="store_true",
+    )
+    parser.add_argument(
+        "--bazel-remote-cache",
+        default=os.getenv("CI_BAZEL_REMOTE_CACHE"),
+        action="store",
+    )
     args = parser.parse_args()
 
     print(f"Pipeline is: {args.pipeline}")
@@ -117,10 +127,22 @@ so it is executed.""",
             print(
                 "Repository glue code has changed, so the trimmed pipeline below does not apply"
             )
-            trim_tests_pipeline(copy.deepcopy(pipeline), args.coverage, args.sanitizer)
+            trim_tests_pipeline(
+                copy.deepcopy(pipeline),
+                args.coverage,
+                args.sanitizer,
+                args.bazel,
+                args.bazel_remote_cache,
+            )
         else:
             print("--- Trimming unchanged steps from pipeline")
-            trim_tests_pipeline(pipeline, args.coverage, args.sanitizer)
+            trim_tests_pipeline(
+                pipeline,
+                args.coverage,
+                args.sanitizer,
+                args.bazel,
+                args.bazel_remote_cache,
+            )
 
     if args.sanitizer != Sanitizer.none:
         pipeline.setdefault("env", {})["CI_SANITIZER"] = args.sanitizer.value
@@ -229,7 +251,9 @@ so it is executed.""",
 
     add_version_to_preflight_tests(pipeline)
 
-    trim_builds(pipeline, args.coverage, args.sanitizer)
+    trim_builds(
+        pipeline, args.coverage, args.sanitizer, args.bazel, args.bazel_remote_cache
+    )
 
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline and for coverage runs.
@@ -430,7 +454,13 @@ def trim_test_selection(pipeline: Any, steps_to_run: set[str]) -> None:
             step["skip"] = True
 
 
-def trim_tests_pipeline(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
+def trim_tests_pipeline(
+    pipeline: Any,
+    coverage: bool,
+    sanitizer: Sanitizer,
+    bazel: bool,
+    bazel_remote_cache: str,
+) -> None:
     """Trim pipeline steps whose inputs have not changed in this branch.
 
     Steps are assigned inputs in two ways:
@@ -444,7 +474,13 @@ def trim_tests_pipeline(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> 
     A step is trimmed if a) none of its inputs have changed, and b) there are
     no other untrimmed steps that depend on it.
     """
-    repo = mzbuild.Repository(Path("."), coverage=coverage, sanitizer=sanitizer)
+    repo = mzbuild.Repository(
+        Path("."),
+        coverage=coverage,
+        sanitizer=sanitizer,
+        bazel=bazel,
+        bazel_remote_cache=bazel_remote_cache,
+    )
     deps = repo.resolve_dependencies(image for image in repo)
 
     steps = OrderedDict()
@@ -546,7 +582,13 @@ def trim_tests_pipeline(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> 
     ]
 
 
-def trim_builds(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
+def trim_builds(
+    pipeline: Any,
+    coverage: bool,
+    sanitizer: Sanitizer,
+    bazel: bool,
+    bazel_remote_cache: str,
+) -> None:
     """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
     # Used to make sure we don't recalculate hashes since there are multiple
     # builds (Bazel, Cargo) at the moment
@@ -555,7 +597,12 @@ def trim_builds(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
     def get_deps(arch: Arch) -> tuple[mzbuild.DependencySet, bool]:
         if arch not in deps_check:
             repo = mzbuild.Repository(
-                Path("."), arch=arch, coverage=coverage, sanitizer=sanitizer
+                Path("."),
+                arch=arch,
+                coverage=coverage,
+                sanitizer=sanitizer,
+                bazel=bazel,
+                bazel_remote_cache=bazel_remote_cache,
             )
             deps = repo.resolve_dependencies(image for image in repo if image.publish)
             check = deps.check()

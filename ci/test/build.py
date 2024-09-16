@@ -31,7 +31,7 @@ DEBUGINFO_BINS = ["environmentd", "clusterd"]
 def main() -> None:
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
-    bazel = ui.env_is_truthy("CI_BUILD_WITH_BAZEL")
+    bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
     bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
 
     repo = mzbuild.Repository(

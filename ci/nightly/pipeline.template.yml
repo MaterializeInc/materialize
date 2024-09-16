@@ -11,7 +11,7 @@
 priority: 0
 
 env:
-  CI_BUILD_WITH_BAZEL: 1
+  CI_BAZEL_BUILD: 1
   CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
 
 steps:
@@ -67,7 +67,7 @@ steps:
     depends_on: []
     timeout_in_minutes: 600
     env:
-      CI_BUILD_WITH_BAZEL: 0
+      CI_BAZEL_BUILD: 0
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cargo-test

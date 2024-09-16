@@ -44,6 +44,8 @@ steps:
   $bootstrap_steps
   - wait
   - label: mkpipeline
+    env:
+      CI_BUILD_WTIH_BAZEL: 1
     command: bin/ci-builder run stable bin/pyactivate -m ci.mkpipeline $pipeline $@
     priority: 200
     agents:

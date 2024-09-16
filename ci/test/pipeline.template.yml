@@ -16,7 +16,7 @@ dag: true
 
 env:
   CI_BUILDER_SCCACHE: 1
-  CI_BUILD_WITH_BAZEL: 1
+  CI_BAZEL_BUILD: 1
   CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
   # Note: In .cargo/config we set the default build jobs to -1 so on developer machines we keep
   # a single core open when compiling. But we want to use all of CI's resources, hence setting the
@@ -33,7 +33,7 @@ steps:
       - id: rust-build-x86_64
         label: ":rust: Build x86_64"
         env:
-          CI_BUILD_WITH_BAZEL: 0
+          CI_BAZEL_BUILD: 0
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
@@ -46,7 +46,7 @@ steps:
       - id: rust-build-aarch64
         label: ":rust: Build aarch64"
         env:
-          CI_BUILD_WITH_BAZEL: 0
+          CI_BAZEL_BUILD: 0
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"

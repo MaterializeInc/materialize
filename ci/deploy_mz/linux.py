@@ -10,7 +10,7 @@
 import os
 from pathlib import Path
 
-from materialize import mzbuild, spawn
+from materialize import mzbuild, spawn, ui
 from materialize.mz_version import MzCliVersion
 from materialize.rustc_flags import Sanitizer
 
@@ -19,7 +19,16 @@ from .deploy_util import APT_BUCKET, MZ_CLI_VERSION
 
 
 def main() -> None:
-    repo = mzbuild.Repository(Path("."), coverage=False, sanitizer=Sanitizer.none)
+    bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
+    bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+
+    repo = mzbuild.Repository(
+        Path("."),
+        coverage=False,
+        sanitizer=Sanitizer.none,
+        bazel=bazel,
+        bazel_remote_cache=bazel_remote_cache,
+    )
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 
     print("--- Checking version")
