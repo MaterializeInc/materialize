@@ -119,6 +119,7 @@ optimizer_feature_flags!({
     reoptimize_imported_views: bool,
     // Enables the value window function fusion optimization.
     enable_value_window_function_fusion: bool,
+    enable_reduce_unnest_list_fusion: bool,
 });
 
 /// A trait used to implement layered config construction.

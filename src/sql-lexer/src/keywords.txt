@@ -342,6 +342,7 @@ Reassign
 Recursion
 Recursive
 Redacted
+Reduce
 Reference
 References
 Refresh
@@ -451,6 +452,7 @@ Uncommitted
 Union
 Unique
 Unknown
+Unnest
 Until
 Up
 Update

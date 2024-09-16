@@ -37,6 +37,8 @@ pub(super) struct Context {
     debug_info: LirDebugInfo,
     /// Whether to enable fusion of MFPs in reductions.
     enable_reduce_mfp_fusion: bool,
+    /// Whether to fuse `Reduce` with `FlatMap UnnestList` for better window function performance.
+    enable_reduce_unnest_list_fusion: bool,
 }
 
 impl Context {
@@ -49,6 +51,7 @@ impl Context {
                 id: GlobalId::Transient(0),
             },
             enable_reduce_mfp_fusion: features.enable_reduce_mfp_fusion,
+            enable_reduce_unnest_list_fusion: features.enable_reduce_unnest_list_fusion,
         }
     }
 
