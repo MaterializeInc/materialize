@@ -1363,11 +1363,6 @@ Snapshot {
     },
     configs: {
         ConfigKey {
-            key: "deploy_generation",
-        }: ConfigValue {
-            value: 0,
-        },
-        ConfigKey {
             key: "system_config_synced",
         }: ConfigValue {
             value: 0,

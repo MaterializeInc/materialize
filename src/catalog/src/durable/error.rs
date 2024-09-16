@@ -138,20 +138,6 @@ pub enum FenceError {
 }
 
 impl FenceError {
-    pub fn deploy_generation(current_generation: u64, fence_generation: u64) -> Self {
-        Self::DeployGeneration {
-            current_generation,
-            fence_generation,
-        }
-    }
-
-    pub fn epoch(current_epoch: Epoch, fence_epoch: Epoch) -> Self {
-        Self::Epoch {
-            current_epoch,
-            fence_epoch,
-        }
-    }
-
     pub fn migration(err: UpperMismatch<Timestamp>) -> Self {
         Self::MigrationUpper {
             expected_upper: antichain_to_timestamp(err.expected),
