@@ -804,6 +804,37 @@ where
         }
     }
 
+    /// Adds a batch of updates all at once. The caller takes responsibility for ensuring
+    /// that the data is appropriately chunked.
+    ///
+    /// The update timestamps must be greater or equal to `lower` that was given
+    /// when creating this [BatchBuilder].
+    pub async fn add_many(&mut self, updates: BlobTraceUpdates) -> Result<(), InvalidUsage<T>> {
+        for ts in updates.records().timestamps().iter().flatten() {
+            let ts = T::decode(ts.to_le_bytes());
+            if !self.lower.less_equal(&ts) {
+                return Err(InvalidUsage::UpdateNotBeyondLower {
+                    ts,
+                    lower: self.lower.clone(),
+                });
+            }
+
+            self.inclusive_upper.insert(Reverse(ts));
+        }
+
+        // If there have been any individual updates added, flush those first.
+        // This is a noop if there are no such updates... and at time of writing there
+        // never are, since no callers mix these two methods.
+        // TODO: consider moving the individual updates to BatchBuilder so we can
+        // avoid handling this case.
+        let previous = self.buffer.drain();
+        self.flush_part(previous).await;
+
+        self.flush_part(updates).await;
+
+        Ok(())
+    }
+
     /// Flushes the current part to Blob storage, first consolidating and then
     /// columnar encoding the updates. It is the caller's responsibility to
     /// chunk `current_part` to be no greater than

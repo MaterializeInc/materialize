@@ -721,9 +721,6 @@ where
                 metrics.compaction.not_all_prefetched.inc();
             }
 
-            // Reuse the allocations for individual keys and values
-            let mut key_vec = vec![];
-            let mut val_vec = vec![];
             loop {
                 let fetch_start = Instant::now();
                 let Some(updates) = consolidator
@@ -733,16 +730,7 @@ where
                     break;
                 };
                 timings.part_fetching += fetch_start.elapsed();
-                for ((k, v), t, d) in updates.records().iter() {
-                    key_vec.clear();
-                    key_vec.extend_from_slice(k);
-                    val_vec.clear();
-                    val_vec.extend_from_slice(v);
-                    crate::batch::validate_schema(&real_schemas, &key_vec, &val_vec, None, None);
-                    batch
-                        .add(&key_vec, &val_vec, &T::decode(t), &D::decode(d))
-                        .await?;
-                }
+                batch.add_many(updates).await?;
                 tokio::task::yield_now().await;
             }
         } else {
