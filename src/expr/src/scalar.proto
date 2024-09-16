@@ -132,7 +132,7 @@ message ProtoUnaryFunc {
         string format_string = 1;
         mz_expr.scalar.func.format.ProtoDateTimeFormat format = 2;
     }
-    reserved 5, 6, 15, 104, 111, 115, 212, 306, 313;
+    reserved 5, 6, 15, 104, 111, 115, 212, 306, 313, 321;
     oneof kind {
         google.protobuf.Empty not = 1;
         google.protobuf.Empty is_null = 2;
@@ -446,7 +446,6 @@ message ProtoUnaryFunc {
         mz_repr.adt.regex.ProtoRegex regexp_split_to_array = 305;
         mz_repr.relation_and_scalar.ProtoScalarType map_build_from_record_list = 317;
         google.protobuf.Empty initcap = 320;
-        google.protobuf.Empty cast_interval_to_mz_timestamp = 321;
         google.protobuf.Empty cast_mz_timestamp_to_timestamp = 322;
         google.protobuf.Empty cast_mz_timestamp_to_timestamp_tz = 323;
         google.protobuf.Empty pg_size_pretty = 324;
