@@ -413,9 +413,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
     /// Enqueue the given response for delivery to the controller clients.
     fn deliver_response(&mut self, response: ComputeControllerResponse<T>) {
-        self.response_tx
-            .send(response)
-            .expect("global controller never drops");
+        // Failure to send means the `ComputeController` has been dropped and doesn't care about
+        // responses anymore.
+        let _ = self.response_tx.send(response);
     }
 
     /// Enqueue the given introspection updates for recording.
@@ -424,9 +424,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         type_: IntrospectionType,
         updates: Vec<(Row, Diff)>,
     ) {
-        self.introspection_tx
-            .send((type_, updates))
-            .expect("global controller never drops");
+        // Failure to send means the `ComputeController` has been dropped and doesn't care about
+        // introspection updates anymore.
+        let _ = self.introspection_tx.send((type_, updates));
     }
 
     /// Returns whether the identified replica exists.
@@ -2326,17 +2326,9 @@ impl<T: ComputeControllerTimestamp> CollectionIntrospection<T> {
     }
 
     fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
-        let result = self.introspection_tx.send((introspection_type, updates));
-
-        if result.is_err() {
-            // The global controller holds on to the `introspection_rx`. So when we get here that
-            // probably means that the controller was dropped and the process is shutting down, in
-            // which case we don't care about introspection updates anymore.
-            tracing::info!(
-                ?introspection_type,
-                "discarding introspection update because the receiver disconnected"
-            );
-        }
+        // Failure to send means the `ComputeController` has been dropped and doesn't care about
+        // introspection updates anymore.
+        let _ = self.introspection_tx.send((introspection_type, updates));
     }
 }
 
@@ -2901,17 +2893,9 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
     }
 
     fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
-        let result = self.introspection_tx.send((introspection_type, updates));
-
-        if result.is_err() {
-            // The global controller holds on to the `introspection_rx`. So when we get here that
-            // probably means that the controller was dropped and the process is shutting down, in
-            // which case we don't care about introspection updates anymore.
-            tracing::info!(
-                ?introspection_type,
-                "discarding introspection update because the receiver disconnected"
-            );
-        }
+        // Failure to send means the `ComputeController` has been dropped and doesn't care about
+        // introspection updates anymore.
+        let _ = self.introspection_tx.send((introspection_type, updates));
     }
 }
 
