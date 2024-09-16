@@ -58,7 +58,7 @@ use crate::durable::objects::state_update::{
     IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
     TryIntoStateUpdateKind,
 };
-use crate::durable::objects::{AuditLogKey, Snapshot};
+use crate::durable::objects::{AuditLogKey, ConfigKey, ConfigValue, FenceToken, Snapshot};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
@@ -119,7 +119,7 @@ const UPGRADE_SEED: usize = 2;
 const BUILTIN_MIGRATION_SEED: usize = 3;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub(crate) enum Mode {
     /// Mutable operations are prohibited.
     Readonly,
@@ -129,66 +129,134 @@ pub(crate) enum Mode {
     Writable,
 }
 
-/// Enum representing a potentially fenced token.
+/// Enum representing the fenced state of the catalog.
 #[derive(Debug)]
-pub(crate) enum FenceableToken<T: Ord + Copy + Clone + Debug> {
-    /// The current token, if one exists, has not been fenced.
-    Unfenced {
-        current_token: Option<T>,
-        err_fn: fn(T, T) -> FenceError,
+pub(crate) enum FenceableToken {
+    /// The catalog is still initializing and learning about previously written fence tokens. This
+    /// state can be fenced if it encounters a larger deploy generation.
+    Initializing {
+        /// A deploy generation in the legacy format. Remove after one release.
+        legacy_durable_deploy_generation: Option<u64>,
+        /// An epoch in the legacy format. Remove after one release.
+        legacy_durable_epoch: Option<Epoch>,
+        /// The largest fence token durably written to the catalog, if any.
+        durable_token: Option<FenceToken>,
+        /// This process's deploy generation.
+        current_deploy_generation: Option<u64>,
     },
+    /// The current token has not been fenced.
+    Unfenced { current_token: FenceToken },
     /// The current token has been fenced.
-    Fenced { current_token: T, err: FenceError },
+    Fenced {
+        current_token: FenceToken,
+        fence_token: FenceToken,
+    },
 }
 
-impl<T: Ord + Copy + Clone + Debug> FenceableToken<T> {
-    /// Returns a new unfenced token.
-    fn new(token: Option<T>, err_fn: fn(T, T) -> FenceError) -> Self {
-        Self::Unfenced {
-            current_token: token,
-            err_fn,
+impl FenceableToken {
+    /// Returns a new token.
+    fn new(current_deploy_generation: Option<u64>) -> Self {
+        Self::Initializing {
+            legacy_durable_deploy_generation: None,
+            legacy_durable_epoch: None,
+            durable_token: None,
+            current_deploy_generation,
         }
     }
 
     /// Returns the current token if it is not fenced, otherwise returns an error.
-    fn validate(&self) -> Result<Option<T>, FenceError> {
+    fn validate(&self) -> Result<Option<FenceToken>, FenceError> {
         match self {
-            FenceableToken::Unfenced { current_token, .. } => Ok(current_token.clone()),
-            FenceableToken::Fenced { err, .. } => Err(err.clone()),
+            FenceableToken::Initializing { durable_token, .. } => Ok(durable_token.clone()),
+            FenceableToken::Unfenced { current_token, .. } => Ok(Some(current_token.clone())),
+            FenceableToken::Fenced {
+                current_token,
+                fence_token,
+            } => {
+                assert!(
+                    fence_token > current_token,
+                    "must be fenced by higher token; current={current_token:?}, fence={fence_token:?}"
+                );
+                if fence_token.deploy_generation > current_token.deploy_generation {
+                    Err(FenceError::DeployGeneration {
+                        current_generation: current_token.deploy_generation,
+                        fence_generation: fence_token.deploy_generation,
+                    })
+                } else {
+                    assert!(
+                        fence_token.epoch > current_token.epoch,
+                        "must be fenced by higher token; current={current_token:?}, fence={fence_token:?}"
+                    );
+                    Err(FenceError::Epoch {
+                        current_epoch: current_token.epoch,
+                        fence_epoch: fence_token.epoch,
+                    })
+                }
+            }
         }
     }
 
     /// Returns the current token.
-    fn token(&self) -> Option<T> {
+    fn token(&self) -> Option<FenceToken> {
         match self {
-            FenceableToken::Unfenced { current_token, .. } => current_token.clone(),
+            FenceableToken::Initializing { durable_token, .. } => durable_token.clone(),
+            FenceableToken::Unfenced { current_token, .. } => Some(current_token.clone()),
             FenceableToken::Fenced { current_token, .. } => Some(current_token.clone()),
         }
     }
 
-    /// Returns `Err` if `token` fences out `self`, `Ok` otherwise.
-    fn maybe_fence(&mut self, token: T) -> Result<(), FenceError> {
+    /// Returns the durable deploy generation.
+    fn durable_deploy_generation(&self) -> Option<u64> {
         match self {
-            FenceableToken::Unfenced {
-                current_token: Some(current_token),
-                err_fn,
+            FenceableToken::Initializing {
+                durable_token,
+                legacy_durable_deploy_generation,
+                ..
+            } => durable_token
+                .clone()
+                .map(|token| token.deploy_generation)
+                .or(legacy_durable_deploy_generation.clone()),
+            token => token.token().clone().map(|token| token.deploy_generation),
+        }
+    }
+
+    /// Returns `Err` if `token` fences out `self`, `Ok` otherwise.
+    fn maybe_fence(&mut self, token: FenceToken) -> Result<(), FenceError> {
+        match self {
+            FenceableToken::Initializing {
+                durable_token,
+                current_deploy_generation,
+                ..
             } => {
-                if token > *current_token {
+                match durable_token {
+                    Some(durable_token) => {
+                        *durable_token = max(durable_token.clone(), token.clone());
+                    }
+                    None => {
+                        *durable_token = Some(token.clone());
+                    }
+                }
+                if let Some(current_deploy_generation) = current_deploy_generation {
+                    if *current_deploy_generation < token.deploy_generation {
+                        *self = FenceableToken::Fenced {
+                            current_token: FenceToken {
+                                deploy_generation: *current_deploy_generation,
+                                epoch: token.epoch,
+                            },
+                            fence_token: token,
+                        };
+                        self.validate()?;
+                    }
+                }
+            }
+            FenceableToken::Unfenced { current_token } => {
+                if *current_token < token {
                     *self = FenceableToken::Fenced {
-                        current_token: *current_token,
-                        err: err_fn(*current_token, token),
+                        current_token: current_token.clone(),
+                        fence_token: token,
                     };
                     self.validate()?;
                 }
-            }
-            FenceableToken::Unfenced {
-                current_token: None,
-                err_fn,
-            } => {
-                *self = FenceableToken::Unfenced {
-                    current_token: Some(token),
-                    err_fn: *err_fn,
-                };
             }
             FenceableToken::Fenced { .. } => {
                 self.validate()?;
@@ -196,6 +264,156 @@ impl<T: Ord + Copy + Clone + Debug> FenceableToken<T> {
         }
 
         Ok(())
+    }
+
+    /// Update state when encountering a deploy generation in the legacy format.
+    ///
+    /// TODO(jkosh44) Remove after one release.
+    fn handle_legacy_delpoy_generation(&mut self, deploy_generation: u64, diff: Diff) {
+        let legacy_durable_deploy_generation = match self {
+            FenceableToken::Initializing {
+                legacy_durable_deploy_generation,
+                ..
+            } => legacy_durable_deploy_generation,
+            FenceableToken::Unfenced { current_token }
+            | FenceableToken::Fenced { current_token, .. } => {
+                assert!(deploy_generation <= current_token.deploy_generation, "saw legacy deploy generation after fencing out old versions: deploy generation: ({deploy_generation:?}, {diff:?}), {self:?}");
+                return;
+            }
+        };
+
+        match (&legacy_durable_deploy_generation, diff) {
+            (Some(current_deploy_generation), -1) => {
+                assert_eq!(*current_deploy_generation, deploy_generation);
+                *legacy_durable_deploy_generation = None;
+            }
+            (Some(current_deploy_generation), 1) => {
+                panic!("must retract deploy generation before adding new one: {current_deploy_generation:?}")
+            }
+            (None, -1) => panic!("must add deploy generation before retracting it"),
+            (None, 1) => {
+                *legacy_durable_deploy_generation = Some(deploy_generation);
+            }
+            (_, diff) => panic!("invalid diff: {diff}"),
+        }
+    }
+
+    /// Update state when encountering an epoch in the legacy format.
+    ///
+    /// TODO(jkosh44) Remove after one release.
+    fn handle_legacy_epoch(&mut self, epoch: Epoch, diff: Diff) {
+        let legacy_durable_epoch = match self {
+            FenceableToken::Initializing {
+                legacy_durable_epoch,
+                ..
+            } => legacy_durable_epoch,
+            FenceableToken::Unfenced { current_token }
+            | FenceableToken::Fenced { current_token, .. } => {
+                assert!(epoch <= current_token.epoch, "saw legacy epoch after fencing out old versions: epoch: ({epoch:?}, {diff:?}), {self:?}");
+                return;
+            }
+        };
+
+        match (&legacy_durable_epoch, diff) {
+            (Some(current_epoch), -1) => {
+                assert_eq!(*current_epoch, epoch);
+                *legacy_durable_epoch = None;
+            }
+            (Some(current_epoch), 1) => {
+                panic!("must retract epoch before adding new one: {current_epoch:?}")
+            }
+            (None, -1) => panic!("must add epoch before retracting it"),
+            (None, 1) => {
+                *legacy_durable_epoch = Some(epoch);
+            }
+            (_, diff) => panic!("invalid diff: {diff}"),
+        }
+    }
+
+    /// Returns a [`FenceableToken::Unfenced`] token and the updates to the catalog required to
+    /// transition to the `Unfenced` state if `self` is [`FenceableToken::Initializing`], otherwise
+    /// returns `None`.
+    fn generate_unfenced_token(
+        &self,
+        mode: Mode,
+    ) -> Result<Option<(Vec<(StateUpdateKind, Diff)>, FenceableToken)>, DurableCatalogError> {
+        let (
+            legacy_durable_deploy_generation,
+            legacy_durable_epoch,
+            durable_token,
+            current_deploy_generation,
+        ) = match self {
+            FenceableToken::Initializing {
+                legacy_durable_deploy_generation,
+                legacy_durable_epoch,
+                durable_token,
+                current_deploy_generation,
+            } => (
+                legacy_durable_deploy_generation.clone(),
+                legacy_durable_epoch.clone(),
+                durable_token.clone(),
+                current_deploy_generation.clone(),
+            ),
+            FenceableToken::Unfenced { .. } | FenceableToken::Fenced { .. } => return Ok(None),
+        };
+
+        if durable_token.is_some()
+            && (legacy_durable_epoch.is_some() || legacy_durable_deploy_generation.is_some())
+        {
+            panic!("can't have both a durable fence token and a durable legacy epoch/deploy_generation; token={durable_token:?}, epoch={legacy_durable_epoch:?}, deploy_generation={legacy_durable_deploy_generation:?}");
+        }
+
+        let mut fence_updates = Vec::with_capacity(3);
+
+        if let Some(legacy_durable_epoch) = legacy_durable_epoch {
+            fence_updates.push((StateUpdateKind::Epoch(legacy_durable_epoch), -1));
+        }
+        if let Some(legacy_durable_deploy_generation) = legacy_durable_deploy_generation {
+            fence_updates.push((
+                StateUpdateKind::Config(
+                    ConfigKey {
+                        key: DEPLOY_GENERATION.to_string(),
+                    }
+                    .into_proto(),
+                    ConfigValue {
+                        value: legacy_durable_deploy_generation,
+                    }
+                    .into_proto(),
+                ),
+                -1,
+            ));
+        }
+        if let Some(durable_token) = &durable_token {
+            fence_updates.push((StateUpdateKind::FenceToken(durable_token.clone()), -1));
+        }
+
+        let durable_token_deploy_generation =
+            durable_token.as_ref().map(|token| token.deploy_generation);
+        let current_deploy_generation = current_deploy_generation
+            .or(durable_token_deploy_generation)
+            .or(legacy_durable_deploy_generation)
+            // We cannot initialize a catalog without a deploy generation.
+            .ok_or(DurableCatalogError::Uninitialized)?;
+        let mut current_epoch = durable_token
+            .map(|token| token.epoch)
+            .or(legacy_durable_epoch)
+            .unwrap_or(MIN_EPOCH)
+            .get();
+        // Only writable catalogs attempt to increment the epoch.
+        if matches!(mode, Mode::Writable) {
+            current_epoch = current_epoch + 1;
+        }
+        let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
+        let current_token = FenceToken {
+            deploy_generation: current_deploy_generation,
+            epoch: current_epoch,
+        };
+
+        fence_updates.push((StateUpdateKind::FenceToken(current_token.clone()), 1));
+
+        let current_fenceable_token = FenceableToken::Unfenced { current_token };
+
+        Ok(Some((fence_updates, current_fenceable_token)))
     }
 }
 
@@ -242,8 +460,7 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
     fn apply_update(
         &mut self,
         update: StateUpdate<T>,
-        current_epoch: &mut FenceableToken<Epoch>,
-        current_deploy_generation: &mut FenceableToken<u64>,
+        current_fence_token: &mut FenceableToken,
         metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<T>>, FenceError>;
 }
@@ -283,14 +500,8 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     update_applier: U,
     /// The current upper of the persist shard.
     pub(crate) upper: Timestamp,
-    // TODO(jkosh44) Ideally the fencing token is a single totally ordered struct that contains
-    // both the deploy generation and the epoch. The deploy generation would be compared first and
-    // then the epoch. This would allow us to avoid tracking them separately and all the awkward
-    // implementations that come with it. However, that would require an annoying migration.
-    /// The deploy generation of the catalog, if one exists.
-    deploy_generation: FenceableToken<u64>,
-    /// The epoch of the catalog, if one exists.
-    epoch: FenceableToken<Epoch>,
+    /// The fence token of the catalog, if one exists.
+    fenceable_token: FenceableToken,
     /// The semantic version of the current binary.
     catalog_content_version: semver::Version,
     /// Metrics for the persist catalog.
@@ -373,12 +584,12 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                         .map(|update| (update, diff))
                 })
                 .collect();
-            let contains_retraction = parsed_updates
-                .iter()
-                .any(|(update, diff)| matches!(update, StateUpdateKind::Epoch(..)) && *diff == -1);
-            let contains_addition = parsed_updates
-                .iter()
-                .any(|(update, diff)| matches!(update, StateUpdateKind::Epoch(..)) && *diff == 1);
+            let contains_retraction = parsed_updates.iter().any(|(update, diff)| {
+                matches!(update, StateUpdateKind::FenceToken(..)) && *diff == -1
+            });
+            let contains_addition = parsed_updates.iter().any(|(update, diff)| {
+                matches!(update, StateUpdateKind::FenceToken(..)) && *diff == 1
+            });
             let contains_fence = contains_retraction && contains_addition;
             Some((contains_fence, updates))
         } else {
@@ -491,8 +702,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
     #[mz_ore::instrument(level = "debug")]
     async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), FenceError> {
-        self.deploy_generation.validate()?;
-        self.epoch.validate()?;
+        self.fenceable_token.validate()?;
 
         // Savepoint catalogs do not yet know how to update themselves in response to concurrent
         // writes from writer catalogs.
@@ -560,8 +770,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
             match self.update_applier.apply_update(
                 StateUpdate { kind, ts, diff },
-                &mut self.epoch,
-                &mut self.deploy_generation,
+                &mut self.fenceable_token,
                 &self.metrics,
             ) {
                 Ok(Some(StateUpdate { kind, ts, diff })) => self.snapshot.push((kind, ts, diff)),
@@ -796,8 +1005,7 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
     fn apply_update(
         &mut self,
         update: StateUpdate<StateUpdateKindJson>,
-        current_epoch: &mut FenceableToken<Epoch>,
-        current_deploy_generation: &mut FenceableToken<u64>,
+        current_fence_token: &mut FenceableToken,
         _metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKindJson>>, FenceError> {
         // TODO(jkosh44) It's a bit unfortunate that we have to clone all updates to attempt to
@@ -809,7 +1017,7 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
             match (kind, update.diff) {
                 (StateUpdateKind::Config(key, value), 1) => {
                     if key.key == DEPLOY_GENERATION {
-                        current_deploy_generation.maybe_fence(value.value)?;
+                        current_fence_token.handle_legacy_delpoy_generation(value.value, 1);
                     }
                     let prev = self.configs.insert(key.key, value.value);
                     assert_eq!(
@@ -818,6 +1026,9 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
                     );
                 }
                 (StateUpdateKind::Config(key, value), -1) => {
+                    if key.key == DEPLOY_GENERATION {
+                        current_fence_token.handle_legacy_delpoy_generation(value.value, -1);
+                    }
                     let prev = self.configs.remove(&key.key);
                     assert_eq!(
                         prev,
@@ -840,12 +1051,11 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
                         "retraction does not match existing value"
                     );
                 }
-                (StateUpdateKind::Epoch(epoch), 1) => {
-                    current_epoch.maybe_fence(epoch)?;
+                (StateUpdateKind::Epoch(epoch), diff) => {
+                    current_fence_token.handle_legacy_epoch(epoch, diff);
                 }
-                (StateUpdateKind::FenceToken(token), 1) => {
-                    current_deploy_generation.maybe_fence(token.deploy_generation)?;
-                    current_epoch.maybe_fence(token.epoch)?;
+                (StateUpdateKind::FenceToken(fence_token), 1) => {
+                    current_fence_token.maybe_fence(fence_token)?;
                 }
                 _ => {}
             }
@@ -965,8 +1175,7 @@ impl UnopenedPersistCatalogState {
             snapshot: Vec::new(),
             update_applier: UnopenedCatalogStateInner::new(organization_id),
             upper,
-            deploy_generation: FenceableToken::new(None, FenceError::deploy_generation),
-            epoch: FenceableToken::new(None, FenceError::epoch),
+            fenceable_token: FenceableToken::new(deploy_generation),
             catalog_content_version: version,
             metrics,
         };
@@ -980,24 +1189,6 @@ impl UnopenedPersistCatalogState {
             .into_iter()
             .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
         handle.apply_updates(updates)?;
-
-        let mut current_deploy_generation =
-            FenceableToken::new(deploy_generation, FenceError::deploy_generation);
-        match (
-            current_deploy_generation.token(),
-            handle.deploy_generation.token(),
-        ) {
-            (Some(_), Some(catalog_deploy_generation)) => {
-                current_deploy_generation.maybe_fence(catalog_deploy_generation)?;
-                handle.deploy_generation = current_deploy_generation;
-            }
-            (Some(_), None) => {
-                handle.deploy_generation = current_deploy_generation;
-            }
-            // If the provided `deploy_generation` is `None`, then we'll keep most recent
-            // deploy generation that we see in the catalog.
-            _ => {}
-        }
 
         // Validate that the binary version of the current process is not less than any binary
         // version that has written to the catalog.
@@ -1024,42 +1215,62 @@ impl UnopenedPersistCatalogState {
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.mode = mode;
+
+        // Validate the current deploy generation.
+        match (&self.mode, &self.fenceable_token) {
+            (_, FenceableToken::Unfenced { .. } | FenceableToken::Fenced { .. }) => {
+                return Err(DurableCatalogError::Internal(
+                    "catalog should not have fenced before opening".to_string(),
+                )
+                .into());
+            }
+            (
+                Mode::Writable | Mode::Savepoint,
+                FenceableToken::Initializing {
+                    current_deploy_generation: None,
+                    ..
+                },
+            ) => {
+                return Err(DurableCatalogError::Internal(format!(
+                    "cannot open in mode '{:?}' without a deploy generation",
+                    self.mode,
+                ))
+                .into());
+            }
+            _ => {}
+        }
+
         let read_only = matches!(self.mode, Mode::Readonly);
 
         // Fence out previous catalogs.
-        self.sync_to_current_upper().await?;
-        let prev_epoch = self.epoch.validate()?;
-        let mut fence_updates = Vec::with_capacity(2);
-        if let Some(prev_epoch) = prev_epoch {
-            fence_updates.push((StateUpdateKind::Epoch(prev_epoch), -1));
-        }
-        let mut current_epoch = prev_epoch.unwrap_or(MIN_EPOCH).get();
-        // Only writable catalogs attempt to increment the epoch.
-        if matches!(self.mode, Mode::Writable) {
-            current_epoch = current_epoch + 1;
-        }
-        let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
-        fence_updates.push((StateUpdateKind::Epoch(current_epoch), 1));
-        let current_epoch = FenceableToken::new(Some(current_epoch), FenceError::epoch);
-        debug!(
-            ?self.upper,
-            ?prev_epoch,
-            ?current_epoch,
-            "fencing previous catalogs"
-        );
-        self.epoch = current_epoch;
-        if matches!(self.mode, Mode::Writable) {
-            loop {
+        loop {
+            self.sync_to_current_upper().await?;
+            let (fence_updates, current_fenceable_token) = self
+                .fenceable_token
+                .generate_unfenced_token(self.mode)?
+                .ok_or_else(|| {
+                    DurableCatalogError::Internal(
+                        "catalog should not have fenced before opening".to_string(),
+                    )
+                })?;
+            debug!(
+                ?self.upper,
+                ?self.fenceable_token,
+                ?current_fenceable_token,
+                "fencing previous catalogs"
+            );
+            if matches!(self.mode, Mode::Writable) {
                 match self.compare_and_append(fence_updates.clone()).await {
-                    Ok(_) => break,
+                    Ok(_) => {}
                     Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
                     Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
                         warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
-                        self.sync_to_current_upper().await?;
                         continue;
                     }
                 }
             }
+            self.fenceable_token = current_fenceable_token;
+            break;
         }
 
         let is_initialized = self.is_initialized_inner();
@@ -1091,8 +1302,7 @@ impl UnopenedPersistCatalogState {
             persist_client: self.persist_client,
             shard_id: self.shard_id,
             upper: self.upper,
-            deploy_generation: self.deploy_generation,
-            epoch: self.epoch,
+            fenceable_token: self.fenceable_token,
             // Initialize empty in-memory state.
             snapshot: Vec::new(),
             update_applier: CatalogStateInner::new(),
@@ -1107,12 +1317,8 @@ impl UnopenedPersistCatalogState {
         catalog.apply_updates(updates)?;
 
         let catalog_content_version = catalog.catalog_content_version.to_string();
-        let deploy_generation = catalog.deploy_generation.token();
         let txn = if is_initialized {
             let mut txn = catalog.transaction().await?;
-            if deploy_generation.is_some() {
-                txn.set_config(DEPLOY_GENERATION.into(), deploy_generation)?;
-            }
             txn.set_catalog_content_version(catalog_content_version)?;
             txn
         } else {
@@ -1120,21 +1326,18 @@ impl UnopenedPersistCatalogState {
                 catalog
                     .snapshot
                     .iter()
-                    .filter(|(kind, _, _)| !matches!(kind, StateUpdateKind::Epoch(_)))
+                    .filter(|(kind, _, _)| !matches!(kind, StateUpdateKind::FenceToken(_)))
                     .count(),
                 0,
                 "trace should not contain any updates for an uninitialized catalog: {:#?}",
                 catalog.snapshot
             );
-            let Some(deploy_generation) = deploy_generation else {
-                return Err(CatalogError::Durable(DurableCatalogError::Uninitialized));
-            };
+
             let mut txn = catalog.transaction().await?;
             initialize::initialize(
                 &mut txn,
                 bootstrap_args,
                 initial_ts,
-                deploy_generation,
                 catalog_content_version,
             )
             .await?;
@@ -1291,15 +1494,17 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     #[mz_ore::instrument]
     async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
         self.sync_to_current_upper().await?;
-        self.epoch
+        self.fenceable_token
             .validate()?
+            .map(|token| token.epoch)
             .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
     }
 
     #[mz_ore::instrument]
     async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError> {
-        self.get_current_config(DEPLOY_GENERATION)
-            .await?
+        self.sync_to_current_upper().await?;
+        self.fenceable_token
+            .durable_deploy_generation()
             .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
     }
 
@@ -1404,8 +1609,7 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
     fn apply_update(
         &mut self,
         update: StateUpdate<StateUpdateKind>,
-        current_epoch: &mut FenceableToken<Epoch>,
-        current_deploy_generation: &mut FenceableToken<u64>,
+        current_fence_token: &mut FenceableToken,
         metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKind>>, FenceError> {
         if let Some(collection_type) = update.kind.collection_type() {
@@ -1429,23 +1633,22 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
             // Nothing to due for fence token retractions but wait for the next insertion.
             (StateUpdateKind::FenceToken(_), -1) => Ok(None),
             (StateUpdateKind::FenceToken(token), 1) => {
-                current_deploy_generation.maybe_fence(token.deploy_generation)?;
-                current_epoch.maybe_fence(token.epoch)?;
+                current_fence_token.maybe_fence(token)?;
                 Ok(None)
             }
-            // Nothing to due for epoch retractions but wait for the next insertion.
-            (StateUpdateKind::Epoch(_), -1) => Ok(None),
-            (StateUpdateKind::Epoch(epoch), 1) => {
-                current_epoch.maybe_fence(epoch)?;
+            (StateUpdateKind::Epoch(epoch), diff) => {
+                assert!(
+                    epoch <= current_fence_token.token().expect("catalog must have token after open").epoch,
+                    "Saw legacy deploy generation update after fencing: ({epoch:?}, {diff}), current: {current_fence_token:?}"
+                );
                 Ok(None)
             }
-            (StateUpdateKind::Config(key, value), diff @ 1) if key.key == DEPLOY_GENERATION => {
-                current_deploy_generation.maybe_fence(value.value)?;
-                Ok(Some(StateUpdate {
-                    kind: StateUpdateKind::Config(key, value),
-                    ts: update.ts,
-                    diff,
-                }))
+            (StateUpdateKind::Config(key, value), diff) if key.key == DEPLOY_GENERATION => {
+                assert!(
+                    value.value <= current_fence_token.token().expect("catalog must have token after open").deploy_generation,
+                    "Saw legacy deploy generation update after fencing: ({key:?}, {value:?}, {diff}), current: {current_fence_token:?}"
+                );
+                Ok(None)
             }
             (kind, diff) => Ok(Some(StateUpdate {
                 kind,
@@ -1466,9 +1669,10 @@ type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
 #[async_trait]
 impl ReadOnlyDurableCatalogState for PersistCatalogState {
     fn epoch(&self) -> Epoch {
-        self.epoch
+        self.fenceable_token
             .token()
             .expect("opened catalog state must have an epoch")
+            .epoch
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1829,8 +2033,6 @@ impl UnopenedPersistCatalogState {
         T::Key: PartialEq + Eq + Debug + Clone,
         T::Value: Debug + Clone,
     {
-        // We must fence out all other catalogs since we are writing.
-        let fence_updates = self.increment_epoch()?;
         let prev_value = loop {
             let key = key.clone();
             let value = value.clone();
@@ -1857,13 +2059,27 @@ impl UnopenedPersistCatalogState {
                 .map(|((k, v), _, _)| (T::update(k, v), -1))
                 .collect();
             updates.push((T::update(key, value), 1));
-            updates.extend(fence_updates.clone());
-            match self.compare_and_append(updates).await {
-                Ok(_) => break prev_value,
-                Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
-                Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
-                    warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
-                    continue;
+            // We must fence out all other catalogs, if we haven't already, since we are writing.
+            match self.fenceable_token.generate_unfenced_token(self.mode)? {
+                Some((fence_updates, current_fenceable_token)) => {
+                    updates.extend(fence_updates.clone());
+                    match self.compare_and_append(updates).await {
+                        Ok(_) => {
+                            self.fenceable_token = current_fenceable_token;
+                            break prev_value;
+                        }
+                        Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
+                        Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
+                            warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
+                            continue;
+                        }
+                    }
+                }
+                None => {
+                    self.compare_and_append(updates)
+                        .await
+                        .map_err(|e| e.unwrap_fence_error())?;
+                    break prev_value;
                 }
             }
         };
@@ -1880,8 +2096,6 @@ impl UnopenedPersistCatalogState {
         T::Key: PartialEq + Eq + Debug + Clone,
         T::Value: Debug,
     {
-        // We must fence out all other catalogs since we are writing.
-        let fence_updates = self.increment_epoch()?;
         loop {
             let key = key.clone();
             let snapshot = self.current_snapshot().await?;
@@ -1896,13 +2110,28 @@ impl UnopenedPersistCatalogState {
                 })
                 .map(|((k, v), _, _)| (T::update(k, v), -1))
                 .collect();
-            retractions.extend(fence_updates.clone());
-            match self.compare_and_append(retractions).await {
-                Ok(_) => break,
-                Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
-                Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
-                    warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
-                    continue;
+
+            // We must fence out all other catalogs, if we haven't already, since we are writing.
+            match self.fenceable_token.generate_unfenced_token(self.mode)? {
+                Some((fence_updates, current_fenceable_token)) => {
+                    retractions.extend(fence_updates.clone());
+                    match self.compare_and_append(retractions).await {
+                        Ok(_) => {
+                            self.fenceable_token = current_fenceable_token;
+                            break;
+                        }
+                        Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
+                        Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
+                            warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
+                            continue;
+                        }
+                    }
+                }
+                None => {
+                    self.compare_and_append(retractions)
+                        .await
+                        .map_err(|e| e.unwrap_fence_error())?;
+                    break;
                 }
             }
         }
@@ -1922,22 +2151,5 @@ impl UnopenedPersistCatalogState {
             let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
             StateUpdate { kind, ts, diff }
         }))
-    }
-
-    /// Increment `self.epoch` and return the updates needed to make this change durable.
-    ///
-    /// The caller is expected to compare and append these updates promptly.
-    fn increment_epoch(&mut self) -> Result<[(StateUpdateKind, Diff); 2], DurableCatalogError> {
-        let current_epoch = self
-            .epoch
-            .validate()?
-            .expect("cannot edit/delete from unopened catalog");
-        let next_epoch =
-            Epoch::new(current_epoch.get() + 1).expect("non-zero epoch plus 1 is always non-zero");
-        self.epoch = FenceableToken::new(Some(next_epoch), FenceError::epoch);
-        Ok([
-            (StateUpdateKind::Epoch(current_epoch), -1),
-            (StateUpdateKind::Epoch(next_epoch), 1),
-        ])
     }
 }
