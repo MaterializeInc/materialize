@@ -574,8 +574,8 @@ steps:
               composition: platform-checks
               args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-backup-multi
-        label: "Checks + multiple backups/restores %N"
+      - id: checks-backup-rollback
+        label: "Checks + backup + rollback to previous %N"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -584,7 +584,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=BackupAndRestoreMulti, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=BackupAndRestoreToPreviousState, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-drop-create-default-replica
         label: "Checks parallel + DROP/CREATE replica %N"
