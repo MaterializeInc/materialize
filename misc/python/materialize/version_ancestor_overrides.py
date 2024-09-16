@@ -14,21 +14,18 @@ from typing import Any
 
 from materialize.mz_version import MzVersion
 
-"""
-Git revisions that are based on commits listed as keys require at least the version specified in the value.
-Note that specified versions do not necessarily need to be already published.
-Commits must be ordered descending by their date.
-"""
-
 
 def get_ancestor_overrides_for_performance_regressions(
     scenario_class: type[Any], scale: str | None
 ) -> dict[str, MzVersion]:
+    """
+    Git revisions that are based on commits listed as keys require at least the version specified in the value.
+    Note that specified versions do not necessarily need to be already published.
+    Commits must be ordered descending by their date.
+    """
+
     scenario_class_name = scenario_class.__name__
 
-    # Git revisions that are based on commits listed as keys require at least the version specified in the value.
-    # Note that specified versions do not necessarily need to be already published.
-    # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
     if scenario_class_name in (
@@ -140,11 +137,6 @@ def get_ancestor_overrides_for_performance_regressions(
     return min_ancestor_mz_version_per_commit
 
 
-"""
-Git revisions that are based on commits listed as keys require at least the version specified in the value.
-Note that specified versions do not necessarily need to be already published.
-Commits must be ordered descending by their date.
-"""
 _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_SCALABILITY_REGRESSIONS: dict[
     str, MzVersion
 ] = {
@@ -157,10 +149,12 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_SCALABILITY_REGRESSIONS: dict
     "5179ebd39aea4867622357a832aaddcde951b411": MzVersion.parse_mz("v0.79.0"),
     # insert newer commits at the top
 }
+"""
+Git revisions that are based on commits listed as keys require at least the version specified in the value.
+Note that specified versions do not necessarily need to be already published.
+Commits must be ordered descending by their date.
+"""
 
-"""
-See: #_MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_PERFORMANCE_REGRESSIONS
-"""
 _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_CORRECTNESS_REGRESSIONS: dict[
     str, MzVersion
 ] = {
@@ -170,6 +164,9 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_CORRECTNESS_REGRESSIONS: dict
     # PR#24497 (Make sure variance never returns a negative number) changes DFR or CTF handling compared to v0.84.0
     "82a5130a8466525c5b3bdb3eff845c7c34585774": MzVersion.parse_mz("v0.85.0"),
 }
+"""
+See: #_MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_PERFORMANCE_REGRESSIONS
+"""
 
 ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS = (
     _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_SCALABILITY_REGRESSIONS
