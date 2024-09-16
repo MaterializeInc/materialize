@@ -1212,7 +1212,7 @@ class Repository:
         )
         parser.add_argument(
             "--bazel",
-            default=ui.env_is_truthy("CI_BUILD_WITH_BAZEL"),
+            default=ui.env_is_truthy("CI_BAZEL_BUILD"),
             action="store_true",
         )
         parser.add_argument(
