@@ -18,7 +18,7 @@ run_args=(
     "--junitxml=junit_cloudtest_$BUILDKITE_JOB_ID.xml"
 )
 
-test_parallelism=false
+test_parallelism=true
 if read_list BUILDKITE_PLUGIN_CLOUDTEST_ARGS; then
     for arg in "${result[@]}"; do
         if [[ "$arg" == "--no-test-parallelism" ]]; then
