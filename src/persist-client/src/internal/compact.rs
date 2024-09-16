@@ -724,7 +724,10 @@ where
             loop {
                 let fetch_start = Instant::now();
                 let Some(updates) = consolidator
-                    .next_chunk(cfg.compaction_yield_after_n_updates)
+                    .next_chunk(
+                        cfg.compaction_yield_after_n_updates,
+                        cfg.batch.blob_target_size,
+                    )
                     .await?
                 else {
                     break;
