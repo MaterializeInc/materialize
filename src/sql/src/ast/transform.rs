@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::str::StrExt;
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::CreateTableFromSourceStatement;
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
@@ -43,6 +44,7 @@ pub fn create_stmt_rename_schema_refs(
         | stmt @ Statement::CreateView(_)
         | stmt @ Statement::CreateMaterializedView(_)
         | stmt @ Statement::CreateTable(_)
+        | stmt @ Statement::CreateTableFromSource(_)
         | stmt @ Statement::CreateIndex(_)
         | stmt @ Statement::CreateType(_)
         | stmt @ Statement::CreateSecret(_) => {
@@ -147,6 +149,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
         })
         | Statement::CreateMaterializedView(CreateMaterializedViewStatement { name, .. })
         | Statement::CreateTable(CreateTableStatement { name, .. })
+        | Statement::CreateTableFromSource(CreateTableFromSourceStatement { name, .. })
         | Statement::CreateSecret(CreateSecretStatement { name, .. })
         | Statement::CreateConnection(CreateConnectionStatement { name, .. })
         | Statement::CreateWebhookSource(CreateWebhookSourceStatement { name, .. }) => {
@@ -206,6 +209,7 @@ pub fn create_stmt_rename_refs(
         Statement::CreateSource(_)
         | Statement::CreateSubsource(_)
         | Statement::CreateTable(_)
+        | Statement::CreateTableFromSource(_)
         | Statement::CreateSecret(_)
         | Statement::CreateConnection(_)
         | Statement::CreateWebhookSource(_) => {}
