@@ -1348,6 +1348,7 @@ where
 
     pub fn compare_and_downgrade_since<O: Opaque + Codec64>(
         &mut self,
+        shard_id: ShardId,
         reader_id: &CriticalReaderId,
         expected_opaque: &O,
         (new_opaque, new_since): (&O, &Antichain<T>),
@@ -1384,6 +1385,7 @@ where
             self.update_since();
             Continue(Ok(Since(new_since.clone())))
         } else {
+            info!("LOOK: Oops, I'm not actually updating the opaque value for {shard_id}");
             // no work to be done -- the reader state's `since` is already sufficiently
             // advanced. we may someday need to revisit this branch when it's possible
             // for two `since` frontiers to be incomparable.

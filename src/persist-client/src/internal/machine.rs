@@ -682,11 +682,13 @@ where
         (new_opaque, new_since): (&O, &Antichain<T>),
     ) -> (Result<Since<T>, (O, Since<T>)>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
+        let shard_id = self.shard_id();
         let (_seqno, res, maintenance) = self
             .apply_unbatched_idempotent_cmd(
                 &metrics.cmds.compare_and_downgrade_since,
                 |_seqno, _cfg, state| {
                     state.compare_and_downgrade_since::<O>(
+                        shard_id,
                         reader_id,
                         expected_opaque,
                         (new_opaque, new_since),
