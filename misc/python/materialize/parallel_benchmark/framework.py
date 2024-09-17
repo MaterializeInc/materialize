@@ -16,7 +16,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from textwrap import dedent
 
-import pg8000
+import psycopg
 
 from materialize.mzcompose.composition import Composition
 from materialize.util import PgConnInfo
@@ -41,10 +41,10 @@ class State:
     periodic_dists: dict[str, int]
 
 
-def execute_query(cur: pg8000.Cursor, query: str) -> None:
+def execute_query(cur: psycopg.Cursor, query: str) -> None:
     while True:
         try:
-            cur.execute(query)
+            cur.execute(query.encode("utf-8"))
             break
         except Exception as e:
             if "deadlock detected" in str(e):
@@ -318,6 +318,9 @@ def run_job(jobs: queue.Queue) -> None:
 
 
 class Scenario:
+    # Has to be set for the class already, not just in the constructor, so that
+    # we can change the value for the entire class in the decorator
+    enabled: bool = True
     phases: list[Phase]
     thread_pool_size: int
     conn_pool_size: int
@@ -382,3 +385,11 @@ class Scenario:
         for thread in self.thread_pool:
             thread.join()
         self.jobs.join()
+
+
+def disabled(ignore_reason: str):
+    def decorator(cls):
+        cls.enabled = False
+        return cls
+
+    return decorator

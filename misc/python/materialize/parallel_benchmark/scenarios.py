@@ -21,6 +21,7 @@ from materialize.parallel_benchmark.framework import (
     StandaloneQuery,
     TdAction,
     TdPhase,
+    disabled,
 )
 from materialize.util import PgConnInfo
 
@@ -749,6 +750,9 @@ class OperationalDataMesh(Scenario):
         )
 
 
+@disabled(
+    "Not well suited to measure regressions since too many queries are running at once"
+)
 class ReadReplicaBenchmark(Scenario):
     # We might want to run a full version of rr-bench instead, this is not a
     # very realistic representation of it but might already help us catch some
