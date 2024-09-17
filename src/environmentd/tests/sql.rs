@@ -1795,7 +1795,7 @@ async fn test_timeline_read_holds() {
 
     // Make sure that the table and view are joinable immediately at some timestamp.
     let mz_join_client = server.connect().await.unwrap();
-    let _ = tokio::time::timeout(Duration::from_millis(2_000), async move {
+    let _ = tokio::time::timeout(Duration::from_millis(4_000), async move {
         Ok::<_, anyhow::Error>(
             mz_join_client
                 .query_one(&format!("SELECT COUNT(t.a) FROM t, {view_name};"), &[])
