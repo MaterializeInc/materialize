@@ -512,7 +512,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         report = Report(cycle_number=cycle_number)
 
-        scenarios_with_regressions = []
+        scenarios_to_retry = []
         for scenario in scenarios_to_run:
             scenario_name = scenario.__name__
             comparators = run_one_scenario(c, scenario, args)
@@ -522,9 +522,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             report.add_comparisons(comparators)
 
-            # Do not retry the scenario if no regressions
-            if _shall_retry_scenario(scenario, comparators, cycle_index):
-                scenarios_with_regressions.append(scenario)
+            if is_regression(comparators):
+                if _shall_retry_scenario(comparators, cycle_index):
+                    scenarios_to_retry.append(scenario)
+                else:
+                    scenarios_with_regressions.append(scenario)
 
             if cycle_index > 0:
                 discarded_reports_of_scenario = discarded_reports_by_scenario_name.get(
@@ -542,7 +544,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             print(f"+++ Benchmark Report for cycle {cycle_number}:")
             print(report)
 
-        scenarios_to_run = scenarios_with_regressions
+        scenarios_to_run = scenarios_to_retry
         if len(scenarios_to_run) == 0:
             break
 
@@ -609,9 +611,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
 
-def _shall_retry_scenario(
-    scenario: type[Scenario], comparators: list[Comparator], cycle_index: int
-) -> bool:
+def is_regression(comparators: list[Comparator]) -> bool:
+    return any([c.is_regression() for c in comparators])
+
+
+def _shall_retry_scenario(comparators: list[Comparator], cycle_index: int) -> bool:
     return any(
         [
             c.is_regression() and not (c.is_strong_regression() and cycle_index >= 2)
