@@ -24,13 +24,14 @@ class LoadGeneratorAsOfUpTo(Check):
                 """
             > CREATE SOURCE counter1 FROM LOAD GENERATOR COUNTER (AS OF 100, UP TO 200);
 
-            > CREATE SOURCE auction1 FROM LOAD GENERATOR AUCTION (AS OF 100, UP TO 200);
+            >[version<11700] CREATE SOURCE auction1 FROM LOAD GENERATOR AUCTION (AS OF 100, UP TO 200) FOR ALL TABLES;
 
-            > CREATE TABLE accounts FROM SOURCE auction1 (REFERENCE accounts);
-            > CREATE TABLE auctions FROM SOURCE auction1 (REFERENCE auctions);
-            > CREATE TABLE bids FROM SOURCE auction1 (REFERENCE bids);
-            > CREATE TABLE organizations FROM SOURCE auction1 (REFERENCE organizations);
-            > CREATE TABLE users FROM SOURCE auction1 (REFERENCE users);
+            >[version>=11700] CREATE SOURCE auction1 FROM LOAD GENERATOR AUCTION (AS OF 100, UP TO 200);
+            >[version>=11700] CREATE TABLE accounts FROM SOURCE auction1 (REFERENCE accounts);
+            >[version>=11700] CREATE TABLE auctions FROM SOURCE auction1 (REFERENCE auctions);
+            >[version>=11700] CREATE TABLE bids FROM SOURCE auction1 (REFERENCE bids);
+            >[version>=11700] CREATE TABLE organizations FROM SOURCE auction1 (REFERENCE organizations);
+            >[version>=11700] CREATE TABLE users FROM SOURCE auction1 (REFERENCE users);
         """
             )
         )

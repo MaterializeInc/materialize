@@ -44,17 +44,25 @@ class SourceErrors(Check):
                   USER source_errors_user1,
                   PASSWORD SECRET source_errors_secret
 
-                > CREATE SOURCE source_errors_sourceA
+                >[version<11700] CREATE SOURCE source_errors_sourceA
                   FROM POSTGRES CONNECTION source_errors_connection
                   (PUBLICATION 'source_errors_publicationa') /* all lowercase */
+                  FOR TABLES (source_errors_table AS source_errors_tableA)
 
-                > CREATE TABLE source_errors_tableA FROM SOURCE source_errors_sourceA (REFERENCE source_errors_table);
+                >[version>=11700] CREATE SOURCE source_errors_sourceA
+                  FROM POSTGRES CONNECTION source_errors_connection
+                  (PUBLICATION 'source_errors_publicationa') /* all lowercase */
+                >[version>=11700] CREATE TABLE source_errors_tableA FROM SOURCE source_errors_sourceA (REFERENCE source_errors_table);
 
-                > CREATE SOURCE source_errors_sourceB
+                >[version<11700] CREATE SOURCE source_errors_sourceB
                   FROM POSTGRES CONNECTION source_errors_connection
                   (PUBLICATION 'source_errors_publicationb') /* all lowercase */
+                  FOR TABLES (source_errors_table AS source_errors_tableB)
 
-                > CREATE TABLE source_errors_tableB FROM SOURCE source_errors_sourceB (REFERENCE source_errors_table);
+                >[version>=11700] CREATE SOURCE source_errors_sourceB
+                  FROM POSTGRES CONNECTION source_errors_connection
+                  (PUBLICATION 'source_errors_publicationb') /* all lowercase */
+                >[version>=11700] CREATE TABLE source_errors_tableB FROM SOURCE source_errors_sourceB (REFERENCE source_errors_table);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO source_errors_table VALUES (2);
