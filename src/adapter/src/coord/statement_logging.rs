@@ -593,10 +593,10 @@ impl Coordinator {
     pub fn pack_statement_ended_execution_updates(
         began_record: &StatementBeganExecutionRecord,
         ended_record: &StatementEndedExecutionRecord,
-    ) -> Vec<(Row, Diff)> {
+    ) -> [(Row, Diff); 2] {
         let retraction = Self::pack_statement_began_execution_update(began_record);
         let new = Self::pack_full_statement_execution_update(began_record, ended_record);
-        vec![(retraction, -1), (new, 1)]
+        [(retraction, -1), (new, 1)]
     }
 
     /// Mutate a statement execution record via the given function `f`.
