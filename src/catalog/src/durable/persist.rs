@@ -220,6 +220,21 @@ impl FenceableToken {
         }
     }
 
+    /// Returns the durable epoch.
+    fn durable_epoch(&self) -> Option<Epoch> {
+        match self {
+            FenceableToken::Initializing {
+                durable_token,
+                legacy_durable_epoch,
+                ..
+            } => durable_token
+                .clone()
+                .map(|token| token.epoch)
+                .or(legacy_durable_epoch.clone()),
+            token => token.token().clone().map(|token| token.epoch),
+        }
+    }
+
     /// Returns `Err` if `token` fences out `self`, `Ok` otherwise.
     fn maybe_fence(&mut self, token: FenceToken) -> Result<(), FenceError> {
         match self {
@@ -1670,9 +1685,8 @@ type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
 impl ReadOnlyDurableCatalogState for PersistCatalogState {
     fn epoch(&self) -> Epoch {
         self.fenceable_token
-            .token()
+            .durable_epoch()
             .expect("opened catalog state must have an epoch")
-            .epoch
     }
 
     #[mz_ore::instrument(level = "debug")]
