@@ -22,4 +22,5 @@ CREATE TABLE output_consistency_stats (
    count_used_ops UINT4 NOT NULL
 );
 
+ALTER TABLE output_consistency_stats OWNER TO qa;
 GRANT SELECT, INSERT, UPDATE ON TABLE output_consistency_stats TO "hetzner-ci";

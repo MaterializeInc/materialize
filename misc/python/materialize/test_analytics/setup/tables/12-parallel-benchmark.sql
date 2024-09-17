@@ -34,4 +34,5 @@ CREATE TABLE parallel_benchmark_result (
    slope DOUBLE NOT NULL
 );
 
+ALTER TABLE parallel_benchmark_result OWNER TO qa;
 GRANT SELECT, INSERT, UPDATE ON TABLE parallel_benchmark_result TO "hetzner-ci";

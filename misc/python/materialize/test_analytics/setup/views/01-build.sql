@@ -84,3 +84,9 @@ GROUP BY
     b.branch,
     b.build_id,
     b.build_number;
+
+ALTER VIEW v_count_builds_per_week OWNER TO qa;
+ALTER VIEW v_count_builds_per_mz_version OWNER TO qa;
+ALTER VIEW v_last_build_per_week OWNER TO qa;
+ALTER VIEW v_most_recent_build OWNER TO qa;
+ALTER VIEW v_build_success OWNER TO qa;
