@@ -1378,9 +1378,9 @@ where
             )));
         }
 
+        reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
         if PartialOrder::less_equal(&reader_state.since, new_since) {
             reader_state.since.clone_from(new_since);
-            reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
             self.update_since();
             Continue(Ok(Since(new_since.clone())))
         } else {
