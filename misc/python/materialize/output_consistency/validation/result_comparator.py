@@ -42,7 +42,7 @@ class ResultComparator:
     def __init__(
         self,
         ignore_filter: GenericInconsistencyIgnoreFilter,
-        error_message_normalizer: ErrorMessageNormalizer = ErrorMessageNormalizer(),
+        error_message_normalizer: ErrorMessageNormalizer,
     ):
         self.ignore_filter = ignore_filter
         self.error_message_normalizer = error_message_normalizer
