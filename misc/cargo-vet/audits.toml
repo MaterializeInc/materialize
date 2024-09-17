@@ -462,7 +462,7 @@ version = "3.0.4"
 [[audits.jemalloc_pprof]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.4.2"
+version = "0.6.0"
 
 [[audits.json-patch]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
@@ -582,7 +582,7 @@ version = "0.11.3"
 [[audits.mappings]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.5.1"
+version = "0.6.0"
 
 [[audits.memchr]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -841,7 +841,7 @@ importable = false
 [[audits.pprof_util]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.4.0"
+version = "0.6.0"
 
 [[audits.proc-macro2]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"

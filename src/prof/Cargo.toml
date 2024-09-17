@@ -14,14 +14,14 @@ workspace = true
 anyhow = "1.0.66"
 backtrace = "0.3.66"
 flate2 = "1.0.24"
-jemalloc_pprof = { version = "0.4", optional = true }
-pprof_util = "0.4"
+jemalloc_pprof = { version = "0.6", optional = true }
+pprof_util = "0.6"
 libc = "0.2.138"
 mz-ore = { path = "../ore", default-features = false }
 pprof = "0.11.1"
 prost = { version = "0.13.1", features = ["no-recursion-limit"] }
 tempfile = "3.8.1"
-tikv-jemalloc-ctl = { version = "0.5.0", features = ["use_std"], optional = true }
+tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
 tracing = "0.1.37"
 tokio = { version = "1.38.0", features = ["time"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
