@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{ENABLE_0DT_DEPLOYMENT, WITH_0DT_DEPLOYMENT_MAX_WAIT};
+use mz_adapter_types::dyncfgs::{
+    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+};
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
     ObjectType, SchedulingDecisionsWithReasonsV1, VersionedEvent,
@@ -1974,6 +1976,10 @@ impl Catalog {
                         Duration::parse(VarInput::Flat(&parsed_value))
                             .expect("parsing succeeded above");
                     tx.set_0dt_deployment_max_wait(with_0dt_deployment_max_wait)?;
+                } else if name == ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name() {
+                    let panic_after_timeout =
+                        strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
+                    tx.set_enable_0dt_deployment_panic_after_timeout(panic_after_timeout)?;
                 }
 
                 CatalogState::add_to_audit_log(

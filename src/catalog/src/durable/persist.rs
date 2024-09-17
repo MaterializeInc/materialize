@@ -50,8 +50,8 @@ use uuid::Uuid;
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
 use crate::durable::error::FenceError;
 use crate::durable::initialize::{
-    DEPLOY_GENERATION, ENABLE_0DT_DEPLOYMENT, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
-    WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    DEPLOY_GENERATION, ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
+    SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use crate::durable::metrics::Metrics;
 use crate::durable::objects::state_update::{
@@ -1327,6 +1327,26 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         match value {
             None => Ok(None),
             Some(millis) => Ok(Some(Duration::from_millis(millis))),
+        }
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn get_enable_0dt_deployment_panic_after_timeout(
+        &mut self,
+    ) -> Result<Option<bool>, CatalogError> {
+        let value = self
+            .get_current_config(ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)
+            .await?;
+        match value {
+            None => Ok(None),
+            Some(0) => Ok(Some(false)),
+            Some(1) => Ok(Some(true)),
+            Some(v) => Err(
+                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(format!(
+                    "{v} is not a valid boolean value"
+                )))
+                .into(),
+            ),
         }
     }
 

@@ -72,6 +72,7 @@ def get_default_system_parameters(
         "compute_hydration_concurrency": "2",
         "disk_cluster_replicas_default": "true",
         "enable_0dt_deployment": "true" if zero_downtime else "false",
+        "enable_0dt_deployment_panic_after_timeout": "true",
         "enable_alter_swap": "true",
         "enable_assert_not_null": "true",
         "enable_columnation_lgalloc": "true",
@@ -133,7 +134,7 @@ def get_default_system_parameters(
         "storage_use_reclock_v2": "true",
         "timestamp_oracle": "postgres",
         "wait_catalog_consolidation_on_startup": "true",
-        "with_0dt_deployment_max_wait": "100d",  # forever, time out and fail test!
+        "with_0dt_deployment_max_wait": "300s",
         # End of list (ordered by name)
     }
 

@@ -37,7 +37,8 @@ use mz_storage_types::controller::StorageError;
 
 use crate::builtin::BuiltinLog;
 use crate::durable::initialize::{
-    ENABLE_0DT_DEPLOYMENT, SYSTEM_CONFIG_SYNCED_KEY, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, SYSTEM_CONFIG_SYNCED_KEY,
+    WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
@@ -1616,6 +1617,21 @@ impl<'a> Transaction<'a> {
         )
     }
 
+    /// Updates the catalog `0dt_deployment_panic_after_timeout` "config" value to
+    /// match the `0dt_deployment_panic_after_timeout` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with Launch Darkly,
+    /// but use it in boot before Launch Darkly is available.
+    pub fn set_enable_0dt_deployment_panic_after_timeout(
+        &mut self,
+        value: bool,
+    ) -> Result<(), CatalogError> {
+        self.set_config(
+            ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.into(),
+            Some(u64::from(value)),
+        )
+    }
+
     /// Removes the catalog `enable_0dt_deployment` "config" value to
     /// match the `enable_0dt_deployment` "system var" value.
     ///
@@ -1632,6 +1648,16 @@ impl<'a> Transaction<'a> {
     /// but use it in boot before LaunchDarkly is available.
     pub fn reset_0dt_deployment_max_wait(&mut self) -> Result<(), CatalogError> {
         self.set_config(WITH_0DT_DEPLOYMENT_MAX_WAIT.into(), None)
+    }
+
+    /// Removes the catalog `enable_0dt_deployment_panic_after_timeout` "config"
+    /// value to match the `enable_0dt_deployment_panic_after_timeout` "system
+    /// var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with LaunchDarkly, but
+    /// use it in boot before LaunchDarkly is available.
+    pub fn reset_enable_0dt_deployment_panic_after_timeout(&mut self) -> Result<(), CatalogError> {
+        self.set_config(ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.into(), None)
     }
 
     /// Updates the catalog `system_config_synced` "config" value to true.
