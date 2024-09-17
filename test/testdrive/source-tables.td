@@ -324,29 +324,28 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 > CREATE SOURCE avro_source
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}');
 
-# TODO: #29562 (panic)
-# > CREATE TABLE avro_table_upsert FROM SOURCE avro_source (REFERENCE "testdrive-avroavro-${testdrive.seed}")
-#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-#   ENVELOPE UPSERT
-#
-# > CREATE TABLE avro_table_append FROM SOURCE avro_source (REFERENCE "testdrive-avroavro-${testdrive.seed}")
-#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-#   ENVELOPE NONE
-#
-# > SELECT * from avro_table_upsert
-# key           f1       f2
-# ---------------------------
-# fish          fish     1000
-# birdmore      geese    56
-# mammalmore    moose    2
-#
-# > SELECT * from avro_table_append
-# f1       f2
-# ---------------
-# fish     1000
-# geese    2
-# geese    56
-# goose    1
-# moose    1
-# moose    2
-# moose    42
+> CREATE TABLE avro_table_upsert FROM SOURCE avro_source (REFERENCE "testdrive-avroavro-${testdrive.seed}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT
+
+> CREATE TABLE avro_table_append FROM SOURCE avro_source (REFERENCE "testdrive-avroavro-${testdrive.seed}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+
+> SELECT * from avro_table_upsert
+key           f1       f2
+---------------------------
+fish          fish     1000
+birdmore      geese    56
+mammalmore    moose    2
+
+> SELECT * from avro_table_append
+f1       f2
+---------------
+fish     1000
+geese    2
+geese    56
+goose    1
+moose    1
+moose    2
+moose    42
