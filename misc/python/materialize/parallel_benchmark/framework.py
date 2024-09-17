@@ -16,7 +16,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from textwrap import dedent
 
-import pg8000
+import psycopg
 
 from materialize.mzcompose.composition import Composition
 from materialize.util import PgConnInfo
@@ -41,10 +41,10 @@ class State:
     periodic_dists: dict[str, int]
 
 
-def execute_query(cur: pg8000.Cursor, query: str) -> None:
+def execute_query(cur: psycopg.Cursor, query: str) -> None:
     while True:
         try:
-            cur.execute(query)
+            cur.execute(query.encode("utf-8"))
             break
         except Exception as e:
             if "deadlock detected" in str(e):

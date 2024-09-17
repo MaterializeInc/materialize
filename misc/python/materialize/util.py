@@ -17,7 +17,6 @@ import json
 import os
 import pathlib
 import random
-import ssl
 import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -27,7 +26,7 @@ from threading import Thread
 from typing import Protocol, TypeVar
 from urllib.parse import parse_qs, unquote, urlparse
 
-import pg8000
+import psycopg
 import xxhash
 import zstandard
 
@@ -159,14 +158,14 @@ class PgConnInfo:
     password: str | None = None
     ssl: bool = False
 
-    def connect(self) -> pg8000.Connection:
-        return pg8000.connect(
+    def connect(self) -> psycopg.Connection:
+        return psycopg.connect(
             host=self.host,
             port=self.port,
             user=self.user,
             password=self.password,
-            database=self.database,
-            ssl_context=ssl.SSLContext() if self.ssl else None,
+            dbname=self.database,
+            sslmode="require" if self.ssl else None,
         )
 
 
