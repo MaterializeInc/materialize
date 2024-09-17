@@ -26,7 +26,9 @@ use derivative::Derivative;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_adapter::{load_remote_system_parameters, AdapterError};
-use mz_adapter_types::dyncfgs::{ENABLE_0DT_DEPLOYMENT, WITH_0DT_DEPLOYMENT_MAX_WAIT};
+use mz_adapter_types::dyncfgs::{
+    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+};
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
@@ -466,6 +468,40 @@ impl Listeners {
             );
             computed
         };
+        // Determine whether we should panic if we reach the maximum wait time
+        // without the preflight checks succeeding.
+        let enable_0dt_deployment_panic_after_timeout = {
+            let default = config
+                .system_parameter_defaults
+                .get(ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name())
+                .map(|x| {
+                    strconv::parse_bool(x).map_err(|err| {
+                        anyhow!(
+                            "failed to parse default for {}: {}",
+                            ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name(),
+                            err
+                        )
+                    })
+                })
+                .transpose()?;
+            let ld = get_ld_value(
+                "enable_0dt_deployment_panic_after_timeout",
+                &remote_system_parameters,
+                |x| strconv::parse_bool(x).map_err(|x| x.to_string()),
+            )?;
+            let catalog = openable_adapter_storage
+                .get_enable_0dt_deployment_panic_after_timeout()
+                .await?;
+            let computed = ld.or(catalog).or(default).unwrap_or(false);
+            info!(
+                %computed,
+                ?ld,
+                ?catalog,
+                ?default,
+                "determined value for enable_0dt_deployment_panic_after_timeout system parameter",
+            );
+            computed
+        };
 
         // TODO(aljoscha): We have to do the same dance for
         // `0dt_deployment_max_wait`, and pass it to the preflight check.
@@ -488,6 +524,7 @@ impl Listeners {
             openable_adapter_storage,
             catalog_metrics: Arc::clone(&config.catalog_config.metrics),
             hydration_max_wait: with_0dt_deployment_max_wait,
+            panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
         };
         if enable_0dt_deployment {
             PreflightOutput {
