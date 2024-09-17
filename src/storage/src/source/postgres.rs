@@ -90,7 +90,8 @@ use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{simple_query_opt, Client, PostgresError};
 use mz_repr::{Datum, Row};
-use mz_sql_parser::ast::{display::AstDisplay, Ident};
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::Ident;
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{
@@ -176,7 +177,7 @@ impl SourceRender for PostgresSourceConnection {
 
         let metrics = config.metrics.get_postgres_source_metrics(config.id);
 
-        let (snapshot_updates, rewinds, snapshot_stats, snapshot_err, snapshot_token) =
+        let (snapshot_updates, rewinds, slot_ready, snapshot_stats, snapshot_err, snapshot_token) =
             snapshot::render(
                 scope.clone(),
                 config.clone(),
@@ -191,6 +192,7 @@ impl SourceRender for PostgresSourceConnection {
             self,
             table_info,
             &rewinds,
+            &slot_ready,
             resume_uppers,
             metrics,
         );
@@ -271,6 +273,8 @@ pub enum TransientError {
         requested_lsn: MzOffset,
         available_lsn: MzOffset,
     },
+    #[error("replication slot already exists")]
+    ReplicationSlotAlreadyExists,
     #[error("stream ended prematurely")]
     ReplicationEOF,
     #[error("unexpected replication message")]
@@ -355,7 +359,6 @@ impl From<DefiniteError> for DataflowError {
     }
 }
 
-/// Ensures the replication slot of this connection is created.
 async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), TransientError> {
     // Note: Using unchecked here is okay because we're using it in a SQL query.
     let slot = Ident::new_unchecked(slot).to_ast_string();
