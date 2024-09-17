@@ -46,9 +46,15 @@ contains:PUBLICATION mz_source_empty is empty
   FOR TABLES (t1);
 contains:PUBLICATION mz_source_empty is empty
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_table_from_source = false
+
 ! CREATE SOURCE "mz_source_empty"
   FROM POSTGRES CONNECTION pg (PUBLICATION mz_source);
 contains:missing TABLES specification
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_table_from_source = true
 
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION mz_source)
