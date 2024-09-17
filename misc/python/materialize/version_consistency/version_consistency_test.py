@@ -41,15 +41,11 @@ from materialize.output_consistency.output_consistency_test import (
     OutputConsistencyTest,
     connect,
 )
-from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.version_consistency.execution.multi_version_executors import (
     MultiVersionSqlExecutors,
 )
 from materialize.version_consistency.ignore_filter.version_consistency_ignore_filter import (
     VersionConsistencyIgnoreFilter,
-)
-from materialize.version_consistency.validation.version_consistency_error_message_normalizer import (
-    VersionConsistencyErrorMessageNormalizer,
 )
 
 
@@ -114,13 +110,6 @@ class VersionConsistencyTest(OutputConsistencyTest):
         return MultiVersionSqlExecutors(
             mz1_sql_executor,
             mz2_sql_executor,
-        )
-
-    def create_result_comparator(
-        self, ignore_filter: GenericInconsistencyIgnoreFilter
-    ) -> ResultComparator:
-        return ResultComparator(
-            ignore_filter, VersionConsistencyErrorMessageNormalizer()
         )
 
     def create_inconsistency_ignore_filter(self) -> GenericInconsistencyIgnoreFilter:

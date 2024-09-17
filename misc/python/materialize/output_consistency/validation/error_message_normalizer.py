@@ -9,6 +9,10 @@
 
 import re
 
+FUNCTION_ID_SUFFIX_PATTERN = re.compile(r" \(function \[s\d+ AS pg_catalog\.\w+\]\)")
+# Example: column "table_func_8ab9ea9d-340c-45c2-967d-65118d6c979b" does not exist
+TABLE_FUNC_PATTERN = re.compile(r"column \"table_func_[a-f0-9-]+\"")
+
 
 class ErrorMessageNormalizer:
     def normalize(self, error_message: str) -> str:
@@ -17,6 +21,10 @@ class ErrorMessageNormalizer:
         normalized_message = re.sub(
             'column "[^.]*\\.', 'column "<source>.', normalized_message
         )
+        normalized_message = re.sub(
+            TABLE_FUNC_PATTERN, 'column "table_func_x"', normalized_message
+        )
+        normalized_message = re.sub(FUNCTION_ID_SUFFIX_PATTERN, "", normalized_message)
         normalized_message = normalized_message.replace("Evaluation error: ", "")
 
         # This will replace ln, log, and log10 mentions with log
