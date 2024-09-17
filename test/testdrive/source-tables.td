@@ -32,6 +32,7 @@ contains: not supported
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_create_table_from_source = true
+ALTER SYSTEM SET enable_load_generator_key_value = true
 
 #
 # Multi-output load generator source using source-fed tables
@@ -353,3 +354,38 @@ goose    1
 moose    1
 moose    2
 moose    42
+
+
+#
+# Key-value load generator source using source-fed tables
+#
+
+> CREATE SOURCE keyvalue
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR KEY VALUE (
+    KEYS 16,
+    PARTITIONS 4,
+    SNAPSHOT ROUNDS 3,
+    SEED 123,
+    VALUE SIZE 10,
+    BATCH SIZE 2,
+    TICK INTERVAL '1s'
+  );
+
+> CREATE TABLE kv_1 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE UPSERT;
+
+> CREATE TABLE kv_2 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE NONE;
+
+> SELECT partition, count(*) FROM kv_1 GROUP BY partition
+0   4
+1   4
+2   4
+3   4
+
+> SELECT partition, count(*) > 10 FROM kv_2 GROUP BY partition
+0   true
+1   true
+2   true
+3   true
+
+> DROP SOURCE keyvalue CASCADE;
