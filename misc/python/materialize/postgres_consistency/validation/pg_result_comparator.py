@@ -24,6 +24,9 @@ from materialize.output_consistency.input_data.operations.jsonb_operations_provi
     TAG_JSONB_OBJECT_GENERATION,
 )
 from materialize.output_consistency.query.query_result import QueryExecution
+from materialize.output_consistency.validation.error_message_normalizer import (
+    ErrorMessageNormalizer,
+)
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 # Examples:
@@ -61,8 +64,12 @@ JSON_OBJECT_PATTERN = re.compile(r"\{(.*)[:,](.*)\}")
 class PostgresResultComparator(ResultComparator):
     """Compares the outcome (result or failure) of multiple query executions"""
 
-    def __init__(self, ignore_filter: GenericInconsistencyIgnoreFilter):
-        super().__init__(ignore_filter)
+    def __init__(
+        self,
+        ignore_filter: GenericInconsistencyIgnoreFilter,
+        error_message_normalizer: ErrorMessageNormalizer,
+    ):
+        super().__init__(ignore_filter, error_message_normalizer)
         self.floating_precision = 1e-03
 
     def shall_validate_error_message(self, query_execution: QueryExecution) -> bool:

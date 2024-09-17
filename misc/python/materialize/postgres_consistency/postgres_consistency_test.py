@@ -34,6 +34,9 @@ from materialize.output_consistency.output_consistency_test import (
     OutputConsistencyTest,
     connect,
 )
+from materialize.output_consistency.validation.error_message_normalizer import (
+    ErrorMessageNormalizer,
+)
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.postgres_consistency.custom.predefined_pg_queries import (
     create_custom_pg_consistency_queries,
@@ -79,7 +82,7 @@ class PostgresConsistencyTest(OutputConsistencyTest):
     def create_result_comparator(
         self, ignore_filter: GenericInconsistencyIgnoreFilter
     ) -> ResultComparator:
-        return PostgresResultComparator(ignore_filter)
+        return PostgresResultComparator(ignore_filter, ErrorMessageNormalizer())
 
     def create_inconsistency_ignore_filter(self) -> GenericInconsistencyIgnoreFilter:
         return PgInconsistencyIgnoreFilter()

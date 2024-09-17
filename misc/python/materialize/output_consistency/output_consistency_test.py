@@ -51,6 +51,9 @@ from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.runner.test_runner import ConsistencyTestRunner
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.status.test_summary import ConsistencyTestSummary
+from materialize.output_consistency.validation.error_message_normalizer import (
+    ErrorMessageNormalizer,
+)
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
@@ -294,7 +297,7 @@ class OutputConsistencyTest:
     def create_result_comparator(
         self, ignore_filter: GenericInconsistencyIgnoreFilter
     ) -> ResultComparator:
-        return ResultComparator(ignore_filter)
+        return ResultComparator(ignore_filter, ErrorMessageNormalizer())
 
     def create_inconsistency_ignore_filter(self) -> GenericInconsistencyIgnoreFilter:
         return InternalOutputInconsistencyIgnoreFilter()
