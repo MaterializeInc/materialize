@@ -22,6 +22,8 @@ use crate::names::{FullItemName, PartialItemName};
 pub enum PgSourcePurificationError {
     #[error("CREATE SOURCE specifies DETAILS option")]
     UserSpecifiedDetails,
+    #[error("{0} option is unnecessary when no tables are added")]
+    UnnecessaryOptionsWithoutReferences(String),
     #[error("PUBLICATION {0} is empty")]
     EmptyPublication(String),
     #[error("database {database} missing referenced schemas")]
@@ -119,6 +121,10 @@ impl PgSourcePurificationError {
                 "you might be able to wait for other sources to finish snapshotting and try again".into()
             ),
             Self::ReplicationDisabled => Some("set max_wal_senders to a value > 0".into()),
+            Self::UnnecessaryOptionsWithoutReferences(option) => Some(format!(
+                "Remove the {} option, as no tables are being added.",
+                option
+            )),
             _ => None,
         }
     }
@@ -241,6 +247,8 @@ pub enum MySqlSourcePurificationError {
     UserLacksPrivileges(Vec<(String, String)>),
     #[error("CREATE SOURCE specifies DETAILS option")]
     UserSpecifiedDetails,
+    #[error("{0} option is unnecessary when no tables are added")]
+    UnnecessaryOptionsWithoutReferences(String),
     #[error("{0} is not a MYSQL CONNECTION")]
     NotMySqlConnection(FullItemName),
     #[error("Invalid MySQL system replication settings")]
@@ -249,11 +257,14 @@ pub enum MySqlSourcePurificationError {
     UnrecognizedTypes { cols: Vec<(String, String, String)> },
     #[error("duplicated column name references in table {0}: {1:?}")]
     DuplicatedColumnNames(String, Vec<String>),
-    #[error("Reference to columns not currently being added")]
-    DanglingColumns { items: Vec<UnresolvedItemName> },
+    #[error("{option_name} refers to table not currently being added")]
+    DanglingColumns {
+        option_name: String,
+        items: Vec<UnresolvedItemName>,
+    },
     #[error("Invalid MySQL table reference: {0}")]
     InvalidTableReference(String),
-    #[error("No tables found")]
+    #[error("No tables found for provided reference")]
     EmptyDatabase,
     #[error("missing TABLES specification")]
     RequiresExternalReferences,
@@ -273,7 +284,10 @@ impl MySqlSourcePurificationError {
                     ", "
                 )
             )),
-            Self::DanglingColumns { items } => Some(format!(
+            Self::DanglingColumns {
+                option_name: _,
+                items,
+            } => Some(format!(
                 "the following columns are referenced but not added: {}",
                 itertools::join(items, ", ")
             )),
@@ -330,6 +344,10 @@ impl MySqlSourcePurificationError {
                 the user does not have privileges on the intended tables."
                     .into(),
             ),
+            Self::UnnecessaryOptionsWithoutReferences(option) => Some(format!(
+                "Remove the {} option, as no tables are being added.",
+                option
+            )),
             _ => None,
         }
     }
