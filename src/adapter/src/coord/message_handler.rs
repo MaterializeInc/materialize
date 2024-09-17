@@ -801,20 +801,13 @@ impl Coordinator {
                 new_process_status,
             );
 
-            let mut builtin_table_updates = vec![builtin_table_retraction, builtin_table_addition];
+            let builtin_table_updates = vec![builtin_table_retraction, builtin_table_addition];
 
-            if self.controller.read_only() {
-                self.buffered_builtin_table_updates
-                    .as_mut()
-                    .expect("in read-only mode")
-                    .append(&mut builtin_table_updates);
-            } else {
-                self.builtin_table_update()
-                    .execute(builtin_table_updates)
-                    .await
-                    .instrument(info_span!("coord::message_cluster_event::table_updates"))
-                    .await;
-            }
+            self.builtin_table_update()
+                .execute(builtin_table_updates)
+                .await
+                .instrument(info_span!("coord::message_cluster_event::table_updates"))
+                .await;
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");
