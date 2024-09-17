@@ -663,6 +663,8 @@ where
                         .await
                         .is_ok();
                     if checked_success {
+                        info!("LOOK: Set the epoch of {id} ({shard}) to {our_epoch}");
+                        assert_eq!(&PersistEpoch::from(our_epoch), handle.opaque());
                         break handle;
                     }
                 } else {
@@ -2034,6 +2036,13 @@ where
             ),
         }
     }
+
+    pub fn shard_id(&self) -> ShardId {
+        match self {
+            SinceHandleWrapper::Critical(handle) => handle.shard_id(),
+            SinceHandleWrapper::Leased(handle) => handle.shard_id(),
+        }
+    }
 }
 
 /// State maintained about individual collections.
@@ -2383,6 +2392,8 @@ where
                 trace!("downgrading since of {} to {:?}", id, new_since);
             }
 
+            let shard_id = since_handle.shard_id();
+
             let epoch = since_handle.opaque().clone();
             let result = if new_since.is_empty() {
                 // A shard's since reaching the empty frontier is a prereq for
@@ -2432,7 +2443,9 @@ where
             };
 
             if let Some(Err(other_epoch)) = result {
-                mz_ore::halt!("fenced by envd @ {other_epoch:?}. ours = {epoch:?}");
+                mz_ore::halt!(
+                    "fenced by envd @ {other_epoch:?}. ours = {epoch:?} at id {id} ({shard_id})"
+                );
             }
         }
     }
