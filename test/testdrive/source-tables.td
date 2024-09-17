@@ -7,12 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default default-replica-size=1
+$ set-arg-default single-replica-cluster=quickstart
+
 # TODO(def-) Remove when #29397 and #29435 are fixed
 $ skip-if
 SELECT true
-
-$ set-arg-default default-replica-size=1
-$ set-arg-default single-replica-cluster=quickstart
 
 #
 # Validate feature flag
@@ -322,6 +322,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 {"key": "mammalmore"} {"f1":"moose", "f2": 2}
 
 > CREATE SOURCE avro_source
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}');
 
 > CREATE TABLE avro_table_upsert FROM SOURCE avro_source (REFERENCE "testdrive-avroavro-${testdrive.seed}")
