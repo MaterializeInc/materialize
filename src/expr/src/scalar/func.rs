@@ -7605,7 +7605,7 @@ fn make_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     if is_grantable {
         return Err(EvalError::Unsupported {
             feature: "GRANT OPTION".to_string(),
-            issue_no: None,
+            discussion_no: None,
         });
     }
 
@@ -7653,7 +7653,7 @@ fn array_fill<'a>(
     if matches!(fill, Datum::Array(_)) {
         return Err(EvalError::Unsupported {
             feature: "array_fill with arrays".to_string(),
-            issue_no: None,
+            discussion_no: None,
         });
     }
 

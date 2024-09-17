@@ -390,7 +390,7 @@ impl Cluster {
                 // them before we have to implement this.
                 return Err(PlanError::Unsupported {
                     feature: "SHOW CREATE for unmanaged clusters".to_string(),
-                    issue_no: Some(15435),
+                    discussion_no: None,
                 });
             }
         };

@@ -69,14 +69,14 @@ macro_rules! bail_unsupported {
     ($feature:expr) => {
         return Err(crate::plan::error::PlanError::Unsupported {
             feature: $feature.to_string(),
-            issue_no: None,
+            discussion_no: None,
         }
         .into())
     };
-    ($issue:expr, $feature:expr) => {
+    ($discussion_no:expr, $feature:expr) => {
         return Err(crate::plan::error::PlanError::Unsupported {
             feature: $feature.to_string(),
-            issue_no: Some($issue),
+            discussion_no: Some($discussion_no),
         }
         .into())
     };

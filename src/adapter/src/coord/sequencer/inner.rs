@@ -4442,7 +4442,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         Err(AdapterError::PlanError(plan::PlanError::Unsupported {
             feature: "ALTER TABLE ... ADD COLUMN ...".to_string(),
-            issue_no: Some(28082),
+            discussion_no: Some(29607),
         }))
     }
 }

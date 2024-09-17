@@ -251,8 +251,7 @@ impl AdapterError {
     pub fn detail(&self) -> Option<String> {
         match self {
             AdapterError::AmbiguousSystemColumnReference => {
-                Some("This is a limitation in Materialize that will be lifted in a future release. \
-                See https://github.com/MaterializeInc/materialize/issues/16650 for details.".to_string())
+                Some("This is a current limitation in Materialize".into())
             },
             AdapterError::Catalog(c) => c.detail(),
             AdapterError::Eval(e) => e.detail(),

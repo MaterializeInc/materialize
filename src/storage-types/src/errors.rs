@@ -566,9 +566,12 @@ mod columnation {
                         | e @ EvalError::LengthTooLarge
                         | e @ EvalError::AclArrayNullElement
                         | e @ EvalError::MzAclArrayNullElement => e.clone(),
-                        EvalError::Unsupported { feature, issue_no } => EvalError::Unsupported {
+                        EvalError::Unsupported {
+                            feature,
+                            discussion_no,
+                        } => EvalError::Unsupported {
                             feature: self.string_region.copy(feature),
-                            issue_no: *issue_no,
+                            discussion_no: *discussion_no,
                         },
                         EvalError::Float32OutOfRange(string) => {
                             EvalError::Float32OutOfRange(self.string_region.copy(string))
