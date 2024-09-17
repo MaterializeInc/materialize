@@ -134,22 +134,22 @@ def execute_operation(
                 cursor.execute("BEGIN")
                 for i in range(transaction_size):
                     cursor.execute(
-                        f"INSERT INTO table{table_id} VALUES ({id}, {i}, '{mz_service}')"
+                        f"INSERT INTO table{table_id} VALUES ({id}, {i}, '{mz_service}')".encode()
                     )
                 cursor.execute("COMMIT")
             else:
                 cursor.execute(
-                    f"INSERT INTO table{table_id} VALUES ({id}, 0, '{mz_service}')"
+                    f"INSERT INTO table{table_id} VALUES ({id}, 0, '{mz_service}')".encode()
                 )
         except Exception as e:
             str_e = str(e)
             if "running docker compose failed" in str_e:
                 # The query targeted a Mz container that is not up
                 return None
-            elif "network error" in str_e:
+            elif "server closed the connection unexpectedly" in str_e:
                 # Container died while query was in progress
                 return None
-            elif "Can't create a connection to host" in str_e:
+            elif "Connection refused" in str_e:
                 # Container died before the SQL connection was established
                 return None
             else:
@@ -254,7 +254,7 @@ def run_workload(c: Composition, workload: Workload) -> None:
                     FROM {target}{commit.table_id}
                     WHERE id = {commit.row_id}
                     GROUP BY id
-                    """
+                    """.encode()
                 )
                 result = cursor.fetchall()
                 assert len(result) == 1

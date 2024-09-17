@@ -13,7 +13,7 @@ import traceback
 from collections.abc import Iterator
 from typing import Any
 
-import pg8000
+import psycopg
 
 from materialize.data_ingest.data_type import DATA_TYPES_FOR_AVRO, DATA_TYPES_FOR_KEY
 from materialize.data_ingest.definition import (
@@ -287,16 +287,16 @@ def execute_workload(
     order_str = ", ".join(str(i + 1) for i in range(len(fields)))
 
     with pg_executor.pg_conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM {pg_executor.table} ORDER BY {order_str}")
+        cur.execute(f"SELECT * FROM {pg_executor.table} ORDER BY {order_str}".encode())
         expected_result = cur.fetchall()
         print(f"Expected (via Postgres): {expected_result}")
 
     # Reconnect as Mz disruptions may have destroyed the previous connection
-    conn = pg8000.connect(
+    conn = psycopg.connect(
         host="localhost",
         port=ports[workload.mz_service],
         user="materialize",
-        database="materialize",
+        dbname="materialize",
     )
 
     for executor in executors:
@@ -307,7 +307,9 @@ def execute_workload(
                 cur.execute("SET REAL_TIME_RECENCY TO TRUE")
                 # TODO: Remove when #29452 is merged
                 cur.execute("SET real_time_recency_timeout = '60s'")
-                cur.execute(f"SELECT * FROM {executor.table} ORDER BY {order_str}")
+                cur.execute(
+                    f"SELECT * FROM {executor.table} ORDER BY {order_str}".encode()
+                )
                 actual_result = cur.fetchall()
                 cur.execute("SET REAL_TIME_RECENCY TO FALSE")
             except Exception as e:

@@ -13,7 +13,7 @@ import time
 from typing import Any
 
 import confluent_kafka  # type: ignore
-import pg8000
+import psycopg
 import pymysql
 import pymysql.cursors
 from confluent_kafka.admin import AdminClient  # type: ignore
@@ -23,8 +23,8 @@ from confluent_kafka.serialization import (  # type: ignore
     MessageField,
     SerializationContext,
 )
-from pg8000.exceptions import InterfaceError
 from pg8000.native import identifier
+from psycopg.errors import OperationalError
 
 from materialize.data_ingest.data_type import Backend
 from materialize.data_ingest.field import Field, formatted_value
@@ -37,7 +37,7 @@ from materialize.mzcompose.services.mysql import MySql
 class Executor:
     num_transactions: int
     ports: dict[str, int]
-    mz_conn: pg8000.Connection
+    mz_conn: psycopg.Connection
     fields: list[Field]
     database: str
     schema: str
@@ -72,11 +72,11 @@ class Executor:
                 if "materialized2" in self.ports
                 else "materialized"
             )
-        self.mz_conn = pg8000.connect(
+        self.mz_conn = psycopg.connect(
             host="localhost",
             port=self.ports[mz_service],
             user="materialize",
-            database=self.database,
+            dbname=self.database,
         )
         self.mz_conn.autocommit = True
 
@@ -86,13 +86,17 @@ class Executor:
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         raise NotImplementedError
 
-    def execute(self, cur: pg8000.Cursor | pymysql.cursors.Cursor, query: str) -> None:
+    def execute(self, cur: psycopg.Cursor | pymysql.cursors.Cursor, query: str) -> None:
         if self.logging_exe is not None:
             self.logging_exe.log(query)
 
         try:
-            cur.execute(query)
-        except InterfaceError:
+            (
+                cur.execute(query.encode("utf-8"))
+                if isinstance(cur, psycopg.Cursor)
+                else cur.execute(query)
+            )
+        except OperationalError:
             # Can happen after Mz disruptions if we are running queries against Mz
             print("Network error, retrying")
             time.sleep(0.01)
@@ -105,7 +109,7 @@ class Executor:
 
     def execute_with_retry_on_error(
         self,
-        cur: pg8000.Cursor,
+        cur: psycopg.Cursor,
         query: str,
         required_error_message_substrs: list[str],
         max_tries: int = 5,
@@ -422,7 +426,7 @@ class MySqlExecutor(Executor):
 
 
 class PgExecutor(Executor):
-    pg_conn: pg8000.Connection
+    pg_conn: psycopg.Connection
     table: str
     source: str
     num: int
@@ -444,7 +448,7 @@ class PgExecutor(Executor):
 
     def create(self, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
-        self.pg_conn = pg8000.connect(
+        self.pg_conn = psycopg.connect(
             host="localhost",
             user="postgres",
             password="postgres",

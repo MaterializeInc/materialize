@@ -10,10 +10,14 @@ from collections import deque
 from collections.abc import Sequence
 from typing import Any
 
-import dateutil  # type: ignore
-from pg8000 import Connection
-from pg8000.dbapi import ProgrammingError
-from pg8000.exceptions import DatabaseError, InterfaceError
+from psycopg import Connection, DataError
+from psycopg.errors import (
+    DatabaseError,
+    InternalError_,
+    OperationalError,
+    ProgrammingError,
+    SyntaxError,
+)
 
 from materialize.output_consistency.output.output_printer import OutputPrinter
 
@@ -107,15 +111,10 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
     def _execute_with_cursor(self, sql: str) -> None:
         try:
             self.last_statements.append(sql)
-            self.cursor.execute(sql)
-        except (ProgrammingError, DatabaseError) as err:
-            raise SqlExecutionError(self._extract_message_from_error(err))
-        except dateutil.parser._parser.ParserError as err:  # type: ignore
-            raise SqlExecutionError(err.args[0])
-        except ValueError as err:
-            self.output_printer.print_error(f"Query with value error is: {sql}")
-            raise err
-        except InterfaceError:
+            self.cursor.execute(sql.encode("utf-8"))
+        except OperationalError as e:
+            if "server closed the connection unexpectedly" not in str(e):
+                raise SqlExecutionError(self._extract_message_from_error(e))
             print("A network error occurred! Aborting!")
             # The current or one of previous queries might have broken the database.
             last_statements_desc = self.last_statements.copy()
@@ -127,22 +126,32 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
                 f"Last {len(last_statements_desc)} queries in descending order:\n{statements_str}"
             )
             exit(1)
+        except (ProgrammingError, DatabaseError, SyntaxError, InternalError_) as err:
+            raise SqlExecutionError(self._extract_message_from_error(err))
+        except DataError as err:  # type: ignore
+            raise SqlExecutionError(err.args[0])
+        except ValueError as err:
+            self.output_printer.print_error(f"Query with value error is: {sql}")
+            raise err
         except Exception:
             self.output_printer.print_error(f"Query with unexpected error is: {sql}")
             raise
 
     def _extract_message_from_error(
-        self, error: ProgrammingError | DatabaseError
+        self,
+        error: (
+            OperationalError
+            | ProgrammingError
+            | DataError
+            | DatabaseError
+            | SyntaxError
+            | InternalError_
+        ),
     ) -> str:
-        error_args = error.args[0]
-
-        message = error_args.get("M") if "M" in error_args else str(error_args)
-        details = error_args.get("H") if "H" in error_args else None
-
-        if details is None:
-            return f"{message}"
-        else:
-            return f"{message} ({details})"
+        result = str(error.diag.message_primary)
+        if error.diag.message_detail:
+            result += f" ({error.diag.message_detail})"
+        return result
 
 
 class MzDatabaseSqlExecutor(PgWireDatabaseSqlExecutor):

@@ -17,8 +17,8 @@ import json
 import time
 from textwrap import dedent
 
-import pg8000.exceptions
 import requests
+from psycopg.errors import OperationalError
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -367,7 +367,7 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     )
 
     # SQL and HTTP user sessions should work.
-    assert c.sql_query("SELECT 1") == ([1],)
+    assert c.sql_query("SELECT 1") == [(1,)]
     assert requests.post(
         f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
     ).json()["results"][0]["rows"] == [["1"]]
@@ -385,13 +385,13 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     # New SQL and HTTP user sessions should now fail.
     try:
         c.sql_query("SELECT 1")
-    except pg8000.exceptions.DatabaseError as e:
-        assert e.args[0]["C"] == "MZ010"
-        assert e.args[0]["M"] == "login blocked"
+    except OperationalError as e:
+        # assert e.pgcode == "MZ010" # Not exposed by psycopg
+        assert "login blocked" in str(e)
         assert (
-            e.args[0]["D"]
-            == "Your organization has been blocked. Please contact support."
-        )
+            "DETAIL:  Your organization has been blocked. Please contact support."
+            in e.args[0]
+        ), e.args
 
     res = requests.post(
         f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
@@ -405,7 +405,7 @@ def workflow_allow_user_sessions(c: Composition) -> None:
 
     # The cursor from the beginning of the test should still work.
     cursor.execute("SELECT 1")
-    assert cursor.fetchall() == ([1],)
+    assert cursor.fetchall() == [(1,)]
 
     # Re-allow new user sessions.
     c.sql(
@@ -415,14 +415,14 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     )
 
     # SQL and HTTP user sessions should work again.
-    assert c.sql_query("SELECT 1") == ([1],)
+    assert c.sql_query("SELECT 1") == [(1,)]
     assert requests.post(
         f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
     ).json()["results"][0]["rows"] == [["1"]]
 
     # The cursor from the beginning of the test should still work.
     cursor.execute("SELECT 1")
-    assert cursor.fetchall() == ([1],)
+    assert cursor.fetchall() == [(1,)]
 
 
 def workflow_drop_materialize_database(c: Composition) -> None:

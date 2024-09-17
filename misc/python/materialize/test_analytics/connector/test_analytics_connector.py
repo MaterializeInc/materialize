@@ -8,13 +8,12 @@
 # by the Apache License, Version 2.0.
 
 import re
-import ssl
 import time
 from dataclasses import dataclass
 from textwrap import dedent
 
-import pg8000
-from pg8000 import Connection, Cursor
+import psycopg
+from psycopg import Connection, Cursor
 
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
@@ -67,13 +66,13 @@ class DatabaseConnector:
         remaining_retries: int = 1,
     ) -> Connection:
         try:
-            connection = pg8000.connect(
+            connection = psycopg.connect(
                 host=self.config.hostname,
                 user=self.config.username,
                 password=self.config.app_password,
                 port=self.config.port,
-                ssl_context=ssl.SSLContext(),
-                timeout=timeout_in_seconds,
+                sslmode="require",
+                connect_timeout=timeout_in_seconds,
                 application_name=self.config.application_name,
             )
         except Exception:
@@ -92,10 +91,12 @@ class DatabaseConnector:
                 raise
 
         connection.autocommit = autocommit
-        connection.run(f"SET database = {self.config.database}")
-        connection.run(f"SET search_path = {self.config.search_path}")
-        connection.run(f"SET cluster = {as_sanitized_literal(self.config.cluster)}")
-        connection.run("SET transaction_isolation = serializable")
+        connection.execute(f"SET database = {self.config.database}".encode())
+        connection.execute(f"SET search_path = {self.config.search_path}".encode())
+        connection.execute(
+            f"SET cluster = {as_sanitized_literal(self.config.cluster)}".encode()
+        )
+        connection.execute("SET transaction_isolation = serializable")
 
         return connection
 
@@ -116,7 +117,7 @@ class DatabaseConnector:
 
         cursor = connection.cursor()
         cursor.execute(
-            f"SET statement_timeout = {as_sanitized_literal(statement_timeout)}"
+            f"SET statement_timeout = {as_sanitized_literal(statement_timeout)}".encode()
         )
         return cursor
 
@@ -216,7 +217,7 @@ class DatabaseConnector:
 
         try:
             start_time = time.time()
-            cursor.execute(sql)
+            cursor.execute(sql.encode("utf-8"))
             end_time = time.time()
 
             if print_status:

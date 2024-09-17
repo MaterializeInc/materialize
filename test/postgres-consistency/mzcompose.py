@@ -47,6 +47,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         service="postgres",
         user="postgres",
         password="postgres",
+        database="postgres",
     )
 
     test_summary = test.run_output_consistency_tests(

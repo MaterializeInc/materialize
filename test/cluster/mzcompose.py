@@ -25,9 +25,13 @@ from threading import Thread
 
 import psycopg
 import requests
-from pg8000 import Cursor
-from pg8000.dbapi import ProgrammingError
-from pg8000.exceptions import DatabaseError, InterfaceError
+from psycopg import Cursor
+from psycopg.errors import (
+    DatabaseError,
+    InternalError_,
+    OperationalError,
+    QueryCanceled,
+)
 
 from materialize import buildkite, ui
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -233,10 +237,10 @@ def workflow_test_github_12251(c: Composition) -> None:
         INSERT INTO log_table SELECT mz_unsafe.mz_panic(f1) FROM panic_table;
         """
         )
-    except ProgrammingError as e:
+    except QueryCanceled as e:
         # Ensure we received the correct error message
-        assert "statement timeout" in e.args[0]["M"], e
-        # Ensure the statemenet_timeout setting is ~honored
+        assert "statement timeout" in str(e)
+        # Ensure the statement_timeout setting is ~honored
         assert (
             time.time() - start_time < 2
         ), "idle_in_transaction_session_timeout not respected"
@@ -1583,8 +1587,11 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
             FETCH c WITH (timeout = '5s');
             """
         )
-    except ProgrammingError as e:
-        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    except InternalError_ as e:
+        assert (
+            e.diag.message_primary
+            and "target replica failed or was dropped" in e.diag.message_primary
+        ), e
     else:
         raise RuntimeError("SUBSCRIBE didn't return the expected error")
 
@@ -1607,8 +1614,11 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
             FETCH c WITH (timeout = '5s');
             """
         )
-    except ProgrammingError as e:
-        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    except InternalError_ as e:
+        assert (
+            e.diag.message_primary
+            and "target replica failed or was dropped" in e.diag.message_primary
+        ), e
     else:
         raise RuntimeError("SUBSCRIBE didn't return the expected error")
 
@@ -1670,8 +1680,11 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
             SELECT * FROM t AS OF 18446744073709551615;
             """
         )
-    except ProgrammingError as e:
-        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    except InternalError_ as e:
+        assert (
+            e.diag.message_primary
+            and "target replica failed or was dropped" in e.diag.message_primary
+        ), e
     else:
         raise RuntimeError("SELECT didn't return the expected error")
 
@@ -1692,8 +1705,11 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
             SELECT * FROM t AS OF 18446744073709551615;
             """
         )
-    except ProgrammingError as e:
-        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    except InternalError_ as e:
+        assert (
+            e.diag.message_primary
+            and "target replica failed or was dropped" in e.diag.message_primary
+        ), e
     else:
         raise RuntimeError("SELECT didn't return the expected error")
 
@@ -2197,9 +2213,9 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
     def start_subscribe(table: str, cluster: str) -> Cursor:
         """Start a subscribe on the given table and cluster."""
         cursor = c.sql_cursor()
-        cursor.execute(f"SET cluster = {cluster}")
+        cursor.execute(f"SET cluster = {cluster}".encode())
         cursor.execute("BEGIN")
-        cursor.execute(f"DECLARE c CURSOR FOR SUBSCRIBE {table}")
+        cursor.execute(f"DECLARE c CURSOR FOR SUBSCRIBE {table}".encode())
         cursor.execute("FETCH 1 c")
         return cursor
 
@@ -2207,7 +2223,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         """Stop a susbscribe started with `start_subscribe`."""
         cursor.execute("ROLLBACK")
 
-    def check_mz_subscriptions(expected: tuple) -> None:
+    def check_mz_subscriptions(expected: list) -> None:
         """
         Check that the expected subscribes exist in mz_subscriptions.
         We identify subscribes by user, cluster, and target table only.
@@ -2229,32 +2245,32 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         assert output == expected, f"expected: {expected}, got: {output}"
 
     subscribe1 = start_subscribe("t1", "quickstart")
-    check_mz_subscriptions((["materialize", "quickstart", "t1"],))
+    check_mz_subscriptions([("materialize", "quickstart", "t1")])
 
     subscribe2 = start_subscribe("t2", "cluster1")
     check_mz_subscriptions(
-        (
-            ["materialize", "quickstart", "t1"],
-            ["materialize", "cluster1", "t2"],
-        )
+        [
+            ("materialize", "quickstart", "t1"),
+            ("materialize", "cluster1", "t2"),
+        ]
     )
 
     stop_subscribe(subscribe1)
-    check_mz_subscriptions((["materialize", "cluster1", "t2"],))
+    check_mz_subscriptions([("materialize", "cluster1", "t2")])
 
     subscribe3 = start_subscribe("t3", "quickstart")
     check_mz_subscriptions(
-        (
-            ["materialize", "cluster1", "t2"],
-            ["materialize", "quickstart", "t3"],
-        )
+        [
+            ("materialize", "cluster1", "t2"),
+            ("materialize", "quickstart", "t3"),
+        ]
     )
 
     stop_subscribe(subscribe3)
-    check_mz_subscriptions((["materialize", "cluster1", "t2"],))
+    check_mz_subscriptions([("materialize", "cluster1", "t2")])
 
     stop_subscribe(subscribe2)
-    check_mz_subscriptions(())
+    check_mz_subscriptions([])
 
 
 def workflow_test_mv_source_sink(c: Composition) -> None:
@@ -2860,16 +2876,16 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     # not indexed in the `default` cluster, so we can use that to
     # collect the `since` frontiers we want.
     def collect_sinces() -> tuple[int, int]:
-        explain = c.sql_query(
-            "SET cluster = default;"
-            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"
-        )[0][0]
+        with c.sql_cursor() as cur:
+            cur.execute("SET cluster = default;")
+            cur.execute("EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;")
+            explain = cur.fetchall()[0][0]
         table_since = parse_since_from_explain(explain)
 
-        explain = c.sql_query(
-            "SET cluster = mz_catalog_server;"
-            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"
-        )[0][0]
+        with c.sql_cursor() as cur:
+            cur.execute("SET cluster = mz_catalog_server;")
+            cur.execute("EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;")
+            explain = cur.fetchall()[0][0]
         index_since = parse_since_from_explain(explain)
 
         return table_since, index_since
@@ -3370,13 +3386,17 @@ def workflow_blue_green_deployment(
                     for i, query in enumerate(queries):
                         start_time = time.time()
                         try:
-                            cursor.execute(query)
+                            cursor.execute(query.encode("utf-8"))
                         except DatabaseError as e:
                             # Expected
                             if "cached plan must not change result type" in str(e):
                                 continue
                             raise e
-                        assert int(cursor.fetchone()[0]) > 0
+                        if query.startswith("SET "):
+                            cursor.nextset()
+                        results = cursor.fetchone()
+                        assert results
+                        assert int(results[0]) > 0
                         runtime = time.time() - start_time
                         assert (
                             runtime < 5
@@ -3529,11 +3549,11 @@ def workflow_cluster_drop_concurrent(
             for thread in threads:
                 try:
                     thread.join(timeout=10)
-                except ProgrammingError as e:
+                except InternalError_ as e:
                     assert (
-                        e.args[0]["M"]
-                        == 'query could not complete because relation "materialize.public.counter" was dropped'
-                    ), e
+                        'query could not complete because relation "materialize.public.counter" was dropped'
+                        in str(e)
+                    )
             for thread in threads:
                 assert not thread.is_alive(), f"Thread {thread.name} is still running"
 
@@ -4284,7 +4304,7 @@ def workflow_test_read_frontier_advancement(
             cursor.execute("FETCH ALL sub WITH (timeout = '30s')")
         except DatabaseError as exc:
             assert (
-                exc.args[0]["M"]
+                exc.diag.message_primary
                 == 'subscribe has been terminated because underlying relation "materialize.public.mv2" was dropped'
             )
 
@@ -4353,7 +4373,7 @@ def workflow_test_adhoc_system_indexes(
         WHERE i.name = 'mz_test_idx1'
         """
     )
-    assert output[0] == ["u1", "mz_tables", "mz_catalog_server"], output
+    assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
     output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 9")
     assert "mz_test_idx1" in output[0][0], output
     output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 9")
@@ -4382,7 +4402,7 @@ def workflow_test_adhoc_system_indexes(
         WHERE i.name = 'mz_test_idx2'
         """
     )
-    assert output[0] == ["u2", "mz_hydration_statuses", "mz_catalog_server"], output
+    assert output[0] == ("u2", "mz_hydration_statuses", "mz_catalog_server"), output
     output = c.sql_query(
         "EXPLAIN SELECT * FROM mz_internal.mz_hydration_statuses WHERE hydrated"
     )
@@ -4407,8 +4427,8 @@ def workflow_test_adhoc_system_indexes(
         ORDER BY id
         """
     )
-    assert output[0] == ["u1", "mz_tables", "mz_catalog_server"], output
-    assert output[1] == ["u2", "mz_hydration_statuses", "mz_catalog_server"], output
+    assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
+    assert output[1] == ("u2", "mz_hydration_statuses", "mz_catalog_server"), output
 
     # Make sure the new indexes can be dropped again.
     c.sql(
@@ -4679,9 +4699,9 @@ def workflow_test_graceful_reconfigure(
             mz_cluster_replicas.cluster_id = mz_clusters.id AND mz_clusters.name='cluster1';
             """
         )
-        assert replicas == (
-            ["r1"],
-        ), f"Cluster should only have one replica prior to alter, found {replicas}"
+        assert replicas == [
+            ("r1",)
+        ], f"Cluster should only have one replica prior to alter, found {replicas}"
 
         replicas = c.sql_query(
             """
@@ -4705,7 +4725,7 @@ def workflow_test_graceful_reconfigure(
                     port=6877,
                     user="mz_system",
                 )
-            except InterfaceError:
+            except OperationalError:
                 # We expect the network to drop during this
                 pass
 
@@ -4715,16 +4735,14 @@ def workflow_test_graceful_reconfigure(
         time.sleep(3)
 
         # Validate that there is a pending replica
-        assert (
-            c.sql_query(
-                """
+        replicas = c.sql_query(
+            """
             SELECT mz_cluster_replicas.name
             FROM mz_cluster_replicas, mz_clusters WHERE
             mz_cluster_replicas.cluster_id = mz_clusters.id AND mz_clusters.name='cluster1';
             """
-            )
-            == (["r1"], ["r1-pending"])
         )
+        assert replicas == [("r1",), ("r1-pending",)], replicas
         replicas = c.sql_query(
             """
             SELECT cr.name
@@ -4751,9 +4769,9 @@ def workflow_test_graceful_reconfigure(
             AND mz_clusters.name='cluster1';
             """
         )
-        assert replicas == (
-            ["r1"],
-        ), f"Expected one non pending replica, found {replicas}"
+        assert replicas == [
+            ("r1",)
+        ], f"Expected one non pending replica, found {replicas}"
 
         # Ensure the cluster config did not change
         assert (
@@ -4762,7 +4780,7 @@ def workflow_test_graceful_reconfigure(
             SELECT size FROM mz_clusters WHERE name='cluster1';
             """
             )
-            == (["1"],)
+            == [("1",)]
         )
         c.sql(
             """

@@ -17,7 +17,7 @@ import time
 from typing import Any
 
 import pymysql
-from pg8000 import Cursor
+from psycopg import Cursor
 
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition

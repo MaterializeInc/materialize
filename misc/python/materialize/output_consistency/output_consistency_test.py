@@ -9,9 +9,9 @@
 
 import argparse
 
-import pg8000
-from pg8000 import Connection
-from pg8000.exceptions import InterfaceError
+import psycopg
+from psycopg import Connection
+from psycopg.errors import OperationalError
 
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition
@@ -347,8 +347,8 @@ def connect(host: str, port: int, user: str, password: str | None = None) -> Con
         print(
             f"Connecting to database (host={host}, port={port}, user={user}, password={'****' if password else 'None'})"
         )
-        return pg8000.connect(host=host, port=port, user=user, password=password)
-    except InterfaceError:
+        return psycopg.connect(host=host, port=port, user=user, password=password)
+    except OperationalError:
         print(f"Connecting to database failed (host={host}, port={port}, user={user})!")
         raise
 
@@ -372,7 +372,7 @@ def main() -> int:
     try:
         default_connection = connect(args.host, args.port, default_db_user)
         mz_system_connection = connect(args.host, args.system_port, mz_system_db_user)
-    except InterfaceError:
+    except OperationalError:
         return 1
 
     result = test.run_output_consistency_tests(

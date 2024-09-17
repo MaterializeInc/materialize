@@ -1285,10 +1285,6 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 90
     parallelism: 2
-    retry:
-      automatic:
-        - exit_status: 75
-          limit: 1
     agents:
       queue: hetzner-aarch64-8cpu-16gb
     plugins:
@@ -1444,16 +1440,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: balancerd
-
-  - id: restarts
-    label: Restart test
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: restart
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
 
   - id: legacy-upgrade
     label: Legacy upgrade tests (last version from git)

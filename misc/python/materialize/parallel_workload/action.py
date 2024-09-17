@@ -16,12 +16,12 @@ import urllib.parse
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-import pg8000
+import psycopg
 import requests
 import websocket
-from pg8000 import Connection
-from pg8000.exceptions import InterfaceError
 from pg8000.native import identifier
+from psycopg import Connection
+from psycopg.errors import OperationalError
 
 import materialize.parallel_workload.database
 from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
@@ -130,7 +130,6 @@ class Action:
         result = [
             "permission denied for",
             "must be owner of",
-            "network error",  # TODO: Remove when #21954 is fixed
             "HTTP read timeout",
             "result exceeds max size of",
         ]
@@ -147,6 +146,7 @@ class Action:
                     "the transaction's active cluster has been dropped",  # cluster was dropped
                     "was removed",  # dependency was removed, started with moving optimization off main thread, see #24367
                     "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
+                    "object state changed while transaction was in progress",
                 ]
             )
         if exe.db.scenario == Scenario.Cancel:
@@ -169,8 +169,8 @@ class Action:
         ):
             result.extend(
                 [
-                    # pg8000
-                    "network error",
+                    # psycopg
+                    "server closed the connection unexpectedly",
                     "Can't create a connection to host",
                     "Connection refused",
                     "Cursor closed",
@@ -943,8 +943,8 @@ class SwapSchemaAction(Action):
                     f"ALTER SCHEMA {schema1} SWAP WITH {identifier(schema2.name())}"
                 )
             else:
+                exe.cur.connection.autocommit = False
                 try:
-                    exe.cur._c.autocommit = False
                     exe.execute(f"ALTER SCHEMA {schema1} RENAME TO tmp_schema")
                     exe.execute(
                         f"ALTER SCHEMA {schema2} RENAME TO {identifier(schema1.name())}"
@@ -954,7 +954,10 @@ class SwapSchemaAction(Action):
                     )
                     exe.commit()
                 finally:
-                    exe.cur._c.autocommit = True
+                    try:
+                        exe.cur.connection.autocommit = True
+                    except:
+                        exe.reconnect_next = True
             schema1.schema_id, schema2.schema_id = schema2.schema_id, schema1.schema_id
             schema1.rename, schema2.rename = schema2.rename, schema1.rename
         return True
@@ -1052,7 +1055,7 @@ class FlipFlagsAction(Action):
             conn = self.create_system_connection(exe)
             self.flip_flag(conn, flag_name, flag_value)
             return True
-        except InterfaceError:
+        except OperationalError:
             if conn is not None:
                 conn.close()
 
@@ -1065,13 +1068,13 @@ class FlipFlagsAction(Action):
         self, exe: Executor, num_attempts: int = 10
     ) -> Connection:
         try:
-            conn = pg8000.connect(
+            conn = psycopg.connect(
                 host=exe.db.host,
                 port=exe.db.ports[
                     "mz_system" if exe.mz_service == "materialized" else "mz_system2"
                 ],
                 user="mz_system",
-                database="materialize",
+                dbname="materialize",
             )
             conn.autocommit = True
             return conn
@@ -1085,7 +1088,7 @@ class FlipFlagsAction(Action):
     def flip_flag(self, conn: Connection, flag_name: str, flag_value: str) -> None:
         with conn.cursor() as cur:
             cur.execute(
-                f"ALTER SYSTEM SET {flag_name} = {flag_value};",
+                f"ALTER SYSTEM SET {flag_name} = {flag_value};".encode(),
             )
 
 
@@ -1268,8 +1271,8 @@ class SwapClusterAction(Action):
                     # http=Http.RANDOM,  # Fails, see https://buildkite.com/materialize/nightly/builds/7362#018ecc56-787f-4cc2-ac54-1c8437af164b
                 )
             else:
+                exe.cur.connection.autocommit = False
                 try:
-                    exe.cur._c.autocommit = False
                     exe.execute(f"ALTER SCHEMA {cluster1} RENAME TO tmp_cluster")
                     exe.execute(
                         f"ALTER SCHEMA {cluster2} RENAME TO {identifier(cluster1.name())}"
@@ -1279,7 +1282,10 @@ class SwapClusterAction(Action):
                     )
                     exe.commit()
                 finally:
-                    exe.cur._c.autocommit = True
+                    try:
+                        exe.cur.connection.autocommit = True
+                    except:
+                        exe.reconnect_next = True
             cluster1.cluster_id, cluster2.cluster_id = (
                 cluster2.cluster_id,
                 cluster1.cluster_id,
@@ -1454,7 +1460,7 @@ class ReconnectAction(Action):
                 )
             else:
                 user = "materialize"
-            conn = exe.cur._c
+            conn = exe.cur.connection
 
         if exe.ws and exe.use_ws:
             try:
@@ -1509,8 +1515,8 @@ class ReconnectAction(Action):
             NUM_ATTEMPTS if exe.db.scenario != Scenario.ZeroDowntimeDeploy else 1000000
         ):
             try:
-                conn = pg8000.connect(
-                    host=host, port=port, user=user, database="materialize"
+                conn = psycopg.connect(
+                    host=host, port=port, user=user, dbname="materialize"
                 )
                 conn.autocommit = exe.autocommit
                 cur = conn.cursor()
@@ -1528,7 +1534,7 @@ class ReconnectAction(Action):
                     )
                     continue
                 if i < NUM_ATTEMPTS - 1 and (
-                    "network error" in str(e)
+                    "server closed the connection unexpectedly" in str(e)
                     or "Can't create a connection to host" in str(e)
                     or "Connection refused" in str(e)
                 ):

@@ -9,7 +9,7 @@
 
 import os
 
-from pg8000 import Cursor
+from psycopg import Cursor
 
 from materialize import MZ_ROOT
 from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
@@ -39,13 +39,13 @@ def setup_structures(cursor: Cursor, directory: str) -> None:
 
         for command in sql_commands:
             print(f"> {command}")
-            cursor.execute(command)
+            cursor.execute(command.encode("utf-8"))
 
 
 def exist_structures(cursor: Cursor) -> bool:
     table_name_to_test = "build"
     cursor.execute(
-        f"SELECT exists(SELECT 1 FROM mz_tables WHERE name = {as_sanitized_literal(table_name_to_test)});"
+        f"SELECT exists(SELECT 1 FROM mz_tables WHERE name = {as_sanitized_literal(table_name_to_test)});".encode()
     )
     return cursor.fetchall()[0][0]
 

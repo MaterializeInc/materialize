@@ -12,7 +12,7 @@ import threading
 import time
 from collections import Counter, defaultdict
 
-import pg8000
+import psycopg
 import websocket
 
 from materialize.data_ingest.query_error import QueryError
@@ -68,8 +68,8 @@ class Worker:
     def run(
         self, host: str, pg_port: int, http_port: int, user: str, database: Database
     ) -> None:
-        self.conn = pg8000.connect(
-            host=host, port=pg_port, user=user, database="materialize"
+        self.conn = psycopg.connect(
+            host=host, port=pg_port, user=user, dbname="materialize"
         )
         self.conn.autocommit = self.autocommit
         cur = self.conn.cursor()
@@ -93,9 +93,11 @@ class Worker:
                     except QueryError as e:
                         if (
                             "Please disconnect and re-connect" in e.msg
-                            or "network error" in e.msg
+                            or "server closed the connection unexpectedly" in e.msg
                             or "Can't create a connection to host" in e.msg
                             or "Connection refused" in e.msg
+                            or "the connection is lost" in e.msg
+                            or "connection in transaction status INERROR" in e.msg
                         ):
                             self.exe.reconnect_next = True
                             self.exe.rollback_next = False
@@ -115,9 +117,11 @@ class Worker:
                         self.ignored_errors[error_to_ignore][type(action)] += 1
                         if (
                             "Please disconnect and re-connect" in e.msg
-                            or "network error" in e.msg
+                            or "server closed the connection unexpectedly" in e.msg
                             or "Can't create a connection to host" in e.msg
                             or "Connection refused" in e.msg
+                            or "the connection is lost" in e.msg
+                            or "connection in transaction status INERROR" in e.msg
                         ):
                             self.exe.reconnect_next = True
                         else:
@@ -132,6 +136,6 @@ class Worker:
                 self.occurred_exception = e
                 raise e
 
-        self.exe.cur._c.close()
+        self.exe.cur.connection.close()
         if self.exe.ws:
             self.exe.ws.close()

@@ -23,10 +23,11 @@ from textwrap import dedent
 from typing import Any
 from urllib.parse import quote
 
+import pg8000
 import requests
-from pg8000 import Cursor
-from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import InterfaceError
+from psycopg import Cursor
+from psycopg.errors import OperationalError, ProgramLimitExceeded, ProgrammingError
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.balancerd import Balancerd
@@ -152,16 +153,30 @@ def assert_metrics(c: Composition, contains: str):
 def sql_cursor(
     c: Composition, service="balancerd", email="u1@example.com", init_params={}
 ) -> Cursor:
+    return c.sql_cursor(
+        service=service,
+        user=email,
+        password=app_password(email),
+        sslmode="require",
+        init_params=init_params,
+    )
+
+
+def pg8000_sql_cursor(
+    c: Composition, service="balancerd", email="u1@example.com", init_params={}
+) -> pg8000.Cursor:
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
-    return c.sql_cursor(
-        service=service,
+    conn = pg8000.connect(
+        host="127.0.0.1",
+        port=c.default_port(service),
         user=email,
         password=app_password(email),
         ssl_context=ssl_context,
         init_params=init_params,
     )
+    return conn.cursor()
 
 
 def workflow_default(c: Composition) -> None:
@@ -373,7 +388,7 @@ def workflow_long_query(c: Composition) -> None:
     try:
         cursor.execute(f"SELECT 'ABC{medium_pad}XYZ';")
         raise RuntimeError("execute() expected to fail")
-    except ProgrammingError as e:
+    except ProgramLimitExceeded as e:
         assert "statement batch size cannot exceed 1000.0 KB" in str(e)
     except:
         raise RuntimeError("execute() threw an unexpected exception")
@@ -383,8 +398,11 @@ def workflow_long_query(c: Composition) -> None:
     try:
         cursor.execute(f"SELECT 'ABC{large_pad}XYZ';")
         raise RuntimeError("execute() expected to fail")
-    except InterfaceError as e:
-        assert "network error" in str(e)
+    except OperationalError as e:
+        msg = str(e)
+        assert (
+            "server closed the connection unexpectedly" in msg or "EOF detected" in msg
+        )
     except:
         raise RuntimeError("execute() threw an unexpected exception")
 
@@ -410,8 +428,8 @@ def workflow_mz_restarted(c: Composition) -> None:
     try:
         cursor.execute("INSERT INTO restart_mz VALUES (2)")
         raise RuntimeError("execute() expected to fail")
-    except InterfaceError as e:
-        assert "network error" in str(e)
+    except OperationalError as e:
+        assert "SSL connection has been closed unexpectedly" in str(e)
     except:
         raise RuntimeError("execute() threw an unexpected exception")
 
@@ -420,26 +438,30 @@ def workflow_mz_restarted(c: Composition) -> None:
 
 
 def workflow_pgwire_param_rejection(c: Composition) -> None:
-    """Existing connections should fail if balancerd is restarted"""
+    """Parameters should be rejected"""
     c.up("balancerd", "frontegg-mock", "materialized")
 
-    def check_error(message: str, f: Callable[..., Any], expected_error: Any):
+    def check_error(
+        message: str, f: Callable[..., Any], ExpectedError: type[Exception]
+    ):
         try:
             f()
-        except Exception as e:
-            assert isinstance(e, expected_error)
+        except ExpectedError:
             return
-        raise AssertionError(f"Expected {message} to raise {expected_error}")
+        raise AssertionError(f"Expected {message} to raise {ExpectedError}")
 
+    # Uses pg8000, because with psycopg/libpq only a notice is printed, and
+    # catching it during the connection process is not easy:
+    # NOTICE:  startup setting mz_forwarded_for not set: unrecognized configuration parameter "mz_forwarded_for"
     check_error(
-        "connect with x_forwarded_for param",
-        lambda: sql_cursor(c, init_params={"mz_forwarded_for": "1.1.1.1"}),
+        "connect with mz_forwarded_for param",
+        lambda: pg8000_sql_cursor(c, init_params={"mz_forwarded_for": "1.1.1.1"}),
         InterfaceError,
     )
 
     check_error(
-        "connect with mz_connection_id param",
-        lambda: sql_cursor(c, init_params={"mz_connection_uuid": "123456"}),
+        "connect with mz_connection_uuid param",
+        lambda: pg8000_sql_cursor(c, init_params={"mz_connection_uuid": "123456"}),
         InterfaceError,
     )
 
@@ -458,8 +480,12 @@ def workflow_balancerd_restarted(c: Composition) -> None:
     try:
         cursor.execute("INSERT INTO restart_balancerd VALUES (2)")
         raise RuntimeError("execute() expected to fail")
-    except InterfaceError as e:
-        assert "network error" in str(e)
+    except OperationalError as e:
+        msg = str(e)
+        assert (
+            "consuming input failed: EOF detected" in msg
+            or "failed to lookup address information: Name or service not known" in msg
+        )
     except:
         raise RuntimeError("execute() threw an unexpected exception")
 
@@ -474,7 +500,7 @@ def workflow_mz_not_running(c: Composition) -> None:
     try:
         sql_cursor(c)
         raise RuntimeError("connect() expected to fail")
-    except ProgrammingError as e:
+    except OperationalError as e:
         assert any(
             expected in str(e)
             for expected in [

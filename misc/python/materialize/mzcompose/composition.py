@@ -25,7 +25,6 @@ import json
 import os
 import re
 import selectors
-import ssl
 import subprocess
 import sys
 import threading
@@ -39,10 +38,10 @@ from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from tempfile import TemporaryFile
 from typing import Any, TextIO, cast
 
-import pg8000
+import psycopg
 import sqlparse
 import yaml
-from pg8000 import Connection, Cursor
+from psycopg import Connection, Cursor
 
 from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
@@ -636,9 +635,10 @@ class Composition:
         self,
         service: str | None = None,
         user: str = "materialize",
+        database: str = "materialize",
         port: int | None = None,
         password: str | None = None,
-        ssl_context: ssl.SSLContext | None = None,
+        sslmode: str = "disable",
         init_params: dict[str, str] = {},
     ) -> Connection:
         if service is None:
@@ -646,13 +646,15 @@ class Composition:
 
         """Get a connection (with autocommit enabled) to the materialized service."""
         port = self.port(service, port) if port else self.default_port(service)
-        conn = pg8000.connect(
+        print(" ".join([f"-c {key}={val}" for key, val in init_params.items()]))
+        conn = psycopg.connect(
             host="localhost",
+            dbname=database,
             user=user,
             password=password,
             port=port,
-            ssl_context=ssl_context,
-            init_params=init_params,
+            sslmode=sslmode,
+            options=" ".join([f"-c {key}={val}" for key, val in init_params.items()]),
         )
         conn.autocommit = True
         return conn
@@ -661,14 +663,15 @@ class Composition:
         self,
         service: str | None = None,
         user: str = "materialize",
+        database: str = "materialize",
         port: int | None = None,
         password: str | None = None,
-        ssl_context: ssl.SSLContext | None = None,
+        sslmode: str = "disable",
         init_params: dict[str, str] = {},
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
         conn = self.sql_connection(
-            service, user, port, password, ssl_context, init_params
+            service, user, database, port, password, sslmode, init_params
         )
         return conn.cursor()
 
@@ -677,32 +680,34 @@ class Composition:
         sql: str,
         service: str | None = None,
         user: str = "materialize",
+        database: str = "materialize",
         port: int | None = None,
         password: str | None = None,
         print_statement: bool = True,
     ) -> None:
         """Run a batch of SQL statements against the materialized service."""
         with self.sql_cursor(
-            service=service, user=user, port=port, password=password
+            service=service, user=user, database=database, port=port, password=password
         ) as cursor:
             for statement in sqlparse.split(sql):
                 if print_statement:
                     print(f"> {statement}")
-                cursor.execute(statement)
+                cursor.execute(statement.encode("utf-8"))
 
     def sql_query(
         self,
         sql: str,
         service: str | None = None,
         user: str = "materialize",
+        database: str = "materialize",
         port: int | None = None,
         password: str | None = None,
     ) -> Any:
         """Execute and return results of a SQL query."""
         with self.sql_cursor(
-            service=service, user=user, port=port, password=password
+            service=service, user=user, database=database, port=port, password=password
         ) as cursor:
-            cursor.execute(sql)
+            cursor.execute(sql.encode("utf-8"))
             return cursor.fetchall()
 
     def query_mz_version(self, service: str | None = None) -> str:
