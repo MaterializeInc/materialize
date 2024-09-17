@@ -155,7 +155,7 @@ def upload_plot(
     variant: str,
 ):
     if buildkite.is_in_buildkite():
-        buildkite.upload_artifact(plot_path, cwd=MZ_ROOT)
+        buildkite.upload_artifact(plot_path, cwd=MZ_ROOT, quiet=True)
         print(f"+++ Plot for {scenario_name} ({variant})")
         print(
             buildkite.inline_image(
@@ -221,12 +221,14 @@ def report(
     plt.yscale("log")
     plt.ylabel("CCDF")
     plt.xlabel("latency [ms]")
+    plt.title(f"{scenario_name} against {mz_string}")
     for key, m in measurements.items():
         durations = [x.duration * 1000.0 for x in m]
         durations.sort()
         (uniqu_durations, counts) = numpy.unique(durations, return_counts=True)
         counts = numpy.cumsum(counts)
         plt.plot(uniqu_durations, 1 - counts / counts.max(), label=key)
+    plt.legend(loc="best")
 
     plot_path = f"plots/{scenario_name}_{suffix}_ccdf.png"
     plt.savefig(MZ_ROOT / plot_path, dpi=300)
