@@ -86,9 +86,9 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::catalog::ConnCatalog;
+use crate::catalog::{Catalog, ConnCatalog};
 use crate::coord::ConnMeta;
-use crate::optimize::{self, Optimize};
+use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
 use crate::AdapterError;
 
@@ -2176,5 +2176,53 @@ impl ConnectionResolver for CatalogState {
             AwsPrivatelink(conn) => AwsPrivatelink(conn),
             MySql(conn) => MySql(conn.into_inline_connection(self)),
         }
+    }
+}
+
+impl OptimizerCatalog for CatalogState {
+    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+        CatalogState::get_entry(self, id)
+    }
+    fn resolve_full_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: Option<&ConnectionId>,
+    ) -> FullItemName {
+        CatalogState::resolve_full_name(self, name, conn_id)
+    }
+    fn get_indexes_on(
+        &self,
+        id: GlobalId,
+        cluster: ClusterId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &Index)> + '_> {
+        Box::new(CatalogState::get_indexes_on(self, id, cluster))
+    }
+}
+
+impl OptimizerCatalog for Catalog {
+    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+        self.state.get_entry(id)
+    }
+
+    fn resolve_full_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: Option<&ConnectionId>,
+    ) -> FullItemName {
+        self.state.resolve_full_name(name, conn_id)
+    }
+
+    fn get_indexes_on(
+        &self,
+        id: GlobalId,
+        cluster: ClusterId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &Index)> + '_> {
+        Box::new(self.state.get_indexes_on(id, cluster))
+    }
+}
+
+impl Catalog {
+    pub fn as_optimizer_catalog(self: Arc<Self>) -> Arc<dyn OptimizerCatalog> {
+        self
     }
 }

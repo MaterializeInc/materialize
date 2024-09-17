@@ -2600,7 +2600,7 @@ impl Coordinator {
                     let (optimized_plan, global_lir_plan) = {
                         // Build an optimizer for this MATERIALIZED VIEW.
                         let mut optimizer = optimize::materialized_view::Optimizer::new(
-                            self.owned_catalog(),
+                            self.owned_catalog().as_optimizer_catalog(),
                             compute_instance.clone(),
                             entry.id(),
                             internal_view_id,

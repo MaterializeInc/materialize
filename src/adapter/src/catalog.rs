@@ -360,16 +360,6 @@ impl Catalog {
         }
         policies
     }
-
-    /// TODO(ct): This exists for continual tasks because they are the first
-    /// self-referential thing in mz. We use this to inject something for the
-    /// optimizer to resolve the CT's own id to before we've saved it to the
-    /// catalog. The one usage of this is careful to destroy this copy of
-    /// catalog immediately after. There are better ways to do this, but it was
-    /// the easiest path to get the skeleton of the feature merged.
-    pub fn hack_add_ct(&mut self, id: GlobalId, entry: CatalogEntry) {
-        self.state.entry_by_id.insert(id, entry);
-    }
 }
 
 #[derive(Debug)]

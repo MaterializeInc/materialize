@@ -442,7 +442,7 @@ impl Coordinator {
 
         // Build an optimizer for this MATERIALIZED VIEW.
         let mut optimizer = optimize::materialized_view::Optimizer::new(
-            self.owned_catalog(),
+            self.owned_catalog().as_optimizer_catalog(),
             compute_instance,
             sink_id,
             view_id,

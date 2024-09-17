@@ -20,6 +20,7 @@ use mz_expr::{Id, LocalId};
 use mz_ore::instrument;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::optimize::OverrideFrom;
+use mz_repr::GlobalId;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self, HirRelationExpr};
 use mz_sql::session::metadata::SessionMetadata;
@@ -30,7 +31,7 @@ use crate::command::ExecuteResponse;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
-use crate::optimize::{self, Optimize};
+use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
 use crate::util::ResultExt;
 
@@ -70,36 +71,38 @@ impl Coordinator {
             .override_from(&self.catalog.get_cluster(cluster_id).config.features());
 
         let view_id = self.allocate_transient_id();
-        let catalog_mut = self.catalog_mut();
-        let sink_id = catalog_mut.allocate_user_id().await?;
+        let sink_id = self.catalog_mut().allocate_user_id().await?;
 
         // Put a placeholder in the catalog so the optimizer can find something
         // for the sink_id.
-        let fake_entry = CatalogEntry {
-            item: CatalogItem::Table(Table {
-                create_sql: Some(create_sql.clone()),
-                desc: desc.clone(),
-                conn_id: None,
-                resolved_ids: resolved_ids.clone(),
-                custom_logical_compaction_window: None,
-                is_retained_metrics_object: false,
-                data_source: TableDataSource::TableWrites {
-                    defaults: Vec::new(),
-                },
-            }),
-            referenced_by: Vec::new(),
-            used_by: Vec::new(),
-            id: sink_id,
-            oid: 0,
-            name: name.clone(),
-            owner_id: *session.current_role_id(),
-            privileges: PrivilegeMap::new(),
+        let bootstrap_catalog = ContinualTaskCatalogBootstrap {
+            delegate: self.owned_catalog().as_optimizer_catalog(),
+            sink_id,
+            entry: CatalogEntry {
+                item: CatalogItem::Table(Table {
+                    create_sql: Some(create_sql.clone()),
+                    desc: desc.clone(),
+                    conn_id: None,
+                    resolved_ids: resolved_ids.clone(),
+                    custom_logical_compaction_window: None,
+                    is_retained_metrics_object: false,
+                    data_source: TableDataSource::TableWrites {
+                        defaults: Vec::new(),
+                    },
+                }),
+                referenced_by: Vec::new(),
+                used_by: Vec::new(),
+                id: sink_id,
+                oid: 0,
+                name: name.clone(),
+                owner_id: *session.current_role_id(),
+                privileges: PrivilegeMap::new(),
+            },
         };
-        catalog_mut.hack_add_ct(sink_id, fake_entry);
 
         // Build an optimizer for this CONTINUAL TASK.
         let mut optimizer = optimize::materialized_view::Optimizer::new(
-            Arc::new(catalog_mut.clone()),
+            Arc::new(bootstrap_catalog),
             compute_instance,
             sink_id,
             view_id,
@@ -204,5 +207,39 @@ impl Coordinator {
             })
             .await?;
         Ok(ExecuteResponse::CreatedContinualTask)
+    }
+}
+
+/// An implementation of [OptimizerCatalog] with a placeholder for the continual
+/// task to solve the self-referential CT bootstrapping problem.
+#[derive(Debug)]
+struct ContinualTaskCatalogBootstrap {
+    delegate: Arc<dyn OptimizerCatalog>,
+    sink_id: GlobalId,
+    entry: CatalogEntry,
+}
+
+impl OptimizerCatalog for ContinualTaskCatalogBootstrap {
+    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+        if self.sink_id == *id {
+            return &self.entry;
+        }
+        self.delegate.get_entry(id)
+    }
+
+    fn resolve_full_name(
+        &self,
+        name: &mz_sql::names::QualifiedItemName,
+        conn_id: Option<&mz_adapter_types::connection::ConnectionId>,
+    ) -> mz_sql::names::FullItemName {
+        self.delegate.resolve_full_name(name, conn_id)
+    }
+
+    fn get_indexes_on(
+        &self,
+        id: GlobalId,
+        cluster: mz_controller_types::ClusterId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &mz_catalog::memory::objects::Index)> + '_> {
+        self.delegate.get_indexes_on(id, cluster)
     }
 }

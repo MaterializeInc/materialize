@@ -45,7 +45,7 @@ use mz_transform::analysis::DerivedBuilder;
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::optimize::{view, Optimize, OptimizerConfig, OptimizerError};
+use crate::optimize::{view, Optimize, OptimizerCatalog, OptimizerConfig, OptimizerError};
 use crate::session::{SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::viewable_variables;
 
@@ -87,7 +87,7 @@ impl ComputeInstanceSnapshot {
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 #[derive(Debug)]
 pub struct DataflowBuilder<'a> {
-    pub catalog: &'a CatalogState,
+    pub catalog: &'a dyn OptimizerCatalog,
     /// A handle to the compute abstraction, which describes indexes by identifier.
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
@@ -150,7 +150,7 @@ pub fn dataflow_import_id_bundle<P>(
 }
 
 impl<'a> DataflowBuilder<'a> {
-    pub fn new(catalog: &'a CatalogState, compute: ComputeInstanceSnapshot) -> Self {
+    pub fn new(catalog: &'a dyn OptimizerCatalog, compute: ComputeInstanceSnapshot) -> Self {
         Self {
             catalog,
             compute,
