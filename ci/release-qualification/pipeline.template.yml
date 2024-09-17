@@ -154,7 +154,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: zippy
             # Runs out of disk
-            args: [--scenario=BackupAndRestoreLarge, --actions=500000]
+            args: [--scenario=BackupAndRestoreLarge, --actions=250000]
 
     - id: zippy-kafka-parallel-insert
       label: "Longer Zippy Kafka Parallel Insert"
