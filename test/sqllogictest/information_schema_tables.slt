@@ -365,6 +365,10 @@ mz_internal_cluster_replicas
 BASE TABLE
 materialize
 mz_internal
+mz_kafka_source_tables
+BASE TABLE
+materialize
+mz_internal
 mz_materialization_dependencies
 VIEW
 materialize

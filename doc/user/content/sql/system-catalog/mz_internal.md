@@ -570,27 +570,38 @@ system.
 
 ## `mz_postgres_source_tables`
 
-The `mz_postgres_source_tables` table contains the mapping between each
-subsource and the corresponding upstream PostgreSQL table being ingested.
+The `mz_postgres_source_tables` table contains the mapping between each Materialize
+subsource or table and the corresponding upstream PostgreSQL table being ingested.
 
 <!-- RELATION_SPEC mz_internal.mz_postgres_source_tables -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
-| `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `id`                | [`text`]         | The ID of the subsource or table. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
 | `schema_name`       | [`text`]         | The schema of the upstream table being ingested. |
 | `table_name`        | [`text`]         | The name of the upstream table being ingested.   |
 
 ## `mz_mysql_source_tables`
 
-The `mz_mysql_source_tables` table contains the mapping between each
-subsource and the corresponding upstream MySQL table being ingested.
+The `mz_mysql_source_tables` table contains the mapping between each Materialize
+subsource or table and the corresponding upstream MySQL table being ingested.
 
 <!-- RELATION_SPEC mz_internal.mz_mysql_source_tables -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
-| `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `id`                | [`text`]         | The ID of the subsource or table. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
 | `schema_name`       | [`text`]         | The schema ([or, database](https://dev.mysql.com/doc/refman/8.0/en/glossary.html#glos_schema)) of the upstream table being ingested. |
 | `table_name`        | [`text`]         | The name of the upstream table being ingested. |
+
+## `mz_kafka_source_tables`
+
+The `mz_kafka_source_tables` table contains the mapping between each Materialize
+table and the corresponding upstream Kafka topic being ingested.
+
+<!-- RELATION_SPEC mz_internal.mz_kafka_source_tables -->
+| Field               | Type             | Meaning                                                                                                        |
+| ------------------- | ---------------- | --------                                                                                                       |
+| `id`                | [`text`]         | The ID of the table. Corresponds to [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
+| `topic`             | [`text`]         | The topic being ingested. |
 
 <!--
 ## `mz_prepared_statement_history`

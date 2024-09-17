@@ -599,6 +599,7 @@ mz_comments                              ""
 mz_history_retention_strategies          ""
 mz_internal_cluster_replicas             ""
 mz_pending_cluster_replicas              ""
+mz_kafka_source_tables                   ""
 mz_materialized_view_refresh_strategies  ""
 mz_mysql_source_tables                   ""
 mz_object_dependencies                   ""
@@ -776,7 +777,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-57
+58
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
