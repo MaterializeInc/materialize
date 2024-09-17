@@ -13,16 +13,10 @@ $ set-arg-default single-replica-cluster=quickstart
 # cardinality, don't depend on exact count that could change if the rng
 # implementation changes, just check that it's within the spec range.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_table_from_source = false
-
 ! CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 0)
 contains: multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_table_from_source = true
 
 ! CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
