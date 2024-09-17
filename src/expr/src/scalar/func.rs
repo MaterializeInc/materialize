@@ -3428,6 +3428,16 @@ impl BinaryFunc {
             BinaryFunc::ToCharTimestamp | BinaryFunc::ToCharTimestampTz => (false, false),
             BinaryFunc::DateBinTimestamp | BinaryFunc::DateBinTimestampTz => (true, true),
             BinaryFunc::AgeTimestamp | BinaryFunc::AgeTimestampTz => (true, true),
+            // Text concatenation is monotonic in its second argument, because if I change the
+            // second argument but don't change the first argument, then we won't find a difference
+            // in that part of the concatenation result that came from the first argument, so we'll
+            // find the difference that comes from changing the second argument.
+            // (It's not monotonic in its first argument, because e.g.,
+            // 'A' < 'AA' but 'AZ' > 'AAZ'.)
+            BinaryFunc::TextConcat => (false, true),
+            // `left` is unfortunately not monotonic (at least for negative second arguments),
+            // because 'aa' < 'z', but `left(_, -1)` makes 'a' > ''.
+            BinaryFunc::Left => (false, false),
             // TODO: can these ever be treated as monotone? It's safe to treat the unary versions
             // as monotone in some cases, but only when extracting specific parts.
             BinaryFunc::ExtractInterval
@@ -3448,8 +3458,7 @@ impl BinaryFunc {
             | BinaryFunc::TimezoneIntervalTimestampTz
             | BinaryFunc::TimezoneIntervalTime
             | BinaryFunc::TimezoneOffset => (false, false),
-            BinaryFunc::TextConcat
-            | BinaryFunc::JsonbGetInt64 { .. }
+            BinaryFunc::JsonbGetInt64 { .. }
             | BinaryFunc::JsonbGetString { .. }
             | BinaryFunc::JsonbGetPath { .. }
             | BinaryFunc::JsonbContainsString
@@ -3463,7 +3472,6 @@ impl BinaryFunc {
             | BinaryFunc::MapContainsAnyKeys
             | BinaryFunc::MapContainsMap => (false, false),
             BinaryFunc::ConvertFrom
-            | BinaryFunc::Left
             | BinaryFunc::Position
             | BinaryFunc::Right
             | BinaryFunc::RepeatString
