@@ -678,7 +678,6 @@ where
     /// Wait until data is available, then return an iterator over the next
     /// consolidated chunk of output. If this method returns `None`, that all the data has been
     /// exhausted and the full consolidated dataset has been returned.
-    #[allow(dead_code)]
     pub(crate) async fn next_chunk(
         &mut self,
         max_len: usize,
