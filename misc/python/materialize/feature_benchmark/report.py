@@ -95,7 +95,6 @@ class Report:
         self, scenario_name: str
     ) -> dict[MeasurementType, ReportMeasurement]:
         scenario_result = self.get_scenario_result_by_name(scenario_name)
-        assert scenario_result is not None
 
         this_results = dict()
         for metric in scenario_result.metrics:
@@ -107,8 +106,6 @@ class Report:
 
     def get_scenario_version(self, scenario_name: str) -> ScenarioVersion:
         scenario_result = self.get_scenario_result_by_name(scenario_name)
-        assert scenario_result is not None
-
         return scenario_result.get_scenario_version()
 
     def get_scenario_result_by_name(

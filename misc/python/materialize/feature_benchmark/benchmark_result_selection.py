@@ -38,8 +38,6 @@ def choose_representative_report_of_single_scenario(
 
     for report in reports:
         scenario_result = report.get_scenario_result_by_name(scenario_name)
-        if scenario_result is None:
-            continue
 
         metric_value = scenario_result.get_metric_by_measurement_type(
             MeasurementType.WALLCLOCK
