@@ -20,9 +20,11 @@ T = TypeVar("T")
 
 
 class Comparator(Generic[T]):
-    def __init__(self, type: MeasurementType, name: str, threshold: float) -> None:
-        self.name = name
-        self.type = type
+    def __init__(
+        self, scenario_name: str, measurement_type: MeasurementType, threshold: float
+    ) -> None:
+        self.scenario_name = scenario_name
+        self.measurement_type = measurement_type
         self.threshold = threshold
         self._points: list[T] = []
         self._unit: MeasurementUnit = MeasurementUnit.UNKNOWN
@@ -39,7 +41,7 @@ class Comparator(Generic[T]):
         else:
             assert (
                 self._unit == unit
-            ), f"Mix of units in {self.name}: {self._unit} and {unit} in {aggregation_name}"
+            ), f"Mix of units in {self.scenario_name}: {self._unit} and {unit} in {aggregation_name}"
 
         self._points.append(point)
 
@@ -112,9 +114,9 @@ class RelativeThresholdComparator(Comparator[float | None]):
             return False
 
     def human_readable(self, use_colors: bool) -> str:
-        assert self.type.is_lower_value_better(), "unexpected metric"
+        assert self.measurement_type.is_lower_value_better(), "unexpected metric"
 
-        if self.type.is_amount():
+        if self.measurement_type.is_amount():
             improvement = "less"
             deterioration = "more"
         else:

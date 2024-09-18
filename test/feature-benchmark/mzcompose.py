@@ -117,10 +117,12 @@ def make_aggregation_class() -> type[Aggregation]:
 
 
 def make_comparator(
-    name: str, type: MeasurementType, relative_threshold: float
+    scenario_name: str, measurement_type: MeasurementType, relative_threshold: float
 ) -> Comparator:
     return RelativeThresholdComparator(
-        name=name, type=type, threshold=relative_threshold
+        scenario_name=scenario_name,
+        measurement_type=measurement_type,
+        threshold=relative_threshold,
     )
 
 
@@ -148,8 +150,8 @@ SERVICES = [
 def run_one_scenario(
     c: Composition, scenario_class: type[Scenario], args: argparse.Namespace
 ) -> list[Comparator]:
-    name = scenario_class.__name__
-    print(f"--- Now benchmarking {name} ...")
+    scenario_name = scenario_class.__name__
+    print(f"--- Now benchmarking {scenario_name} ...")
 
     measurement_types = [MeasurementType.WALLCLOCK, MeasurementType.MESSAGES]
     if args.measure_memory:
@@ -158,7 +160,9 @@ def run_one_scenario(
 
     comparators = [
         make_comparator(
-            name=name, type=t, relative_threshold=scenario_class.RELATIVE_THRESHOLD[t]
+            scenario_name=scenario_name,
+            measurement_type=t,
+            relative_threshold=scenario_class.RELATIVE_THRESHOLD[t],
         )
         for t in measurement_types
     ]

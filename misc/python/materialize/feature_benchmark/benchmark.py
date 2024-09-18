@@ -282,13 +282,16 @@ class Report:
             if not comparison.has_values():
                 continue
 
-            if limit_to_scenario is not None and comparison.name != limit_to_scenario:
+            if (
+                limit_to_scenario is not None
+                and comparison.scenario_name != limit_to_scenario
+            ):
                 continue
 
             regression = "!!YES!!" if comparison.is_regression() else "no"
             threshold = f"{(comparison.threshold * 100):.0f}%"
             output_lines.append(
-                f"{comparison.name:<35} | {comparison.type:<15} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {comparison.unit():^6} | {threshold:^10} | {regression:^13} | {comparison.human_readable(use_colors)}"
+                f"{comparison.scenario_name:<35} | {comparison.measurement_type:<15} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {comparison.unit():^6} | {threshold:^10} | {regression:^13} | {comparison.human_readable(use_colors)}"
             )
 
         return "\n".join(output_lines)
@@ -302,14 +305,16 @@ class Report:
         result = dict()
 
         for comparison in self._comparisons:
-            if comparison.name == scenario_name:
-                result[comparison.type] = ReportMeasurement(comparison.points_this())
+            if comparison.scenario_name == scenario_name:
+                result[comparison.measurement_type] = ReportMeasurement(
+                    comparison.points_this()
+                )
 
         return result
 
     def get_scenario_version(self, scenario_name: str) -> ScenarioVersion:
         for comparison in self._comparisons:
-            if comparison.name == scenario_name:
+            if comparison.scenario_name == scenario_name:
                 return comparison.get_scenario_version()
 
         raise RuntimeError(f"Scenario {scenario_name} not found!")
