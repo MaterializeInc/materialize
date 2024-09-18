@@ -10,15 +10,12 @@
 //! A controller for a storage instance.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::future::Future;
 use std::num::NonZeroI64;
-use std::task::Poll;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_cluster_client::ReplicaId;
@@ -65,6 +62,8 @@ pub(crate) struct Instance<T> {
     now: NowFn,
     /// Responses ready for delivery on the next call to [`Instance::recv`].
     ready_responses: VecDeque<StorageResponse<T>>,
+    /// A receiver for responses from replicas.
+    instance_response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
 }
 
 impl<T> Instance<T>
@@ -73,7 +72,12 @@ where
     StorageGrpcClient: StorageClient<T>,
 {
     /// Creates a new [`Instance`].
-    pub fn new(envd_epoch: NonZeroI64, metrics: InstanceMetrics, now: NowFn) -> Self {
+    pub fn new(
+        envd_epoch: NonZeroI64,
+        metrics: InstanceMetrics,
+        now: NowFn,
+        instance_response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
+    ) -> Self {
         let history = CommandHistory::new(metrics.for_history());
         let epoch = ClusterStartupEpoch::new(envd_epoch, 0);
 
@@ -84,6 +88,7 @@ where
             metrics,
             now,
             ready_responses: Default::default(),
+            instance_response_tx,
         };
 
         instance.send(StorageCommand::CreateTimely {
@@ -118,7 +123,13 @@ where
 
         self.epoch.bump_replica();
         let metrics = self.metrics.for_replica(id);
-        let mut replica = Replica::new(id, config, self.epoch, metrics);
+        let mut replica = Replica::new(
+            id,
+            config,
+            self.epoch,
+            metrics,
+            self.instance_response_tx.clone(),
+        );
 
         // Replay the commands at the new replica.
         for command in self.history.iter() {
@@ -141,7 +152,7 @@ where
     pub fn rehydrate_failed_replicas(&mut self) {
         let replicas = self.replicas.iter();
         let failed_replicas: Vec<_> = replicas
-            .filter_map(|(id, replica)| replica.failed.then_some(*id))
+            .filter_map(|(id, replica)| replica.failed().then_some(*id))
             .collect();
 
         for id in failed_replicas {
@@ -210,38 +221,9 @@ where
         }
     }
 
-    /// Receives the next response from this storage instance.
-    ///
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no response was
-    /// received from this storage instance.
-    ///
-    /// The implementation intentionally avoids the `async`/`await` syntax to facilitate reasoning
-    /// about its cancel safety.
-    pub fn recv(&mut self) -> impl Future<Output = Option<StorageResponse<T>>> + '_ {
-        let receives = self.replicas.values_mut().map(|r| r.recv());
-        // `futs` is cancel safe: It only awaits `Replica::recv`, which is documented as cancel
-        // safe. Thus dropping `futs` while awaiting it is guaranteed to never drop a replica
-        // response.
-        let mut futs: FuturesUnordered<_> = receives.collect();
-
-        let ready_responses = &mut self.ready_responses;
-        std::future::poll_fn(move |cx| {
-            if let Some(resp) = ready_responses.pop_front() {
-                return Poll::Ready(Some(resp));
-            }
-
-            match std::task::ready!(futs.poll_next_unpin(cx)) {
-                Some(resp) => Poll::Ready(resp),
-                None => {
-                    // There are no live replicas left.
-                    // Remain pending to communicate that no response is ready.
-                    Poll::Pending
-                }
-            }
-        })
+    /// Receives the next stashed response from this storage instance.
+    pub fn recv(&mut self) -> Option<StorageResponse<T>> {
+        self.ready_responses.pop_front()
     }
 }
 
@@ -258,21 +240,15 @@ pub(super) struct ReplicaConfig {
 pub struct Replica<T> {
     /// Replica configuration.
     config: ReplicaConfig,
-    /// Whether the replica has failed and requires rehydration.
-    failed: bool,
-
     /// A sender for commands for the replica.
     ///
     /// If sending to this channel fails, the replica has failed and requires
     /// rehydration.
     command_tx: mpsc::UnboundedSender<StorageCommand<T>>,
-    /// A receiver for responses from the replica.
-    ///
-    /// If receiving from the channel returns `None`, the replica has failed
-    /// and requires rehydration.
-    response_rx: mpsc::UnboundedReceiver<StorageResponse<T>>,
     /// A handle to the task that aborts it when the replica is dropped.
     _task: AbortOnDropHandle<()>,
+    /// Token to determine whether the replica has failed and requires rehydration.
+    token: Weak<()>,
 }
 
 impl<T> Replica<T>
@@ -286,9 +262,10 @@ where
         config: ReplicaConfig,
         epoch: ClusterStartupEpoch,
         metrics: ReplicaMetrics,
+        response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let (response_tx, response_rx) = mpsc::unbounded_channel();
+        let token = Arc::new(());
 
         let task = mz_ore::task::spawn(
             || "storage-replica-{id}",
@@ -299,46 +276,29 @@ where
                 metrics: metrics.clone(),
                 command_rx,
                 response_tx,
+                _token: Arc::clone(&token),
             }
             .run(),
         );
 
         Self {
             config,
-            failed: false,
             command_tx,
-            response_rx,
+            token: Arc::downgrade(&token),
             _task: task.abort_on_drop(),
         }
     }
 
     /// Sends a command to the replica.
     fn send(&mut self, command: StorageCommand<T>) {
-        if self.command_tx.send(command).is_err() {
-            self.failed = true;
-        }
+        /// Send failures ignored, we'll check for failed replicas separately.
+        let _ = self.command_tx.send(command);
     }
 
-    /// Receives the next response from the replica and returns it, or `None` if the replica has
-    /// disconnected.
-    ///
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no response was
-    /// received from this replica.
-    ///
-    /// The implementation intentionally avoids the `async`/`await` syntax to facilitate reasoning
-    /// about its cancel safety.
-    fn recv(&mut self) -> impl Future<Output = Option<StorageResponse<T>>> + '_ {
-        std::future::poll_fn(|cx| {
-            // `tokio::sync::mpsc::UnboundedReceiver::recv` is documented as cancel safe.
-            let resp = std::task::ready!(self.response_rx.poll_recv(cx));
-            if resp.is_none() {
-                self.failed = true;
-            }
-            Poll::Ready(resp)
-        })
+    /// Determine if this replica has failed. This is true if the replica
+    /// task has terminated.
+    fn failed(&self) -> bool {
+        self.token.upgrade().is_none()
     }
 }
 
@@ -358,6 +318,8 @@ struct ReplicaTask<T> {
     command_rx: mpsc::UnboundedReceiver<StorageCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
     response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
+    /// A token that lets the instance determine that the replica has failed.
+    _token: Arc<()>,
 }
 
 impl<T> ReplicaTask<T>
