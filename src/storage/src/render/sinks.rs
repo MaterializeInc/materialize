@@ -143,7 +143,7 @@ where
     // Group messages by key at each timestamp.
     //
     // Allow access to `arrange_named` because we cannot access Mz's wrapper
-    // from here. TODO(#17413): Revisit with cluster unification.
+    // from here. TODO(materialize#17413): Revisit with cluster unification.
     #[allow(clippy::disallowed_methods)]
     let mut collection =
         combine_at_timestamp(collection.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Sink"));

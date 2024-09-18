@@ -1867,7 +1867,7 @@ impl Coordinator {
                 let vars = session.vars();
 
                 // Emit a warning when deprecated variables are used.
-                // TODO(#27285) remove this after sufficient time has passed
+                // TODO(materialize#27285) remove this after sufficient time has passed
                 if name == vars::OLD_AUTO_ROUTE_CATALOG_QUERIES {
                     session.add_notice(AdapterNotice::AutoRouteIntrospectionQueriesUsage);
                 } else if name == vars::CLUSTER.name()
@@ -3068,7 +3068,7 @@ impl Coordinator {
                 session_var.visible(session.user(), Some(catalog.system_vars()))?;
 
                 // Emit a warning when deprecated variables are used.
-                // TODO(#27285) remove this after sufficient time has passed
+                // TODO(materialize#27285) remove this after sufficient time has passed
                 if variable.name() == vars::OLD_AUTO_ROUTE_CATALOG_QUERIES {
                     notices.push(AdapterNotice::AutoRouteIntrospectionQueriesUsage);
                 } else if let PlannedRoleVariable::Set {

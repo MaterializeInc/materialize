@@ -1994,11 +1994,11 @@ fn attempt_outer_equijoin(
     id_gen: &mut mz_ore::id_gen::IdGen,
     context: &Context,
 ) -> Result<Option<MirRelationExpr>, PlanError> {
-    // TODO(#22581): In theory, we can be smarter and also handle `on`
+    // TODO(materialize#22581): In theory, we can be smarter and also handle `on`
     // predicates that reference subqueries as long as these subqueries don't
     // reference `left` and `right` at the same time.
     //
-    // TODO(#22582): This code can be improved as follows:
+    // TODO(materialize#22582): This code can be improved as follows:
     //
     // 1. Move the `canonicalize_predicates(...)` call to `applied_to`.
     // 2. Use the canonicalized `on` predicate in the non-equijoin based

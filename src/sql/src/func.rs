@@ -1910,7 +1910,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                         // concat uses nonstandard bool -> string casts
                         // to match historical baggage in PostgreSQL.
                         ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard(func::CastBoolToStringNonstandard)),
-                        // TODO(#7572): remove call to PadChar
+                        // TODO(materialize#7572): remove call to PadChar
                         ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                         _ => typeconv::to_string(ecx, expr)
                     });
@@ -1930,7 +1930,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                         // concat uses nonstandard bool -> string casts
                         // to match historical baggage in PostgreSQL.
                         ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard(func::CastBoolToStringNonstandard)),
-                        // TODO(#7572): remove call to PadChar
+                        // TODO(materialize#7572): remove call to PadChar
                         ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                         _ => typeconv::to_string(ecx, expr)
                     });
@@ -2702,7 +2702,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         // https://www.postgresql.org/docs/current/functions-json.html
         "to_jsonb" => Scalar {
             params!(Any) => Operation::unary(|ecx, e| {
-                // TODO(#7572): remove this
+                // TODO(materialize#7572): remove this
                 let e = match ecx.scalar_type(&e) {
                     ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                     _ => e,
@@ -3056,7 +3056,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Float32) => AggregateFunc::MaxFloat32 => Float32, 2119;
             params!(Float64) => AggregateFunc::MaxFloat64 => Float64, 2120;
             params!(String) => AggregateFunc::MaxString => String, 2129;
-            // TODO(#7572): make this its own function
+            // TODO(materialize#7572): make this its own function
             params!(Char) => AggregateFunc::MaxString => Char, 2244;
             params!(Date) => AggregateFunc::MaxDate => Date, 2122;
             params!(Timestamp) => AggregateFunc::MaxTimestamp => Timestamp, 2126;
@@ -3077,7 +3077,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Float32) => AggregateFunc::MinFloat32 => Float32, 2135;
             params!(Float64) => AggregateFunc::MinFloat64 => Float64, 2136;
             params!(String) => AggregateFunc::MinString => String, 2145;
-            // TODO(#7572): make this its own function
+            // TODO(materialize#7572): make this its own function
             params!(Char) => AggregateFunc::MinString => Char, 2245;
             params!(Date) => AggregateFunc::MinDate => Date, 2138;
             params!(Timestamp) => AggregateFunc::MinTimestamp => Timestamp, 2142;
@@ -3088,7 +3088,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "jsonb_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
-                // TODO(#7572): remove this
+                // TODO(materialize#7572): remove this
                 let e = match ecx.scalar_type(&e) {
                     ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                     _ => e,
@@ -3108,7 +3108,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "jsonb_object_agg" => Aggregate {
             params!(Any, Any) => Operation::binary_ordered(|ecx, key, val, order_by| {
-                // TODO(#7572): remove this
+                // TODO(materialize#7572): remove this
                 let key = match ecx.scalar_type(&key) {
                     ScalarType::Char { length } => key.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                     _ => key,
@@ -3717,7 +3717,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "map_agg" => Aggregate {
             params!(String, Any) => Operation::binary_ordered(|ecx, key, val, order_by| {
                 let (value_type, val) = match ecx.scalar_type(&val) {
-                    // TODO(#7572): remove this
+                    // TODO(materialize#7572): remove this
                     ScalarType::Char { length } => (ScalarType::Char { length }, val.call_unary(UnaryFunc::PadChar(func::PadChar { length }))),
                     typ => (typ, val),
                 };

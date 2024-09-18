@@ -182,7 +182,7 @@ array;int4;jsonb;timestamp
 # Copy a large amount of data in the background and check to see that the INCOMPLETE
 # sentinel object is written during the copy
 
-# TODO(26963): Enable this test once it is more reliable
+# TODO(materialize#26963): Enable this test once it is more reliable
 # $ postgres-execute background=true connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 # COPY (SELECT * FROM generate_series(1, 50000000)) TO 's3://copytos3/test/5' WITH (AWS CONNECTION = aws_conn, MAX FILE SIZE = "100MB", FORMAT = 'csv');
 

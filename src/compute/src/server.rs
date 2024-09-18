@@ -805,7 +805,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // distinct TVCs, so the controller doesn't expect any historical consistency from
             // these collections when it reconnects to a replica.
             //
-            // TODO(#27730): Consider resolving this with controller-side reconciliation instead.
+            // TODO(materialize#27730): Consider resolving this with controller-side reconciliation instead.
             if let Some(config) = old_instance_config {
                 for id in config.logging.index_logs.values() {
                     let trace = compute_state

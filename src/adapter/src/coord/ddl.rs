@@ -667,7 +667,7 @@ impl Coordinator {
             // up external resources (PostgreSQL replication slots and secrets),
             // so we perform that cleanup in a background task.
             //
-            // TODO(14551): This is inherently best effort. An ill-timed crash
+            // TODO(materialize#14551): This is inherently best effort. An ill-timed crash
             // means we'll never clean these resources up. Safer cleanup for non-Materialize resources.
             // See <https://github.com/MaterializeInc/materialize/issues/14551>
             task::spawn(|| "drop_replication_slots_and_secrets", {

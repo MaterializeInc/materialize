@@ -1920,7 +1920,7 @@ where
 
         // For subscribes we downgrade all replica frontiers based on write frontiers. This should
         // be fine because the input and output frontier of a subscribe track its write frontier.
-        // TODO(#16274): report subscribe frontiers through `Frontiers` responses
+        // TODO(materialize#16274): report subscribe frontiers through `Frontiers` responses
         replica_collection.update_write_frontier(write_frontier.clone());
         replica_collection.update_input_frontier(write_frontier.clone());
         replica_collection.update_output_frontier(write_frontier.clone());

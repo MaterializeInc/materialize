@@ -84,9 +84,9 @@ impl RustType<ProtoJoinPlan> for JoinPlan {
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct JoinClosure {
-    /// TODO(#25239): Add documentation.
+    /// TODO(materialize#25239): Add documentation.
     pub ready_equivalences: Vec<Vec<MirScalarExpr>>,
-    /// TODO(#25239): Add documentation.
+    /// TODO(materialize#25239): Add documentation.
     pub before: mz_expr::SafeMfpPlan,
 }
 

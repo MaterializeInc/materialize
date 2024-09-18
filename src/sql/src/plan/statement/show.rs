@@ -427,7 +427,7 @@ fn show_subsources<'a>(
         query_filter.push(format!("subsources.schema_id = '{schema_spec}'"));
     }
 
-    // TODO(#28430): this looks in both directions for subsources as long as
+    // TODO(materialize#28430): this looks in both directions for subsources as long as
     // progress collections still exist
     let query = format!(
         "SELECT DISTINCT

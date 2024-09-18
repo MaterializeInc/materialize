@@ -498,7 +498,7 @@ where
                     output.push((accum.row.clone(), 1));
                 },
             );
-        // TODO(#7331): Here we discard the arranged output.
+        // TODO(materialize#7331): Here we discard the arranged output.
         (result.as_collection(|_k, v| v.into_owned()), errs)
     }
 }
