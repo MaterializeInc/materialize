@@ -637,6 +637,8 @@ where
                 .await
                 .expect("invalid persist usage");
 
+            tokio::time::sleep(Duration::from_secs(2)).await;
+
             // Take the join of the handle's since and the provided `since`;
             // this lets materialized views express the since at which their
             // read handles "start."
