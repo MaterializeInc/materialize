@@ -50,9 +50,16 @@ $ set schema={
     ]
   }
 
-$ kafka-create-topic topic=dbzupsert partitions=1
+$ kafka-create-topic topic=dbzupsert-broken-key partitions=1
 
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema}
+$ kafka-ingest format=avro topic=dbzupsert-broken-key key-format=avro key-schema=${keyschema} schema=${schema}
+{"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "mudskipper"}}}
+{"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "salamander"}}}
+{"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "lizard"}}}
+
+$ kafka-create-topic topic=dbzupsert-broken-value partitions=1
+
+$ kafka-ingest format=avro topic=dbzupsert-broken-value key-format=avro key-schema=${keyschema} schema=${schema}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "mudskipper"}}}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "salamander"}}}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "lizard"}}}
@@ -63,33 +70,38 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
     URL '${testdrive.schema-registry-url}'
   );
 
-# With this first source, we verify that we can retract key/value decoding errors.
+# With these first two sources, we verify that we can retract key/value decoding errors.
 
-> CREATE SOURCE upsert
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+> CREATE SOURCE upsert_broken_key
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-broken-key-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM upsert
+> CREATE SOURCE upsert_broken_value
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-broken-value-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM upsert_broken_key
 id creature
 -----------
 1  lizard
 
 # Ingest a broken key/value pair
-$ kafka-ingest format=bytes topic=dbzupsert key-format=bytes
+$ kafka-ingest format=bytes topic=dbzupsert-broken-key key-format=bytes
 broken-key:bar
 
-! SELECT * FROM upsert
+! SELECT * FROM upsert_broken_key
 contains: Key decode
 
 # Ingest a broken value with a good key
-$ kafka-ingest format=bytes topic=dbzupsert key-format=avro key-schema=${keyschema}
+$ kafka-ingest format=bytes topic=dbzupsert-broken-value key-format=avro key-schema=${keyschema}
 {"id": 2}bar2
 
-! SELECT * FROM upsert
+! SELECT * FROM upsert_broken_value
 contains: Value error
 
-# With this second source, we verify that we can retract NULL-key errors by
+# With this third source, we verify that we can retract NULL-key errors by
 # ingesting a NULL:NULL record (a record where both key and value are NULL).
 
 $ kafka-create-topic topic=upsert-nullkey partitions=1
