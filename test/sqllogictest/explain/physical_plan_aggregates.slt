@@ -433,13 +433,12 @@ query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR SELECT a, dense_rank() OVER (ORDER BY a), array_agg(b) FROM t GROUP BY a;
 ----
 Explained Query:
-  FlatMap unnest_list(#0)
-    mfp_after
-      project=(#3, #5, #4)
-      map=(record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1))
+  Mfp
+    project=(#2, #4, #3)
+    map=(record_get[1](#0), record_get[0](#1), record_get[1](#1), record_get[0](#0))
     input_key=
     Reduce::Basic
-      aggr=(0, dense_rank[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0)))
+      aggr=(0, dense_rank[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0)), fused_unnest_list=true)
       val_plan
         project=(#2)
         map=(row(list[row(#0, #1)], #0))

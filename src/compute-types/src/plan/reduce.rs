@@ -718,11 +718,9 @@ impl ReducePlan {
         expected_group_size: Option<u64>,
         fused_unnest_list: bool,
     ) -> Self {
-        assert!(if fused_unnest_list {
-            matches!(typ, ReductionType::Basic) && aggregates_list.len() == 1
-        } else {
-            true
-        });
+        if fused_unnest_list {
+            assert!(matches!(typ, ReductionType::Basic) && aggregates_list.len() == 1);
+        }
         assert!(
             aggregates_list.len() > 0,
             "error: tried to render a reduce dataflow with no aggregates"

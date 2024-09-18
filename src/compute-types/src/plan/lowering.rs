@@ -390,6 +390,16 @@ impl Context {
             } => {
                 // A `FlatMap UnnestList` that comes after the `Reduce` of a window function can be
                 // fused into the lowered `Reduce`.
+                //
+                // In theory, we could have implemented this also as an MIR transform. However, this
+                // is more of a physical optimization, which are sometimes unpleasant to make a part
+                // of the MIR pipeline. The specific problem here with putting this into the MIR
+                // pipeline would be that we'd need to modify MIR's semantics: MIR's Reduce
+                // currently always emits exactly 1 row per group, but the fused Reduce-FlatMap can
+                // emit multiple rows per group. Such semantic changes of MIR are very scary, since
+                // various parts of the optimizer assume that Reduce emits only 1 row per group, and
+                // it would be very hard to hunt down all these parts. (For example, key inference
+                // infers the group key as a unique key.)
                 let fused_with_reduce = 'fusion: {
                     if !self.enable_reduce_unnest_list_fusion {
                         break 'fusion None;
@@ -406,7 +416,7 @@ impl Context {
                     } = &**flat_map_input
                     {
                         // We want this to be a single column, because we'll want to deal with only
-                        // one aggregation in the `Reduce`. (The aggregation of a window functions
+                        // one aggregation in the `Reduce`. (The aggregation of a window function
                         // always stands alone currently: we plan them separately from other
                         // aggregations, and Reduces are never fused. When window functions are
                         // fused with each other, they end up in one aggregation. When there are
@@ -444,6 +454,14 @@ impl Context {
                         // MFP above the FlatMap with this column disappearance.
                         let tweaked_mfp = {
                             let mut mfp = non_fused_mfp_above_flat_map.clone();
+                            if mfp.demand().contains(&0) {
+                                // I don't think this can happen currently that this MFP would
+                                // refer to the list column, because both the list column and the
+                                // MFP were constructed by the HIR-to-MIR lowering, so it's not just
+                                // some random MFP that we are seeing here. But anyhow, it's better
+                                // to check this here for robustness against future code changes.
+                                break 'fusion None;
+                            }
                             mfp.permute(
                                 (1..mfp.input_arity).map(|col| (col, col - 1)).collect(),
                                 mfp.input_arity - 1,
@@ -652,15 +670,29 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 aggregates,
                 monotonic,
                 expected_group_size,
-            } => self.lower_reduce(
-                input,
-                group_key,
-                aggregates,
-                monotonic,
-                expected_group_size,
-                &mut mfp,
-                false,
-            )?,
+            } => {
+                if self.enable_reduce_unnest_list_fusion
+                    && aggregates
+                        .iter()
+                        .any(|agg| agg.func.can_fuse_with_unnest_list())
+                {
+                    // This case should have been handled at the `MirRelationExpr::FlatMap` case
+                    // above. But that has a pretty complicated pattern matching, so it's not
+                    // unthinkable that it fails.
+                    soft_panic_or_log!(
+                        "Window function performance issue: `reduce_unnest_list_fusion` failed"
+                    );
+                }
+                self.lower_reduce(
+                    input,
+                    group_key,
+                    aggregates,
+                    monotonic,
+                    expected_group_size,
+                    &mut mfp,
+                    false,
+                )?
+            }
             MirRelationExpr::TopK {
                 input,
                 group_key,

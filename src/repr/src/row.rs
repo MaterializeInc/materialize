@@ -2465,6 +2465,8 @@ impl RowArena {
         }
     }
 
+    /// Does a `reserve` on the underlying `Vec`. Call this when you expect `additional` more datums
+    /// to be created in this arena.
     pub fn reserve(&self, additional: usize) {
         self.inner.borrow_mut().reserve(additional);
     }

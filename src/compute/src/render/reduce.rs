@@ -782,8 +782,9 @@ where
         // Allocations for the two closures.
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
+        let mut datums_key_1 = DatumVec::new();
+        let mut datums_key_2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
-        let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
         let func2 = func.clone();
 
         let name = if !fused_unnest_list {
@@ -791,22 +792,21 @@ where
         } else {
             "FusedReduceUnnestList"
         };
-        let arranged =
-            partial.mz_arrange::<RowRowSpine<_, _>>(("Arranged ".to_owned() + name).as_str());
-        let oks = arranged.mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>(name, {
-            move |key, source, target| {
-                // We respect the multiplicity here (unlike in hierarchical aggregation)
-                // because we don't know that the aggregation method is not sensitive
-                // to the number of records.
-                let iter = source.iter().flat_map(|(v, w)| {
-                    // Note that in the non-positive case, this is wrong, but harmless because
-                    // our other reduction will produce an error.
-                    let count = usize::try_from(*w).unwrap_or(0);
-                    std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
-                });
+        let arranged = partial.mz_arrange::<RowRowSpine<_, _>>(&format!("Arranged {name}"));
+        let oks = if !fused_unnest_list {
+            arranged.mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>(name, {
+                move |key, source, target| {
+                    // We respect the multiplicity here (unlike in hierarchical aggregation)
+                    // because we don't know that the aggregation method is not sensitive
+                    // to the number of records.
+                    let iter = source.iter().flat_map(|(v, w)| {
+                        // Note that in the non-positive case, this is wrong, but harmless because
+                        // our other reduction will produce an error.
+                        let count = usize::try_from(*w).unwrap_or(0);
+                        std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
+                    });
 
-                let temp_storage = RowArena::new();
-                if !fused_unnest_list {
+                    let temp_storage = RowArena::new();
                     let datum_iter = key.to_datum_iter();
                     let mut datums_local = datums1.borrow();
                     datums_local.extend(datum_iter);
@@ -825,17 +825,29 @@ where
                     {
                         target.push((row, 1));
                     }
-                } else {
+                }
+            })
+        } else {
+            arranged.mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>(name, {
+                move |key, source, target| {
+                    // This part is the same as in the `!fused_unnest_list` if branch above.
+                    let iter = source.iter().flat_map(|(v, w)| {
+                        let count = usize::try_from(*w).unwrap_or(0);
+                        std::iter::repeat(v.to_datum_iter().next().unwrap()).take(count)
+                    });
+
+                    // This is the part that is specific to the `fused_unnest_list` branch.
+                    let temp_storage = RowArena::new();
+                    let mut datums_local = datums_key_1.borrow();
+                    datums_local.extend(key.to_datum_iter());
+                    let key_len = datums_local.len();
                     for datum in func
                         .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
                             iter,
                             &temp_storage,
                         )
                     {
-                        let datum_iter = key.to_datum_iter();
-                        let mut datums_local = datums1.borrow();
-                        datums_local.extend(datum_iter);
-                        let key_len = datums_local.len();
+                        datums_local.truncate(key_len);
                         datums_local.push(datum);
                         if let Some(row) = evaluate_mfp_after(
                             &mfp_after1,
@@ -847,48 +859,49 @@ where
                         }
                     }
                 }
-            }
-        });
+            })
+        };
 
         // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here, but
         // we then wouldn't be able to do this error check conditionally.  See its documentation for the
         // rationale around using a second reduction here.
         let must_validate = validating && err_output.is_none();
+        let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
         if must_validate || mfp_after2.is_some() {
             let error_logger = self.error_logger();
 
-            let errs = arranged
-                .mz_reduce_abelian::<_, _, _, RowErrSpine<_, _>>(
-                    (name.to_owned() + " Error Check").as_str(),
-                    move |key, source, target| {
-                        // Negative counts would be surprising, but until we are 100% certain we won't
-                        // see them, we should report when we do. We may want to bake even more info
-                        // in here in the future.
-                        if must_validate {
-                            for (value, count) in source.iter() {
-                                if count.is_positive() {
-                                    continue;
+            let errs = if !fused_unnest_list {
+                arranged
+                    .mz_reduce_abelian::<_, _, _, RowErrSpine<_, _>>(
+                        &format!("{name} Error Check"),
+                        move |key, source, target| {
+                            // Negative counts would be surprising, but until we are 100% certain we won't
+                            // see them, we should report when we do. We may want to bake even more info
+                            // in here in the future.
+                            if must_validate {
+                                for (value, count) in source.iter() {
+                                    if count.is_positive() {
+                                        continue;
+                                    }
+                                    let value = value.into_owned();
+                                    let message = "Non-positive accumulation in ReduceInaccumulable";
+                                    error_logger
+                                        .log(message, &format!("value={value:?}, count={count}"));
+                                    target.push((EvalError::Internal(message.to_string()).into(), 1));
+                                    return;
                                 }
-                                let value = value.into_owned();
-                                let message = "Non-positive accumulation in ReduceInaccumulable";
-                                error_logger
-                                    .log(message, &format!("value={value:?}, count={count}"));
-                                target.push((EvalError::Internal(message.to_string()).into(), 1));
-                                return;
                             }
-                        }
 
-                        // We know that `mfp_after` can error if it exists, so try to evaluate it here.
-                        let Some(mfp) = &mfp_after2 else { return };
-                        let iter = source.iter().flat_map(|(mut v, w)| {
-                            let count = usize::try_from(*w).unwrap_or(0);
-                            // This would ideally use `to_datum_iter` but we cannot as it needs to
-                            // borrow `v` and only presents datums with that lifetime, not any longer.
-                            std::iter::repeat(v.next().unwrap()).take(count)
-                        });
+                            // We know that `mfp_after` can error if it exists, so try to evaluate it here.
+                            let Some(mfp) = &mfp_after2 else { return };
+                            let iter = source.iter().flat_map(|(mut v, w)| {
+                                let count = usize::try_from(*w).unwrap_or(0);
+                                // This would ideally use `to_datum_iter` but we cannot as it needs to
+                                // borrow `v` and only presents datums with that lifetime, not any longer.
+                                std::iter::repeat(v.next().unwrap()).take(count)
+                            });
 
-                        let temp_storage = RowArena::new();
-                        if !fused_unnest_list {
+                            let temp_storage = RowArena::new();
                             let datum_iter = key.to_datum_iter();
                             let mut datums_local = datums2.borrow();
                             datums_local.extend(datum_iter);
@@ -898,25 +911,56 @@ where
                                     &temp_storage,
                                 ),
                             );
-                            if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                            if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
                             {
                                 target.push((e.into(), 1));
                             }
-                        } else {
-                            for datum in func2.eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(iter, &temp_storage) {
-                                let datum_iter = key.to_datum_iter();
-                                let mut datums_local = datums2.borrow();
-                                datums_local.extend(datum_iter);
+                        },
+                    )
+                    .as_collection(|_, v| v.into_owned())
+            } else {
+                // `render_reduce_plan_inner` doesn't request validation when `fused_unnest_list`.
+                assert!(!must_validate);
+                // We couldn't have got into this if branch due to `must_validate`, so it must be
+                // because of the `mfp_after2.is_some()`.
+                let Some(mfp) = mfp_after2 else {
+                    unreachable!()
+                };
+                arranged
+                    .mz_reduce_abelian::<_, _, _, RowErrSpine<_, _>>(
+                        &format!("{name} Error Check"),
+                        move |key, source, target| {
+                            let iter = source.iter().flat_map(|(mut v, w)| {
+                                let count = usize::try_from(*w).unwrap_or(0);
+                                // This would ideally use `to_datum_iter` but we cannot as it needs to
+                                // borrow `v` and only presents datums with that lifetime, not any longer.
+                                std::iter::repeat(v.next().unwrap()).take(count)
+                            });
+
+                            let temp_storage = RowArena::new();
+                            let mut datums_local = datums_key_2.borrow();
+                            datums_local.extend(key.to_datum_iter());
+                            let key_len = datums_local.len();
+                            for datum in func2
+                                .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
+                                    iter,
+                                    &temp_storage,
+                                )
+                            {
+                                datums_local.truncate(key_len);
                                 datums_local.push(datum);
-                                if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                                // We know that `mfp` can error (because of the `could_error` call
+                                // above), so try to evaluate it here.
+                                if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
                                 {
                                     target.push((e.into(), 1));
                                 }
                             }
-                        }
-                    },
-                )
-                .as_collection(|_, v| v.into_owned());
+                        },
+                    )
+                    .as_collection(|_, v| v.into_owned())
+            };
+
             if let Some(e) = err_output {
                 err_output = Some(e.concat(&errs));
             } else {
