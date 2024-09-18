@@ -56,6 +56,9 @@ class Report:
         ), f"Result of scenario {result.scenario_name} already present"
         self._result_by_scenario_name[result.scenario_name] = result
 
+    def get_scenario_names(self) -> list[str]:
+        return list(self._result_by_scenario_name.keys())
+
     def as_string(self, use_colors: bool, limit_to_scenario: str | None = None) -> str:
         output_lines = []
 
