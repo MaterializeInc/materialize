@@ -50,7 +50,7 @@ impl CloudResourceController for KubernetesOrchestrator {
                 labels: Some(labels),
                 name: Some(name.clone()),
                 namespace: Some(self.kubernetes_namespace.clone()),
-                // TODO owner references https://github.com/MaterializeInc/cloud/issues/4408
+                // TODO owner references #28729
                 //owner_references: todo!(),
                 ..Default::default()
             },
