@@ -70,7 +70,7 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_CAUGHT_UP_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
-    WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL,
+    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF, WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL,
 };
 use mz_compute_client::as_of_selection;
 use mz_ore::channel::trigger;
@@ -3287,23 +3287,23 @@ impl Coordinator {
                     .try_into()
                     .expect("must fit into u64");
 
+                let cutoff =
+                    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF.get(self.catalog().system_config().dyncfgs());
+                let cutoff: u64 = cutoff.as_millis().try_into().expect("must fit into u64");
+
+                let now = self.now();
+
                 let compute_caught_up = self.controller.compute.clusters_caught_up(
                     allowed_lag.into(),
+                    cutoff.into(),
+                    now.into(),
                     &live_collection_frontiers,
                     &ctx.exclude_collections,
                 );
 
-                // We also check that we're "hydrated", meaning all collections
-                // have reported an upper at _some_ frontier. This acts as a
-                // back-stop to the case where `mz_cluster_replica_frontiers` is
-                // migrated and we report `0` for a collection frontier.
-                let compute_hydrated = self
-                    .controller
-                    .compute
-                    .clusters_hydrated(&ctx.exclude_collections);
-                tracing::info!(%compute_caught_up, %compute_hydrated, "checked caught-up status of collections");
+                tracing::info!(%compute_caught_up, "checked caught-up status of collections");
 
-                if compute_caught_up && compute_hydrated {
+                if compute_caught_up {
                     let ctx = self.hydration_check.take().expect("known to exist");
                     ctx.trigger.fire();
                 }
