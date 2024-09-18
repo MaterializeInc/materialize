@@ -142,11 +142,10 @@ be reported.
 
 ## Retry policy
 
-Any suspected performance regressions will be retried up to `--max-retries` times (default is 3). Only regressions that are
-repeatedly reproducible will cause the benchmark to exit with a nonzero exit code. The bottom of the Buildkite log will show
-the retry attempts.
+Any scenario will be run exactly `--runs-per-scenario` times (default is 3). The run with the median wallclock duration
+will be chosen and other runs will be discarded.
 
-Reported performance improvements are not retried to establish reprodicibility, so should be considered flukes if seen in the CI
+Reported performance improvements are not retried to establish reproducibility, so should be considered flakes if seen in the CI
 output until reliably reproduced locally.
 
 # Measuring memory consumption
