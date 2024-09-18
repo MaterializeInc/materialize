@@ -791,8 +791,7 @@
     {{< tip >}}
 
     For some window function query patterns, rewriting your query to not use
-    window functions can yield better performance.  See [Patterns: Window
-    functions](/transform-data/patterns/window-functions/) for details.
+    window functions can yield better performance.  See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/) for details.
 
     {{</ tip >}}
 
@@ -831,6 +830,9 @@
     description: |
       Returns `value` evaluated at the first row of the window frame. The default window frame is
       `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
+
+      See also [Idiomatic Materialize SQL: First value](/transform-data/idiomatic-materialize-sql/first-value/).
+
   - signature: 'lag(value anycompatible [, offset integer [, default anycompatible ]]) -> int'
     description: |
       Returns `value` evaluated at the row that is `offset` rows before the current row within the partition;
@@ -838,10 +840,17 @@
       If `offset` is `NULL`, `NULL` is returned instead.
       Both `offset` and `default` are evaluated with respect to the current row.
       If omitted, `offset` defaults to 1 and `default` to `NULL`.
+
+      See also [Idiomatic Materialize SQL: Lag over](/transform-data/idiomatic-materialize-sql/lag/).
+
   - signature: 'last_value(value anycompatible) -> anyelement'
     description: |
       Returns `value` evaluated at the last row of the window frame. The default window frame is
       `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
+
+      See also [Idiomatic Materialize SQL: Last
+      value](/transform-data/idiomatic-materialize-sql/last-value/).
+
   - signature: 'lead(value anycompatible [, offset integer [, default anycompatible ]]) -> int'
     description: |
       Returns `value` evaluated at the row that is `offset` rows after the current row within the partition;
@@ -849,6 +858,10 @@
       If `offset` is `NULL`, `NULL` is returned instead.
       Both `offset` and `default` are evaluated with respect to the current row.
       If omitted, `offset` defaults to 1 and `default` to `NULL`.
+
+      See also [Idiomatic Materialize SQL: Lead
+      over](/transform-data/idiomatic-materialize-sql/lead/).
+
   - signature: 'rank() -> int'
     description: |
       Returns the rank of the current row within its partition with gaps (counting from 1):
@@ -858,6 +871,9 @@
     description: |
       Returns the number of the current row within its partition, counting from 1.
       Rows that compare equal will be ordered in an unspecified way.
+
+      See also [Idiomatic Materialize SQL: Top-K](/transform-data/idiomatic-materialize-sql/top-k/).
+
 
 - type: System information
   description: Functions that return information about the system.

@@ -391,7 +391,7 @@ p+p {
         }
     }
 
-    ol.has-p:not(ol.has-p ol.has-p) {
+    :not(div.footnotes) > ol.has-p:not(ol.has-p ol.has-p) {
         list-style-type: none;
         counter-reset: list-counter;
         margin: 0;
@@ -1130,8 +1130,11 @@ div.json_widget {
     }
 }
 
+/* Unclear why we are suppressing the copy button in tables
+   but ... at least, allow for cases where we want to enable copy button in tables.
+*/
 
-tr .copy_button {
+td:not(.copyableCode) .copy_button {
     display: none !important;
 }
 
@@ -1204,4 +1207,32 @@ body.dark {
     font-weight: 300;
     padding: var(--nano);
     font-style: italic;
+}
+
+td.copyableCode{
+    .chroma {
+        background-color: var(--code-block);
+    }
+
+}
+
+div.footnotes  {
+
+    font-size: var(--sm);
+
+    hr {
+        width: 100%;
+    }
+
+    li::marker {
+        font-variant-numeric: normal;
+        content: "[" counter(list-item) "] ";
+    }
+
+}
+
+sup {
+    a {
+        color: var(--link);
+    }
 }

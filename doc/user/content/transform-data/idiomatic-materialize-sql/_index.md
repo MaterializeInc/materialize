@@ -1,0 +1,104 @@
+---
+title: "Idiomatic Materialize SQL"
+description: "Learn about idiomatic Materialize SQL. Materialize offers various idiomatic query patterns, such as for top-k query pattern, first value/last value query paterrns, etc."
+disable_list: true
+menu:
+  main:
+    parent: transform-data
+    weight: 10
+    identifier: idiomatic-materialize-sql
+
+aliases:
+  - /transform-data/patterns/window-functions/
+---
+
+Materialize follows the SQL standard (SQL-92) implementation and strives for
+compatibility with the PostgreSQL dialect.  However, for some use cases,
+Materialize provides its own idiomatic query patterns that can provide better
+performance.
+
+<table>
+<thead>
+<tr>
+<th>
+Query
+</th>
+<th>
+Idiomatic Materialize
+</th>
+</tr>
+</thead>
+<tbody>
+
+<tr>
+<td>
+
+[First value within groups](/transform-data/idiomatic-materialize-sql/first-value/)
+
+</td>
+<td>
+
+[Use `MIN/MAX ... GROUP BY` subquery](/transform-data/idiomatic-materialize-sql/first-value/)
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+[Lag over](/transform-data/idiomatic-materialize-sql/lag/)
+
+</td>
+<td>
+
+[Use self join or a self `LEFT JOIN/LEFT OUTER JOIN` that specifies an equality
+match on the regularly increasing
+field](/transform-data/idiomatic-materialize-sql/lag/)
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+[Last value within groups](/transform-data/idiomatic-materialize-sql/last-value/)
+
+</td>
+<td>
+
+[Use `MIN/MAX ... GROUP BY` subquery](/transform-data/idiomatic-materialize-sql/last-value/)
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+[Lead over](/transform-data/idiomatic-materialize-sql/lead/)
+
+</td>
+<td>
+
+[Use self join or a self `LEFT JOIN/LEFT OUTER JOIN` that specifies an equality
+match on the regularly increasing
+field](/transform-data/idiomatic-materialize-sql/lead/)
+
+</td>
+</tr>
+
+
+<tr>
+<td>
+
+[Top-K](/transform-data/idiomatic-materialize-sql/top-k/)
+
+</td>
+<td>
+
+[Use `LATERAL JOIN` on a `DISTINCT` subquery and an `ORDER BY ... LIMIT` subquery](/transform-data/idiomatic-materialize-sql/top-k/)
+
+</td>
+</tr>
+
+</tbody>
+</table>

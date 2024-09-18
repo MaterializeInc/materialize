@@ -29,8 +29,8 @@ Field | Use
 _select&lowbar;with&lowbar;ctes_, _select&lowbar;with&lowbar;recursive&lowbar;ctes_ | [Common table expressions](#common-table-expressions-ctes) (CTEs) for this query.
 **(** _col&lowbar;ident_... **)** | Rename the CTE's columns to the list of identifiers, both of which must be the same length.
 **ALL** | Return all rows from query _(Default)_.
-**DISTINCT** | Return only distinct values.
-**DISTINCT ON (** _col&lowbar;ref_... **)**  | Return only the first row with a distinct value for _col&lowbar;ref_. If an `ORDER BY` clause is also present, then `DISTINCT ON` will respect that ordering when choosing which row to return for each distinct value of `col_ref...`. Please note that in this case, you should start the `ORDER BY` clause with the same `col_ref...` as the `DISTINCT ON` clause. For an example, see [Top K](/guides/top-k).
+**DISTINCT** | <a name="select-distinct"></a>Return only distinct values.
+**DISTINCT ON (** _col&lowbar;ref_... **)**  | <a name="select-distinct-on"></a>Return only the first row with a distinct value for _col&lowbar;ref_. If an `ORDER BY` clause is also present, then `DISTINCT ON` will respect that ordering when choosing which row to return for each distinct value of `col_ref...`. Please note that in this case, you should start the `ORDER BY` clause with the same `col_ref...` as the `DISTINCT ON` clause. For an example, see [Top K](/transform-data/idiomatic-materialize-sql/top-k/).
 _target&lowbar;elem_ | Return identified columns or functions.
 **FROM** _table&lowbar;ref_ | The tables you want to read from; note that these can also be other `SELECT` statements or [Common Table Expressions](#common-table-expressions-ctes) (CTEs).
 _join&lowbar;expr_ | A join expression; for more details, see the [`JOIN` documentation](/sql/select/join/).
@@ -125,8 +125,8 @@ The following query hints are valid within the `OPTION` clause.
 Hint | Value type | Description
 ------|------------|------------
 `AGGREGATE INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in an aggregation. Materialize can render `min` and `max` expressions more efficiently with this information.
-`DISTINCT ON INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in a `DISTINCT ON` expression. Materialize can render [Top K patterns](/guides/top-k) based on `DISTINCT ON` more efficiently with this information.
-`LIMIT INPUT GROUP SIZE` | `uint8` | How many rows will be given as a group to a `LIMIT` restriction. Materialize can render [Top K patterns](/guides/top-k) based on `LIMIT` more efficiently with this information.
+`DISTINCT ON INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in a `DISTINCT ON` expression. Materialize can render [Top K patterns](/transform-data/idiomatic-materialize-sql/top-k/) based on `DISTINCT ON` more efficiently with this information.
+`LIMIT INPUT GROUP SIZE` | `uint8` | How many rows will be given as a group to a `LIMIT` restriction. Materialize can render [Top K patterns](/transform-data/idiomatic-materialize-sql/top-k/) based on `LIMIT` more efficiently with this information.
 
 For examples, see the [Optimization](/transform-data/optimization/#query-hints) page.
 
