@@ -271,6 +271,7 @@ def run_one_scenario(
                 scenario_version = benchmark.create_scenario_instance().version()
                 for aggregation, comparator in zip(aggregations, comparators):
                     comparator.set_scenario_version(scenario_version)
+                    assert aggregation.measurement_type == comparator.measurement_type
                     comparator.append_point(
                         aggregation.aggregate(),
                         aggregation.unit(),
