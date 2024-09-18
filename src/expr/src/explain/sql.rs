@@ -460,16 +460,19 @@ impl MirToSql {
                     // recursively generate inputs in the order...
                     let mut fq_columns = Vec::with_capacity(columns.len());
                     let mut q_idents = Vec::with_capacity(num_inputs);
+                    let mut q_aliases = Vec::with_capacity(num_inputs);
                     let mut q_columns = Vec::with_capacity(num_inputs);
                     for input in std::iter::once(&first).chain(rest.iter()) {
                         let (inner, inner_columns) =
                             sc.build_query(&inputs[*input], bindings, ctx)?;
+                        let alias = sc.fresh_ident(inner.as_str());
                         assert!(inner_columns == sc.column_info(&inputs[*input], ctx));
                         fq_columns.extend(
                             inner_columns
                                 .iter()
-                                .map(|col_name| vec![inner.clone(), col_name.clone()]),
+                                .map(|col_name| vec![alias.clone(), col_name.clone()]),
                         );
+                        q_aliases.push(alias);
                         q_idents.push(inner);
                         q_columns.push(inner_columns);
                     }
@@ -481,7 +484,11 @@ impl MirToSql {
                             name: RawItemName::Name(UnresolvedItemName(vec![
                                 q_idents[first].clone()
                             ])),
-                            alias: None,
+                            alias: Some(TableAlias {
+                                name: q_aliases[first].clone(),
+                                columns: vec![],
+                                strict: false,
+                            }),
                         },
                         joins: rest
                             .into_iter()
@@ -490,7 +497,11 @@ impl MirToSql {
                                     name: RawItemName::Name(UnresolvedItemName(vec![q_idents
                                         [idx]
                                         .clone()])),
-                                    alias: None,
+                                    alias: Some(TableAlias {
+                                        name: q_aliases[idx].clone(),
+                                        columns: vec![],
+                                        strict: false,
+                                    }),
                                 },
                                 join_operator: JoinOperator::Inner(JoinConstraint::On(
                                     Expr::Value(Value::Boolean(true)),
@@ -513,7 +524,6 @@ impl MirToSql {
                         }
                     }
 
-                    // TODO(mgree) self joins will generate duplicate (bad) aliases
                     let projection = fq_columns
                         .into_iter()
                         .map(|fqi| {
