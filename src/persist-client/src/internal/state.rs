@@ -2630,6 +2630,71 @@ pub(crate) mod tests {
     }
 
     #[mz_ore::test]
+    fn compare_and_downgrade_since() {
+        let mut state = TypedState::<(), (), u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+        let reader = CriticalReaderId::new();
+        let _ = state
+            .collections
+            .register_critical_reader::<u64>("", &reader, "");
+
+        // The shard global since == 0 initially.
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
+        // The initial opaque value should be set.
+        assert_eq!(
+            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            u64::initial()
+        );
+
+        // Greater
+        assert_eq!(
+            state.collections.compare_and_downgrade_since::<u64>(
+                &reader,
+                &u64::initial(),
+                (&1, &Antichain::from_elem(2)),
+            ),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+        assert_eq!(
+            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            1
+        );
+        // Equal (no-op)
+        assert_eq!(
+            state.collections.compare_and_downgrade_since::<u64>(
+                &reader,
+                &1,
+                (&2, &Antichain::from_elem(2)),
+            ),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+        assert_eq!(
+            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            2
+        );
+        // Less (no-op)
+        assert_eq!(
+            state.collections.compare_and_downgrade_since::<u64>(
+                &reader,
+                &2,
+                (&3, &Antichain::from_elem(1)),
+            ),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+        assert_eq!(
+            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            3
+        );
+    }
+
+    #[mz_ore::test]
     fn compare_and_append() {
         let state = &mut TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
