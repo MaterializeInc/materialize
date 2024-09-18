@@ -48,33 +48,45 @@ $ set schema={
 # TODO - we should verify here that the topic is not being re-read from the beginning,
 # but I don't know of any way to do that in Testdrive today.
 
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema}
+$ kafka-ingest format=avro topic=dbzupsert-broken-key key-format=avro key-schema=${keyschema} schema=${schema}
+{"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "Tyrannosaurus rex"}}}
+{"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "dragon"}}}
+
+$ kafka-ingest format=avro topic=dbzupsert-broken-value key-format=avro key-schema=${keyschema} schema=${schema}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "Tyrannosaurus rex"}}}
 {"id": 1} {"before": null, "after": {"row": {"id": 1, "creature": "dragon"}}}
 
 # Verify that the errors from before are still there
-! SELECT * FROM upsert
+! SELECT * FROM upsert_broken_key
+contains: Key decode
+
+! SELECT * FROM upsert_broken_value
 contains: Value error
 
 # Retract the bad key
-$ kafka-ingest format=bytes topic=dbzupsert key-format=bytes omit-value=true
+$ kafka-ingest format=bytes topic=dbzupsert-broken-key key-format=bytes omit-value=true
 broken-key:
 
-# There is still an error, due to the bad value.
-! SELECT * FROM upsert
+> SELECT * FROM upsert_broken_key
+id creature
+-----------
+1  dragon
+
+# There is still an error in the other source, due to the bad value.
+! SELECT * FROM upsert_broken_value
 contains: Value error
 
 # Update the bad value
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema}
+$ kafka-ingest format=avro topic=dbzupsert-broken-value key-format=avro key-schema=${keyschema} schema=${schema}
 {"id": 2} {"before": null, "after": {"row": {"id": 2, "creature": "cow"}}}
 
-> SELECT * FROM upsert
+> SELECT * FROM upsert_broken_value
 id creature
 -----------
 1  dragon
 2  cow
 
-# Verify that we still can't query, because of the NULL-key error.
+# Verify that we still can't query the third source, because of the NULL-key error.
 ! select * from upsert_nullkey
 contains: record with NULL key in UPSERT source
 
