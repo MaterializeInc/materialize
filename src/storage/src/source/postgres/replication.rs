@@ -101,7 +101,7 @@ use postgres_replication::protocol::{LogicalReplicationMessage, ReplicationMessa
 use postgres_replication::LogicalReplicationStream;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::Capability;
@@ -142,6 +142,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     connection: PostgresSourceConnection,
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     rewind_stream: &Stream<G, RewindRequest>,
+    slot_ready_stream: &Stream<G, Infallible>,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     metrics: PgSourceMetrics,
 ) -> (
@@ -166,6 +167,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         Exchange::new(move |_| slot_reader),
         &data_output,
     );
+    let mut slot_ready_input = builder.new_disconnected_input(slot_ready_stream, Pipeline);
     let mut output_uppers = table_info
         .iter()
         .flat_map(|(_, outputs)| outputs.values().map(|o| o.resume_upper.clone()))
@@ -226,6 +228,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 )
                 .await?;
 
+            while let Some(_) = slot_ready_input.next().await {
+                // Wait for the slot to be created
+            }
             tracing::info!(%id, "ensuring replication slot {slot} exists");
             super::ensure_replication_slot(&replication_client, slot).await?;
             let slot_metadata = super::fetch_slot_metadata(

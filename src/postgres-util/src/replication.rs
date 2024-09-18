@@ -89,13 +89,13 @@ pub async fn available_replication_slots(client: &Client) -> Result<i64, Postgre
 pub async fn drop_replication_slots(
     ssh_tunnel_manager: &SshTunnelManager,
     config: Config,
-    slots: &[&str],
+    slots: &[(&str, bool)],
 ) -> Result<(), PostgresError> {
     let client = config
         .connect("postgres_drop_replication_slots", ssh_tunnel_manager)
         .await?;
     let replication_client = config.connect_replication(ssh_tunnel_manager).await?;
-    for slot in slots {
+    for (slot, should_wait) in slots {
         let rows = client
             .query(
                 "SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
@@ -112,8 +112,9 @@ pub async fn drop_replication_slots(
                 continue;
             }
             1 => {
+                let wait_str = if *should_wait { " WAIT" } else { "" };
                 replication_client
-                    .simple_query(&format!("DROP_REPLICATION_SLOT {} WAIT", slot))
+                    .simple_query(&format!("DROP_REPLICATION_SLOT {slot}{wait_str}"))
                     .await?;
             }
             _ => {
