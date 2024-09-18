@@ -12,6 +12,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_reduce_unnest_list_fusion = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t(x string);
 
@@ -7608,3 +7613,415 @@ Source materialize.public.t7
 Target cluster: quickstart
 
 EOF
+
+# Test the situation when the MFP above is fused into the Reduce, and the MFP can error.
+query III
+SELECT *
+FROM (
+  SELECT *, lag(x) OVER (ORDER BY x) AS l
+  FROM t7
+)
+WHERE l/2 < 7
+ORDER BY x,y,l;
+----
+3  NULL  1
+5  6  3
+7  8  5
+9  NULL  7
+10  -50  9
+10  -40  10
+11  NULL  10
+13  14  11
+15  16  13
+
+# Test the situation when the MFP above is fused into the Reduce, but the MFP can't error.
+query III
+SELECT *
+FROM (
+  SELECT *, lag(x) OVER (ORDER BY x) AS l
+  FROM t7
+)
+WHERE l < 14
+ORDER BY x,y,l;
+----
+3  NULL  1
+5  6  3
+7  8  5
+9  NULL  7
+10  -50  9
+10  -40  10
+11  NULL  10
+13  14  11
+15  16  13
+
+## Check some LIR plans that the optimization guarded by `enable_reduce_unnest_list_fusion` happens.
+## These should show `fused_unnest_list=true`.
+
+# Simple situation
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  lead(x,y-2,120) OVER (ORDER BY x)
+FROM t9;
+----
+Explained Query:
+  Mfp
+    project=(#1)
+    map=(record_get[0](#0))
+    input_key=
+    Reduce::Basic
+      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+      key_plan
+        project=()
+      Get::PassArrangements materialize.public.t9
+        raw=true
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+# PARTITION BY
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  lead(x,y-2,120) OVER (PARTITION BY x/2 ORDER BY x)
+FROM t9;
+----
+Explained Query:
+  Mfp
+    project=(#2)
+    map=(record_get[0](#1))
+    input_key=#0
+    Reduce::Basic
+      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+      key_plan
+        project=(#2)
+        map=((#0 / 2))
+      Get::PassArrangements materialize.public.t9
+        raw=true
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+# PARTITION BY multiple columns
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  lead(x,y-2,120) OVER (PARTITION BY x/2, y ORDER BY x)
+FROM t9;
+----
+Explained Query:
+  Mfp
+    project=(#3)
+    map=(record_get[0](#2))
+    input_key=#0, #1
+    Reduce::Basic
+      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+      key_plan
+        project=(#2, #1)
+        map=((#0 / 2))
+      Get::PassArrangements materialize.public.t9
+        raw=true
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+# row_number()
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  row_number() OVER (ORDER BY x),
+  x
+FROM t7
+ORDER BY row_number
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0, #1]
+    Mfp
+      project=(#2, #1)
+      map=(record_get[0](record_get[1](#0)), record_get[0](#0))
+      input_key=
+      Reduce::Basic
+        aggr=(0, row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0)), fused_unnest_list=true)
+        val_plan
+          project=(#2)
+          map=(row(list[row(#0, #1)], #0))
+        key_plan
+          project=()
+        Get::PassArrangements materialize.public.t7
+          raw=true
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+# MFP after is fused into the Reduce
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT *
+FROM (
+  SELECT *, lag(x) OVER (ORDER BY x) AS l
+  FROM t7
+)
+WHERE l < 14
+ORDER BY x,y,l;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last, #2 asc nulls_last] output=[#0..=#2]
+    Mfp
+      project=(#3, #4, #1)
+      map=(record_get[0](#0), record_get[1](#0), record_get[0](#2), record_get[1](#2))
+      input_key=
+      Reduce::Basic
+        aggr=(0, lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, 1, null)), #0)), fused_unnest_list=true)
+        val_plan
+          project=(#2)
+          map=(row(row(row(#0, #1), row(#0, 1, null)), #0))
+        key_plan
+          project=()
+        mfp_after
+          filter=((record_get[0](#0) < 14))
+        Get::PassArrangements materialize.public.t7
+          raw=true
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+# Two lags fused with each other + Reduce-FlatMap fusion.
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  *,
+  lag(x) OVER (),
+  lag(y) OVER ()
+FROM t7
+ORDER BY x,y;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#3]
+    Mfp
+      project=(#2, #3, #6, #5)
+      map=(record_get[1](#0), record_get[0](#1), record_get[1](#1), record_get[0](#0), record_get[0](#4), record_get[1](#4))
+      input_key=
+      Reduce::Basic
+        aggr=(0, fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(#0, #1), row(row(#1, 1, null), row(#0, 1, null))))), fused_unnest_list=true)
+        val_plan
+          project=(#2)
+          map=(row(row(row(#0, #1), row(row(#1, 1, null), row(#0, 1, null)))))
+        key_plan
+          project=()
+        Get::PassArrangements materialize.public.t7
+          raw=true
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+## Run some tests also with `enable_reduce_unnest_list_fusion` disabled.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_reduce_unnest_list_fusion = false
+----
+COMPLETE 0
+
+# This is a new test.
+query IIIIIIIIIIIII
+SELECT
+  *,
+  first_value(
+    lag(x*x,y,1111) OVER (PARTITION BY x ORDER BY y)
+  ) OVER (PARTITION BY x ORDER BY y),
+  x*y,
+  last_value(
+    lag(x*x,y,2222) OVER (PARTITION BY x ORDER BY y)
+  ) OVER (PARTITION BY x ORDER BY y+y),
+  last_value(x+y) OVER (PARTITION BY x ORDER BY y+y),
+  lag(y)          OVER (ORDER BY x),
+  row_number() OVER (ORDER BY x),
+  rank()       OVER (ORDER BY x),
+  dense_rank() OVER (ORDER BY x),
+  sum(y+3)     OVER (ORDER BY x),
+  min(y+4)     OVER (PARTITION BY x%2 ORDER BY x),
+  x+y
+FROM t7
+ORDER BY x,y;
+----
+1  2  1111  2  2222  3  NULL  1  1  1  5  6  3
+3  NULL  NULL  NULL  NULL  NULL  2  2  2  2  5  6  NULL
+5  6  1111  30  2222  11  NULL  3  3  3  14  6  11
+7  8  1111  56  2222  15  6  4  4  4  25  6  15
+9  NULL  NULL  NULL  NULL  NULL  8  5  5  5  25  6  NULL
+10  -50  1111  -500  2222  -40  NULL  6  6  6  -59  -46  -40
+10  -40  1111  -400  2222  -30  -50  7  6  6  -59  -46  -30
+11  NULL  NULL  NULL  NULL  NULL  -40  8  8  7  -59  6  NULL
+13  14  1111  182  2222  27  NULL  9  9  8  -42  6  27
+15  16  1111  240  2222  31  14  10  10  9  -23  6  31
+17  18  1111  306  2222  35  16  11  11  10  -2  6  35
+
+# These are copied from above.
+query III
+SELECT *
+FROM (
+  SELECT *, lag(x) OVER (ORDER BY x) AS l
+  FROM t7
+)
+WHERE l/2 < 7
+ORDER BY x,y,l;
+----
+3  NULL  1
+5  6  3
+7  8  5
+9  NULL  7
+10  -50  9
+10  -40  10
+11  NULL  10
+13  14  11
+15  16  13
+
+query IRRB
+WITH
+  simple AS (
+    SELECT
+      x%5 AS x5_simple,
+      avg(y) OVER (PARTITION BY x%5) AS avg_simple
+    FROM t7
+  ),
+  complicated AS ( -- array_agg, then do an unnest and global agg in a subquery in a SELECT
+    WITH
+      array_agg AS (
+        SELECT
+          x%5 AS x5,
+          array_agg(y) OVER (PARTITION BY x%5) AS l
+        FROM t7
+      )
+    SELECT
+      x5 AS x5_complicated,
+      (
+        SELECT avg(uy)
+        FROM unnest(l) AS uy
+      ) AS avg_complicated
+    FROM array_agg
+  )
+SELECT DISTINCT
+  x5_simple,
+  avg_simple,
+  avg_complicated,
+  avg_simple = avg_complicated
+FROM simple, complicated
+WHERE x5_simple = x5_complicated
+ORDER BY x5_simple;
+----
+0  -17  -17  true
+1  2  2  true
+2  13  13  true
+3  14  14  true
+4  NULL  NULL  NULL
+
+query IIIIIIIIIIIIIIIIIIII
+select
+  x,
+  y,
+  lag(y) over (partition by x%4 order by x) as lag1,
+  lag(y) respect nulls over (partition by x%4 order by x) as lag1_resp,
+  lag(y) ignore nulls over (partition by x%4 order by x) as lag1_ign,
+  lead(y) over (partition by x%4 order by x) as lead1,
+  lead(y) ignore nulls over (partition by x%4 order by x) as lead1_ign,
+  lag(y, 2) over (partition by x%4 order by x) as lag2,
+  lag(y, 2) ignore nulls over (partition by x%4 order by x) as lag2_ign,
+  lead(y, 2) over (partition by x%4 order by x) as lead2,
+  lead(y, 2) ignore nulls over (partition by x%4 order by x) as lead2_ign,
+  lag(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lag2_ign_def,
+  lead(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lead2_ign_def,
+  lag(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lag2_ign_def16,
+  lead(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lead2_ign_def16,
+  lag(y, -1, 100) ignore nulls over (partition by x%4 order by x) as lag_neg_offset,
+  lead(y, -2, 100) ignore nulls over (partition by x%4 order by x) as lead_neg_offset,
+  lag(y, y/5+1) ignore nulls over (partition by x%4 order by x) as lag_dynamic_offset,
+  lead(y, y/5+1) ignore nulls over (partition by x%4 order by x) as lead_dynamic_offset,
+  lag(y, null) ignore nulls over (partition by x%4 order by x) as lag_literal_null_offset
+from t6
+order by x%4, x;
+----
+1  2  NULL  NULL  NULL  6  6  NULL  NULL  NULL  14  -1  14  16  14  6  100  NULL  6  NULL
+5  6  2  2  2  NULL  14  NULL  NULL  14  18  -1  18  16  18  14  100  NULL  18  NULL
+9  NULL  6  6  6  14  14  2  2  18  18  2  18  2  18  14  2  NULL  NULL  NULL
+13  14  NULL  NULL  6  18  18  6  2  NULL  NULL  2  -1  2  16  18  2  NULL  NULL  NULL
+17  18  14  14  14  NULL  NULL  NULL  6  NULL  NULL  6  -1  6  16  100  6  NULL  NULL  NULL
+3  NULL  NULL  NULL  NULL  8  8  NULL  NULL  NULL  16  -1  16  16  16  8  100  NULL  NULL  NULL
+7  8  NULL  NULL  NULL  NULL  16  NULL  NULL  16  NULL  -1  -1  16  16  16  100  NULL  NULL  NULL
+11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16  16  100  NULL  NULL  NULL
+15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16  100  100  NULL  NULL  NULL
+
+# Run the same test with also `enable_value_window_function_fusion` disabled.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_value_window_function_fusion = false
+----
+COMPLETE 0
+
+query IIIIIIIIIIIIIIIIIIII
+select
+  x,
+  y,
+  lag(y) over (partition by x%4 order by x) as lag1,
+  lag(y) respect nulls over (partition by x%4 order by x) as lag1_resp,
+  lag(y) ignore nulls over (partition by x%4 order by x) as lag1_ign,
+  lead(y) over (partition by x%4 order by x) as lead1,
+  lead(y) ignore nulls over (partition by x%4 order by x) as lead1_ign,
+  lag(y, 2) over (partition by x%4 order by x) as lag2,
+  lag(y, 2) ignore nulls over (partition by x%4 order by x) as lag2_ign,
+  lead(y, 2) over (partition by x%4 order by x) as lead2,
+  lead(y, 2) ignore nulls over (partition by x%4 order by x) as lead2_ign,
+  lag(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lag2_ign_def,
+  lead(y, 2, -1) ignore nulls over (partition by x%4 order by x) as lead2_ign_def,
+  lag(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lag2_ign_def16,
+  lead(y, 2, 16) ignore nulls over (partition by x%4 order by x) as lead2_ign_def16,
+  lag(y, -1, 100) ignore nulls over (partition by x%4 order by x) as lag_neg_offset,
+  lead(y, -2, 100) ignore nulls over (partition by x%4 order by x) as lead_neg_offset,
+  lag(y, y/5+1) ignore nulls over (partition by x%4 order by x) as lag_dynamic_offset,
+  lead(y, y/5+1) ignore nulls over (partition by x%4 order by x) as lead_dynamic_offset,
+  lag(y, null) ignore nulls over (partition by x%4 order by x) as lag_literal_null_offset
+from t6
+order by x%4, x;
+----
+1  2  NULL  NULL  NULL  6  6  NULL  NULL  NULL  14  -1  14  16  14  6  100  NULL  6  NULL
+5  6  2  2  2  NULL  14  NULL  NULL  14  18  -1  18  16  18  14  100  NULL  18  NULL
+9  NULL  6  6  6  14  14  2  2  18  18  2  18  2  18  14  2  NULL  NULL  NULL
+13  14  NULL  NULL  6  18  18  6  2  NULL  NULL  2  -1  2  16  18  2  NULL  NULL  NULL
+17  18  14  14  14  NULL  NULL  NULL  6  NULL  NULL  6  -1  6  16  100  6  NULL  NULL  NULL
+3  NULL  NULL  NULL  NULL  8  8  NULL  NULL  NULL  16  -1  16  16  16  8  100  NULL  NULL  NULL
+7  8  NULL  NULL  NULL  NULL  16  NULL  NULL  16  NULL  -1  -1  16  16  16  100  NULL  NULL  NULL
+11  NULL  8  8  8  16  16  NULL  NULL  NULL  NULL  -1  -1  16  16  16  100  NULL  NULL  NULL
+15  16  NULL  NULL  8  NULL  NULL  8  NULL  NULL  NULL  -1  -1  16  16  100  100  NULL  NULL  NULL
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_value_window_function_fusion = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_reduce_unnest_list_fusion = true
+----
+COMPLETE 0

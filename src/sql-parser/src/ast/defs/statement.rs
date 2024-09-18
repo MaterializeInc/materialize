@@ -2047,6 +2047,7 @@ pub enum ClusterFeatureName {
     EnableLetrecFixpointAnalysis,
     EnableOuterJoinNullFilter,
     EnableValueWindowFunctionFusion,
+    EnableReduceUnnestListFusion,
 }
 
 impl WithOptionName for ClusterFeatureName {
@@ -2063,7 +2064,8 @@ impl WithOptionName for ClusterFeatureName {
             | Self::EnableVariadicLeftJoinLowering
             | Self::EnableLetrecFixpointAnalysis
             | Self::EnableOuterJoinNullFilter
-            | Self::EnableValueWindowFunctionFusion => false,
+            | Self::EnableValueWindowFunctionFusion
+            | Self::EnableReduceUnnestListFusion => false,
         }
     }
 }
@@ -3591,6 +3593,7 @@ pub enum ExplainPlanOptionName {
     EnableLetrecFixpointAnalysis,
     EnableOuterJoinNullFilter,
     EnableValueWindowFunctionFusion,
+    EnableReduceUnnestListFusion,
 }
 
 impl WithOptionName for ExplainPlanOptionName {
@@ -3626,7 +3629,8 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::EnableVariadicLeftJoinLowering
             | Self::EnableLetrecFixpointAnalysis
             | Self::EnableOuterJoinNullFilter
-            | Self::EnableValueWindowFunctionFusion => false,
+            | Self::EnableValueWindowFunctionFusion
+            | Self::EnableReduceUnnestListFusion => false,
         }
     }
 }

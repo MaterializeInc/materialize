@@ -27,7 +27,7 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
 {
-    /// Renders `relation_expr` followed by `map_filter_project` if provided.
+    /// Applies a `TableFunc` to every row, followed by an `mfp`.
     pub fn render_flat_map(
         &mut self,
         input: CollectionBundle<G>,

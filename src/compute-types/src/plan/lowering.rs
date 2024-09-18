@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
-    permutation_for_arrangement, Id, JoinInputMapper, MapFilterProject, MirRelationExpr,
-    MirScalarExpr, OptimizedMirRelationExpr,
+    permutation_for_arrangement, AggregateExpr, Id, JoinInputMapper, MapFilterProject,
+    MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
 };
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::optimize::OptimizerFeatures;
@@ -37,6 +37,8 @@ pub(super) struct Context {
     debug_info: LirDebugInfo,
     /// Whether to enable fusion of MFPs in reductions.
     enable_reduce_mfp_fusion: bool,
+    /// Whether to fuse `Reduce` with `FlatMap UnnestList` for better window function performance.
+    enable_reduce_unnest_list_fusion: bool,
 }
 
 impl Context {
@@ -49,6 +51,7 @@ impl Context {
                 id: GlobalId::Transient(0),
             },
             enable_reduce_mfp_fusion: features.enable_reduce_mfp_fusion,
+            enable_reduce_unnest_list_fusion: features.enable_reduce_unnest_list_fusion,
         }
     }
 
@@ -380,37 +383,152 @@ impl Context {
                     b_keys,
                 )
             }
-            MirRelationExpr::FlatMap { input, func, exprs } => {
-                let (input, keys) = self.lower_mir_expr(input)?;
-                // This stage can absorb arbitrary MFP instances.
-                let mfp = mfp.take();
-                let mut exprs = exprs.clone();
-                let input_key = if let Some((k, permutation, _)) = keys.arbitrary_arrangement() {
-                    // We don't permute the MFP here, because it runs _after_ the table function,
-                    // whose output is in a fixed order.
-                    //
-                    // We _do_, however, need to permute the `expr`s that provide input to the
-                    // `func`.
-                    for expr in &mut exprs {
-                        expr.permute_map(permutation);
+            MirRelationExpr::FlatMap {
+                input: flat_map_input,
+                func,
+                exprs,
+            } => {
+                // A `FlatMap UnnestList` that comes after the `Reduce` of a window function can be
+                // fused into the lowered `Reduce`.
+                //
+                // In theory, we could have implemented this also as an MIR transform. However, this
+                // is more of a physical optimization, which are sometimes unpleasant to make a part
+                // of the MIR pipeline. The specific problem here with putting this into the MIR
+                // pipeline would be that we'd need to modify MIR's semantics: MIR's Reduce
+                // currently always emits exactly 1 row per group, but the fused Reduce-FlatMap can
+                // emit multiple rows per group. Such semantic changes of MIR are very scary, since
+                // various parts of the optimizer assume that Reduce emits only 1 row per group, and
+                // it would be very hard to hunt down all these parts. (For example, key inference
+                // infers the group key as a unique key.)
+                let fused_with_reduce = 'fusion: {
+                    if !self.enable_reduce_unnest_list_fusion {
+                        break 'fusion None;
                     }
-
-                    Some(k.clone())
-                } else {
-                    None
+                    if !matches!(func, TableFunc::UnnestList { .. }) {
+                        break 'fusion None;
+                    }
+                    // We might have a Project of a single col between the FlatMap and the
+                    // Reduce. (It projects away the grouping keys of the Reduce, and keeps the
+                    // result of the window function.)
+                    let (maybe_reduce, num_grouping_keys) = if let MirRelationExpr::Project {
+                        input: project_input,
+                        outputs: projection,
+                    } = &**flat_map_input
+                    {
+                        // We want this to be a single column, because we'll want to deal with only
+                        // one aggregation in the `Reduce`. (The aggregation of a window function
+                        // always stands alone currently: we plan them separately from other
+                        // aggregations, and Reduces are never fused. When window functions are
+                        // fused with each other, they end up in one aggregation. When there are
+                        // multiple window functions in the same SELECT, but can't be fused, they
+                        // end up in different Reduces.)
+                        if let &[single_col] = &**projection {
+                            (project_input, single_col)
+                        } else {
+                            break 'fusion None;
+                        }
+                    } else {
+                        (flat_map_input, 0)
+                    };
+                    if let MirRelationExpr::Reduce {
+                        input,
+                        group_key,
+                        aggregates,
+                        monotonic,
+                        expected_group_size,
+                    } = &**maybe_reduce
+                    {
+                        if group_key.len() != num_grouping_keys
+                            || aggregates.len() != 1
+                            || !aggregates[0].func.can_fuse_with_unnest_list()
+                        {
+                            break 'fusion None;
+                        }
+                        // At the beginning, `non_fused_mfp_above_flat_map` will be the original MFP
+                        // above the FlatMap. Later, we'll mutate this to be the residual MFP that
+                        // didn't get fused into the `Reduce`.
+                        let non_fused_mfp_above_flat_map = &mut mfp;
+                        let reduce_output_arity = num_grouping_keys + 1;
+                        // We are fusing away the list that the FlatMap would have been unnesting,
+                        // so the column that had that list disappears, so we have to permute the
+                        // MFP above the FlatMap with this column disappearance.
+                        let tweaked_mfp = {
+                            let mut mfp = non_fused_mfp_above_flat_map.clone();
+                            if mfp.demand().contains(&0) {
+                                // I don't think this can happen currently that this MFP would
+                                // refer to the list column, because both the list column and the
+                                // MFP were constructed by the HIR-to-MIR lowering, so it's not just
+                                // some random MFP that we are seeing here. But anyhow, it's better
+                                // to check this here for robustness against future code changes.
+                                break 'fusion None;
+                            }
+                            mfp.permute(
+                                (1..mfp.input_arity).map(|col| (col, col - 1)).collect(),
+                                mfp.input_arity - 1,
+                            );
+                            mfp
+                        };
+                        // We now put together the project that was before the FlatMap, and the
+                        // tweaked version of the MFP that was after the FlatMap.
+                        // (Part of this MFP might be fused into the Reduce.)
+                        let mut project_and_tweaked_mfp = {
+                            let mut mfp = MapFilterProject::new(reduce_output_arity);
+                            mfp = mfp.project(vec![num_grouping_keys]);
+                            mfp = MapFilterProject::compose(mfp, tweaked_mfp);
+                            mfp
+                        };
+                        let fused = self.lower_reduce(
+                            input,
+                            group_key,
+                            aggregates,
+                            monotonic,
+                            expected_group_size,
+                            &mut project_and_tweaked_mfp,
+                            true,
+                        )?;
+                        // Update the residual MFP.
+                        *non_fused_mfp_above_flat_map = project_and_tweaked_mfp;
+                        Some(fused)
+                    } else {
+                        break 'fusion None;
+                    }
                 };
-                // Return the plan, and no arrangements.
-                (
-                    Plan::FlatMap {
-                        input: Box::new(input),
-                        func: func.clone(),
-                        exprs: exprs.clone(),
-                        mfp_after: mfp,
-                        input_key,
-                        lir_id: self.allocate_lir_id(),
-                    },
-                    AvailableCollections::new_raw(),
-                )
+                if let Some(fused_with_reduce) = fused_with_reduce {
+                    fused_with_reduce
+                } else {
+                    // Couldn't fuse it with a `Reduce`, so lower as a normal `FlatMap`.
+                    let (input, keys) = self.lower_mir_expr(flat_map_input)?;
+                    // This stage can absorb arbitrary MFP instances.
+                    let mfp = mfp.take();
+                    let mut exprs = exprs.clone();
+                    let input_key = if let Some((k, permutation, _)) = keys.arbitrary_arrangement()
+                    {
+                        // We don't permute the MFP here, because it runs _after_ the table function,
+                        // whose output is in a fixed order.
+                        //
+                        // We _do_, however, need to permute the `expr`s that provide input to the
+                        // `func`.
+                        for expr in &mut exprs {
+                            expr.permute_map(permutation);
+                        }
+
+                        Some(k.clone())
+                    } else {
+                        None
+                    };
+                    // Return the plan, and no arrangements.
+                    (
+                        Plan::FlatMap {
+                            input: Box::new(input),
+                            func: func.clone(),
+                            exprs: exprs.clone(),
+                            mfp_after: mfp,
+                            input_key,
+                            lir_id: self.allocate_lir_id(),
+                        },
+                        AvailableCollections::new_raw(),
+                    )
+                }
             }
             MirRelationExpr::Join {
                 inputs,
@@ -553,58 +671,27 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 monotonic,
                 expected_group_size,
             } => {
-                let input_arity = input.arity();
-                let (input, keys) = self.lower_mir_expr(input)?;
-                let (input_key, permutation_and_new_arity) = if let Some((
-                    input_key,
-                    permutation,
-                    thinning,
-                )) = keys.arbitrary_arrangement()
+                if self.enable_reduce_unnest_list_fusion
+                    && aggregates
+                        .iter()
+                        .any(|agg| agg.func.can_fuse_with_unnest_list())
                 {
-                    (
-                        Some(input_key.clone()),
-                        Some((permutation.clone(), thinning.len() + input_key.len())),
-                    )
-                } else {
-                    (None, None)
-                };
-                let key_val_plan = KeyValPlan::new(
-                    input_arity,
-                    group_key,
-                    aggregates,
-                    permutation_and_new_arity,
-                );
-                let reduce_plan =
-                    ReducePlan::create_from(aggregates.clone(), *monotonic, *expected_group_size);
-                // Return the plan, and the keys it produces.
-                let mfp_after;
-                let output_arity;
-                if self.enable_reduce_mfp_fusion {
-                    (mfp_after, mfp, output_arity) =
-                        reduce_plan.extract_mfp_after(mfp, group_key.len());
-                } else {
-                    (mfp_after, output_arity) = (
-                        MapFilterProject::new(mfp.input_arity),
-                        group_key.len() + aggregates.len(),
-                    );
-                    soft_assert_eq_or_log!(
-                        mfp.input_arity,
-                        output_arity,
-                        "Output arity of reduce must match input arity for MFP on top of it"
+                    // This case should have been handled at the `MirRelationExpr::FlatMap` case
+                    // above. But that has a pretty complicated pattern matching, so it's not
+                    // unthinkable that it fails.
+                    soft_panic_or_log!(
+                        "Window function performance issue: `reduce_unnest_list_fusion` failed"
                     );
                 }
-                let output_keys = reduce_plan.keys(group_key.len(), output_arity);
-                (
-                    Plan::Reduce {
-                        input: Box::new(input),
-                        key_val_plan,
-                        plan: reduce_plan,
-                        input_key,
-                        mfp_after,
-                        lir_id: self.allocate_lir_id(),
-                    },
-                    output_keys,
-                )
+                self.lower_reduce(
+                    input,
+                    group_key,
+                    aggregates,
+                    monotonic,
+                    expected_group_size,
+                    &mut mfp,
+                    false,
+                )?
             }
             MirRelationExpr::TopK {
                 input,
@@ -867,6 +954,74 @@ This is not expected to cause incorrect results, but could indicate a performanc
         }
 
         Ok((plan, keys))
+    }
+
+    /// Lowers a `Reduce` with the given fields and an `mfp_on_top`, which is the MFP that is
+    /// originally on top of the `Reduce`. This MFP, or a part of it, might be fused into the
+    /// `Reduce`, in which case `mfp_on_top` is mutated to be the residual MFP, i.e., what was not
+    /// fused.
+    fn lower_reduce<T: Timestamp>(
+        &mut self,
+        input: &MirRelationExpr,
+        group_key: &Vec<MirScalarExpr>,
+        aggregates: &Vec<AggregateExpr>,
+        monotonic: &bool,
+        expected_group_size: &Option<u64>,
+        mfp_on_top: &mut MapFilterProject,
+        fused_unnest_list: bool,
+    ) -> Result<(Plan<T>, AvailableCollections), String> {
+        let input_arity = input.arity();
+        let (input, keys) = self.lower_mir_expr(input)?;
+        let (input_key, permutation_and_new_arity) =
+            if let Some((input_key, permutation, thinning)) = keys.arbitrary_arrangement() {
+                (
+                    Some(input_key.clone()),
+                    Some((permutation.clone(), thinning.len() + input_key.len())),
+                )
+            } else {
+                (None, None)
+            };
+        let key_val_plan = KeyValPlan::new(
+            input_arity,
+            group_key,
+            aggregates,
+            permutation_and_new_arity,
+        );
+        let reduce_plan = ReducePlan::create_from(
+            aggregates.clone(),
+            *monotonic,
+            *expected_group_size,
+            fused_unnest_list,
+        );
+        // Return the plan, and the keys it produces.
+        let mfp_after;
+        let output_arity;
+        if self.enable_reduce_mfp_fusion {
+            (mfp_after, *mfp_on_top, output_arity) =
+                reduce_plan.extract_mfp_after(mfp_on_top.clone(), group_key.len());
+        } else {
+            (mfp_after, output_arity) = (
+                MapFilterProject::new(mfp_on_top.input_arity),
+                group_key.len() + aggregates.len(),
+            );
+        }
+        soft_assert_eq_or_log!(
+            mfp_on_top.input_arity,
+            output_arity,
+            "Output arity of reduce must match input arity for MFP on top of it"
+        );
+        let output_keys = reduce_plan.keys(group_key.len(), output_arity);
+        Ok((
+            Plan::Reduce {
+                input: Box::new(input),
+                key_val_plan,
+                plan: reduce_plan,
+                input_key,
+                mfp_after,
+                lir_id: self.allocate_lir_id(),
+            },
+            output_keys,
+        ))
     }
 
     /// Replace the plan with another one
