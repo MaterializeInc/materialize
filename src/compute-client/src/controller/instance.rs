@@ -673,8 +673,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
             let write_frontier = collection.write_frontier();
 
-            // WIP: Assumes that the String representation remains stable. Is
-            // that okay?
             let live_write_frontier = match live_frontiers.get(&id) {
                 Some(frontier) => frontier,
                 None => {
