@@ -63,6 +63,32 @@ Field          | Type       | Meaning
 ---------------|------------|----------
 `id`           | [`text`]   | The ID of the type.
 
+### `mz_cluster_replica_frontiers`
+
+{{< warn-if-unreleased "v0.118" >}}
+
+The `mz_cluster_replica_frontiers` table describes the per-replica frontiers of
+sources, sinks, materialized views, indexes, and subscriptions in the system,
+as observed from the coordinator.
+
+[`mz_compute_frontiers`](../mz_introspection/#mz_compute_frontiers) is similar to
+`mz_cluster_replica_frontiers`, but `mz_compute_frontiers` reports the
+frontiers known to the active compute replica, while
+`mz_cluster_replica_frontiers` reports the frontiers of all replicas. Note also
+that `mz_compute_frontiers` is restricted to compute objects (indexes,
+materialized views, and subscriptions) while `mz_cluster_replica_frontiers`
+contains storage objects that are installed on replicas (sources, sinks) as
+well.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_catalog.mz_cluster_replica_frontiers -->
+| Field            | Type             | Meaning                                                                |
+| -----------------| ---------------- | --------                                                               |
+| `object_id`      | [`text`]         | The ID of the source, sink, index, materialized view, or subscription. |
+| `replica_id`     | [`text`]         | The ID of a cluster replica.                                           |
+| `write_frontier` | [`mz_timestamp`] | The next timestamp at which the output may change.                     |
+
 ### `mz_cluster_replica_sizes`
 
 The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
@@ -266,7 +292,7 @@ Field                | Type     | Meaning
 `id`                 | [`text`] | The ID of the sink.
 `topic`              | [`text`] | The name of the Kafka topic into which the sink is writing.
 
-## `mz_kafka_sources`
+### `mz_kafka_sources`
 
 {{< warn-if-unreleased v0.115 >}}
 The `mz_kafka_sources` table contains a row for each Kafka source in the system.
@@ -636,6 +662,7 @@ Field          | Type                 | Meaning
 [`jsonb`]: /sql/types/jsonb
 [`mz_aclitem`]: /sql/types/mz_aclitem
 [`mz_aclitem array`]: /sql/types/mz_aclitem
+[`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric/
 [`oid`]: /sql/types/oid
 [`record`]: /sql/types/record

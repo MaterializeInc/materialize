@@ -57,6 +57,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 1  id  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
+----
+1  object_id  text
+2  replica_id  text
+3  write_frontier  mz_timestamp
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_cluster_replica_sizes' ORDER BY position
 ----
 1  size  text
@@ -419,6 +426,7 @@ mz_array_types
 mz_audit_events
 mz_aws_privatelink_connections
 mz_base_types
+mz_cluster_replica_frontiers
 mz_cluster_replica_sizes
 mz_cluster_replicas
 mz_clusters

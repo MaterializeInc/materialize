@@ -18,6 +18,6 @@ SELECT mz_now()::text
 # the first frontiers message to arrive.
 
 > SELECT bool_and(f.write_frontier > ${now})
-  FROM mz_cluster_replicas r, mz_internal.mz_cluster_replica_frontiers f
+  FROM mz_cluster_replicas r, mz_cluster_replica_frontiers f
   WHERE r.id = f.replica_id AND r.name = 'r'
 true

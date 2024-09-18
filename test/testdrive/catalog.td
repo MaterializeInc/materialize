@@ -499,8 +499,9 @@ name    comment
 # Check default sources, tables, and views in mz_catalog.
 
 > SHOW SOURCES FROM mz_catalog
-name  type  cluster  comment
-----------------------------
+name                                         type    cluster  comment
+---------------------------------------------------------------------
+mz_cluster_replica_frontiers                 source  <null>   ""
 
 > SHOW TABLES FROM mz_catalog
 name                           comment
@@ -565,7 +566,6 @@ mz_timezone_names          ""
 name                                         type    cluster    comment
 -----------------------------------------------------------------------
 mz_aws_privatelink_connection_status_history source  <null>     ""
-mz_cluster_replica_frontiers                 source  <null>     ""
 mz_cluster_replica_metrics_history           source  <null>     ""
 mz_cluster_replica_status_history            source  <null>     ""
 mz_compute_dependencies                      source  <null>     ""
