@@ -393,6 +393,9 @@ where
     })
 }
 
+/// The expected input is in the format of `[((OriginalRow, [EncodedArgs]), OrderByExprs...)]`
+/// The output is in the format of `[result_value, original_row]`.
+/// See an example at `lag_lead`, where the input-output formats are similar.
 fn row_number<'a, I>(
     datums: I,
     callers_temp_storage: &'a RowArena,
@@ -412,6 +415,8 @@ where
     })
 }
 
+/// Like `row_number`, but doesn't perform the final wrapping in a list, returning an Iterator
+/// instead.
 fn row_number_no_list<'a: 'b, 'b, I>(
     datums: I,
     callers_temp_storage: &'b RowArena,
@@ -438,6 +443,9 @@ where
         })
 }
 
+/// The expected input is in the format of `[((OriginalRow, [EncodedArgs]), OrderByExprs...)]`
+/// The output is in the format of `[result_value, original_row]`.
+/// See an example at `lag_lead`, where the input-output formats are similar.
 fn rank<'a, I>(datums: I, callers_temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -450,6 +458,8 @@ where
     })
 }
 
+/// Like `rank`, but doesn't perform the final wrapping in a list, returning an Iterator
+/// instead.
 fn rank_no_list<'a: 'b, 'b, I>(
     datums: I,
     callers_temp_storage: &'b RowArena,
@@ -497,6 +507,9 @@ where
     })
 }
 
+/// The expected input is in the format of `[((OriginalRow, [EncodedArgs]), OrderByExprs...)]`
+/// The output is in the format of `[result_value, original_row]`.
+/// See an example at `lag_lead`, where the input-output formats are similar.
 fn dense_rank<'a, I>(
     datums: I,
     callers_temp_storage: &'a RowArena,
@@ -513,6 +526,8 @@ where
     })
 }
 
+/// Like `dense_rank`, but doesn't perform the final wrapping in a list, returning an Iterator
+/// instead.
 fn dense_rank_no_list<'a: 'b, 'b, I>(
     datums: I,
     callers_temp_storage: &'b RowArena,
@@ -626,7 +641,7 @@ where
         })
         .unzip();
 
-    let result: Vec<Datum<'a>> = lag_lead_inner(unwrapped_args, lag_lead_type, ignore_nulls);
+    let result = lag_lead_inner(unwrapped_args, lag_lead_type, ignore_nulls);
 
     callers_temp_storage.reserve(result.len());
     result
@@ -1210,14 +1225,18 @@ where
         })
 }
 
+/// `input_datums` is an entire window partition.
 /// The expected input is in the format of `[((OriginalRow, InputValue), OrderByExprs...)]`
 /// See also in the comment in `window_func_applied_to`.
+///
+/// `wrapped_aggregate`: e.g., for `sum(...) OVER (...)`, this is the `sum(...)`.
+///
+/// Note that this `order_by` doesn't have expressions, only `ColumnOrder`s. For an explanation,
+/// see the comment on `WindowExprType`.
 fn window_aggr<'a, I, A>(
-    input_datums: I, // An entire window partition.
+    input_datums: I,
     callers_temp_storage: &'a RowArena,
-    wrapped_aggregate: &AggregateFunc, // E.g., for `sum(...) OVER (...)`, this is the `sum(...)`.
-    // Note that this `order_by` doesn't have expressions, only `ColumnOrder`s. For an explanation,
-    // see the comment on `WindowExprType`.
+    wrapped_aggregate: &AggregateFunc,
     order_by: &[ColumnOrder],
     window_frame: &WindowFrame,
 ) -> Datum<'a>
@@ -1241,11 +1260,9 @@ where
 /// Like `window_aggr`, but doesn't perform the final wrapping in a list, returning an Iterator
 /// instead.
 fn window_aggr_no_list<'a: 'b, 'b, I, A>(
-    input_datums: I, // An entire window partition.
+    input_datums: I,
     callers_temp_storage: &'b RowArena,
-    wrapped_aggregate: &AggregateFunc, // E.g., for `sum(...) OVER (...)`, this is the `sum(...)`.
-    // Note that this `order_by` doesn't have expressions, only `ColumnOrder`s. For an explanation,
-    // see the comment on `WindowExprType`.
+    wrapped_aggregate: &AggregateFunc,
     order_by: &[ColumnOrder],
     window_frame: &WindowFrame,
 ) -> impl Iterator<Item = Datum<'b>>
@@ -2331,7 +2348,7 @@ impl AggregateFunc {
         I: IntoIterator<Item = Datum<'a>>,
         W: OneByOneAggr,
     {
-        // TODO: Use use `enum_dispatch` to construct a unified iterator instead of `collect_vec`.
+        // TODO: Use `enum_dispatch` to construct a unified iterator instead of `collect_vec`.
         assert!(self.can_fuse_with_unnest_list());
         match self {
             AggregateFunc::RowNumber { order_by } => {

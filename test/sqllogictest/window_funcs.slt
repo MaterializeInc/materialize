@@ -7614,7 +7614,7 @@ Target cluster: quickstart
 
 EOF
 
-# Test the situation when the MFP above is fused into the Reduce.
+# Test the situation when the MFP above is fused into the Reduce, and the MFP can error.
 query III
 SELECT *
 FROM (
@@ -7634,9 +7634,216 @@ ORDER BY x,y,l;
 13  14  11
 15  16  13
 
+# Test the situation when the MFP above is fused into the Reduce, but the MFP can't error.
+query III
+SELECT *
+FROM (
+  SELECT *, lag(x) OVER (ORDER BY x) AS l
+  FROM t7
+)
+WHERE l < 14
+ORDER BY x,y,l;
+----
+3  NULL  1
+5  6  3
+7  8  5
+9  NULL  7
+10  -50  9
+10  -40  10
+11  NULL  10
+13  14  11
+15  16  13
+
+## Check some LIR plans that the optimization guarded by `enable_reduce_unnest_list_fusion` happens.
+## These should show `fused_unnest_list=true`.
+
+# Simple situation
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  lead(x,y-2,120) OVER (ORDER BY x)
+FROM t9;
+----
+Explained Query:
+  Mfp
+    project=(#1)
+    map=(record_get[0](#0))
+    input_key=
+    Reduce::Basic
+      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+      key_plan
+        project=()
+      Get::PassArrangements materialize.public.t9
+        raw=true
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+# PARTITION BY
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  lead(x,y-2,120) OVER (PARTITION BY x/2 ORDER BY x)
+FROM t9;
+----
+Explained Query:
+  Mfp
+    project=(#2)
+    map=(record_get[0](#1))
+    input_key=#0
+    Reduce::Basic
+      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+      key_plan
+        project=(#2)
+        map=((#0 / 2))
+      Get::PassArrangements materialize.public.t9
+        raw=true
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+# PARTITION BY multiple columns
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  lead(x,y-2,120) OVER (PARTITION BY x/2, y ORDER BY x)
+FROM t9;
+----
+Explained Query:
+  Mfp
+    project=(#3)
+    map=(record_get[0](#2))
+    input_key=#0, #1
+    Reduce::Basic
+      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0)), fused_unnest_list=true)
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0, (#1 - 2), 120)), #0))
+      key_plan
+        project=(#2, #1)
+        map=((#0 / 2))
+      Get::PassArrangements materialize.public.t9
+        raw=true
+
+Source materialize.public.t9
+
+Target cluster: quickstart
+
+EOF
+
+# row_number()
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  row_number() OVER (ORDER BY x),
+  x
+FROM t7
+ORDER BY row_number
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#0, #1]
+    Mfp
+      project=(#2, #1)
+      map=(record_get[0](record_get[1](#0)), record_get[0](#0))
+      input_key=
+      Reduce::Basic
+        aggr=(0, row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0)), fused_unnest_list=true)
+        val_plan
+          project=(#2)
+          map=(row(list[row(#0, #1)], #0))
+        key_plan
+          project=()
+        Get::PassArrangements materialize.public.t7
+          raw=true
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+# MFP after is fused into the Reduce
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT *
+FROM (
+  SELECT *, lag(x) OVER (ORDER BY x) AS l
+  FROM t7
+)
+WHERE l < 14
+ORDER BY x,y,l;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last, #2 asc nulls_last] output=[#0..=#2]
+    Mfp
+      project=(#3, #4, #1)
+      map=(record_get[0](#0), record_get[1](#0), record_get[0](#2), record_get[1](#2))
+      input_key=
+      Reduce::Basic
+        aggr=(0, lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0, 1, null)), #0)), fused_unnest_list=true)
+        val_plan
+          project=(#2)
+          map=(row(row(row(#0, #1), row(#0, 1, null)), #0))
+        key_plan
+          project=()
+        mfp_after
+          filter=((record_get[0](#0) < 14))
+        Get::PassArrangements materialize.public.t7
+          raw=true
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
+# Two lags fused with each other + Reduce-FlatMap fusion.
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR
+SELECT
+  *,
+  lag(x) OVER (),
+  lag(y) OVER ()
+FROM t7
+ORDER BY x,y;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#3]
+    Mfp
+      project=(#2, #3, #6, #5)
+      map=(record_get[1](#0), record_get[0](#1), record_get[1](#1), record_get[0](#0), record_get[0](#4), record_get[1](#4))
+      input_key=
+      Reduce::Basic
+        aggr=(0, fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(#0, #1), row(row(#1, 1, null), row(#0, 1, null))))), fused_unnest_list=true)
+        val_plan
+          project=(#2)
+          map=(row(row(row(#0, #1), row(row(#1, 1, null), row(#0, 1, null)))))
+        key_plan
+          project=()
+        Get::PassArrangements materialize.public.t7
+          raw=true
+
+Source materialize.public.t7
+
+Target cluster: quickstart
+
+EOF
+
 ## Run some tests also with `enable_reduce_unnest_list_fusion` disabled.
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_reduce_unnest_list_fusion = true
+ALTER SYSTEM SET enable_reduce_unnest_list_fusion = false
 ----
 COMPLETE 0
 
