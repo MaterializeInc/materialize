@@ -749,44 +749,18 @@ def upload_results_to_test_analytics(
 
     for scenario_cls in scenario_classes:
         scenario_name = scenario_cls.__name__
-        scenario_group = scenario_cls.__bases__[0].__name__
         report = latest_report_by_scenario_name[scenario_name]
-        report_measurements = report.measurements_of_this(scenario_name)
-        scenario_version = report.get_scenario_version(scenario_name)
 
         result_entries.append(
-            feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
-                scenario_name=scenario_name,
-                scenario_group=scenario_group,
-                scenario_version=str(scenario_version),
-                cycle=report.cycle_number,
-                scale=scale or "default",
-                wallclock=report_measurements[MeasurementType.WALLCLOCK],
-                messages=report_measurements[MeasurementType.MESSAGES],
-                memory_mz=report_measurements[MeasurementType.MEMORY_MZ],
-                memory_clusterd=report_measurements[MeasurementType.MEMORY_CLUSTERD],
-            )
+            _create_feature_benchmark_result_entry(scenario_cls, report, scale)
         )
 
         for discarded_report in discarded_reports_by_scenario_name.get(
             scenario_name, []
         ):
-            discarded_measurements = discarded_report.measurements_of_this(
-                scenario_name
-            )
             discarded_entries.append(
-                feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
-                    scenario_name=scenario_name,
-                    scenario_group=scenario_group,
-                    scenario_version=str(scenario_version),
-                    cycle=discarded_report.cycle_number,
-                    scale=scale or "default",
-                    wallclock=discarded_measurements[MeasurementType.WALLCLOCK],
-                    messages=discarded_measurements[MeasurementType.MESSAGES],
-                    memory_mz=discarded_measurements[MeasurementType.MEMORY_MZ],
-                    memory_clusterd=discarded_measurements[
-                        MeasurementType.MEMORY_CLUSTERD
-                    ],
+                _create_feature_benchmark_result_entry(
+                    scenario_cls, discarded_report, scale
                 )
             )
 
@@ -802,3 +776,26 @@ def upload_results_to_test_analytics(
     except Exception as e:
         # An error during an upload must never cause the build to fail
         test_analytics.on_upload_failed(e)
+
+
+def _create_feature_benchmark_result_entry(
+    scenario_cls: type[Scenario],
+    report: Report,
+    scale: str | None,
+) -> feature_benchmark_result_storage.FeatureBenchmarkResultEntry:
+    scenario_name = scenario_cls.__name__
+    scenario_group = scenario_cls.__bases__[0].__name__
+    scenario_version = report.get_scenario_version(scenario_name)
+    measurements = report.measurements_of_this(scenario_name)
+
+    return feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
+        scenario_name=scenario_name,
+        scenario_group=scenario_group,
+        scenario_version=str(scenario_version),
+        cycle=report.cycle_number,
+        scale=scale or "default",
+        wallclock=measurements[MeasurementType.WALLCLOCK],
+        messages=measurements[MeasurementType.MESSAGES],
+        memory_mz=measurements[MeasurementType.MEMORY_MZ],
+        memory_clusterd=measurements[MeasurementType.MEMORY_CLUSTERD],
+    )
