@@ -667,7 +667,10 @@ enum Tag {
     StringHuge,
     Uuid,
     Array,
-    List,
+    ListTiny,
+    ListShort,
+    ListLong,
+    ListHuge,
     Dict,
     JsonNull,
     Dummy,
@@ -819,14 +822,14 @@ fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8] {
 /// and it was only written with a `String` tag if it was indeed UTF-8.
 unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) -> Datum<'a> {
     let len = match tag {
-        Tag::BytesTiny | Tag::StringTiny => usize::from(read_byte(data, offset)),
-        Tag::BytesShort | Tag::StringShort => {
+        Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => usize::from(read_byte(data, offset)),
+        Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
             usize::from(u16::from_le_bytes(read_byte_array(data, offset)))
         }
-        Tag::BytesLong | Tag::StringLong => {
+        Tag::BytesLong | Tag::StringLong | Tag::ListLong => {
             usize::cast_from(u32::from_le_bytes(read_byte_array(data, offset)))
         }
-        Tag::BytesHuge | Tag::StringHuge => {
+        Tag::BytesHuge | Tag::StringHuge | Tag::ListHuge => {
             usize::cast_from(u64::from_le_bytes(read_byte_array(data, offset)))
         }
         _ => unreachable!(),
@@ -837,6 +840,9 @@ unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) 
         Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => Datum::Bytes(bytes),
         Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
             Datum::String(str::from_utf8_unchecked(bytes))
+        }
+        Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => {
+            Datum::List(DatumList { data: bytes })
         }
         _ => unreachable!(),
     }
@@ -1174,7 +1180,11 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         | Tag::StringTiny
         | Tag::StringShort
         | Tag::StringLong
-        | Tag::StringHuge => read_lengthed_datum(data, offset, tag),
+        | Tag::StringHuge
+        | Tag::ListTiny
+        | Tag::ListShort
+        | Tag::ListLong
+        | Tag::ListHuge => read_lengthed_datum(data, offset, tag),
         Tag::Uuid => Datum::Uuid(Uuid::from_bytes(read_byte_array(data, offset))),
         Tag::Array => {
             // See the comment in `Row::push_array` for details on the encoding
@@ -1188,10 +1198,6 @@ pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
                 dims: ArrayDimensions { data: dims },
                 elements: DatumList { data },
             })
-        }
-        Tag::List => {
-            let bytes = read_untagged_bytes(data, offset);
-            Datum::List(DatumList { data: bytes })
         }
         Tag::Dict => {
             let bytes = read_untagged_bytes(data, offset);
@@ -1297,19 +1303,19 @@ where
     D: Vector<u8>,
 {
     match tag {
-        Tag::BytesTiny | Tag::StringTiny => {
+        Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => {
             let len = bytes.len().to_le_bytes();
             data.push(len[0]);
         }
-        Tag::BytesShort | Tag::StringShort => {
+        Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
             let len = bytes.len().to_le_bytes();
             data.extend_from_slice(&len[0..2]);
         }
-        Tag::BytesLong | Tag::StringLong => {
+        Tag::BytesLong | Tag::StringLong | Tag::ListLong => {
             let len = bytes.len().to_le_bytes();
             data.extend_from_slice(&len[0..4]);
         }
-        Tag::BytesHuge | Tag::StringHuge => {
+        Tag::BytesHuge | Tag::StringHuge | Tag::ListHuge => {
             let len = bytes.len().to_le_bytes();
             data.extend_from_slice(&len);
         }
@@ -1426,6 +1432,10 @@ where
     (64 - n_sign_bits + 7) / 8
 }
 
+const TINY: usize = 1 << 8;
+const SHORT: usize = 1 << 16;
+const LONG: usize = 1 << 32;
+
 fn push_datum<D>(data: &mut D, datum: Datum)
 where
     D: Vector<u8>,
@@ -1537,9 +1547,9 @@ where
         }
         Datum::Bytes(bytes) => {
             let tag = match bytes.len() {
-                0..=255 => Tag::BytesTiny,
-                256..=65535 => Tag::BytesShort,
-                65536..=4294967295 => Tag::BytesLong,
+                0..TINY => Tag::BytesTiny,
+                TINY..SHORT => Tag::BytesShort,
+                SHORT..LONG => Tag::BytesLong,
                 _ => Tag::BytesHuge,
             };
             data.push(tag.into());
@@ -1547,13 +1557,23 @@ where
         }
         Datum::String(string) => {
             let tag = match string.len() {
-                0..=255 => Tag::StringTiny,
-                256..=65535 => Tag::StringShort,
-                65536..=4294967295 => Tag::StringLong,
+                0..TINY => Tag::StringTiny,
+                TINY..SHORT => Tag::StringShort,
+                SHORT..LONG => Tag::StringLong,
                 _ => Tag::StringHuge,
             };
             data.push(tag.into());
             push_lengthed_bytes(data, string.as_bytes(), tag);
+        }
+        Datum::List(list) => {
+            let tag = match list.data.len() {
+                0..TINY => Tag::ListTiny,
+                TINY..SHORT => Tag::ListShort,
+                SHORT..LONG => Tag::ListLong,
+                _ => Tag::ListHuge,
+            };
+            data.push(tag.into());
+            push_lengthed_bytes(data, list.data, tag);
         }
         Datum::Uuid(u) => {
             data.push(Tag::Uuid.into());
@@ -1566,10 +1586,6 @@ where
             data.push(array.dims.ndims());
             data.extend_from_slice(array.dims.data);
             push_untagged_bytes(data, array.elements.data);
-        }
-        Datum::List(list) => {
-            data.push(Tag::List.into());
-            push_untagged_bytes(data, list.data);
         }
         Datum::Map(dict) => {
             data.push(Tag::Dict.into());
@@ -1705,9 +1721,9 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Bytes(bytes) => {
             // We use a variable length representation of slice length.
             let bytes_for_length = match bytes.len() {
-                0..=255 => 1,
-                256..=65535 => 2,
-                65536..=4294967295 => 4,
+                0..TINY => 1,
+                TINY..SHORT => 2,
+                SHORT..LONG => 4,
                 _ => 8,
             };
             1 + bytes_for_length + bytes.len()
@@ -1715,9 +1731,9 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::String(string) => {
             // We use a variable length representation of slice length.
             let bytes_for_length = match string.len() {
-                0..=255 => 1,
-                256..=65535 => 2,
-                65536..=4294967295 => 4,
+                0..TINY => 1,
+                TINY..SHORT => 2,
+                SHORT..LONG => 4,
                 _ => 8,
             };
             1 + bytes_for_length + string.len()
@@ -1876,16 +1892,73 @@ impl RowPacker<'_> {
     where
         F: FnOnce(&mut RowPacker) -> R,
     {
-        self.row.data.push(Tag::List.into());
+        // First, assume that the list will fit in 255 bytes, and thus the length will fit in
+        // 1 byte. If not, we'll fix it up later.
         let start = self.row.data.len();
-        // write a dummy len, will fix it up later
-        self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
+        self.row.data.push(Tag::ListTiny.into());
+        // Write a dummy len, will fix it up later.
+        self.row.data.push(0);
 
         let out = f(self);
 
-        let len = u64::cast_from(self.row.data.len() - start - size_of::<u64>());
-        // fix up the len
-        self.row.data[start..start + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
+        // The `- 1 - 1` is for the tag and the len.
+        let len = self.row.data.len() - start - 1 - 1;
+        // We now know the real len.
+        if len < TINY {
+            // If the len fits in 1 byte, we just need to fix up the len.
+            self.row.data[start + 1] = len.to_le_bytes()[0];
+        } else {
+            // Note: We move this code path into its own function, so that the common case can be
+            // inlined.
+            long_list(&mut self.row.data, start, len);
+        }
+
+        /// 1. Fix up the tag.
+        /// 2. Move the actual data a bit (for which we also need to make room at the end).
+        /// 3. Fix up the len.
+        /// `data`: The row's backing data.
+        /// `start`: where `push_list_with` started writing in `data`.
+        /// `len`: the length of the data, excluding the tag and the length.
+        #[cold]
+        fn long_list(data: &mut CompactBytes, start: usize, len: usize) {
+            // `len_len`: the length of the length. (Possible values are: 2, 4, 8. 1 is handled
+            // elsewhere.) The other parameters are the same as for `long_list`.
+            let long_list_inner = |data: &mut CompactBytes, len_len| {
+                // We'll need memory for the new, bigger length, so make the `CompactBytes` bigger.
+                // The `- 1` is because the old length was 1 byte.
+                const ZEROS: [u8; 8] = [0; 8];
+                data.extend_from_slice(&ZEROS[0..len_len - 1]);
+                // Move the data to the end of the `CompactBytes`, to make space for the new length.
+                // Originally, it started after the 1-byte tag and the 1-byte length, now it will
+                // start after the 1-byte tag and the len_len-byte length.
+                //
+                // Note that this is the only operation in `long_list` whose cost is proportional
+                // to `len`. Since `len` is at least 256 here, the other operations' cost are
+                // negligible. `copy_within` is a memmove, which is probably a fair bit faster per
+                // Datum than a Datum encoding in the `f` closure.
+                data.copy_within(start + 1 + 1..start + 1 + 1 + len, start + 1 + len_len);
+                // Write the new length.
+                data[start + 1..start + 1 + len_len]
+                    .copy_from_slice(&len.to_le_bytes()[0..len_len]);
+            };
+            match len {
+                0..TINY => {
+                    unreachable!()
+                }
+                TINY..SHORT => {
+                    data[start] = Tag::ListShort.into();
+                    long_list_inner(data, 2);
+                }
+                SHORT..LONG => {
+                    data[start] = Tag::ListLong.into();
+                    long_list_inner(data, 4);
+                }
+                _ => {
+                    data[start] = Tag::ListHuge.into();
+                    long_list_inner(data, 8);
+                }
+            };
+        }
 
         out
     }

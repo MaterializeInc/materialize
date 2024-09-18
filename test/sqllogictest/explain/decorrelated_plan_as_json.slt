@@ -85,7 +85,7 @@ SELECT 1 / 0
                       {
                         "Ok": {
                           "data": [
-                            42,
+                            45,
                             1
                           ]
                         }
@@ -101,7 +101,7 @@ SELECT 1 / 0
                       {
                         "Ok": {
                           "data": [
-                            41
+                            44
                           ]
                         }
                       },
@@ -177,7 +177,7 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                       {
                         "Ok": {
                           "data": [
-                            42,
+                            45,
                             1
                           ]
                         }
@@ -193,7 +193,7 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                       {
                         "Ok": {
                           "data": [
-                            42,
+                            45,
                             2
                           ]
                         }
@@ -238,7 +238,7 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                         {
                           "Ok": {
                             "data": [
-                              42,
+                              45,
                               1
                             ]
                           }
@@ -254,7 +254,7 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                         {
                           "Ok": {
                             "data": [
-                              42,
+                              45,
                               2
                             ]
                           }
@@ -298,7 +298,7 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                         {
                           "Ok": {
                             "data": [
-                              42,
+                              45,
                               3
                             ]
                           }
@@ -314,7 +314,7 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
                         {
                           "Ok": {
                             "data": [
-                              42,
+                              45,
                               4
                             ]
                           }
@@ -441,7 +441,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                           {
                                             "Ok": {
                                               "data": [
-                                                41
+                                                44
                                               ]
                                             }
                                           },
@@ -464,7 +464,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                           {
                                             "Ok": {
                                               "data": [
-                                                41
+                                                44
                                               ]
                                             }
                                           },
@@ -498,7 +498,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                     {
                                       "Ok": {
                                         "data": [
-                                          41
+                                          44
                                         ]
                                       }
                                     },
@@ -545,7 +545,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                   {
                     "Ok": {
                       "data": [
-                        42,
+                        45,
                         1
                       ]
                     }
@@ -692,7 +692,7 @@ SELECT generate_series(a, b) from t
                       {
                         "Ok": {
                           "data": [
-                            42,
+                            45,
                             1
                           ]
                         }
@@ -2865,7 +2865,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             {
                                                               "Ok": {
                                                                 "data": [
-                                                                  47,
+                                                                  50,
                                                                   1
                                                                 ]
                                                               }
@@ -2990,7 +2990,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                             {
                                                                               "Ok": {
                                                                                 "data": [
-                                                                                  47,
+                                                                                  50,
                                                                                   1
                                                                                 ]
                                                                               }
@@ -3438,7 +3438,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             {
                                                               "Ok": {
                                                                 "data": [
-                                                                  47,
+                                                                  50,
                                                                   1
                                                                 ]
                                                               }
@@ -3563,7 +3563,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                             {
                                                                               "Ok": {
                                                                                 "data": [
-                                                                                  47,
+                                                                                  50,
                                                                                   1
                                                                                 ]
                                                                               }
@@ -8217,7 +8217,7 @@ FROM
                                                                     {
                                                                       "Ok": {
                                                                         "data": [
-                                                                          42,
+                                                                          45,
                                                                           5
                                                                         ]
                                                                       }

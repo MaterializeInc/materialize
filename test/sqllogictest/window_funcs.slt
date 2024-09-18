@@ -8025,3 +8025,73 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_reduce_unnest_list_fusion = true
 ----
 COMPLETE 0
+
+## Window functions on big relations.
+
+statement ok
+CREATE TABLE t10(t timestamptz, d1 int, d2 text, d3 int, d4 uint8, d5 int, d6 text);
+
+statement ok
+INSERT INTO t10
+SELECT generate_series(1,1000)::mz_timestamp::timestamptz, 5, 'aaa', 7, 8, 9, 'bbb';
+
+statement ok
+CREATE VIEW v1 AS
+SELECT t, d1, d2, EXTRACT(MILLISECOND FROM t) * 91 % 1223 AS d3, d4, d5, d6
+FROM t10;
+
+statement ok
+CREATE MATERIALIZED VIEW mv1 AS
+SELECT t, d1, d2, d3, d4, d6, lag(d1) OVER (ORDER BY t) - d1 AS r
+FROM v1;
+
+query I
+SELECT sum(r)
+FROM mv1;
+----
+0
+
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS
+SELECT *, row_number() OVER (ORDER BY t) AS rn
+FROM mv1;
+
+query I
+SELECT sum(r)
+FROM (
+  SELECT rn - lag(rn) OVER (ORDER BY t) AS r
+  FROM mv2
+);
+----
+999
+
+query I
+SELECT sum(lv)
+FROM (
+  SELECT last_value(rn) OVER () AS lv
+  FROM mv2
+);
+----
+1000000
+
+statement ok
+DELETE FROM t10
+
+statement ok
+INSERT INTO t10
+SELECT generate_series(1,70000)::mz_timestamp::timestamptz, 5, 'aaa', 7, 8, 9, 'bbb';
+
+query I
+SELECT sum(r)
+FROM mv1;
+----
+0
+
+query I
+SELECT sum(r)
+FROM (
+  SELECT rn - lag(rn) OVER (ORDER BY t) AS r
+  FROM mv2
+);
+----
+69999
