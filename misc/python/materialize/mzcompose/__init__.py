@@ -134,7 +134,7 @@ def get_default_system_parameters(
         "storage_use_reclock_v2": "true",
         "timestamp_oracle": "postgres",
         "wait_catalog_consolidation_on_startup": "true",
-        "with_0dt_deployment_max_wait": "300s",
+        "with_0dt_deployment_max_wait": "900s",
         # End of list (ordered by name)
     }
 
