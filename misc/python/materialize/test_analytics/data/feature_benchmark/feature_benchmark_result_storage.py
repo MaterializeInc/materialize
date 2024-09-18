@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
-from materialize.feature_benchmark.benchmark import ReportMeasurement
+from materialize.feature_benchmark.report import ReportMeasurement
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 

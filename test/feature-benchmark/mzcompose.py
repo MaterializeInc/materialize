@@ -25,6 +25,7 @@ from materialize.docker import is_image_tag_of_release_version
 from materialize.feature_benchmark.benchmark_versioning import (
     FEATURE_BENCHMARK_FRAMEWORK_VERSION,
 )
+from materialize.feature_benchmark.report import Report
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.test_result import (
@@ -51,7 +52,7 @@ from materialize.version_list import (
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
-from materialize.feature_benchmark.benchmark import Benchmark, Report
+from materialize.feature_benchmark.benchmark import Benchmark
 from materialize.feature_benchmark.comparator import (
     Comparator,
     RelativeThresholdComparator,
