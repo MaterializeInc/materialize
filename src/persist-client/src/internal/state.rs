@@ -1378,9 +1378,9 @@ where
             )));
         }
 
+        reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
         if PartialOrder::less_equal(&reader_state.since, new_since) {
             reader_state.since.clone_from(new_since);
-            reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
             self.update_since();
             Continue(Ok(Since(new_since.clone())))
         } else {
@@ -2627,6 +2627,71 @@ pub(crate) mod tests {
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
+    }
+
+    #[mz_ore::test]
+    fn compare_and_downgrade_since() {
+        let mut state = TypedState::<(), (), u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+        let reader = CriticalReaderId::new();
+        let _ = state
+            .collections
+            .register_critical_reader::<u64>("", &reader, "");
+
+        // The shard global since == 0 initially.
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
+        // The initial opaque value should be set.
+        assert_eq!(
+            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            u64::initial()
+        );
+
+        // Greater
+        assert_eq!(
+            state.collections.compare_and_downgrade_since::<u64>(
+                &reader,
+                &u64::initial(),
+                (&1, &Antichain::from_elem(2)),
+            ),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+        assert_eq!(
+            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            1
+        );
+        // Equal (no-op)
+        assert_eq!(
+            state.collections.compare_and_downgrade_since::<u64>(
+                &reader,
+                &1,
+                (&2, &Antichain::from_elem(2)),
+            ),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+        assert_eq!(
+            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            2
+        );
+        // Less (no-op)
+        assert_eq!(
+            state.collections.compare_and_downgrade_since::<u64>(
+                &reader,
+                &2,
+                (&3, &Antichain::from_elem(1)),
+            ),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+        assert_eq!(
+            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            3
+        );
     }
 
     #[mz_ore::test]
