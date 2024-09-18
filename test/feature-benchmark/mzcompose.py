@@ -423,11 +423,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--max-retries",
+        "--runs-per-scenario",
         metavar="N",
         type=int,
-        default=5,
-        help="Retry any potential performance regressions up to N times.",
+        default=3,
     )
 
     parser.add_argument(
@@ -502,7 +501,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     discarded_reports_by_scenario_name: dict[str, list[Report]] = dict()
 
     scenario_classes_to_run: list[type[Scenario]] = scenarios_scheduled_to_run.copy()
-    for cycle_index in range(0, args.max_retries):
+    for cycle_index in range(0, args.runs_per_scenario):
         cycle_number = cycle_index + 1
         print(
             f"Cycle {cycle_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenario_classes_to_run])}"
