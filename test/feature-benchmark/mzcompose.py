@@ -24,12 +24,18 @@ from materialize import buildkite
 from materialize.docker import is_image_tag_of_release_version
 from materialize.feature_benchmark.benchmark_result_evaluator import (
     BenchmarkResultEvaluator,
-    RelativeThresholdEvaluator,
+)
+from materialize.feature_benchmark.benchmark_result_selection import (
+    choose_representative_report_per_scenario,
+    get_discarded_reports_per_scenario,
 )
 from materialize.feature_benchmark.benchmark_versioning import (
     FEATURE_BENCHMARK_FRAMEWORK_VERSION,
 )
-from materialize.feature_benchmark.report import Report
+from materialize.feature_benchmark.report import (
+    Report,
+    determine_scenario_classes_with_regressions,
+)
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.services.mysql import MySql
@@ -483,12 +489,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up(*dependencies)
 
-    scenarios_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
+    scenario_classes_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
         selected_scenarios, lambda scenario_cls: scenario_cls.__name__
     )
 
     if (
-        len(scenarios_scheduled_to_run) == 0
+        len(scenario_classes_scheduled_to_run) == 0
         and buildkite.is_in_buildkite()
         and not os.getenv("CI_EXTRA_ARGS")
     ):
@@ -496,22 +502,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             error_summary="No scenarios were selected", errors=[]
         )
 
-    scenarios_with_regressions = []
-    latest_report_by_scenario_name: dict[str, Report] = dict()
-    discarded_reports_by_scenario_name: dict[str, list[Report]] = dict()
+    reports = []
 
-    scenario_classes_to_run: list[type[Scenario]] = scenarios_scheduled_to_run.copy()
-    for cycle_index in range(0, args.runs_per_scenario):
-        cycle_number = cycle_index + 1
+    for run_index in range(0, args.runs_per_scenario):
+        run_number = run_index + 1
         print(
-            f"Cycle {cycle_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenario_classes_to_run])}"
+            f"Run {run_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenario_classes_scheduled_to_run])}"
         )
 
-        report = Report(cycle_number=cycle_number)
+        report = Report(cycle_number=run_number)
+        reports.append(report)
 
-        scenarios_to_retry = []
-        for scenario_class in scenario_classes_to_run:
-            scenario_name = scenario_class.__name__
+        for scenario_class in scenario_classes_scheduled_to_run:
             scenario_result = run_one_scenario(c, scenario_class, args)
 
             if scenario_result.is_empty():
@@ -519,33 +521,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             report.add_scenario_result(scenario_result)
 
-            evaluator = RelativeThresholdEvaluator(scenario_class)
-
-            if is_regression(evaluator, scenario_result):
-                if _shall_retry_scenario(evaluator, scenario_result, cycle_index):
-                    scenarios_to_retry.append(scenario_class)
-                else:
-                    scenarios_with_regressions.append(scenario_class)
-
-            if cycle_index > 0:
-                discarded_reports_of_scenario = discarded_reports_by_scenario_name.get(
-                    scenario_name, []
-                )
-                discarded_reports_of_scenario.append(
-                    latest_report_by_scenario_name[scenario_name]
-                )
-                discarded_reports_by_scenario_name[scenario_name] = (
-                    discarded_reports_of_scenario
-                )
-
-            latest_report_by_scenario_name[scenario_name] = report
-
-        print(f"+++ Benchmark Report for cycle {cycle_number}:")
+        print(f"+++ Benchmark Report for run {run_number}:")
         print(report)
 
-        scenario_classes_to_run = scenarios_to_retry
-        if len(scenario_classes_to_run) == 0:
-            break
+    selected_report_by_scenario_name = choose_representative_report_per_scenario(
+        reports
+    )
+    discarded_reports_by_scenario_name = get_discarded_reports_per_scenario(
+        reports, selected_report_by_scenario_name
+    )
+
+    scenarios_with_regressions = determine_scenario_classes_with_regressions(
+        selected_report_by_scenario_name
+    )
 
     if len(scenarios_with_regressions) > 0:
         justification_by_scenario_name = _check_regressions_justified(
@@ -590,10 +578,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     upload_results_to_test_analytics(
         c,
         args.this_tag,
-        scenarios_scheduled_to_run,
+        scenario_classes_scheduled_to_run,
         scenarios_with_regressions,
         args.scale,
-        latest_report_by_scenario_name,
+        selected_report_by_scenario_name,
         discarded_reports_by_scenario_name,
         successful_run,
     )
@@ -603,7 +591,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             error_summary="At least one regression occurred",
             errors=_regressions_to_failure_details(
                 scenarios_with_regressions,
-                latest_report_by_scenario_name,
+                selected_report_by_scenario_name,
                 justification_by_scenario_name,
                 baseline_tag=args.other_tag,
                 scale=args.scale,
@@ -615,20 +603,6 @@ def is_regression(
     evaluator: BenchmarkResultEvaluator, scenario_result: BenchmarkScenarioResult
 ) -> bool:
     return any([evaluator.is_regression(metric) for metric in scenario_result.metrics])
-
-
-def _shall_retry_scenario(
-    evaluator: BenchmarkResultEvaluator,
-    scenario_result: BenchmarkScenarioResult,
-    cycle_index: int,
-) -> bool:
-    return any(
-        [
-            evaluator.is_regression(metric)
-            and not (evaluator.is_strong_regression(metric) and cycle_index >= 2)
-            for metric in scenario_result.metrics
-        ]
-    )
 
 
 def _check_regressions_justified(
@@ -718,7 +692,7 @@ def _regressions_to_failure_details(
         failure_details.append(
             TestFailureDetails(
                 test_case_name_override=f"Scenario '{scenario_name}'",
-                message=f"New regression against {regression_against_tag} (conducted {report.cycle_number} cycles)",
+                message=f"New regression against {regression_against_tag}",
                 details=report.as_string(
                     use_colors=False, limit_to_scenario=scenario_name
                 ),
