@@ -9,9 +9,8 @@
 
 //! A controller for a storage instance.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
-use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use anyhow::bail;
@@ -60,10 +59,8 @@ pub(crate) struct Instance<T> {
     metrics: InstanceMetrics,
     /// A function that returns the current time.
     now: NowFn,
-    /// Responses ready for delivery on the next call to [`Instance::recv`].
-    ready_responses: VecDeque<StorageResponse<T>>,
-    /// A receiver for responses from replicas.
-    instance_response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
+    /// A sender for responses from replicas.
+    response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
 }
 
 impl<T> Instance<T>
@@ -87,8 +84,7 @@ where
             epoch,
             metrics,
             now,
-            ready_responses: Default::default(),
-            instance_response_tx,
+            response_tx: instance_response_tx,
         };
 
         instance.send(StorageCommand::CreateTimely {
@@ -123,13 +119,7 @@ where
 
         self.epoch.bump_replica();
         let metrics = self.metrics.for_replica(id);
-        let mut replica = Replica::new(
-            id,
-            config,
-            self.epoch,
-            metrics,
-            self.instance_response_tx.clone(),
-        );
+        let mut replica = Replica::new(id, config, self.epoch, metrics, self.response_tx.clone());
 
         // Replay the commands at the new replica.
         for command in self.history.iter() {
@@ -192,8 +182,10 @@ where
             }
         }
 
-        let response = StorageResponse::StatusUpdates(status_updates);
-        self.ready_responses.push_back(response);
+        if !status_updates.is_empty() {
+            let response = StorageResponse::StatusUpdates(status_updates);
+            let _ = self.response_tx.send(response);
+        }
     }
 
     /// Sends a command to this storage instance.
@@ -220,11 +212,6 @@ where
             self.update_paused_statuses();
         }
     }
-
-    /// Receives the next stashed response from this storage instance.
-    pub fn recv(&mut self) -> Option<StorageResponse<T>> {
-        self.ready_responses.pop_front()
-    }
 }
 
 /// Replica-specific configuration.
@@ -246,9 +233,7 @@ pub struct Replica<T> {
     /// rehydration.
     command_tx: mpsc::UnboundedSender<StorageCommand<T>>,
     /// A handle to the task that aborts it when the replica is dropped.
-    _task: AbortOnDropHandle<()>,
-    /// Token to determine whether the replica has failed and requires rehydration.
-    token: Weak<()>,
+    task: AbortOnDropHandle<()>,
 }
 
 impl<T> Replica<T>
@@ -265,7 +250,6 @@ where
         response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let token = Arc::new(());
 
         let task = mz_ore::task::spawn(
             || "storage-replica-{id}",
@@ -276,7 +260,6 @@ where
                 metrics: metrics.clone(),
                 command_rx,
                 response_tx,
-                _token: Arc::clone(&token),
             }
             .run(),
         );
@@ -284,21 +267,20 @@ where
         Self {
             config,
             command_tx,
-            token: Arc::downgrade(&token),
-            _task: task.abort_on_drop(),
+            task: task.abort_on_drop(),
         }
     }
 
     /// Sends a command to the replica.
     fn send(&mut self, command: StorageCommand<T>) {
-        /// Send failures ignored, we'll check for failed replicas separately.
+        // Send failures ignored, we'll check for failed replicas separately.
         let _ = self.command_tx.send(command);
     }
 
     /// Determine if this replica has failed. This is true if the replica
     /// task has terminated.
     fn failed(&self) -> bool {
-        self.token.upgrade().is_none()
+        self.task.is_finished()
     }
 }
 
@@ -318,8 +300,6 @@ struct ReplicaTask<T> {
     command_rx: mpsc::UnboundedReceiver<StorageCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
     response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
-    /// A token that lets the instance determine that the replica has failed.
-    _token: Arc<()>,
 }
 
 impl<T> ReplicaTask<T>

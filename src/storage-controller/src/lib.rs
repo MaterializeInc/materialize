@@ -1797,13 +1797,6 @@ where
             return;
         }
 
-        for instance in self.instances.values_mut() {
-            if let Some(response) = instance.recv() {
-                self.stashed_response = Some(response);
-                return;
-            }
-        }
-
         self.stashed_response = tokio::select! {
             // Order matters here. We want to process internal commands
             // before processing external commands.
