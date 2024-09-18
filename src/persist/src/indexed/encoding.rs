@@ -310,7 +310,13 @@ impl BlobTraceUpdates {
             key: ::arrow::compute::concat(&keys)?,
             val: ::arrow::compute::concat(&vals)?,
         };
-        Ok(Self::Both(records, ext))
+
+        let out = Self::Both(records, ext);
+        metrics
+            .arrow
+            .concat_bytes
+            .inc_by(u64::cast_from(out.goodbytes()));
+        Ok(out)
     }
 }
 
