@@ -162,7 +162,7 @@ def try_mzfmt(sql: str) -> str:
     result = subprocess.run(
         ["mzfmt"],
         shell=True,
-        input=sql.encode("utf-8"),
+        input=sql.encode(),
         capture_output=True,
     )
 

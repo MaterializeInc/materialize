@@ -209,7 +209,7 @@ def _wait_for_pg(
             # The default (autocommit = false) wraps everything in a transaction.
             conn.autocommit = True
             with conn.cursor() as cur:
-                cur.execute(query.encode("utf-8"))
+                cur.execute(query.encode())
                 if expected == "any" and cur.rowcount == -1:
                     ui.progress(" success!", finish=True)
                     return

@@ -478,9 +478,9 @@ def annotate_logged_errors(
         additional_collapsed_error_details_header: str | None = None,
         additional_collapsed_error_details: str | None = None,
     ):
-        search_string = error_message.encode("utf-8")
+        search_string = error_message.encode()
         if error_details is not None:
-            search_string += ("\n" + error_details).encode("utf-8")
+            search_string += ("\n" + error_details).encode()
 
         for issue in known_issues:
             match = issue.regex.search(for_github_re(search_string))

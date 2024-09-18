@@ -308,7 +308,7 @@ def workflow_ip_forwarding(c: Composition) -> None:
             "query": "select client_ip from mz_internal.mz_sessions where connection_id = pg_backend_pid();"
         }
         json_data = json.dumps(json_data)
-        content_length = len(json_data.encode("utf-8"))
+        content_length = len(json_data.encode())
         http_sql_query_request = dedent(
             f"""\
             POST /api/sql HTTP/1.1\r
@@ -319,12 +319,12 @@ def workflow_ip_forwarding(c: Composition) -> None:
             \r
             {json_data}"""
         )
-        sock.sendall(proxy_header + http_sql_query_request.encode("utf-8"))
+        sock.sendall(proxy_header + http_sql_query_request.encode())
 
         # read and parse the response
         body_separator = "\r\n\r\n"
         tcp_resp = sock.recv(8192)
-        resp_split = tcp_resp.split(body_separator.encode("utf-8"))
+        resp_split = tcp_resp.split(body_separator.encode())
         assert (
             len(resp_split) > 1
         ), f"expected response with header and body, found: {resp_split}"

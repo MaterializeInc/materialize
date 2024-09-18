@@ -68,7 +68,7 @@ def workflow_default(c: Composition) -> None:
             while running:
                 for query in queries:
                     start_time = time.time()
-                    cursor.execute(query.encode("utf-8"))
+                    cursor.execute(query.encode())
                     results = cursor.fetchone()
                     assert results
                     runtime = time.time() - start_time

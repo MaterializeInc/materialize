@@ -3386,7 +3386,7 @@ def workflow_blue_green_deployment(
                     for i, query in enumerate(queries):
                         start_time = time.time()
                         try:
-                            cursor.execute(query.encode("utf-8"))
+                            cursor.execute(query.encode())
                         except DatabaseError as e:
                             # Expected
                             if "cached plan must not change result type" in str(e):

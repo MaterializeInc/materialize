@@ -125,21 +125,21 @@ class Database:
 
     def execute(self, statement: str) -> None:
         with self.conn.cursor() as cursor:
-            cursor.execute(statement.encode("utf-8"))
+            cursor.execute(statement.encode())
 
     def execute_all(self, statements: list[str]) -> None:
         with self.conn.cursor() as cursor:
             for statement in statements:
-                cursor.execute(statement.encode("utf-8"))
+                cursor.execute(statement.encode())
 
     def query_one(self, query: str) -> dict[Any, Any]:
         with self.conn.cursor() as cursor:
-            cursor.execute(query.encode("utf-8"))
+            cursor.execute(query.encode())
             return cast(dict[Any, Any], cursor.fetchone())
 
     def query_all(self, query: str) -> dict[Any, Any]:
         with self.conn.cursor() as cursor:
-            cursor.execute(query.encode("utf-8"))
+            cursor.execute(query.encode())
             return cast(dict[Any, Any], cursor.fetchall())
 
 

@@ -39,7 +39,7 @@ def setup_structures(cursor: Cursor, directory: str) -> None:
 
         for command in sql_commands:
             print(f"> {command}")
-            cursor.execute(command.encode("utf-8"))
+            cursor.execute(command.encode())
 
 
 def exist_structures(cursor: Cursor) -> bool:

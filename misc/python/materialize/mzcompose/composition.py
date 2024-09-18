@@ -692,7 +692,7 @@ class Composition:
             for statement in sqlparse.split(sql):
                 if print_statement:
                     print(f"> {statement}")
-                cursor.execute(statement.encode("utf-8"))
+                cursor.execute(statement.encode())
 
     def sql_query(
         self,
@@ -707,7 +707,7 @@ class Composition:
         with self.sql_cursor(
             service=service, user=user, database=database, port=port, password=password
         ) as cursor:
-            cursor.execute(sql.encode("utf-8"))
+            cursor.execute(sql.encode())
             return cursor.fetchall()
 
     def query_mz_version(self, service: str | None = None) -> str:

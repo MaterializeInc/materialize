@@ -92,7 +92,7 @@ class Executor:
 
         try:
             (
-                cur.execute(query.encode("utf-8"))
+                cur.execute(query.encode())
                 if isinstance(cur, psycopg.Cursor)
                 else cur.execute(query)
             )

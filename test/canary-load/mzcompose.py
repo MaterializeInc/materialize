@@ -202,7 +202,7 @@ def create_connection_and_cursor(
     )
     cursor = conn.cursor()
     cursor.execute("BEGIN")
-    cursor.execute(cursor_statement.encode("utf-8"))
+    cursor.execute(cursor_statement.encode())
 
     return conn, cursor
 

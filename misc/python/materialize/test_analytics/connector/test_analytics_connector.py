@@ -217,7 +217,7 @@ class DatabaseConnector:
 
         try:
             start_time = time.time()
-            cursor.execute(sql.encode("utf-8"))
+            cursor.execute(sql.encode())
             end_time = time.time()
 
             if print_status:

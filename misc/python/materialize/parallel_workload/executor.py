@@ -151,7 +151,7 @@ class Executor:
                         raise QueryError(str(e), query)
                 else:
                     try:
-                        self.cur.execute(query.encode("utf-8"))
+                        self.cur.execute(query.encode())
                     except Exception as e:
                         raise QueryError(str(e), query)
 

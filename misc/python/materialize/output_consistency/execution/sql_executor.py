@@ -111,7 +111,7 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
     def _execute_with_cursor(self, sql: str) -> None:
         try:
             self.last_statements.append(sql)
-            self.cursor.execute(sql.encode("utf-8"))
+            self.cursor.execute(sql.encode())
         except OperationalError as e:
             if "server closed the connection unexpectedly" not in str(e):
                 raise SqlExecutionError(self._extract_message_from_error(e))

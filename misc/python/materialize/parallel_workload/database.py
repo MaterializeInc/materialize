@@ -79,7 +79,7 @@ def naughtify(name: str) -> str:
 
     strings = naughty_strings()
     # This rng is just to get a more interesting integer for the name
-    index = sum([10**i * c for i, c in enumerate(name.encode("utf-8"))]) % len(strings)
+    index = sum([10**i * c for i, c in enumerate(name.encode())]) % len(strings)
     # Keep them short so we can combine later with other identifiers, 255 char limit
     return f"{name}_{strings[index].encode('utf-8')[:16].decode('utf-8', 'ignore')}"
 
