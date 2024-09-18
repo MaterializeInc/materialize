@@ -20,7 +20,7 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::fold::{Fold, FoldNode};
 use crate::ast::{
     Ident, Statement, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName,
+    UnresolvedSchemaName, Version,
 };
 
 /// This represents the metadata that lives next to an AST, as we take it through
@@ -85,21 +85,21 @@ impl AstInfo for Raw {
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub enum RawItemName {
     Name(UnresolvedItemName),
-    Id(String, UnresolvedItemName),
+    Id(String, UnresolvedItemName, Option<Version>),
 }
 
 impl RawItemName {
     pub fn name(&self) -> &UnresolvedItemName {
         match self {
             RawItemName::Name(name) => name,
-            RawItemName::Id(_, name) => name,
+            RawItemName::Id(_, name, _) => name,
         }
     }
 
     pub fn name_mut(&mut self) -> &mut UnresolvedItemName {
         match self {
             RawItemName::Name(name) => name,
-            RawItemName::Id(_, name) => name,
+            RawItemName::Id(_, name, _) => name,
         }
     }
 }
@@ -108,9 +108,13 @@ impl AstDisplay for RawItemName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             RawItemName::Name(o) => f.write_node(o),
-            RawItemName::Id(id, o) => {
+            RawItemName::Id(id, o, v) => {
                 f.write_str(format!("[{} AS ", id));
                 f.write_node(o);
+                if let Some(v) = v {
+                    f.write_str(" VERSION ");
+                    f.write_node(v);
+                }
                 f.write_str("]");
             }
         }

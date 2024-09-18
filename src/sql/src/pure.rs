@@ -31,7 +31,7 @@ use mz_ore::{assert_none, soft_panic_or_log};
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
 use mz_proto::RustType;
-use mz_repr::{strconv, RelationDesc, Timestamp};
+use mz_repr::{strconv, RelationDesc, RelationVersionSelector, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
@@ -362,6 +362,7 @@ pub(crate) fn add_materialize_comments(
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
                 ),
+                version: RelationVersionSelector::Latest,
             };
 
             if let Some(comments_map) = catalog.get_item_comments(&object_id) {
@@ -1167,6 +1168,7 @@ async fn purify_alter_source(
         qualifiers: item.name().qualifiers.clone(),
         full_name: scx.catalog.resolve_full_name(source_name),
         print_id: true,
+        version: RelationVersionSelector::Latest,
     };
     let connection_name = desc.connection.name();
 
@@ -2169,6 +2171,7 @@ pub fn purify_create_materialized_view_options(
                     qualifiers: item.name().qualifiers.clone(),
                     full_name: catalog.resolve_full_name(item.name()),
                     print_id: false,
+                    version: RelationVersionSelector::Latest,
                 },
                 args: FunctionArgs::Args {
                     args: Vec::new(),

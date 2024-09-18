@@ -17,12 +17,13 @@ use std::sync::LazyLock;
 use anyhow::anyhow;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
+use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
-use mz_repr::ColumnName;
 use mz_repr::GlobalId;
-use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr};
+use mz_repr::{ColumnName, RelationVersionSelector};
+use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, Version};
 use mz_sql_parser::ident;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -422,6 +423,7 @@ pub enum ResolvedItemName {
         // want this for things like tables and sources, but not for things like
         // types.
         print_id: bool,
+        version: RelationVersionSelector,
     },
     Cte {
         id: LocalId,
@@ -462,6 +464,7 @@ impl AstDisplay for ResolvedItemName {
                 qualifiers: _,
                 full_name,
                 print_id,
+                version,
             } => {
                 if *print_id {
                     f.write_str(format!("[{} AS ", id));
@@ -473,6 +476,13 @@ impl AstDisplay for ResolvedItemName {
                 f.write_node(&Ident::new_unchecked(&full_name.schema));
                 f.write_str(".");
                 f.write_node(&Ident::new_unchecked(&full_name.item));
+
+                if let RelationVersionSelector::Specific(version) = version {
+                    let version: Version = (*version).into();
+                    f.write_str(" VERSION ");
+                    f.write_node(&version);
+                }
+
                 if *print_id {
                     f.write_str("]");
                 }
@@ -1285,10 +1295,12 @@ impl<'a> NameResolver<'a> {
                         let full_name = self.catalog.resolve_full_name(item.name());
                         (full_name, item)
                     }
-                    RawItemName::Id(id, name) => {
+                    RawItemName::Id(id, name, version) => {
                         let gid: GlobalId = id.parse()?;
                         let item = self.catalog.get_item(&gid);
                         let full_name = normalize::full_name(name)?;
+                        assert_none!(version, "no support for versioning data types");
+
                         (full_name, item)
                     }
                 };
@@ -1322,7 +1334,9 @@ impl<'a> NameResolver<'a> {
     ) -> ResolvedItemName {
         match item_name {
             RawItemName::Name(name) => self.resolve_item_name_name(name, config),
-            RawItemName::Id(id, raw_name) => self.resolve_item_name_id(id, raw_name),
+            RawItemName::Id(id, raw_name, version) => {
+                self.resolve_item_name_id(id, raw_name, version)
+            }
         }
     }
 
@@ -1381,6 +1395,8 @@ impl<'a> NameResolver<'a> {
                     qualifiers: item.name().qualifiers.clone(),
                     full_name: self.catalog.resolve_full_name(item.name()),
                     print_id,
+                    // TODO(alter_table): Specify an actual version here.
+                    version: RelationVersionSelector::Latest,
                 }
             }
             Err(mut e) => {
@@ -1420,6 +1436,7 @@ impl<'a> NameResolver<'a> {
         &mut self,
         id: String,
         raw_name: UnresolvedItemName,
+        _version: Option<Version>,
     ) -> ResolvedItemName {
         let gid: GlobalId = match id.parse() {
             Ok(id) => id,
@@ -1455,6 +1472,8 @@ impl<'a> NameResolver<'a> {
             qualifiers: item.name().qualifiers.clone(),
             full_name,
             print_id: true,
+            // TODO(alter_table): Specify an actual version here.
+            version: RelationVersionSelector::Latest,
         }
     }
 }
@@ -1611,9 +1630,14 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         );
 
         match &item_name {
-            ResolvedItemName::Item { id, full_name, .. } => {
+            ResolvedItemName::Item {
+                id,
+                full_name,
+                version: _,
+                qualifiers: _,
+                print_id: _,
+            } => {
                 let item = self.catalog.get_item(id);
-
                 let desc = match item.desc(full_name) {
                     Ok(desc) => desc,
                     Err(e) => {

@@ -4671,6 +4671,12 @@ impl<'a> Parser<'a> {
             let expr = self.parse_expr()?;
             self.expect_token(&Token::RParen)?;
             ColumnOption::Check(expr)
+        } else if self.parse_keyword(VERSION) {
+            self.expect_keyword(ADDED)?;
+            let action = ColumnVersioned::Added;
+            let version = self.parse_version()?;
+
+            ColumnOption::Versioned { action, version }
         } else {
             return self.expected(self.peek_pos(), "column option", self.peek_token());
         };
@@ -6101,6 +6107,24 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_version(&mut self) -> Result<Version, ParserError> {
+        let Value::Number(val) = self.parse_number_value()? else {
+            unreachable!("programming error, expected Value::Number")
+        };
+        match val.parse() {
+            Ok(version) => Ok(Version(version)),
+            Err(err) => {
+                tracing::error!(?err, "failed to parse version number");
+                self.prev_token();
+                self.expected(
+                    self.peek_pos(),
+                    "non-negative version number",
+                    self.peek_token(),
+                )
+            }
+        }
+    }
+
     /// Parse a signed literal integer.
     fn parse_literal_int(&mut self) -> Result<i64, ParserError> {
         let negative = self.consume_token(&Token::Op("-".into()));
@@ -6397,8 +6421,16 @@ impl<'a> Parser<'a> {
                     "table name in square brackets must be fully qualified"
                 );
             }
+
+            let version = if self.parse_keywords(&[VERSION]) {
+                let version = self.parse_version()?;
+                Some(version)
+            } else {
+                None
+            };
+
             self.expect_token(&Token::RBracket)?;
-            Ok(RawItemName::Id(id, name))
+            Ok(RawItemName::Id(id, name, version))
         } else {
             Ok(RawItemName::Name(self.parse_item_name()?))
         }
@@ -6417,7 +6449,7 @@ impl<'a> Parser<'a> {
                 }
                 identifiers.pop().unwrap()
             }
-            RawItemName::Id(_, _) => {
+            RawItemName::Id(_, _, _) => {
                 self.expect_token(&Token::Dot)?;
                 self.parse_identifier()?
             }
