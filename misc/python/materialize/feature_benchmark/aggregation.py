@@ -13,12 +13,16 @@ from typing import Any
 
 import numpy as np
 
-from materialize.feature_benchmark.measurement import Measurement, MeasurementUnit, MeasurementType
+from materialize.feature_benchmark.measurement import (
+    Measurement,
+    MeasurementType,
+    MeasurementUnit,
+)
 
 
 class Aggregation:
     def __init__(self) -> None:
-        self.measurement_type : MeasurementType | None = None
+        self.measurement_type: MeasurementType | None = None
         self._data: list[float] = []
         self._unit: MeasurementUnit = MeasurementUnit.UNKNOWN
 

@@ -22,6 +22,10 @@ from textwrap import dedent
 
 from materialize import buildkite
 from materialize.docker import is_image_tag_of_release_version
+from materialize.feature_benchmark.benchmark_result_evaluator import (
+    BenchmarkResultEvaluator,
+    RelativeThresholdEvaluator,
+)
 from materialize.feature_benchmark.benchmark_versioning import (
     FEATURE_BENCHMARK_FRAMEWORK_VERSION,
 )
@@ -53,9 +57,8 @@ from materialize.version_list import (
 sys.path.append(os.path.dirname(__file__))
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
 from materialize.feature_benchmark.benchmark import Benchmark
-from materialize.feature_benchmark.comparator import (
-    Comparator,
-    RelativeThresholdComparator,
+from materialize.feature_benchmark.benchmark_result import (
+    BenchmarkScenarioResult,
 )
 from materialize.feature_benchmark.executor import Docker
 from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
@@ -117,16 +120,6 @@ def make_aggregation_class() -> type[Aggregation]:
     return MinAggregation
 
 
-def make_comparator(
-    scenario_name: str, measurement_type: MeasurementType, relative_threshold: float
-) -> Comparator:
-    return RelativeThresholdComparator(
-        scenario_name=scenario_name,
-        measurement_type=measurement_type,
-        threshold=relative_threshold,
-    )
-
-
 default_timeout = "1800s"
 
 SERVICES = [
@@ -150,7 +143,7 @@ SERVICES = [
 
 def run_one_scenario(
     c: Composition, scenario_class: type[Scenario], args: argparse.Namespace
-) -> list[Comparator]:
+) -> BenchmarkScenarioResult:
     scenario_name = scenario_class.__name__
     print(f"--- Now benchmarking {scenario_name} ...")
 
@@ -159,14 +152,7 @@ def run_one_scenario(
         measurement_types.append(MeasurementType.MEMORY_MZ)
         measurement_types.append(MeasurementType.MEMORY_CLUSTERD)
 
-    comparators = [
-        make_comparator(
-            scenario_name=scenario_name,
-            measurement_type=t,
-            relative_threshold=scenario_class.RELATIVE_THRESHOLD[t],
-        )
-        for t in measurement_types
-    ]
+    result = BenchmarkScenarioResult(scenario_class, measurement_types)
 
     common_seed = round(time.time())
 
@@ -269,10 +255,13 @@ def run_one_scenario(
             else:
                 aggregations = benchmark.run()
                 scenario_version = benchmark.create_scenario_instance().version()
-                for aggregation, comparator in zip(aggregations, comparators):
-                    comparator.set_scenario_version(scenario_version)
-                    assert aggregation.measurement_type == comparator.measurement_type
-                    comparator.append_point(
+                result.set_scenario_version(scenario_version)
+                for aggregation, metric in zip(aggregations, result.metrics):
+                    assert (
+                        aggregation.measurement_type == metric.measurement_type
+                        or aggregation.measurement_type is None
+                    ), f"Aggregation contains {aggregation.measurement_type} but metric contains {metric.measurement_type} as measurement type"
+                    metric.append_point(
                         aggregation.aggregate(),
                         aggregation.unit(),
                         aggregation.name(),
@@ -283,10 +272,10 @@ def run_one_scenario(
         c.rm_volumes("mzdata")
 
         if early_abort:
-            comparators = []
+            result.empty()
             break
 
-    return comparators
+    return result
 
 
 def resolve_tag(tag: str, scenario_class: type[Scenario], scale: str | None) -> str:
@@ -509,30 +498,32 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     latest_report_by_scenario_name: dict[str, Report] = dict()
     discarded_reports_by_scenario_name: dict[str, list[Report]] = dict()
 
-    scenarios_to_run: list[type[Scenario]] = scenarios_scheduled_to_run.copy()
+    scenario_classes_to_run: list[type[Scenario]] = scenarios_scheduled_to_run.copy()
     for cycle_index in range(0, args.max_retries):
         cycle_number = cycle_index + 1
         print(
-            f"Cycle {cycle_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios_to_run])}"
+            f"Cycle {cycle_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenario_classes_to_run])}"
         )
 
         report = Report(cycle_number=cycle_number)
 
         scenarios_to_retry = []
-        for scenario in scenarios_to_run:
-            scenario_name = scenario.__name__
-            comparators = run_one_scenario(c, scenario, args)
+        for scenario_class in scenario_classes_to_run:
+            scenario_name = scenario_class.__name__
+            scenario_result = run_one_scenario(c, scenario_class, args)
 
-            if len(comparators) == 0:
+            if scenario_result.is_empty():
                 continue
 
-            report.add_comparisons(comparators)
+            report.add_scenario_result(scenario_result)
 
-            if is_regression(comparators):
-                if _shall_retry_scenario(comparators, cycle_index):
-                    scenarios_to_retry.append(scenario)
+            evaluator = RelativeThresholdEvaluator(scenario_class)
+
+            if is_regression(evaluator, scenario_result):
+                if _shall_retry_scenario(evaluator, scenario_result, cycle_index):
+                    scenarios_to_retry.append(scenario_class)
                 else:
-                    scenarios_with_regressions.append(scenario)
+                    scenarios_with_regressions.append(scenario_class)
 
             if cycle_index > 0:
                 discarded_reports_of_scenario = discarded_reports_by_scenario_name.get(
@@ -550,8 +541,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             print(f"+++ Benchmark Report for cycle {cycle_number}:")
             print(report)
 
-        scenarios_to_run = scenarios_to_retry
-        if len(scenarios_to_run) == 0:
+        scenario_classes_to_run = scenarios_to_retry
+        if len(scenario_classes_to_run) == 0:
             break
 
     if len(scenarios_with_regressions) > 0:
@@ -617,15 +608,22 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
 
-def is_regression(comparators: list[Comparator]) -> bool:
-    return any([c.is_regression() for c in comparators])
+def is_regression(
+    evaluator: BenchmarkResultEvaluator, scenario_result: BenchmarkScenarioResult
+) -> bool:
+    return any([evaluator.is_regression(metric) for metric in scenario_result.metrics])
 
 
-def _shall_retry_scenario(comparators: list[Comparator], cycle_index: int) -> bool:
+def _shall_retry_scenario(
+    evaluator: BenchmarkResultEvaluator,
+    scenario_result: BenchmarkScenarioResult,
+    cycle_index: int,
+) -> bool:
     return any(
         [
-            c.is_regression() and not (c.is_strong_regression() and cycle_index >= 2)
-            for c in comparators
+            evaluator.is_regression(metric)
+            and not (evaluator.is_strong_regression(metric) and cycle_index >= 2)
+            for metric in scenario_result.metrics
         ]
     )
 

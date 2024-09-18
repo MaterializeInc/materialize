@@ -7,11 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from collections.abc import Iterable
 from statistics import mean, variance
 from typing import Generic, TypeVar
 
-from materialize.feature_benchmark.comparator import Comparator
+from materialize.feature_benchmark.benchmark_result import BenchmarkScenarioResult
+from materialize.feature_benchmark.benchmark_result_evaluator import (
+    RelativeThresholdEvaluator,
+)
 from materialize.feature_benchmark.measurement import (
     MeasurementType,
 )
@@ -46,13 +48,10 @@ class Report:
     def __init__(self, cycle_number: int) -> None:
         self.cycle_number = cycle_number
         """ 1-based cycle number. """
-        self._comparisons: list[Comparator] = []
+        self._scenario_results: list[BenchmarkScenarioResult] = []
 
-    def add_comparison(self, comparison: Comparator) -> None:
-        self._comparisons.append(comparison)
-
-    def add_comparisons(self, comparisons: Iterable[Comparator]) -> None:
-        self._comparisons.extend(comparisons)
+    def add_scenario_result(self, result: BenchmarkScenarioResult) -> None:
+        self._scenario_results.append(result)
 
     def as_string(self, use_colors: bool, limit_to_scenario: str | None = None) -> str:
         output_lines = []
@@ -62,21 +61,23 @@ class Report:
         )
         output_lines.append("-" * 152)
 
-        for comparison in self._comparisons:
-            if not comparison.has_values():
-                continue
+        for scenario_result in self._scenario_results:
+            evaluator = RelativeThresholdEvaluator(scenario_result.scenario_class)
+            for metric in scenario_result.metrics:
+                if not metric.has_values():
+                    continue
 
-            if (
-                limit_to_scenario is not None
-                and comparison.scenario_name != limit_to_scenario
-            ):
-                continue
+                if (
+                    limit_to_scenario is not None
+                    and scenario_result.scenario_name != limit_to_scenario
+                ):
+                    continue
 
-            regression = "!!YES!!" if comparison.is_regression() else "no"
-            threshold = f"{(comparison.threshold * 100):.0f}%"
-            output_lines.append(
-                f"{comparison.scenario_name:<35} | {comparison.measurement_type:<15} | {comparison.this_as_str():>15} | {comparison.other_as_str():>15} | {comparison.unit():^6} | {threshold:^10} | {regression:^13} | {comparison.human_readable(use_colors)}"
-            )
+                regression = "!!YES!!" if evaluator.is_regression(metric) else "no"
+                threshold = f"{(evaluator.get_threshold(metric) * 100):.0f}%"
+                output_lines.append(
+                    f"{scenario_result.scenario_name:<35} | {metric.measurement_type:<15} | {metric.this_as_str():>15} | {metric.other_as_str():>15} | {metric.unit():^6} | {threshold:^10} | {regression:^13} | {evaluator.human_readable(metric, use_colors)}"
+                )
 
         return "\n".join(output_lines)
 
@@ -86,19 +87,28 @@ class Report:
     def measurements_of_this(
         self, scenario_name: str
     ) -> dict[MeasurementType, ReportMeasurement]:
-        result = dict()
+        scenario_result = self.get_scenario_result_by_name(scenario_name)
+        assert scenario_result is not None
 
-        for comparison in self._comparisons:
-            if comparison.scenario_name == scenario_name:
-                result[comparison.measurement_type] = ReportMeasurement(
-                    comparison.points_this()
-                )
+        this_results = dict()
+        for metric in scenario_result.metrics:
+            this_results[metric.measurement_type] = ReportMeasurement(
+                metric.points_this()
+            )
 
-        return result
+        return this_results
 
     def get_scenario_version(self, scenario_name: str) -> ScenarioVersion:
-        for comparison in self._comparisons:
-            if comparison.scenario_name == scenario_name:
-                return comparison.get_scenario_version()
+        scenario_result = self.get_scenario_result_by_name(scenario_name)
+        assert scenario_result is not None
 
-        raise RuntimeError(f"Scenario {scenario_name} not found!")
+        return scenario_result.get_scenario_version()
+
+    def get_scenario_result_by_name(
+        self, scenario_name: str
+    ) -> BenchmarkScenarioResult | None:
+        for scenario_result in self._scenario_results:
+            if scenario_result.scenario_name == scenario_name:
+                return scenario_result
+
+        return None
