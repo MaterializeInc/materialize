@@ -276,7 +276,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 timestamp_interval: description.desc.timestamp_interval,
                 worker_id: mz_scope.index(),
                 worker_count: mz_scope.peers(),
-                now: storage_state.now.clone(),
+                now_fn: storage_state.now.clone(),
                 metrics: storage_state.metrics.clone(),
                 as_of: as_of.clone(),
                 resume_uppers: resume_uppers.clone(),

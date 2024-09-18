@@ -107,7 +107,7 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender, StackedCollection};
+use crate::source::types::{Probe, ProgressStatisticsUpdate, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
@@ -131,6 +131,7 @@ impl SourceRender for PostgresSourceConnection {
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
+        Stream<G, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting into a per-table map.
@@ -186,16 +187,17 @@ impl SourceRender for PostgresSourceConnection {
                 metrics.snapshot_metrics.clone(),
             );
 
-        let (repl_updates, uppers, stats_stream, repl_err, repl_token) = replication::render(
-            scope.clone(),
-            config,
-            self,
-            table_info,
-            &rewinds,
-            &slot_ready,
-            resume_uppers,
-            metrics,
-        );
+        let (repl_updates, uppers, stats_stream, probe_stream, repl_err, repl_token) =
+            replication::render(
+                scope.clone(),
+                config,
+                self,
+                table_info,
+                &rewinds,
+                &slot_ready,
+                resume_uppers,
+                metrics,
+            );
 
         let stats_stream = stats_stream.concat(&snapshot_stats);
 
@@ -243,6 +245,7 @@ impl SourceRender for PostgresSourceConnection {
             Some(uppers),
             health,
             stats_stream,
+            probe_stream,
             vec![snapshot_token, repl_token],
         )
     }

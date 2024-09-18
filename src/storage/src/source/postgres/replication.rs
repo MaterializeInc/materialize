@@ -74,13 +74,13 @@ use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::LazyLock;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use differential_dataflow::AsCollection;
-use futures::{future, future::select, FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
+use futures::{FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_ore::future::InTask;
@@ -108,6 +108,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use tokio::sync::watch;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 use tracing::{error, trace};
@@ -116,7 +117,7 @@ use crate::metrics::source::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, SourceOutputInfo, TransientError};
 use crate::source::types::{
-    ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
+    Probe, ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
 };
 use crate::source::RawSourceCreationConfig;
 
@@ -149,6 +150,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
     Stream<G, ProgressStatisticsUpdate>,
+    Stream<G, Probe<MzOffset>>,
     Stream<G, ReplicationError>,
     PressOnDropButton,
 ) {
@@ -161,6 +163,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let (mut definite_error_handle, definite_errors) = builder.new_output();
 
     let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut rewind_input = builder.new_input_for(
         rewind_stream,
@@ -191,7 +194,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap_set, upper_cap_set, definite_error_cap_set, stats_cap]: &mut [_; 4] =
+            let [data_cap_set, upper_cap_set, definite_error_cap_set, stats_cap, probe_cap]: &mut [_; 5] =
                 caps.try_into().unwrap();
 
             if !config.responsible_for("slot") {
@@ -360,6 +363,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 committed_uppers.as_mut(),
                 &mut stats_output,
                 &stats_cap[0],
+                &mut probe_output,
+                &probe_cap[0],
             )
             .await?;
 
@@ -541,6 +546,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         replication_updates,
         upper_stream,
         stats_stream,
+        probe_stream,
         errors,
         button.press_on_drop(),
     )
@@ -565,6 +571,12 @@ async fn raw_stream<'a>(
         Tee<MzOffset, Vec<ProgressStatisticsUpdate>>,
     >,
     stats_cap: &'a Capability<MzOffset>,
+    probe_output: &'a mut AsyncOutputHandle<
+        MzOffset,
+        CapacityContainerBuilder<Vec<Probe<MzOffset>>>,
+        Tee<MzOffset, Vec<Probe<MzOffset>>>,
+    >,
+    probe_cap: &'a Capability<MzOffset>,
 ) -> Result<
     Result<
         impl AsyncStream<
@@ -652,18 +664,24 @@ async fn raw_stream<'a>(
         slot_metadata.active_pid, wal_sender_timeout
     );
 
-    let progress_stat_shared_value = Arc::new(Mutex::new(None));
-    let progress_stat_task_value = Arc::clone(&progress_stat_shared_value);
+    let (probe_tx, mut probe_rx) = watch::channel(None);
     let offset_known_interval =
         mz_storage_types::dyncfgs::PG_OFFSET_KNOWN_INTERVAL.get(config.config.config_set());
+    let now_fn = config.now_fn.clone();
     let max_lsn_task_handle =
         mz_ore::task::spawn(|| format!("pg_current_wal_lsn:{}", config.id), async move {
             let mut interval = tokio::time::interval(offset_known_interval);
 
-            loop {
+            while !probe_tx.is_closed() {
                 interval.tick().await;
-                let lsn_or_err = super::fetch_max_lsn(&metadata_client).await;
-                *progress_stat_task_value.lock().expect("poisoned") = Some(lsn_or_err);
+                let probe_ts = mz_repr::Timestamp::try_from((now_fn)()).expect("must fit");
+                let probe_or_err = super::fetch_max_lsn(&metadata_client)
+                    .await
+                    .map(|lsn| Probe {
+                        probe_ts,
+                        upstream_frontier: Antichain::from_elem(lsn),
+                    });
+                let _ = probe_tx.send(Some(probe_or_err));
             }
         })
         .abort_on_drop();
@@ -688,28 +706,49 @@ async fn raw_stream<'a>(
 
         let mut last_feedback = Instant::now();
         loop {
-            let send_feedback = match select(stream.as_mut().next(), uppers.as_mut().next()).await {
-                future::Either::Left((next_message, _)) => match next_message.transpose()? {
-                    Some(ReplicationMessage::XLogData(data)) => {
+            let send_feedback = tokio::select! {
+                Some(next_message) = stream.next() => match next_message {
+                    Ok(ReplicationMessage::XLogData(data)) => {
                         yield ReplicationMessage::XLogData(data);
-                        last_feedback.elapsed() > feedback_interval
+                        Ok(last_feedback.elapsed() > feedback_interval)
                     }
-                    Some(ReplicationMessage::PrimaryKeepAlive(keepalive)) => {
+                    Ok(ReplicationMessage::PrimaryKeepAlive(keepalive)) => {
                         let send_feedback = keepalive.reply() == 1;
                         yield ReplicationMessage::PrimaryKeepAlive(keepalive);
-                        send_feedback
+                        Ok(send_feedback)
                     }
-                    Some(_) => Err(TransientError::UnknownReplicationMessage)?,
-                    None => return,
+                    Err(err) => Err(err.into()),
+                    _ => Err(TransientError::UnknownReplicationMessage),
                 },
-                future::Either::Right((upper, _)) => match upper.and_then(|u| u.into_option()) {
+                Some(upper) = uppers.next() => match upper.into_option() {
                     Some(lsn) => {
                         last_committed_upper = std::cmp::max(last_committed_upper, lsn);
-                        true
+                        Ok(true)
                     }
-                    None => false,
+                    None => Ok(false),
                 },
-            };
+                Ok(()) = probe_rx.changed() => match &*probe_rx.borrow() {
+                    Some(Ok(probe)) => {
+                        if let Some(offset_known) = probe.upstream_frontier.as_option() {
+                            stats_output.give(
+                                stats_cap,
+                                ProgressStatisticsUpdate::SteadyState {
+                                    // Similar to the kafka source, we don't subtract 1 from the
+                                    // upper as we want to report the _number of bytes_ we have
+                                    // processed/in upstream.
+                                    offset_known: offset_known.offset,
+                                    offset_committed: last_committed_upper.offset,
+                                },
+                            );
+                        }
+                        probe_output.give(probe_cap, probe.clone());
+                        Ok(false)
+                    },
+                    Some(Err(err)) => Err(anyhow::anyhow!("{err}").into()),
+                    None => Ok(false),
+                },
+                else => return
+            }?;
             if send_feedback {
                 let ts: i64 = PG_EPOCH.elapsed().unwrap().as_micros().try_into().unwrap();
                 let lsn = PgLsn::from(last_committed_upper.offset);
@@ -718,22 +757,6 @@ async fn raw_stream<'a>(
                     .standby_status_update(lsn, lsn, lsn, ts, 0)
                     .await?;
                 last_feedback = Instant::now();
-
-                // This is separate to ensure clippy doesn't get mad about a lock being held across
-                // an await point.
-                let upstream_stat = { progress_stat_shared_value.lock().expect("poisoned").take() };
-                if let Some(upstream_stat) = upstream_stat {
-                    let upstream_stat = upstream_stat?;
-                    stats_output.give(
-                        stats_cap,
-                        ProgressStatisticsUpdate::SteadyState {
-                            // Similar to the kafka source, we don't subtract 1 from the upper as we want to report the
-                            // _number of bytes_ we have processed/in upstream.
-                            offset_known: upstream_stat.offset,
-                            offset_committed: last_committed_upper.offset,
-                        },
-                    );
-                }
             }
         }
     });

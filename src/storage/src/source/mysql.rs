@@ -80,6 +80,7 @@ use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::source::types::Probe;
 use crate::source::types::{ProgressStatisticsUpdate, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
@@ -106,6 +107,7 @@ impl SourceRender for MySqlSourceConnection {
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
+        Stream<G, Probe<GtidPartition>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.
@@ -172,7 +174,7 @@ impl SourceRender for MySqlSourceConnection {
             metrics,
         );
 
-        let (stats_stream, stats_err, stats_token) =
+        let (stats_stream, stats_err, probe_stream, stats_token) =
             statistics::render(scope.clone(), config, self, resume_uppers);
 
         let stats_stream = stats_stream.concat(&snapshot_stats);
@@ -216,6 +218,7 @@ impl SourceRender for MySqlSourceConnection {
             Some(uppers),
             health,
             stats_stream,
+            probe_stream,
             vec![snapshot_token, repl_token, stats_token],
         )
     }
