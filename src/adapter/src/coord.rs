@@ -3301,17 +3301,9 @@ impl Coordinator {
                     &ctx.exclude_collections,
                 );
 
-                // We also check that we're "hydrated", meaning all collections
-                // have reported an upper at _some_ frontier. This acts as a
-                // back-stop to the case where `mz_cluster_replica_frontiers` is
-                // migrated and we report `0` for a collection frontier.
-                let compute_hydrated = self
-                    .controller
-                    .compute
-                    .clusters_hydrated(&ctx.exclude_collections);
-                tracing::info!(%compute_caught_up, %compute_hydrated, "checked caught-up status of collections");
+                tracing::info!(%compute_caught_up, "checked caught-up status of collections");
 
-                if compute_caught_up && compute_hydrated {
+                if compute_caught_up {
                     let ctx = self.hydration_check.take().expect("known to exist");
                     ctx.trigger.fire();
                 }
