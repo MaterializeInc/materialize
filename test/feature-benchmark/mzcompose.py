@@ -541,8 +541,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             latest_report_by_scenario_name[scenario_name] = report
 
-            print(f"+++ Benchmark Report for cycle {cycle_number}:")
-            print(report)
+        print(f"+++ Benchmark Report for cycle {cycle_number}:")
+        print(report)
 
         scenarios_to_run = scenarios_to_retry
         if len(scenarios_to_run) == 0:
