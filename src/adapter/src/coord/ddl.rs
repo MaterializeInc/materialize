@@ -709,7 +709,10 @@ impl Coordinator {
                             .await;
 
                         if let Err(err) = result {
-                            tracing::warn!(
+                            // Note: it's possible that the secret can be dropped before we have
+                            // a chance to cleanup the replication slot. This is somewhat expected
+                            // so emit a log but there's no reason to have an error.
+                            tracing::info!(
                                 ?replication_slot_name,
                                 ?err,
                                 "failed to drop replication slot"
