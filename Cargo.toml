@@ -318,10 +318,6 @@ openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 
-# Waiting on https://github.com/polarsignals/rust-jemalloc-pprof/pull/10 to
-# make it into a release.
-pprof_util = { git = "https://github.com/MaterializeInc/rust-jemalloc-pprof.git" }
-
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.
 columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
