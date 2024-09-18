@@ -48,11 +48,11 @@ from materialize.scalability.plot.plot import (
     plot_duration_by_endpoints_for_workload,
     plot_tps_per_connections,
 )
-from materialize.scalability.result.benchmark_result import BenchmarkResult
 from materialize.scalability.result.comparison_outcome import ComparisonOutcome
 from materialize.scalability.result.regression_assessment import RegressionAssessment
 from materialize.scalability.result.result_analyzer import ResultAnalyzer
 from materialize.scalability.result.result_analyzers import DefaultResultAnalyzer
+from materialize.scalability.result.scalability_result import BenchmarkResult
 from materialize.scalability.scalability_versioning import SCALABILITY_FRAMEWORK_VERSION
 from materialize.scalability.schema.schema import Schema, TransactionIsolation
 from materialize.scalability.workload.workload import Workload
