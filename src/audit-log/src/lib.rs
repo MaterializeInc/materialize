@@ -159,6 +159,9 @@ pub enum EventDetails {
     CreateSourceSinkV1(CreateSourceSinkV1),
     CreateSourceSinkV2(CreateSourceSinkV2),
     CreateSourceSinkV3(CreateSourceSinkV3),
+    CreateSourceSinkV4(CreateSourceSinkV4),
+    CreateIndexV1(CreateIndexV1),
+    CreateMaterializedViewV1(CreateMaterializedViewV1),
     AlterSetClusterV1(AlterSetClusterV1),
     AlterSourceSinkV1(AlterSourceSinkV1),
     GrantRoleV1(GrantRoleV1),
@@ -360,6 +363,32 @@ pub struct CreateSourceSinkV3 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct CreateSourceSinkV4 {
+    pub id: String,
+    pub cluster_id: Option<String>,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+    #[serde(rename = "type")]
+    pub external_type: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct CreateIndexV1 {
+    pub id: String,
+    pub cluster_id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct CreateMaterializedViewV1 {
+    pub id: String,
+    pub cluster_id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct AlterSourceSinkV1 {
     pub id: String,
     #[serde(flatten)]
@@ -506,6 +535,11 @@ impl EventDetails {
             EventDetails::CreateSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV3(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateSourceSinkV4(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateIndexV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateMaterializedViewV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
             EventDetails::AlterSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::AlterSetClusterV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::GrantRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
