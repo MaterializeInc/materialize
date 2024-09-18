@@ -314,6 +314,10 @@ table.inline-headings {
 
 .toc-wrapper {
     flex: 1;
+    position: sticky;
+    top: 90px;
+    height: 100vh;
+    overflow-y: auto;
 
     @media(max-width: 1050px) {
         display: none;
