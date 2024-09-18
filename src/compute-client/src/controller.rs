@@ -57,6 +57,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
+use tracing::debug_span;
 use uuid::Uuid;
 
 use crate::controller::error::{
@@ -1042,7 +1043,13 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
     where
         F: FnOnce(&mut Instance<T>) + Send + 'static,
     {
-        self.client.send(Box::new(f));
+        let otel_ctx = OpenTelemetryContext::obtain();
+        self.client.send(Box::new(move |instance| {
+            let _span = debug_span!("instance::call").entered();
+            otel_ctx.attach_as_parent();
+
+            f(instance)
+        }));
     }
 
     pub async fn call_sync<F, R>(&self, f: F) -> R
@@ -1051,7 +1058,11 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         R: Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
-        self.client.send(Box::new(|instance| {
+        let otel_ctx = OpenTelemetryContext::obtain();
+        self.client.send(Box::new(move |instance| {
+            let _span = debug_span!("instance::call_sync").entered();
+            otel_ctx.attach_as_parent();
+
             let result = f(instance);
             let _ = tx.send(result);
         }));

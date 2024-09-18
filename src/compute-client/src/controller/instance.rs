@@ -613,6 +613,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
+    #[mz_ore::instrument(level = "debug")]
     pub fn collections_hydrated_on_replicas(
         &self,
         target_replica_ids: Option<Vec<ReplicaId>>,
@@ -674,6 +675,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
+    #[mz_ore::instrument(level = "debug")]
     pub fn collections_hydrated(&self, exclude_collections: &BTreeSet<GlobalId>) -> bool {
         self.collections_hydrated_on_replicas(None, exclude_collections)
             .expect("Cannot error if target_replica_ids is None")
@@ -716,6 +718,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// Returns the state of the [`Instance`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
+    #[mz_ore::instrument(level = "debug")]
     pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Note: We purposefully use the `Debug` formatting for the value of all fields in the
         // returned object as a tradeoff between usability and stability. `serde_json` will fail
@@ -883,6 +886,7 @@ where
     }
 
     /// Update instance configuration.
+    #[mz_ore::instrument(level = "debug")]
     pub fn update_configuration(&mut self, config_params: ComputeParameters) {
         self.send(ComputeCommand::UpdateConfiguration(config_params));
     }
@@ -891,6 +895,7 @@ where
     ///
     /// Intended to be called by `Controller`, rather than by other code.
     /// Calling this method repeatedly has no effect.
+    #[mz_ore::instrument(level = "debug")]
     pub fn initialization_complete(&mut self) {
         // The compute protocol requires that `InitializationComplete` is sent only once.
         if !self.initialized {
@@ -902,6 +907,7 @@ where
     /// Allows this instance to affect writes to external systems (persist).
     ///
     /// Calling this method repeatedly has no effect.
+    #[mz_ore::instrument(level = "debug")]
     pub fn allow_writes(&mut self) {
         if self.read_only {
             self.read_only = false;
@@ -919,6 +925,7 @@ where
     ///
     /// Panics if the compute instance still has active replicas.
     /// Panics if the compute instance still has collections installed.
+    #[mz_ore::instrument(level = "debug")]
     pub fn check_empty(&mut self) {
         // Collections might have been dropped but not cleaned up yet.
         self.apply_read_hold_changes();
@@ -990,6 +997,7 @@ where
     }
 
     /// Add a new instance replica, by ID.
+    #[mz_ore::instrument(level = "debug")]
     pub fn add_replica(
         &mut self,
         id: ReplicaId,
@@ -1033,6 +1041,7 @@ where
     }
 
     /// Remove an existing instance replica, by ID.
+    #[mz_ore::instrument(level = "debug")]
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
         self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
 
@@ -1111,6 +1120,7 @@ where
     /// If a `subscribe_target_replica` is given, any subscribes exported by the dataflow are
     /// configured to target that replica, i.e., only subscribe responses sent by that replica are
     /// considered.
+    #[mz_ore::instrument(level = "debug")]
     pub fn create_dataflow(
         &mut self,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
@@ -1396,6 +1406,7 @@ where
 
     /// Drops the read capability for the given collections and allows their resources to be
     /// reclaimed.
+    #[mz_ore::instrument(level = "debug")]
     pub fn drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), CollectionMissing> {
         for id in &ids {
             let collection = self.collection_mut(*id)?;
@@ -1477,6 +1488,7 @@ where
     }
 
     /// Cancels an existing peek request.
+    #[mz_ore::instrument(level = "debug")]
     pub fn cancel_peek(&mut self, uuid: Uuid) {
         let Some(peek) = self.peeks.get_mut(&uuid) else {
             tracing::warn!("did not find pending peek for {uuid}");
@@ -1742,6 +1754,7 @@ where
         }
     }
 
+    #[mz_ore::instrument(level = "debug")]
     fn handle_peek_response(
         &mut self,
         uuid: Uuid,
@@ -1749,6 +1762,8 @@ where
         otel_ctx: OpenTelemetryContext,
         replica_id: ReplicaId,
     ) {
+        otel_ctx.attach_as_parent();
+
         // We might not be tracking this peek anymore, because we have served a response already or
         // because it was canceled. If this is the case, we ignore the response.
         let Some(peek) = self.peeks.get(&uuid) else {
@@ -1979,6 +1994,7 @@ where
     /// This method is invoked periodically by the global controller.
     /// It is a good place to perform maintenance work that arises from various controller state
     /// changes and that cannot conveniently be handled synchronously with those state changes.
+    #[mz_ore::instrument(level = "debug")]
     pub fn maintain(&mut self) {
         self.rehydrate_failed_replicas();
         self.downgrade_warmup_capabilities();
@@ -2613,6 +2629,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
     /// Returns the state of the [`ReplicaState`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
+    #[mz_ore::instrument(level = "debug")]
     pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Note: We purposefully use the `Debug` formatting for the value of all fields in the
         // returned object as a tradeoff between usability and stability. `serde_json` will fail
