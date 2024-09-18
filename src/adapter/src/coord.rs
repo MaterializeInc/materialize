@@ -70,7 +70,7 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_CAUGHT_UP_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
-    WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL,
+    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF, WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL,
 };
 use mz_compute_client::as_of_selection;
 use mz_ore::channel::trigger;
@@ -3287,8 +3287,16 @@ impl Coordinator {
                     .try_into()
                     .expect("must fit into u64");
 
+                let cutoff =
+                    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF.get(self.catalog().system_config().dyncfgs());
+                let cutoff: u64 = cutoff.as_millis().try_into().expect("must fit into u64");
+
+                let now = self.now();
+
                 let compute_caught_up = self.controller.compute.clusters_caught_up(
                     allowed_lag.into(),
+                    cutoff.into(),
+                    now.into(),
                     &live_collection_frontiers,
                     &ctx.exclude_collections,
                 );

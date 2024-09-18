@@ -56,6 +56,12 @@ pub const WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG: Config<Duration> = Config::new(
     "Maximum allowed lag when determining whether collections are caught up for 0dt deployments.",
 );
 
+pub const WITH_0DT_CAUGHT_UP_CHECK_CUTOFF: Config<Duration> = Config::new(
+    "with_0dt_caught_up_check_cutoff",
+    Duration::from_secs(2 * 60 * 60), // 2 hours
+    "Collections whose write frontier is behind 'now' by more than the cutoff are ignored when doing caught-up checks for 0dt deployments.",
+);
+
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "enable_statement_lifecycle_logging",
@@ -100,6 +106,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL)
         .add(&ENABLE_0DT_CAUGHT_UP_CHECK)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG)
+        .add(&WITH_0DT_CAUGHT_UP_CHECK_CUTOFF)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)

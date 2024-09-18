@@ -650,11 +650,16 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// reported by a currently running `environmentd` deployment, during a 0dt
     /// upgrade.
     ///
+    /// Collections whose write frontier is behind `now` by more than the cutoff
+    /// are ignored.
+    ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
     pub fn collections_caught_up(
         &self,
         allowed_lag: T,
+        cutoff: T,
+        now: T,
         live_frontiers: &BTreeMap<GlobalId, Antichain<T>>,
         exclude_collections: &BTreeSet<GlobalId>,
     ) -> bool {
@@ -688,15 +693,33 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                 }
             };
 
+            // We can't do comparisons and subtractions, so we bump up the live
+            // write frontier by the cutoff, and then compare that against
+            // `now`.
+            let live_write_frontier_plus_cutoff = live_write_frontier
+                .iter()
+                .map(|t| t.step_forward_by(&cutoff));
+            let live_write_frontier_plus_cutoff =
+                Antichain::from_iter(live_write_frontier_plus_cutoff);
+
+            let beyond_all_hope = live_write_frontier_plus_cutoff.less_equal(&now);
+
+            if beyond_all_hope {
+                tracing::info!(?live_write_frontier, ?now, "live write frontier of collection {id} is too far behind 'now', ignoring for caught-up checks");
+                continue;
+            }
+
             // We can't do easy comparisons and subtractions, so we bump up the
             // write frontier by the allowed lag, and then compare that against
             // the write frontier.
-            let bumped_write_frontier = write_frontier
+            let write_frontier_plus_allowed_lag = write_frontier
                 .iter()
                 .map(|t| t.step_forward_by(&allowed_lag));
-            let bumped_write_frontier = Antichain::from_iter(bumped_write_frontier);
+            let bumped_write_plus_allowed_lag =
+                Antichain::from_iter(write_frontier_plus_allowed_lag);
 
-            let within_lag = PartialOrder::less_equal(live_write_frontier, &bumped_write_frontier);
+            let within_lag =
+                PartialOrder::less_equal(live_write_frontier, &bumped_write_plus_allowed_lag);
 
             if !within_lag {
                 // We are not within the allowed lag!
