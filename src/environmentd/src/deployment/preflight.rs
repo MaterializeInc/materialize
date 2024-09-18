@@ -173,9 +173,14 @@ pub async fn preflight_0dt(
                 ()
             };
 
+            let skip_catchup = deployment_state.set_catching_up();
+
             tokio::select! {
                 () = clusters_hydrated_receiver => {
                     info!("all clusters hydrated");
+                }
+                () = skip_catchup => {
+                    info!("skipping waiting for clusters to hydrate due to administrator request");
                 }
                 () = hydration_max_wait_fut => {
                     if panic_after_timeout {
