@@ -23,6 +23,7 @@ use bytes::BufMut;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
 use mz_persist_types::columnar::{codec_to_schema2, data_type};
 use mz_persist_types::parquet::EncodingConfig;
@@ -280,6 +281,36 @@ impl BlobTraceUpdates {
                 structured
             }
         }
+    }
+
+    /// Concatenate the given records together, column-by-column.
+    pub fn concat<K: Codec, V: Codec>(
+        mut updates: Vec<BlobTraceUpdates>,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+        metrics: &ColumnarMetrics,
+    ) -> anyhow::Result<BlobTraceUpdates> {
+        match updates.len() {
+            0 => return Ok(BlobTraceUpdates::Row(ColumnarRecords::default())),
+            1 => return Ok(updates.into_iter().into_element()),
+            _ => {}
+        }
+
+        let columnar: Vec<_> = updates.iter().map(|u| u.records().clone()).collect();
+        let records = ColumnarRecords::concat(&columnar, metrics);
+
+        let mut keys = Vec::with_capacity(records.len());
+        let mut vals = Vec::with_capacity(records.len());
+        for updates in &mut updates {
+            let structured = updates.get_or_make_structured::<K, V>(key_schema, val_schema);
+            keys.push(structured.key.as_ref());
+            vals.push(structured.val.as_ref());
+        }
+        let ext = ColumnarRecordsStructuredExt {
+            key: ::arrow::compute::concat(&keys)?,
+            val: ::arrow::compute::concat(&vals)?,
+        };
+        Ok(Self::Both(records, ext))
     }
 }
 
