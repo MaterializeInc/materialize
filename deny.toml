@@ -45,6 +45,7 @@ skip = [
     { name = "windows_x86_64_gnullvm", version = "0.48.0" },
     { name = "windows_x86_64_gnu", version = "0.48.0" },
     { name = "windows_x86_64_msvc", version = "0.48.0" },
+    { name = "windows-sys", version = "0.52.0" },
     # Newer versions of crates like `tempfile` are held back by crates like `atty`.
     # This is very Unfortunate as we don't actually use these platforms.
     { name = "hermit-abi", version = "0.1.6" },
