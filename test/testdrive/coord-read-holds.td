@@ -46,6 +46,6 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > INSERT INTO t1 VALUES (201), (202), (203);
 
 # Note: the important bit is making sure this EXPLAIN returns "can respond immediately: true"
-$ set-regex match=(\d{13}|([\d\-]{10}\s[\d:.]{12})|u\d) replacement=<NON_CONSTANT>
+$ set-regex match=(\d{13}|([\d\-]{10}\s[\d:.]{12})|u\d+) replacement=<NON_CONSTANT>
 > EXPLAIN TIMESTAMP FOR SELECT COUNT(t1.a) FROM t1, pg_t1;
 "                query timestamp: <NON_CONSTANT> (<NON_CONSTANT>)\n          oracle read timestamp: <NON_CONSTANT> (<NON_CONSTANT>)\nlargest not in advance of upper: <NON_CONSTANT> (<NON_CONSTANT>)\n                          upper:[<NON_CONSTANT> (<NON_CONSTANT>)]\n                          since:[<NON_CONSTANT> (<NON_CONSTANT>)]\n        can respond immediately: false\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <NON_CONSTANT> (<NON_CONSTANT>)\n\nsource materialize.public.pg_t1 (<NON_CONSTANT>, storage):\n                  read frontier:[<NON_CONSTANT> (<NON_CONSTANT>)]\n                 write frontier:[<NON_CONSTANT> (<NON_CONSTANT>)]\n\nsource materialize.public.t1 (<NON_CONSTANT>, storage):\n                  read frontier:[<NON_CONSTANT> (<NON_CONSTANT>)]\n                 write frontier:[<NON_CONSTANT> (<NON_CONSTANT>)]\n"
