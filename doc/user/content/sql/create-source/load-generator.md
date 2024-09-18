@@ -508,4 +508,4 @@ ORDER BY
 [`interval`]: /sql/types/interval
 [`uint8`]: /sql/types/uint/#uint8-info
 [`timestamp with time zone`]: /sql/types/timestamp
-[feature request]: https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml
+[feature request]: https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests

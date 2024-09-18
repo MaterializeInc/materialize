@@ -17,10 +17,7 @@ types](../types/#custom-types).
 ### Use
 
 Currently, custom types provide a shorthand for referring to
-otherwise-annoying-to-type names, but in the future will provide [binary
-encoding and decoding][binary] for these types, as well.
-
-[binary]:https://github.com/MaterializeInc/materialize/issues/4628
+otherwise-annoying-to-type names.
 
 ## Syntax
 

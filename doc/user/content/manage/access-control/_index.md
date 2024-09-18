@@ -270,7 +270,7 @@ them to reach out, across the documentation. Standardize on one."
 
 {{< warning >}}
 This strategy relies on the `NOINHERIT` role attribute and the `SET ROLE`
-command, which are unimplemented in Materialize {{% gh 19165 %}} {{% gh 19942 %}}.
+command, which are unimplemented in Materialize.
 Please [reach out](https://materialize.com/contact/) if you're
 interested in this strategy!
 {{< /warning >}}

@@ -57,6 +57,4 @@ might see the following error:
 Test kill: Cannot cancel queries: Query could not be found in database.
 ```
 
-This is a known issue with Looker and is tracked [here](https://github.com/MaterializeInc/materialize/issues/19891).
-
-You can safely ignore this error.
+This is a known issue with Looker. You can safely ignore this error.

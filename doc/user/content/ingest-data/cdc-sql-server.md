@@ -208,5 +208,5 @@ initial snapshot for all tables has been completed.
 
 ##### Supported types
 
-`DATETIMEOFFSET` columns are replicated as `text` {{% gh 8017 %}}, and
-`DATETIME2` columns are replicated as `bigint` {{% gh 8041 %}} in Materialize.
+`DATETIMEOFFSET` columns are replicated as `text`, and
+`DATETIME2` columns are replicated as `bigint` in Materialize.

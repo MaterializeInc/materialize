@@ -11,7 +11,7 @@ menu:
 
 ### Trials
 
-If you run into a snag or need support during the trial period, join the [Materialize Slack community](https://materialize.com/s/chat) or [open an issue](https://github.com/MaterializeInc/materialize/issues/new/choose). Slack is the best place to get timely help from Materialize employees and other users!
+If you run into a snag or need support during the trial period, join the [Materialize Slack community](https://materialize.com/s/chat) or [open a discussion](https://github.com/MaterializeInc/materialize/discussions). Slack is the best place to get timely help from Materialize employees and other users!
 
 ### Customers
 
