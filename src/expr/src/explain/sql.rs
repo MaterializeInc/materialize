@@ -18,15 +18,16 @@ use mz_repr::explain::sql::DisplaySql;
 use mz_repr::explain::PlanRenderingContext;
 use mz_repr::{Datum, GlobalId};
 use mz_sql_parser::ast::{
-    Cte, CteBlock, Expr, Ident, IdentError, JoinConstraint, JoinOperator, Limit, OrderByExpr,
-    Query, Raw, RawItemName, Select, SelectItem, SelectOption, SelectOptionName, SetExpr,
-    TableAlias, TableFactor, TableWithJoins, UnresolvedItemName, Value, Values, WithOptionValue,
+    Cte, CteBlock, Distinct, Expr, Ident, IdentError, JoinConstraint, JoinOperator, Limit,
+    OrderByExpr, Query, Raw, RawItemName, Select, SelectItem, SelectOption, SelectOptionName,
+    SetExpr, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName, Value, Values,
+    WithOptionValue,
 };
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
 use crate::{
-    AggregateExpr, AggregateFunc, EvalError, Id, LocalId, MirRelationExpr, MirScalarExpr,
-    RECURSION_LIMIT,
+    AggregateExpr, AggregateFunc, ColumnOrder, EvalError, Id, LocalId, MirRelationExpr,
+    MirScalarExpr, RECURSION_LIMIT,
 };
 
 type SqlQuery = Query<Raw>;
@@ -205,14 +206,9 @@ impl MirToSql {
                 .collect();
         };
 
-        names
-            .iter()
-            .map(Ident::new_unchecked)
-            .collect()
+        names.iter().map(Ident::new_unchecked).collect()
     }
 
-    // !!!(mgree) have this return fully qualified column names
-    // switch to builder pattern?
     fn to_sql_query(
         &mut self,
         expr: &MirRelationExpr,
@@ -618,15 +614,12 @@ impl MirToSql {
                         });
                     }
 
-                    let options = expected_group_size.map_or_else(
-                        Vec::new,
-                        |egs| {
-                            vec![SelectOption {
-                                name: SelectOptionName::ExpectedGroupSize,
-                                value: Some(WithOptionValue::Value(Value::Number(egs.to_string()))),
-                            }]
-                        },
-                    );
+                    let options = expected_group_size.map_or_else(Vec::new, |egs| {
+                        vec![SelectOption {
+                            name: SelectOptionName::ExpectedGroupSize,
+                            value: Some(WithOptionValue::Value(Value::Number(egs.to_string()))),
+                        }]
+                    });
 
                     let ident = sc.fresh_ident("reduce");
                     let body = SetExpr::Select(Box::new(Select {
@@ -647,14 +640,210 @@ impl MirToSql {
                     sc.push_body(ident, columns, body)
                 }
                 TopK {
-                    input: _,
-                    group_key: _,
-                    order_key: _,
-                    limit: _,
-                    offset: _,
+                    input,
+                    group_key,
+                    order_key,
+                    limit,
+                    offset,
                     monotonic: _,
-                    expected_group_size: _,
-                } => unimplemented!("MIR-to-SQL TopK\n{expr:?}"),
+                    expected_group_size,
+                } => {
+                    let (inner, inner_columns) = sc.build_query(input, bindings, ctx)?;
+                    assert!(inner_columns.len() == columns.len());
+
+                    let fq_columns = inner_columns
+                        .iter()
+                        .map(|col_name| vec![inner.clone(), col_name.clone()])
+                        .collect::<Vec<_>>();
+
+                    let ident = sc.fresh_ident("topk");
+
+                    // SELECT key_col, ... FROM
+                    //    (SELECT DISTINCT key_col FROM tbl) grp,
+                    //    LATERAL (
+                    //        SELECT col1, col2..., order_col
+                    //        FROM tbl
+                    //        WHERE key_col = grp.key_col
+                    //        OPTIONS (LIMT INPUT GROUP SIZE = ...)
+                    //        ORDER BY order_col LIMIT k
+                    //    )
+                    // ORDER BY key_col, order_col
+
+                    let tbl: TableWithJoins<Raw> = TableWithJoins {
+                        relation: TableFactor::Table {
+                            name: RawItemName::Name(UnresolvedItemName(vec![inner])),
+                            alias: None,
+                        },
+                        joins: vec![],
+                    };
+
+                    let mut keys = Vec::with_capacity(group_key.len());
+                    let mut fq_keys = Vec::with_capacity(group_key.len());
+                    for col in group_key {
+                        keys.push(columns[*col].clone());
+                        fq_keys.push(fq_columns[*col].clone());
+                    }
+
+                    let limit = if let Some(limit) = limit {
+                        Some(Limit {
+                            with_ties: false,
+                            quantity: sc.to_sql_expr(&limit, &fq_columns)?,
+                        })
+                    } else {
+                        None
+                    };
+
+                    //    (SELECT DISTINCT key_col FROM tbl) grp,
+                    let group_alias = sc.fresh_ident("grp");
+                    let key_query = Query {
+                        ctes: CteBlock::Simple(vec![]),
+                        body: SetExpr::Select(Box::new(Select {
+                            distinct: Some(Distinct::EntireRow),
+                            projection: fq_keys
+                                .iter()
+                                .map(|fqi| {
+                                    let alias = fqi.last().cloned();
+                                    SelectItem::Expr {
+                                        expr: Expr::Identifier(fqi.clone()),
+                                        alias,
+                                    }
+                                })
+                                .collect(),
+                            from: vec![tbl.clone()],
+                            selection: None,
+                            group_by: vec![],
+                            having: None,
+                            options: vec![],
+                        })),
+                        order_by: vec![],
+                        limit: None,
+                        offset: None,
+                    };
+
+                    let mut order_by = Vec::with_capacity(order_key.len());
+                    for ColumnOrder {
+                        column,
+                        desc,
+                        nulls_last,
+                    } in order_key
+                    {
+                        let expr = sc.to_sql_expr(&MirScalarExpr::Column(*column), &fq_columns)?;
+                        let asc = Some(!*desc);
+                        let nulls_last = Some(*nulls_last);
+                        order_by.push(OrderByExpr {
+                            expr,
+                            asc,
+                            nulls_last,
+                        });
+                    }
+
+                    let mut outer_order_by = Vec::with_capacity(group_key.len() + order_key.len());
+                    for col in group_key {
+                        let expr = sc.to_sql_expr(&MirScalarExpr::Column(*col), &fq_columns)?;
+                        outer_order_by.push(OrderByExpr {
+                            expr,
+                            asc: None,
+                            nulls_last: None,
+                        });
+                    }
+                    outer_order_by.extend(order_by.iter().cloned());
+
+                    let projection = fq_columns
+                        .into_iter()
+                        .map(|fqi| {
+                            let alias = fqi.last().cloned();
+                            SelectItem::Expr {
+                                expr: Expr::Identifier(fqi),
+                                alias,
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    //    LATERAL (
+                    //        SELECT col1, col2..., order_col
+                    //        FROM tbl
+                    //        WHERE key_col = grp.key_col
+                    //        OPTIONS (LIMT INPUT GROUP SIZE = ...)
+                    //        ORDER BY order_col LIMIT k
+                    //    )
+                    let conjuncts = keys
+                        .iter()
+                        .zip_eq(fq_keys.into_iter())
+                        .map(|(k, fqk)| {
+                            Expr::Identifier(vec![group_alias.clone(), k.clone()])
+                                .equals(Expr::Identifier(fqk.clone()))
+                        })
+                        .collect::<Vec<_>>();
+                    let selection = conjuncts.into_iter().reduce(Expr::and);
+
+                    let mut options = Vec::with_capacity(1);
+                    if let Some(expected_group_size) = expected_group_size {
+                        options.push(SelectOption {
+                            name: SelectOptionName::ExpectedGroupSize,
+                            value: Some(WithOptionValue::Value(Value::Number(
+                                expected_group_size.to_string(),
+                            ))),
+                        })
+                    }
+
+                    let lateral_query = Query {
+                        ctes: CteBlock::Simple(vec![]),
+                        body: SetExpr::Select(Box::new(Select {
+                            distinct: None,
+                            projection: projection.clone(),
+                            selection,
+                            from: vec![tbl],
+                            group_by: vec![],
+                            having: None,
+                            options,
+                        })),
+                        order_by: order_by,
+                        limit,
+                        offset: None,
+                    };
+
+                    let body = SetExpr::Select(Box::new(Select {
+                        distinct: None,
+                        projection,
+                        from: vec![
+                            TableWithJoins {
+                                relation: TableFactor::Derived {
+                                    lateral: false,
+                                    subquery: Box::new(key_query),
+                                    alias: Some(TableAlias {
+                                        name: group_alias,
+                                        columns: keys,
+                                        strict: false,
+                                    }),
+                                },
+                                joins: vec![],
+                            },
+                            TableWithJoins {
+                                relation: TableFactor::Derived {
+                                    lateral: true,
+                                    subquery: Box::new(lateral_query),
+                                    alias: None,
+                                },
+                                joins: vec![],
+                            },
+                        ],
+                        selection: None,
+                        group_by: vec![],
+                        having: None,
+                        options: vec![],
+                    }));
+
+                    sc.push_prequery(
+                        ident,
+                        columns,
+                        PreQuery {
+                            body,
+                            order_by: outer_order_by,
+                            limit: None,
+                            offset: Some(Expr::Value(Value::Number(offset.to_string()))),
+                        },
+                    )
+                }
                 Union { base, inputs } => {
                     // detect aggregates
                     if let Some(res) = sc.detect_aggregate_union(base, inputs, bindings, ctx) {
