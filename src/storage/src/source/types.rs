@@ -97,6 +97,7 @@ pub trait SourceRender {
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
+        Stream<G, Probe<Self::Time>>,
         Vec<PressOnDropButton>,
     );
 }
@@ -114,7 +115,7 @@ pub struct SourceMessage {
 }
 
 /// The result of probing an upstream system for its write frontier.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Probe<T> {
     /// The timestamp at which this probe was initiated.
     pub probe_ts: mz_repr::Timestamp,

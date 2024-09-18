@@ -30,7 +30,7 @@ use tokio::time::{interval_at, Instant};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{
-    ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
+    Probe, ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
 };
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
@@ -139,6 +139,7 @@ impl GeneratorKind {
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
+        Stream<G, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         match self {
@@ -179,6 +180,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
+        Stream<G, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         let generator_kind = GeneratorKind::new(
@@ -204,6 +206,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     Option<Stream<G, Infallible>>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
+    Stream<G, Probe<MzOffset>>,
     Vec<PressOnDropButton>,
 ) {
     // figure out which output types from the generator belong to which output indexes
@@ -228,11 +231,12 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 
     let (mut data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (mut stats_output, stats_stream) = builder.new_output();
+    let (mut probe_output, probe_stream) = builder.new_output();
 
     let busy_signal = Arc::clone(&config.busy_signal);
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            let [mut cap, stats_cap]: [_; 2] = caps.try_into().unwrap();
+            let [mut cap, stats_cap, probe_cap]: [_; 3] = caps.try_into().unwrap();
 
             if !config.responsible_for(()) {
                 // Emit 0, to mark this worker as having started up correctly.
@@ -342,6 +346,13 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                         }
 
                         cap.downgrade(&offset);
+                        probe_output.give(
+                            &probe_cap,
+                            Probe {
+                                probe_ts: (config.now_fn)().try_into().expect("must fit"),
+                                upstream_frontier: Antichain::from_elem(offset),
+                            },
+                        );
 
                         // We only sleep if we have surpassed the resume offset so that we can
                         // quickly go over any historical updates that a generator might choose to
@@ -385,6 +396,13 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                     Event::Progress(None) => return,
                 }
             }
+            probe_output.give(
+                &probe_cap,
+                Probe {
+                    probe_ts: (config.now_fn)().try_into().expect("must fit"),
+                    upstream_frontier: Antichain::new(),
+                },
+            );
         })
     });
 
@@ -399,6 +417,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
         None,
         status,
         stats_stream,
+        probe_stream,
         vec![button.press_on_drop()],
     )
 }

@@ -60,7 +60,7 @@ use tracing::{error, info, trace};
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
 use crate::source::types::{
-    ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
+    Probe, ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
 };
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
@@ -98,7 +98,8 @@ pub struct KafkaSourceReader {
     /// thread.
     progress_statistics: Arc<Mutex<PartialProgressStatistics>>,
     /// The last partition info we received. For each partition we also fetch the high watermark.
-    partition_info: Arc<Mutex<Option<BTreeMap<PartitionId, WatermarkOffsets>>>>,
+    partition_info:
+        Arc<Mutex<Option<(mz_repr::Timestamp, BTreeMap<PartitionId, WatermarkOffsets>)>>>,
     /// A handle to the spawned metadata thread
     // Drop order is important here, we want the thread to be unparked after the `partition_info`
     // Arc has been dropped, so that the unpacked thread notices it and exits immediately
@@ -115,6 +116,7 @@ pub struct KafkaSourceReader {
 /// only emit updates when `offset_known` is updated by the metadata thread.
 #[derive(Default)]
 struct PartialProgressStatistics {
+    probe: Option<Probe<KafkaTimestamp>>,
     offset_known: Option<u64>,
     offset_committed: Option<u64>,
 }
@@ -181,6 +183,7 @@ impl SourceRender for KafkaSourceConnection {
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
+        Stream<G, Probe<KafkaTimestamp>>,
         Vec<PressOnDropButton>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -190,6 +193,7 @@ impl SourceRender for KafkaSourceConnection {
             builder.new_output::<CapacityContainerBuilder<_>>();
         let (mut health_output, health_stream) = builder.new_output();
         let (mut stats_output, stats_stream) = builder.new_output();
+        let (mut probe_output, probe_stream) = builder.new_output();
 
         let mut outputs = vec![];
         for (id, export) in &config.source_exports {
@@ -235,7 +239,7 @@ impl SourceRender for KafkaSourceConnection {
         let busy_signal = Arc::clone(&config.busy_signal);
         let button = builder.build(move |caps| {
             SignaledFuture::new(busy_signal, async move {
-                let [mut data_cap, mut progress_cap, health_cap, stats_cap]: [_; 4] =
+                let [mut data_cap, mut progress_cap, health_cap, stats_cap, probe_cap]: [_; 5] =
                     caps.try_into().unwrap();
 
                 let client_id = self.client_id(
@@ -417,6 +421,7 @@ impl SourceRender for KafkaSourceConnection {
 
                     let status_report = Arc::clone(&health_status);
 
+                    let now_fn = config.now_fn.clone();
                     thread::Builder::new()
                         .name("kafka-metadata".to_string())
                         .spawn(move || {
@@ -428,6 +433,8 @@ impl SourceRender for KafkaSourceConnection {
                                 "kafka metadata thread: starting..."
                             );
                             while let Some(partition_info) = partition_info.upgrade() {
+                                let probe_ts =
+                                    mz_repr::Timestamp::try_from((now_fn)()).expect("must fit");
                                 let result = fetch_partition_info(
                                     consumer.client(),
                                     &topic,
@@ -446,7 +453,7 @@ impl SourceRender for KafkaSourceConnection {
                                 );
                                 match result {
                                     Ok(info) => {
-                                        *partition_info.lock().unwrap() = Some(info);
+                                        *partition_info.lock().unwrap() = Some((probe_ts, info));
                                         trace!(
                                         source_id = config.id.to_string(),
                                         worker_id = config.worker_id,
@@ -573,6 +580,8 @@ impl SourceRender for KafkaSourceConnection {
                 };
                 tokio::pin!(resume_uppers_process_loop);
 
+                let mut prev_offset_known = None;
+                let mut prev_offset_committed = None;
                 let mut prev_pid_info: Option<BTreeMap<PartitionId, WatermarkOffsets>> = None;
                 let mut snapshot_total = None;
 
@@ -580,7 +589,7 @@ impl SourceRender for KafkaSourceConnection {
                     mz_storage_types::dyncfgs::KAFKA_POLL_MAX_WAIT.get(config.config.config_set());
                 loop {
                     let partition_info = reader.partition_info.lock().unwrap().take();
-                    if let Some(partitions) = partition_info {
+                    if let Some((probe_ts, partitions)) = partition_info {
                         let max_pid = partitions.keys().last().cloned();
                         let lower = max_pid
                             .map(RangeBound::after)
@@ -636,7 +645,15 @@ impl SourceRender for KafkaSourceConnection {
                         }
 
                         let mut upstream_stat = 0;
+                        let mut probe = Probe {
+                            probe_ts,
+                            upstream_frontier: Antichain::from_elem(future_ts),
+                        };
                         for (&pid, watermarks) in &partitions {
+                            probe.upstream_frontier.insert(Partitioned::new_singleton(
+                                RangeBound::exact(pid),
+                                MzOffset::from(watermarks.high),
+                            ));
                             if responsible_for_pid(&config, pid) {
                                 upstream_stat += watermarks.high;
                                 reader.ensure_partition(pid);
@@ -683,11 +700,10 @@ impl SourceRender for KafkaSourceConnection {
                             snapshot_total = Some(upstream_stat);
                         }
 
-                        reader
-                            .progress_statistics
-                            .lock()
-                            .expect("poisoned")
-                            .offset_known = Some(upstream_stat);
+                        let mut progress_statistics =
+                            reader.progress_statistics.lock().expect("poisoned");
+                        progress_statistics.offset_known = Some(upstream_stat);
+                        progress_statistics.probe = Some(probe);
                         data_cap.downgrade(&future_ts);
                         progress_cap.downgrade(&future_ts);
                         prev_pid_info = Some(partitions);
@@ -761,7 +777,18 @@ impl SourceRender for KafkaSourceConnection {
                     let mut consumers = std::mem::take(&mut reader.partition_consumers);
                     for consumer in consumers.iter_mut() {
                         let pid = consumer.pid();
-                        while let Some(message) = consumer.get_next_message().transpose() {
+                        // We want to make sure the rest of the actions in the outer loops get
+                        // a chance to run. If rdkafka keeps pumping data at us we might find
+                        // ourselves in a situation where we keep dumping data into the
+                        // dataflow without signaling progress. For this reason we consume at most
+                        // 10k messages from each partition and go around the loop.
+                        let mut partition_exhausted = false;
+                        for _ in 0..10_000 {
+                            let Some(message) = consumer.get_next_message().transpose() else {
+                                partition_exhausted = true;
+                                break;
+                            };
+
                             for output in outputs.iter() {
                                 let message = match &message {
                                     Ok((msg, pid)) => {
@@ -819,6 +846,9 @@ impl SourceRender for KafkaSourceConnection {
                                     }
                                 }
                             }
+                        }
+                        if !partition_exhausted {
+                            notificator.notify_one();
                         }
                     }
                     // We can now put them back
@@ -904,19 +934,15 @@ impl SourceRender for KafkaSourceConnection {
                     // If we have a new `offset_known` from the partition metadata thread, and
                     // `committed` from reading the `resume_uppers` stream, we can emit a
                     // progress stats update.
-                    let progress_statistics = {
-                        let mut stats = reader.progress_statistics.lock().expect("poisoned");
-
-                        if stats.offset_committed.is_some() && stats.offset_known.is_some() {
-                            Some((
-                                stats.offset_known.take().unwrap(),
-                                stats.offset_committed.take().unwrap(),
-                            ))
-                        } else {
-                            None
-                        }
+                    let mut stats = {
+                        std::mem::take(&mut *reader.progress_statistics.lock().expect("poisoned"))
                     };
-                    if let Some((offset_known, offset_committed)) = progress_statistics {
+
+                    let offset_committed = stats.offset_committed.take().or(prev_offset_committed);
+                    let offset_known = stats.offset_known.take().or(prev_offset_known);
+                    if let Some((offset_known, offset_committed)) =
+                        offset_known.zip(offset_committed)
+                    {
                         stats_output.give(
                             &stats_cap,
                             ProgressStatisticsUpdate::SteadyState {
@@ -924,6 +950,12 @@ impl SourceRender for KafkaSourceConnection {
                                 offset_known,
                             },
                         );
+                    }
+                    prev_offset_committed = offset_committed;
+                    prev_offset_known = offset_known;
+
+                    if let Some(probe) = stats.probe {
+                        probe_output.give(&probe_cap, probe);
                     }
 
                     if let (Some(snapshot_total), true) = (snapshot_total, is_snapshotting) {
@@ -959,6 +991,7 @@ impl SourceRender for KafkaSourceConnection {
             Some(progress_stream),
             health_stream,
             stats_stream,
+            probe_stream,
             vec![button.press_on_drop()],
         )
     }
