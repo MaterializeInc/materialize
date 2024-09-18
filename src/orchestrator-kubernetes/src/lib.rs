@@ -8,10 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::fmt;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::{env, fmt};
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
@@ -32,7 +32,9 @@ use k8s_openapi::api::core::v1::{
     WeightedPodAffinityTerm,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
+    LabelSelector, LabelSelectorRequirement, OwnerReference,
+};
 use kube::api::{Api, DeleteParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::error::Error as K8sError;
@@ -51,7 +53,7 @@ use mz_ore::task::AbortOnDropHandle;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
-use tracing::warn;
+use tracing::{info, warn};
 
 pub mod cloud_resource_controller;
 pub mod secrets;
@@ -162,6 +164,7 @@ impl Orchestrator for KubernetesOrchestrator {
                 service_api: Api::default_namespaced(self.client.clone()),
                 stateful_set_api: Api::default_namespaced(self.client.clone()),
                 pod_api: Api::default_namespaced(self.client.clone()),
+                owner_references: vec![],
                 command_rx,
             }
             .spawn(format!("kubernetes-orchestrator-worker:{namespace}"));
@@ -233,6 +236,7 @@ enum WorkerCommand {
 }
 
 /// A description of a service to be created by an [`OrchestratorWorker`].
+#[derive(Debug, Clone)]
 struct ServiceDescription {
     name: String,
     scale: u16,
@@ -258,6 +262,7 @@ struct OrchestratorWorker {
     service_api: Api<K8sService>,
     stateful_set_api: Api<StatefulSet>,
     pod_api: Api<Pod>,
+    owner_references: Vec<OwnerReference>,
     command_rx: mpsc::UnboundedReceiver<WorkerCommand>,
 }
 
@@ -1275,6 +1280,28 @@ impl OrchestratorWorker {
     }
 
     async fn run(mut self) {
+        {
+            info!("initializing Kubernetes orchestrator worker");
+            let start = Instant::now();
+
+            // Fetch the owner reference for our own pod (usually a
+            // StatefulSet), so that we can propagate it to the services we
+            // create.
+            let hostname = env::var("HOSTNAME").unwrap_or_else(|_| panic!("HOSTNAME environment variable missing or invalid; required for Kubernetes orchestrator"));
+            let orchestrator_pod = Retry::default()
+                .clamp_backoff(Duration::from_secs(10))
+                .retry_async(|_| self.pod_api.get(&hostname))
+                .await
+                .expect("always retries on error");
+            self.owner_references
+                .extend(orchestrator_pod.owner_references().into_iter().cloned());
+
+            info!(
+                "Kubernetes orchestrator worker initialized in {:?}",
+                start.elapsed()
+            );
+        }
+
         while let Some(cmd) = self.command_rx.recv().await {
             self.handle_command(cmd).await;
         }
@@ -1304,7 +1331,9 @@ impl OrchestratorWorker {
 
         use WorkerCommand::*;
         match cmd {
-            EnsureService { desc } => retry(|| self.ensure_service(&desc), "EnsureService").await,
+            EnsureService { desc } => {
+                retry(|| self.ensure_service(desc.clone()), "EnsureService").await
+            }
             DropService { name } => retry(|| self.drop_service(&name), "DropService").await,
             ListServices {
                 namespace,
@@ -1565,19 +1594,35 @@ impl OrchestratorWorker {
         ret.await
     }
 
-    async fn ensure_service(&self, desc: &ServiceDescription) -> Result<(), K8sError> {
+    async fn ensure_service(&self, mut desc: ServiceDescription) -> Result<(), K8sError> {
+        // We inject our own pod's owner references into the Kubernetes objects
+        // created for the service so that if the
+        // Deployment/StatefulSet/whatever that owns the pod running the
+        // orchestrator gets deleted, so do all services spawned by this
+        // orchestrator.
+        desc.service
+            .metadata
+            .owner_references
+            .get_or_insert(vec![])
+            .extend(self.owner_references.iter().cloned());
+        desc.stateful_set
+            .metadata
+            .owner_references
+            .get_or_insert(vec![])
+            .extend(self.owner_references.iter().cloned());
+
         self.service_api
             .patch(
                 &desc.name,
                 &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(desc.service.clone()),
+                &Patch::Apply(desc.service),
             )
             .await?;
         self.stateful_set_api
             .patch(
                 &desc.name,
                 &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(desc.stateful_set.clone()),
+                &Patch::Apply(desc.stateful_set),
             )
             .await?;
 
