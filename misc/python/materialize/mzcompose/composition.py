@@ -1397,7 +1397,9 @@ class Composition:
                 DROP EXTERNAL CONNECTION backup_bucket;
             """,
         )
-        self.run(
+        self.up("persistcli", persistent=True)
+        self.exec(
+            "persistcli",
             "persistcli",
             "admin",
             "--commit",
