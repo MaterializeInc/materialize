@@ -25,4 +25,5 @@ CREATE TABLE build_job (
     agent_type TEXT -- will eventually be changed to not null
 );
 
+ALTER TABLE build_job OWNER TO qa;
 GRANT SELECT, INSERT, UPDATE ON TABLE build_job TO "hetzner-ci";

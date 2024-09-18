@@ -136,3 +136,7 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_month AS
         res.scale,
         date_trunc('month', b.date)
 ;
+
+ALTER VIEW v_feature_benchmark_result_per_day OWNER TO qa;
+ALTER VIEW v_feature_benchmark_result_per_week OWNER TO qa;
+ALTER VIEW v_feature_benchmark_result_per_month OWNER TO qa;

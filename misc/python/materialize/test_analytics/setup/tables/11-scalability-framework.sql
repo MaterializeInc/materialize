@@ -20,4 +20,5 @@ CREATE TABLE scalability_framework_result (
    tps DOUBLE
 );
 
+ALTER TABLE scalability_framework_result OWNER TO qa;
 GRANT SELECT, INSERT, UPDATE ON TABLE scalability_framework_result TO "hetzner-ci";

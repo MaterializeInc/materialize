@@ -42,5 +42,7 @@ CREATE TABLE feature_benchmark_discarded_result (
    wallclock_variance DOUBLE
 );
 
+ALTER TABLE feature_benchmark_result OWNER TO qa;
+ALTER TABLE feature_benchmark_discarded_result OWNER TO qa;
 GRANT SELECT, INSERT, UPDATE ON TABLE feature_benchmark_result TO "hetzner-ci";
 GRANT SELECT, INSERT, UPDATE ON TABLE feature_benchmark_discarded_result TO "hetzner-ci";

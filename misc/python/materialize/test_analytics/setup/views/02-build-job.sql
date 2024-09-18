@@ -108,4 +108,8 @@ SELECT * FROM (
 ) WHERE row_number <= 5
 ;
 
+ALTER VIEW v_successful_build_jobs OWNER TO qa;
+ALTER VIEW v_build_step_success OWNER TO qa;
+ALTER VIEW v_build_step_success_unsharded OWNER TO qa;
+ALTER MATERIALIZED VIEW mv_recent_build_job_success_on_main_v2 OWNER TO qa;
 GRANT SELECT ON TABLE mv_recent_build_job_success_on_main_v2 TO "hetzner-ci";
