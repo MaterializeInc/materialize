@@ -230,17 +230,9 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#17189: evaluation order")
 
-        if (
-            query_template.matches_any_expression(
-                is_table_function,
-                True,
-            )
-            and dfr_outcome.error_message.startswith(
-                "invalid input syntax for type jsonb"
-            )
-            and ctf_outcome.error_message.startswith(
-                "invalid input syntax for type jsonb"
-            )
+        if query_template.matches_any_expression(
+            is_table_function,
+            True,
         ):
             return YesIgnore(
                 "Table function rows executed in different order, resulting in different error messages"
