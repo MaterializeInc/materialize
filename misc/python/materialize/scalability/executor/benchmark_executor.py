@@ -23,9 +23,9 @@ from materialize.scalability.df.df_totals import DfTotals, concat_df_totals
 from materialize.scalability.endpoint.endpoint import Endpoint
 from materialize.scalability.io import paths
 from materialize.scalability.operation.scalability_operation import Operation
-from materialize.scalability.result.benchmark_result import BenchmarkResult
 from materialize.scalability.result.comparison_outcome import ComparisonOutcome
 from materialize.scalability.result.result_analyzer import ResultAnalyzer
+from materialize.scalability.result.scalability_result import BenchmarkResult
 from materialize.scalability.result.workload_result import WorkloadResult
 from materialize.scalability.schema.schema import Schema
 from materialize.scalability.workload.workload import Workload, WorkloadWithContext
