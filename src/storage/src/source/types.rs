@@ -91,7 +91,6 @@ pub trait SourceRender {
         scope: &mut G,
         config: RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
-        start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,

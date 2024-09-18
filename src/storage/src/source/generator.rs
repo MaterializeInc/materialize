@@ -133,7 +133,6 @@ impl GeneratorKind {
         scope: &mut G,
         config: RawSourceCreationConfig,
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
-        start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
@@ -157,9 +156,7 @@ impl GeneratorKind {
                 config,
                 committed_uppers,
             ),
-            GeneratorKind::KeyValue(kv) => {
-                key_value::render(kv, scope, config, committed_uppers, start_signal)
-            }
+            GeneratorKind::KeyValue(kv) => key_value::render(kv, scope, config, committed_uppers),
         }
     }
 }
@@ -174,7 +171,6 @@ impl SourceRender for LoadGeneratorSourceConnection {
         scope: &mut G,
         config: RawSourceCreationConfig,
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
-        start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
@@ -189,7 +185,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             self.as_of,
             self.up_to,
         );
-        generator_kind.render(scope, config, committed_uppers, start_signal)
+        generator_kind.render(scope, config, committed_uppers)
     }
 }
 

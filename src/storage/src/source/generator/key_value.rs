@@ -35,7 +35,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     scope: &mut G,
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
-    start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Option<Stream<G, Infallible>>,
@@ -72,7 +71,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
             cap.downgrade(&resume_offset);
             progress_cap.downgrade(&resume_offset);
-            start_signal.await;
 
             let snapshotting = resume_offset.offset == 0;
 

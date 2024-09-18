@@ -177,7 +177,6 @@ impl SourceRender for KafkaSourceConnection {
         scope: &mut G,
         config: RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
-        start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
@@ -392,15 +391,11 @@ impl SourceRender for KafkaSourceConnection {
                     }
                 };
 
-                // Note that we wait for this AFTER we downgrade to the source `resume_upper`. This
-                // allows downstream operators (namely, the `reclock_operator`) to downgrade to the
-                // `resume_upper`, which is necessary for this basic form of backpressure to work.
-                start_signal.await;
                 info!(
                     source_id = config.id.to_string(),
                     worker_id = config.worker_id,
                     num_workers = config.worker_count,
-                    "kafka worker noticed rehydration is finished, starting partition queues..."
+                    "kafka worker starting partition queues..."
                 );
 
                 let partition_info = Arc::new(Mutex::new(None));
