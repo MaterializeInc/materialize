@@ -373,10 +373,10 @@ INSERT INTO table_f VALUES (3, 'var1');
 <null>
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE public.table_e WITH (TEXT COLUMNS (public.table_z.a));
-contains:Reference to columns not currently being added
+contains:TEXT COLUMNS refers to table not currently being added
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE public.table_e WITH (TEXT COLUMNS [public.table_f.f2]);
-contains:Reference to columns not currently being added
+contains:TEXT COLUMNS refers to table not currently being added
 detail:the following columns are referenced but not added: public.table_f.f2
 
 # Test adding text cols w/o original text columns
@@ -428,10 +428,10 @@ contains: invalid EXCLUDE COLUMNS option value: unexpected multiple references t
 <null>
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE public.table_e WITH (EXCLUDE COLUMNS (public.table_z.a));
-contains:Reference to columns not currently being added
+contains:EXCLUDE COLUMNS refers to table not currently being added
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE public.table_e WITH (EXCLUDE COLUMNS [public.table_f.f2]);
-contains:Reference to columns not currently being added
+contains:EXCLUDE COLUMNS refers to table not currently being added
 detail:the following columns are referenced but not added: public.table_f.f2
 
 # Test adding exclude cols w/o original EXCLUDE COLUMNS
