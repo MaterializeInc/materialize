@@ -164,7 +164,6 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     committed_upper: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     config: RawSourceCreationConfig,
     source_connection: C,
-    start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Time>, Diff>,
@@ -227,9 +226,7 @@ where
                 source_connection,
                 probed_upper_tx,
                 committed_upper,
-                start_signal,
             );
-
             source
                 .inner
                 .map(move |((output, result), from_time, diff)| {
@@ -276,9 +273,7 @@ where
                 source_connection,
                 probed_upper_tx,
                 committed_upper,
-                start_signal,
             );
-
             // The use of an _unbounded_ queue here is justified as it matches the unbounded
             // buffers that lie between ordinary timely operators.
             source.inner.capture_into(UnboundedTokioCapture(source_tx));
@@ -317,7 +312,6 @@ fn source_render_operator<G, C>(
     source_connection: C,
     probed_upper_tx: watch::Sender<Option<Probe<C::Time>>>,
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
-    start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
@@ -338,7 +332,7 @@ where
     });
 
     let (input_data, progress, health, stats, probes, tokens) =
-        source_connection.render(scope, config, resume_uppers, start_signal);
+        source_connection.render(scope, config, resume_uppers);
 
     // Broadcasting does more work than necessary, which would be to exchange the probes to the
     // worker that will be the one minting the bindings but we'd have to thread this information

@@ -125,7 +125,6 @@ impl SourceRender for PostgresSourceConnection {
         scope: &mut G,
         config: RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
-        _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
