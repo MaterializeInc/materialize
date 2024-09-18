@@ -21,6 +21,7 @@ use futures_util::TryFutureExt;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
+use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
@@ -722,19 +723,41 @@ where
             }
 
             loop {
-                let fetch_start = Instant::now();
-                let Some(updates) = consolidator
-                    .next_chunk(
-                        cfg.compaction_yield_after_n_updates,
-                        cfg.batch.blob_target_size,
-                    )
-                    .await?
-                else {
+                let mut chunks = vec![];
+                let mut total_bytes = 0;
+                // We attempt to pull chunks out of the consolidator that match our target size,
+                // but it's possible that we may get smaller chunks... for example, if not all
+                // parts have been fetched yet. Loop until we've got enough data to justify flushing
+                // it out to blob (or we run out of data.)
+                while total_bytes < cfg.batch.blob_target_size {
+                    let fetch_start = Instant::now();
+                    let Some(chunk) = consolidator
+                        .next_chunk(
+                            cfg.compaction_yield_after_n_updates,
+                            cfg.batch.blob_target_size - total_bytes,
+                        )
+                        .await?
+                    else {
+                        break;
+                    };
+                    timings.part_fetching += fetch_start.elapsed();
+                    total_bytes += chunk.goodbytes();
+                    chunks.push(chunk);
+                    tokio::task::yield_now().await;
+                }
+
+                if chunks.is_empty() {
                     break;
-                };
-                timings.part_fetching += fetch_start.elapsed();
-                batch.add_many(updates).await?;
-                tokio::task::yield_now().await;
+                }
+
+                // In the hopefully-common case of a single chunk, this will not copy.
+                let updates = BlobTraceUpdates::concat::<K, V>(
+                    chunks,
+                    write_schemas.key.as_ref(),
+                    write_schemas.val.as_ref(),
+                    &metrics.columnar,
+                )?;
+                batch.flush_many(updates).await?;
             }
         } else {
             let mut consolidator = Consolidator::<T, D>::new(

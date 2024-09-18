@@ -809,7 +809,7 @@ where
     ///
     /// The update timestamps must be greater or equal to `lower` that was given
     /// when creating this [BatchBuilder].
-    pub async fn add_many(&mut self, updates: BlobTraceUpdates) -> Result<(), InvalidUsage<T>> {
+    pub async fn flush_many(&mut self, updates: BlobTraceUpdates) -> Result<(), InvalidUsage<T>> {
         for ts in updates.records().timestamps().iter().flatten() {
             let ts = T::decode(ts.to_le_bytes());
             if !self.lower.less_equal(&ts) {
