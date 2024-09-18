@@ -268,7 +268,7 @@ impl MirToSql {
                 Get {
                     id: Id::Global(id), ..
                 } => {
-                    let name = ctx.humanizer.humanize_id(*id).ok_or_else(|| {
+                    let name = ctx.humanizer.humanize_id_unqualified(*id).ok_or_else(|| {
                         SqlConversionError::UnboundId {
                             id: Id::Global(id.clone()),
                         }
@@ -277,33 +277,7 @@ impl MirToSql {
                     let ident = Ident::new(name)
                         .map_err(|err| SqlConversionError::BadGlobalName { id: *id, err })?;
 
-                    sc.push_body(
-                        ident.clone(),
-                        columns.clone(),
-                        SetExpr::Select(Box::new(Select {
-                            distinct: None,
-                            projection: columns
-                                .iter()
-                                .map(|i| SelectItem::Expr {
-                                    expr: Expr::Identifier(vec![ident.clone(), i.clone()]),
-                                    alias: Some(i.clone()),
-                                })
-                                .collect(),
-                            from: vec![TableWithJoins {
-                                relation: TableFactor::Table {
-                                    name: RawItemName::Name(UnresolvedItemName(
-                                        vec![ident.clone()],
-                                    )),
-                                    alias: None,
-                                },
-                                joins: vec![],
-                            }],
-                            selection: None,
-                            group_by: vec![],
-                            having: None,
-                            options: vec![],
-                        })),
-                    )
+                    Ok((ident, columns))
                 }
                 Let { id, value, body } => {
                     // build value query, store binding
@@ -539,6 +513,7 @@ impl MirToSql {
                         }
                     }
 
+                    // TODO(mgree) self joins will generate duplicate (bad) aliases
                     let projection = fq_columns
                         .into_iter()
                         .map(|fqi| {
@@ -687,7 +662,7 @@ impl MirToSql {
                     let limit = if let Some(limit) = limit {
                         Some(Limit {
                             with_ties: false,
-                            quantity: sc.to_sql_expr(&limit, &fq_columns)?,
+                            quantity: sc.to_sql_expr(limit, &fq_columns)?,
                         })
                     } else {
                         None
@@ -748,17 +723,6 @@ impl MirToSql {
                     }
                     outer_order_by.extend(order_by.iter().cloned());
 
-                    let projection = fq_columns
-                        .into_iter()
-                        .map(|fqi| {
-                            let alias = fqi.last().cloned();
-                            SelectItem::Expr {
-                                expr: Expr::Identifier(fqi),
-                                alias,
-                            }
-                        })
-                        .collect::<Vec<_>>();
-
                     //    LATERAL (
                     //        SELECT col1, col2..., order_col
                     //        FROM tbl
@@ -766,9 +730,10 @@ impl MirToSql {
                     //        OPTIONS (LIMT INPUT GROUP SIZE = ...)
                     //        ORDER BY order_col LIMIT k
                     //    )
+                    let lateral_alias = sc.fresh_ident("lateral");
                     let conjuncts = keys
                         .iter()
-                        .zip_eq(fq_keys.into_iter())
+                        .zip_eq(fq_keys)
                         .map(|(k, fqk)| {
                             Expr::Identifier(vec![group_alias.clone(), k.clone()])
                                 .equals(Expr::Identifier(fqk.clone()))
@@ -786,21 +751,47 @@ impl MirToSql {
                         })
                     }
 
+                    let projection = fq_columns
+                        .into_iter()
+                        .map(|fqi| {
+                            let alias = fqi.last().cloned();
+                            SelectItem::Expr {
+                                expr: Expr::Identifier(fqi),
+                                alias,
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
                     let lateral_query = Query {
                         ctes: CteBlock::Simple(vec![]),
                         body: SetExpr::Select(Box::new(Select {
                             distinct: None,
-                            projection: projection.clone(),
+                            projection,
                             selection,
                             from: vec![tbl],
                             group_by: vec![],
                             having: None,
                             options,
                         })),
-                        order_by: order_by,
+                        order_by,
                         limit,
                         offset: None,
                     };
+
+                    // SELECT key_col, ... FROM
+                    // ...
+                    // ORDER BY key_col, order_col
+
+                    let projection = columns
+                        .iter()
+                        .map(|i| {
+                            let alias = Some(i.clone());
+                            SelectItem::Expr {
+                                expr: Expr::Identifier(vec![lateral_alias.clone(), i.clone()]),
+                                alias,
+                            }
+                        })
+                        .collect::<Vec<_>>();
 
                     let body = SetExpr::Select(Box::new(Select {
                         distinct: None,
