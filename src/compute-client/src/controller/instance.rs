@@ -281,7 +281,7 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
 
 impl<T: ComputeControllerTimestamp> Instance<T> {
     /// Acquire a handle to the collection state associated with `id`.
-    pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
+    fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
         self.collections.get(&id).ok_or(CollectionMissing(id))
     }
 
@@ -298,7 +298,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// # Panics
     ///
     /// Panics if the identified collection does not exist.
-    pub fn expect_collection(&self, id: GlobalId) -> &CollectionState<T> {
+    fn expect_collection(&self, id: GlobalId) -> &CollectionState<T> {
         self.collections.get(&id).expect("collection must exist")
     }
 
@@ -313,7 +313,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .expect("collection must exist")
     }
 
-    pub fn collections_iter(&self) -> impl Iterator<Item = (GlobalId, &CollectionState<T>)> {
+    fn collections_iter(&self) -> impl Iterator<Item = (GlobalId, &CollectionState<T>)> {
         self.collections.iter().map(|(id, coll)| (*id, coll))
     }
 
@@ -430,7 +430,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     }
 
     /// Returns whether the identified replica exists.
-    pub fn replica_exists(&self, id: ReplicaId) -> bool {
+    fn replica_exists(&self, id: ReplicaId) -> bool {
         self.replicas.contains_key(&id)
     }
 
@@ -716,7 +716,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// Returns the state of the [`Instance`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
-    pub(crate) fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+    pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Note: We purposefully use the `Debug` formatting for the value of all fields in the
         // returned object as a tradeoff between usability and stability. `serde_json` will fail
         // to serialize an object if the keys aren't strings, so `Debug` formatting the values
@@ -801,7 +801,7 @@ where
     T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
-    pub fn new(
+    fn new(
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
@@ -943,7 +943,7 @@ where
 
     /// Sends a command to all replicas of this instance.
     #[mz_ore::instrument(level = "debug")]
-    pub fn send(&mut self, cmd: ComputeCommand<T>) {
+    fn send(&mut self, cmd: ComputeCommand<T>) {
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
 
@@ -959,7 +959,7 @@ where
     /// Receives the next response from the given replicas.
     ///
     /// This method is cancellation safe.
-    pub async fn recv(
+    async fn recv(
         replicas: &mut BTreeMap<ReplicaId, ReplicaState<T>>,
     ) -> (ReplicaId, ComputeResponse<T>) {
         loop {
@@ -1680,7 +1680,7 @@ where
         drop(peek);
     }
 
-    pub fn handle_response(&mut self, response: ComputeResponse<T>, replica_id: ReplicaId) {
+    fn handle_response(&mut self, response: ComputeResponse<T>, replica_id: ReplicaId) {
         match response {
             ComputeResponse::Frontiers(id, frontiers) => {
                 self.handle_frontiers_response(id, frontiers, replica_id);
@@ -1996,7 +1996,7 @@ where
 /// A compute collection is either an index, or a storage sink, or a subscribe, exported by a
 /// compute dataflow.
 #[derive(Debug)]
-pub(super) struct CollectionState<T: ComputeControllerTimestamp> {
+struct CollectionState<T: ComputeControllerTimestamp> {
     /// Whether this collection is a log collection.
     ///
     /// Log collections are special in that they are only maintained by a subset of all replicas.
@@ -2093,7 +2093,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
     }
 
     /// Creates a new collection state for a log collection.
-    pub(crate) fn new_log_collection(
+    fn new_log_collection(
         id: GlobalId,
         shared: SharedCollectionState<T>,
         read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
@@ -2118,13 +2118,13 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
     }
 
     /// Reports the current read frontier.
-    pub fn read_frontier(&self) -> Antichain<T> {
+    fn read_frontier(&self) -> Antichain<T> {
         self.shared
             .lock_read_capabilities(|c| c.frontier().to_owned())
     }
 
     /// Reports the current write frontier.
-    pub fn write_frontier(&self) -> Antichain<T> {
+    fn write_frontier(&self) -> Antichain<T> {
         self.shared.lock_write_frontier(|f| f.clone())
     }
 
@@ -2518,7 +2518,7 @@ impl<T: ComputeControllerTimestamp> ActiveSubscribe<T> {
 
 /// State maintained about individual replicas.
 #[derive(Debug)]
-pub struct ReplicaState<T: ComputeControllerTimestamp> {
+struct ReplicaState<T: ComputeControllerTimestamp> {
     /// The ID of the replica.
     id: ReplicaId,
     /// Client for the running replica task.
