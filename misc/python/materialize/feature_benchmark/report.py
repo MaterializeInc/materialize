@@ -48,10 +48,13 @@ class Report:
     def __init__(self, cycle_number: int) -> None:
         self.cycle_number = cycle_number
         """ 1-based cycle number. """
-        self._scenario_results: list[BenchmarkScenarioResult] = []
+        self._result_by_scenario_name: dict[str, BenchmarkScenarioResult] = dict()
 
     def add_scenario_result(self, result: BenchmarkScenarioResult) -> None:
-        self._scenario_results.append(result)
+        assert (
+            result.scenario_name not in self._result_by_scenario_name.keys()
+        ), f"Result of scenario {result.scenario_name} already present"
+        self._result_by_scenario_name[result.scenario_name] = result
 
     def as_string(self, use_colors: bool, limit_to_scenario: str | None = None) -> str:
         output_lines = []
@@ -61,7 +64,7 @@ class Report:
         )
         output_lines.append("-" * 152)
 
-        for scenario_result in self._scenario_results:
+        for scenario_result in self._result_by_scenario_name.values():
             evaluator = RelativeThresholdEvaluator(scenario_result.scenario_class)
             for metric in scenario_result.metrics:
                 if not metric.has_values():
@@ -107,8 +110,4 @@ class Report:
     def get_scenario_result_by_name(
         self, scenario_name: str
     ) -> BenchmarkScenarioResult | None:
-        for scenario_result in self._scenario_results:
-            if scenario_result.scenario_name == scenario_name:
-                return scenario_result
-
-        return None
+        return self._result_by_scenario_name[scenario_name]
