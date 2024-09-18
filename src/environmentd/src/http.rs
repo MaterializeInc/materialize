@@ -300,6 +300,21 @@ pub async fn handle_leader_promote(
     }
 }
 
+pub async fn handle_leader_skip_catchup(
+    State(deployment_state_handle): State<DeploymentStateHandle>,
+) -> impl IntoResponse {
+    match deployment_state_handle.try_skip_catchup() {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(()) => {
+            let status = StatusCode::BAD_REQUEST;
+            let body = Json(json!({
+                "message": "cannot skip catchup in this phase of initialization; try again later",
+            }));
+            (status, body).into_response()
+        }
+    }
+}
+
 impl InternalHttpServer {
     pub fn new(
         InternalHttpConfig {
@@ -412,6 +427,10 @@ impl InternalHttpServer {
         let leader_router = Router::new()
             .route("/api/leader/status", routing::get(handle_leader_status))
             .route("/api/leader/promote", routing::post(handle_leader_promote))
+            .route(
+                "/api/leader/skip-catchup",
+                routing::post(handle_leader_skip_catchup),
+            )
             .with_state(deployment_state_handle);
 
         let router = router
