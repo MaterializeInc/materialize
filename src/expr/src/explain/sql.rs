@@ -22,7 +22,6 @@ use mz_sql_parser::ast::{
     Query, Raw, RawItemName, Select, SelectItem, SelectOption, SelectOptionName, SetExpr,
     TableAlias, TableFactor, TableWithJoins, UnresolvedItemName, Value, Values, WithOptionValue,
 };
-use timely::Container;
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
 use crate::{
@@ -166,7 +165,7 @@ struct MirToSql {
     recursion_guard: RecursionGuard,
 }
 
-impl<'a> CheckedRecursion for MirToSql {
+impl CheckedRecursion for MirToSql {
     fn recursion_guard(&self) -> &RecursionGuard {
         &self.recursion_guard
     }
@@ -208,7 +207,7 @@ impl MirToSql {
 
         names
             .iter()
-            .map(|name| Ident::new_unchecked(name))
+            .map(Ident::new_unchecked)
             .collect()
     }
 
@@ -383,7 +382,7 @@ impl MirToSql {
                             }
                         })
                         .collect();
-                    projection.extend(new_select_items.into_iter());
+                    projection.extend(new_select_items);
 
                     let body = SetExpr::Select(Box::new(Select {
                         distinct: None,
@@ -423,7 +422,7 @@ impl MirToSql {
                     let mut predicates = predicates.into_iter();
                     let mut selection = sc.to_sql_expr(predicates.next().unwrap(), &fq_columns)?;
                     for expr in predicates {
-                        selection = selection.and(sc.to_sql_expr(&expr, &fq_columns)?);
+                        selection = selection.and(sc.to_sql_expr(expr, &fq_columns)?);
                     }
 
                     // TODO(mgree) this always generates a new CTE, but we can sometimes just add to the prior one (needs QB support)
@@ -620,7 +619,7 @@ impl MirToSql {
                     }
 
                     let options = expected_group_size.map_or_else(
-                        || vec![],
+                        Vec::new,
                         |egs| {
                             vec![SelectOption {
                                 name: SelectOptionName::ExpectedGroupSize,
@@ -977,7 +976,7 @@ impl PreQuery {
         Cte {
             alias: TableAlias {
                 name: ident,
-                columns: columns,
+                columns,
                 strict: false,
             },
             id: (),
