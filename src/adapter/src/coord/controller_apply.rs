@@ -23,16 +23,13 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::instrument;
 use mz_ore::retry::Retry;
-use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
-use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::ConnectionDetails;
 use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::sources::GenericSourceConnection;
 use tracing::{Instrument, info_span, warn};
 
 use crate::active_compute_sink::ActiveComputeSinkRetireReason;
@@ -40,7 +37,7 @@ use crate::catalog::side_effects::CatalogSideEffect;
 use crate::coord::Coordinator;
 use crate::coord::timeline::TimelineState;
 use crate::statement_logging::StatementEndedExecutionReason;
-use crate::{AdapterError, ExecuteContext, ResultExt, TimelineContext};
+use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt};
 
 impl Coordinator {
     #[instrument(level = "debug")]
@@ -63,6 +60,7 @@ impl Coordinator {
         let mut cluster_replicas_to_drop = vec![];
         let mut compute_sinks_to_drop = BTreeMap::new();
         let mut peeks_to_drop = vec![];
+        let mut copies_to_drop = vec![];
 
         for update in updates {
             tracing::info!(?update, "have to apply!");
@@ -74,22 +72,11 @@ impl Coordinator {
                 CatalogSideEffect::DropTable(id, global_id) => {
                     tables_to_drop.push((id, global_id));
                 }
-                CatalogSideEffect::DropSource(id, gid, source) => {
+                CatalogSideEffect::DropSource(id, gid, _source) => {
                     sources_to_drop.push((id, gid));
-                    if let DataSourceDesc::Ingestion { ingestion_desc, .. } = &source.data_source {
-                        match &ingestion_desc.desc.connection {
-                            GenericSourceConnection::Postgres(conn) => {
-                                let conn =
-                                    conn.clone().into_inline_connection(self.catalog().state());
-                                let pending_drop = (
-                                    conn.connection.clone(),
-                                    conn.publication_details.slot.clone(),
-                                );
-                                replication_slots_to_drop.push(pending_drop);
-                            }
-                            _ => {}
-                        }
-                    }
+                }
+                CatalogSideEffect::DropReplicationSlot(connection, slot) => {
+                    replication_slots_to_drop.push((connection, slot));
                 }
                 CatalogSideEffect::DropSink(_id, gid) => {
                     storage_sink_gids_to_drop.push(gid);
@@ -150,31 +137,34 @@ impl Coordinator {
         // Clean up any active compute sinks like subscribes or copy to-s that rely on dropped relations or clusters.
         for (sink_id, sink) in &self.active_compute_sinks {
             let cluster_id = sink.cluster_id();
-            let conn_id = &sink.connection_id();
+            //let conn_id = &sink.connection_id();
             if let Some(id) = sink
                 .depends_on()
                 .iter()
                 .find(|id| collections_to_drop.contains(id))
             {
-                let entry = self.catalog().get_entry_by_global_id(id);
-                let name = self
-                    .catalog()
-                    .resolve_full_name(entry.name(), Some(conn_id))
-                    .to_string();
+                // WIP: We can't get the full name of the referenced collection
+                // because it has been dropped from the catalog by now. Is this
+                // okay?
+                //let entry = self.catalog().get_entry_by_global_id(id);
+                //let name = self
+                //    .catalog()
+                //    .resolve_full_name(entry.name(), Some(conn_id))
+                //    .to_string();
                 compute_sinks_to_drop.insert(
                     *sink_id,
-                    ActiveComputeSinkRetireReason::DependencyDropped(format!(
-                        "relation {}",
-                        name.quoted()
-                    )),
+                    ActiveComputeSinkRetireReason::DependencyDropped(format!("relation {}", id,)),
                 );
             } else if clusters_to_drop.contains(&cluster_id) {
-                let name = self.catalog().get_cluster(cluster_id).name();
+                // WIP: We can't get the full name of the referenced collection
+                // because it has been dropped from the catalog by now. Is this
+                // okay?
+                //let name = self.catalog().get_cluster(cluster_id).name();
                 compute_sinks_to_drop.insert(
                     *sink_id,
                     ActiveComputeSinkRetireReason::DependencyDropped(format!(
                         "cluster {}",
-                        name.quoted()
+                        cluster_id,
                     )),
                 );
             }
@@ -187,28 +177,46 @@ impl Coordinator {
                 .iter()
                 .find(|id| collections_to_drop.contains(id))
             {
-                let entry = self.catalog().get_entry_by_global_id(id);
-                let name = self
-                    .catalog()
-                    .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
-                peeks_to_drop.push((
-                    format!("relation {}", name.to_string().quoted()),
-                    uuid.clone(),
-                ));
+                // WIP: We can't get the full name of the referenced collection
+                // because it has been dropped from the catalog by now. Is this
+                // okay?
+                //let entry = self.catalog().get_entry_by_global_id(id);
+                //let name = self
+                //    .catalog()
+                //    .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
+                peeks_to_drop.push((format!("relation {}", id), uuid.clone()));
             } else if clusters_to_drop.contains(&pending_peek.cluster_id) {
-                let name = self.catalog().get_cluster(pending_peek.cluster_id).name();
-                peeks_to_drop.push((format!("cluster {}", name.quoted()), uuid.clone()));
+                // WIP: We can't get the full name of the referenced collection
+                // because it has been dropped from the catalog by now. Is this
+                // okay?
+                //let name = self.catalog().get_cluster(pending_peek.cluster_id).name();
+                peeks_to_drop.push((format!("cluster {}", pending_peek.cluster_id), uuid.clone()));
             }
         }
 
-        let storage_ids_to_drop = sources_to_drop
+        // Clean up any pending `COPY` statements that rely on dropped relations or clusters.
+        for (conn_id, pending_copy) in &self.active_copies {
+            let dropping_table = tables_to_drop
+                .iter()
+                .any(|(item_id, _gid)| pending_copy.table_id == *item_id);
+            let dropping_cluster = clusters_to_drop.contains(&pending_copy.cluster_id);
+
+            if dropping_table || dropping_cluster {
+                copies_to_drop.push(conn_id.clone());
+            }
+        }
+
+        let storage_ids_to_drop: BTreeSet<_> = sources_to_drop
             .iter()
-            .map(|(_, gid)| *gid)
-            .chain(tables_to_drop.iter().map(|(_, gid)| *gid))
-            .chain(storage_sink_gids_to_drop.iter().copied())
-            .chain(materialized_views_to_drop.iter().map(|(_, id)| *id))
-            .chain(continual_tasks_to_drop.iter().map(|(_, _, gid)| *gid));
-        let compute_ids_to_drop = indexes_to_drop
+            .map(|(_id, gid)| gid)
+            .chain(storage_sink_gids_to_drop.iter())
+            .chain(tables_to_drop.iter().map(|(_id, gid)| gid))
+            .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
+            .chain(continual_tasks_to_drop.iter().map(|(_, _, gid)| gid))
+            .copied()
+            .collect();
+
+        let compute_ids_to_drop: BTreeSet<_> = indexes_to_drop
             .iter()
             .copied()
             .chain(materialized_views_to_drop.iter().copied())
@@ -216,33 +224,50 @@ impl Coordinator {
                 continual_tasks_to_drop
                     .iter()
                     .map(|(_, cluster_id, gid)| (*cluster_id, *gid)),
-            );
-
-        // Check if any Timelines would become empty, if we dropped the specified storage or
-        // compute resources.
-        //
-        // Note: only after a Transaction succeeds do we actually drop the timeline
-        let collection_id_bundle = self.build_collection_id_bundle(
-            storage_ids_to_drop,
-            compute_ids_to_drop,
-            clusters_to_drop.clone(),
-        );
-        let timeline_associations: BTreeMap<_, _> = self
-            .partition_ids_by_timeline_context(&collection_id_bundle)
-            .filter_map(|(context, bundle)| {
-                let TimelineContext::TimelineDependent(timeline) = context else {
-                    return None;
-                };
-                let TimelineState { read_holds, .. } = self
-                    .global_timelines
-                    .get(&timeline)
-                    .expect("all timeslines have a timestamp oracle");
-
-                let empty = read_holds.id_bundle().difference(&bundle).is_empty();
-
-                Some((timeline, (empty, bundle)))
-            })
+            )
             .collect();
+
+        // Gather resources that we have to remove from timeline state and
+        // pre-check if any Timelines become empty, when we drop the specified
+        // storage and compute resources.
+        //
+        // Note: We only apply these changes below.
+        let mut timeline_id_bundles = BTreeMap::new();
+
+        for (timeline, TimelineState { read_holds, .. }) in &self.global_timelines {
+            let mut id_bundle = CollectionIdBundle::default();
+
+            for storage_id in read_holds.storage_ids() {
+                if storage_ids_to_drop.contains(&storage_id) {
+                    id_bundle.storage_ids.insert(storage_id);
+                }
+            }
+
+            for (instance_id, id) in read_holds.compute_ids() {
+                if compute_ids_to_drop.contains(&(instance_id, id))
+                    || clusters_to_drop.contains(&instance_id)
+                {
+                    id_bundle
+                        .compute_ids
+                        .entry(instance_id)
+                        .or_default()
+                        .insert(id);
+                }
+            }
+
+            timeline_id_bundles.insert(timeline.clone(), id_bundle);
+        }
+
+        let mut timeline_associations = BTreeMap::new();
+        for (timeline, id_bundle) in timeline_id_bundles.into_iter() {
+            let TimelineState { read_holds, .. } = self
+                .global_timelines
+                .get(&timeline)
+                .expect("all timeslines have a timestamp oracle");
+
+            let empty = read_holds.id_bundle().difference(&id_bundle).is_empty();
+            timeline_associations.insert(timeline, (empty, id_bundle));
+        }
 
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
