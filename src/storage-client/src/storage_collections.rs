@@ -251,7 +251,7 @@ pub trait StorageCollections: Debug {
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Updates the [`RelationDesc`] for the specified table.
-    async fn alter_table_desc(
+    fn alter_table_desc(
         &self,
         table_id: GlobalId,
         new_desc: RelationDesc,
@@ -1732,7 +1732,7 @@ where
         Ok(())
     }
 
-    async fn alter_table_desc(
+    fn alter_table_desc(
         &self,
         table_id: GlobalId,
         new_desc: RelationDesc,
@@ -1742,7 +1742,7 @@ where
             .get_mut(&table_id)
             .ok_or_else(|| StorageError::IdentifierMissing(table_id))?;
 
-        // TODO(parkmycar): To support changing the `RelationDesc` of sources
+        // TODO(alter_table): To support changing the `RelationDesc` of sources
         // we'll need to cancel the currently running `BackgroundCmd` that
         // fetches recent uppers. See `BackgroundCmd::Register`.
         if !matches!(
