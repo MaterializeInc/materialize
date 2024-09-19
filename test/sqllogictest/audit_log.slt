@@ -183,7 +183,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 59  alter  materialized-view  {"id":"u5","new_history":null,"old_history":"FOR␠'5m'"}  materialize
 60  comment  materialized-view  {"id":"MaterializedView(User(5))","name":"materialize.public.v2"}  materialize
 61  create  connection  {"database":"materialize","id":"u16","item":"conn","schema":"public"}  materialize
-62  alter  connection  {"id":"u16","name":"materialize.public.conn"}  materialize
+62  alter  connection  {"database":"materialize","id":"u16","item":"conn","schema":"public"}  materialize
 63  alter  system  {"name":"max_aws_privatelink_connections","value":"10"}  mz_system
 64  alter  system  {"name":"max_aws_privatelink_connections","value":null}  mz_system
 65  alter  system  null  mz_system

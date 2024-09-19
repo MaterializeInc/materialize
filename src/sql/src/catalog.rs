@@ -590,7 +590,7 @@ pub trait CatalogItem {
     /// Returns the resolved connection.
     ///
     /// If the catalog item is not a connection, it returns an error.
-    fn connection(&self) -> Result<&Connection<ReferencedConnection>, CatalogError>;
+    fn connection(&self) -> Result<Connection<ReferencedConnection>, CatalogError>;
 
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;

@@ -2551,6 +2551,7 @@ impl<'a> Parser<'a> {
                 HOST,
                 PASSWORD,
                 PORT,
+                PUBLIC,
                 PROGRESS,
                 REGION,
                 ROLE,
@@ -2596,6 +2597,14 @@ impl<'a> Parser<'a> {
                 HOST => ConnectionOptionName::Host,
                 PASSWORD => ConnectionOptionName::Password,
                 PORT => ConnectionOptionName::Port,
+                PUBLIC => {
+                    self.expect_keyword(KEY)?;
+                    match self.next_token() {
+                        Some(Token::Number(n)) if n == "1" => ConnectionOptionName::PublicKey1,
+                        Some(Token::Number(n)) if n == "2" => ConnectionOptionName::PublicKey2,
+                        t => self.expected(self.peek_prev_pos(), "1 or 2 after PUBLIC KEY", t)?,
+                    }
+                }
                 PROGRESS => {
                     self.expect_keyword(TOPIC)?;
                     match self.parse_keywords(&[REPLICATION, FACTOR]) {

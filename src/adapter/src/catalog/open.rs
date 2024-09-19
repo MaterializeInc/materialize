@@ -58,7 +58,6 @@ use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::StorageController;
 use timely::Container;
 use tracing::{error, info, warn, Instrument};
@@ -463,29 +462,6 @@ impl Catalog {
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
-
-            // Load public keys for SSH connections from the secrets store to the builtin tables.
-            let secrets_reader = &catalog.state.config.connection_context.secrets_reader;
-            for (id, entry) in catalog.state.entry_by_id.iter() {
-                if let CatalogItem::Connection(ref connection) = entry.item {
-                    if let mz_storage_types::connections::Connection::Ssh(_) = connection.connection
-                    {
-                        let secret = secrets_reader.read(*id).await?;
-                        let keyset = SshKeyPairSet::from_bytes(&secret)?;
-                        let public_key_pair = keyset.public_keys();
-                        let builtin_table_update = catalog.state.pack_ssh_tunnel_connection_update(
-                            *id,
-                            &public_key_pair,
-                            1,
-                        );
-                        builtin_table_updates.push(
-                            catalog
-                                .state
-                                .resolve_builtin_table_update(builtin_table_update),
-                        );
-                    }
-                }
-            }
 
             // Operators aren't stored in the catalog, but we would like them in
             // introspection views.

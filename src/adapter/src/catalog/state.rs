@@ -990,12 +990,12 @@ impl CatalogState {
                 connection:
                     mz_sql::plan::Connection {
                         create_sql,
-                        connection,
+                        details,
                     },
                 ..
             }) => CatalogItem::Connection(Connection {
                 create_sql,
-                connection,
+                details,
                 resolved_ids,
             }),
             _ => {
@@ -2139,8 +2139,8 @@ impl ConnectionResolver for CatalogState {
             .get_entry(&id)
             .connection()
             .expect("catalog out of sync")
-            .connection
-            .clone()
+            .details
+            .to_connection()
         {
             Kafka(conn) => Kafka(conn.into_inline_connection(self)),
             Postgres(conn) => Postgres(conn.into_inline_connection(self)),

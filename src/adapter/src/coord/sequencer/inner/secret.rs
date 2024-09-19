@@ -10,11 +10,13 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use mz_audit_log::{EventDetails, EventType, RotateKeysV1};
 use mz_catalog::memory::objects::{CatalogItem, Secret};
 use mz_expr::MirScalarExpr;
+use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::{Datum, GlobalId, RowArena};
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{ConnectionOption, ConnectionOptionName, Statement, Value, WithOptionValue};
 use mz_sql::catalog::{CatalogError, ObjectType};
 use mz_sql::plan::{self, CreateSecretPlan};
 use mz_sql::session::metadata::SessionMetadata;
@@ -55,7 +57,7 @@ impl Staged for SecretStage {
             SecretStage::CreateFinish(stage) => {
                 coord.create_secret_finish(ctx.session(), stage).await
             }
-            SecretStage::RotateKeysEnsure(stage) => coord.rotate_keys_ensure(ctx.session(), stage),
+            SecretStage::RotateKeysEnsure(stage) => coord.rotate_keys_ensure(stage),
             SecretStage::RotateKeysFinish(stage) => {
                 coord.rotate_keys_finish(ctx.session(), stage).await
             }
@@ -274,11 +276,12 @@ impl Coordinator {
 
     #[instrument]
     pub(crate) async fn sequence_rotate_keys(&mut self, ctx: ExecuteContext, id: GlobalId) {
-        // If the secret is deleted from the catalog during `rotate_keys_ensure()`, this will
-        // prevent `rotate_keys_finish()` from issuing the `WeirdBuiltinTableUpdates` for the
-        // change. The state of the persisted secret is unknown, and if the rotate ensure'd
-        // after the delete (i.e., the secret is persisted to the secret store but not the
-        // catalog), the secret will be cleaned up during next envd boot.
+        // If the secret is deleted from the catalog during
+        // `rotate_keys_ensure()`, this will prevent `rotate_keys_finish()` from
+        // issuing the catalog update for the change. The state of the persisted
+        // secret is unknown, and if the rotate ensure'd after the delete (i.e.,
+        // the secret is persisted to the secret store but not the catalog), the
+        // secret will be cleaned up during next envd boot.
         let validity = PlanValidity::new(
             self.catalog().transient_revision(),
             BTreeSet::from_iter(std::iter::once(id)),
@@ -293,13 +296,10 @@ impl Coordinator {
     #[instrument]
     fn rotate_keys_ensure(
         &mut self,
-        session: &Session,
         RotateKeysSecretEnsure { validity, id }: RotateKeysSecretEnsure,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
         let secrets_controller = Arc::clone(&self.secrets_controller);
-        let catalog = self.owned_catalog();
-        let entry = catalog.get_entry(&id);
-        let name = catalog.resolve_full_name(&entry.name, Some(session.conn_id()));
+        let entry = self.catalog().get_entry(&id).clone();
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "rotate keys ensure",
@@ -311,39 +311,47 @@ impl Coordinator {
                     .ensure(id, &new_key_set.to_bytes())
                     .await?;
 
-                let builtin_table_retraction = catalog.state().pack_ssh_tunnel_connection_update(
+                let mut to_item = entry.item;
+                match &mut to_item {
+                    CatalogItem::Connection(c) => {
+                        let mut stmt = match mz_sql::parse::parse(&c.create_sql)
+                            .expect("invalid create sql persisted to catalog")
+                            .into_element()
+                            .ast
+                        {
+                            Statement::CreateConnection(stmt) => stmt,
+                            _ => coord_bail!("internal error: persisted SQL for {id} is invalid"),
+                        };
+
+                        stmt.values.retain(|v| {
+                            v.name != ConnectionOptionName::PublicKey1
+                                && v.name != ConnectionOptionName::PublicKey2
+                        });
+                        stmt.values.push(ConnectionOption {
+                            name: ConnectionOptionName::PublicKey1,
+                            value: Some(WithOptionValue::Value(Value::String(
+                                new_key_set.primary().ssh_public_key(),
+                            ))),
+                        });
+                        stmt.values.push(ConnectionOption {
+                            name: ConnectionOptionName::PublicKey2,
+                            value: Some(WithOptionValue::Value(Value::String(
+                                new_key_set.secondary().ssh_public_key(),
+                            ))),
+                        });
+
+                        c.create_sql = stmt.to_ast_string_stable();
+                    }
+                    _ => coord_bail!(
+                        "internal error: rotate keys called on non-connection object {id}"
+                    ),
+                }
+
+                let ops = vec![catalog::Op::UpdateItem {
                     id,
-                    &previous_key_set.public_keys(),
-                    -1,
-                );
-                let builtin_table_retraction = catalog
-                    .state()
-                    .resolve_builtin_table_update(builtin_table_retraction);
-                let builtin_table_addition = catalog.state().pack_ssh_tunnel_connection_update(
-                    id,
-                    &new_key_set.public_keys(),
-                    1,
-                );
-                let builtin_table_addition = catalog
-                    .state()
-                    .resolve_builtin_table_update(builtin_table_addition);
-                let ops = vec![
-                    catalog::Op::WeirdBuiltinTableUpdates {
-                        builtin_table_update: builtin_table_retraction,
-                        audit_log: Vec::new(),
-                    },
-                    catalog::Op::WeirdBuiltinTableUpdates {
-                        builtin_table_update: builtin_table_addition,
-                        audit_log: vec![(
-                            EventType::Alter,
-                            mz_audit_log::ObjectType::Connection,
-                            EventDetails::RotateKeysV1(RotateKeysV1 {
-                                id: id.to_string(),
-                                name: name.to_string(),
-                            }),
-                        )],
-                    },
-                ];
+                    name: entry.name,
+                    to_item,
+                }];
                 let stage = SecretStage::RotateKeysFinish(RotateKeysSecretFinish { validity, ops });
                 Ok(Box::new(stage))
             }

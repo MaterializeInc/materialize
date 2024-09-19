@@ -42,7 +42,7 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
     CreateClusterManagedPlan, CreateClusterPlan, CreateClusterVariant, CreateSourcePlan,
     HirRelationExpr, Ingestion as PlanIngestion, PlanError, WebhookBodyFormat, WebhookHeaders,
     WebhookValidation,
@@ -950,7 +950,7 @@ pub struct Secret {
 #[derive(Debug, Clone, Serialize)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
+    pub details: ConnectionDetails,
     pub resolved_ids: ResolvedIds,
 }
 
@@ -2397,9 +2397,9 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn connection(
         &self,
-    ) -> Result<&mz_storage_types::connections::Connection<ReferencedConnection>, SqlCatalogError>
+    ) -> Result<mz_storage_types::connections::Connection<ReferencedConnection>, SqlCatalogError>
     {
-        Ok(&self.connection()?.connection)
+        Ok(self.connection()?.details.to_connection())
     }
 
     fn create_sql(&self) -> &str {
