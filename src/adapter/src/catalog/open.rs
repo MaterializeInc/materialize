@@ -325,7 +325,7 @@ impl Catalog {
             }
         }
 
-        let builtin_table_update = state
+        let (builtin_table_update, _controller_state_updates) = state
             .apply_updates_for_bootstrap(pre_item_updates, &mut LocalExpressionCache::Closed)
             .await;
         builtin_table_updates.extend(builtin_table_update);
@@ -396,7 +396,11 @@ impl Catalog {
             expr_cache_start.elapsed()
         );
 
-        let builtin_table_update = state
+        // When initializing/bootstrapping, we don't use the controller state
+        // updates but instead load the catalog fully and then go ahead and
+        // apply commands to the controller(s). Maybe we _should_ instead use
+        // the same logic and return and use the updates from here.
+        let (builtin_table_update, _controller_state_updates) = state
             .apply_updates_for_bootstrap(system_item_updates, &mut local_expr_cache)
             .await;
         builtin_table_updates.extend(builtin_table_update);
@@ -407,7 +411,7 @@ impl Catalog {
             .to_string();
 
         // Migrate item ASTs.
-        let builtin_table_update = if !config.skip_migrations {
+        let (builtin_table_update, _controller_state_updates) = if !config.skip_migrations {
             let migrate_result = migrate::migrate(
                 &mut state,
                 &mut txn,
@@ -437,7 +441,10 @@ impl Catalog {
                 differential_dataflow::consolidation::consolidate_updates(&mut post_item_updates);
             }
 
-            migrate_result.builtin_table_updates
+            (
+                migrate_result.builtin_table_updates,
+                migrate_result.controller_state_updates,
+            )
         } else {
             state
                 .apply_updates_for_bootstrap(item_updates, &mut local_expr_cache)
@@ -453,7 +460,7 @@ impl Catalog {
                 diff: diff.try_into().expect("valid diff"),
             })
             .collect();
-        let builtin_table_update = state
+        let (builtin_table_update, _controller_state_updates) = state
             .apply_updates_for_bootstrap(post_item_updates, &mut local_expr_cache)
             .await;
         builtin_table_updates.extend(builtin_table_update);
@@ -654,8 +661,9 @@ impl Catalog {
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
         let updates = txn.get_and_commit_op_updates();
-        let builtin_updates = state.apply_updates(updates)?;
+        let (builtin_updates, controller_state_updates) = state.apply_updates(updates)?;
         assert!(builtin_updates.is_empty());
+        assert!(controller_state_updates.is_empty());
         let commit_ts = txn.upper();
         txn.commit(commit_ts).await?;
         drop(storage);
