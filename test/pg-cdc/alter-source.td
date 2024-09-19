@@ -40,8 +40,9 @@ INSERT INTO table_a VALUES (2, 'two');
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source'
-  )
-  FOR SCHEMAS (public);
+  );
+
+> CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
 
 > SELECT * FROM table_a;
 1 one
@@ -50,7 +51,7 @@ INSERT INTO table_a VALUES (2, 'two');
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE table_a CASCADE;
 
-!ALTER SOURCE mz_source ADD SUBSOURCE table_b;
+! CREATE TABLE table_b FROM SOURCE mz_source (REFERENCE table_b);
 contains:PUBLICATION mz_source is empty
 
 # Adding a table with the same name as a running table does not allow you to add
@@ -68,7 +69,7 @@ INSERT INTO table_a VALUES (9, 'nine');
 2 two
 
 # We are not aware that the new table_a is different
-!ALTER SOURCE mz_source ADD SUBSOURCE table_a;
+! CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
 contains:catalog item 'table_a' already exists
 
 > DROP SOURCE mz_source CASCADE;
@@ -114,35 +115,41 @@ INSERT INTO table_g VALUES (2, 'two');
 
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (
-    PUBLICATION 'mz_source',
-    TEXT COLUMNS [table_f.f2]
-  )
-  FOR SCHEMAS (public);
+    PUBLICATION 'mz_source'
+  );
+
+> CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
+> CREATE TABLE table_b FROM SOURCE mz_source (REFERENCE table_b);
+> CREATE TABLE table_c FROM SOURCE mz_source (REFERENCE table_c);
+> CREATE TABLE table_d FROM SOURCE mz_source (REFERENCE table_d);
+> CREATE TABLE table_e FROM SOURCE mz_source (REFERENCE table_e);
+> CREATE TABLE table_f FROM SOURCE mz_source (REFERENCE table_f) WITH (TEXT COLUMNS [f2]);
+> CREATE TABLE table_g FROM SOURCE mz_source (REFERENCE table_g);
 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress    progress
-table_a               subsource
-table_b               subsource
-table_c               subsource
-table_d               subsource
-table_e               subsource
-table_f               subsource
-table_g               subsource
 
-# Show all tablestodo this should be splittable
-> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"postgres\".\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\", \"postgres\".\"public\".\"table_b\" AS \"materialize\".\"public\".\"table_b\", \"postgres\".\"public\".\"table_c\" AS \"materialize\".\"public\".\"table_c\", \"postgres\".\"public\".\"table_d\" AS \"materialize\".\"public\".\"table_d\", \"postgres\".\"public\".\"table_e\" AS \"materialize\".\"public\".\"table_e\", \"postgres\".\"public\".\"table_f\" AS \"materialize\".\"public\".\"table_f\", \"postgres\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\""
+> SHOW TABLES
+table_a               ""
+table_b               ""
+table_c               ""
+table_d               ""
+table_e               ""
+table_f               ""
+table_g               ""
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"postgres\".\"public\".\"table_f\".\"f2\""
+$ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
-"\"f2\""
+> SHOW CREATE SOURCE mz_source;
+materialize.public.mz_source "CREATE SOURCE \"materialize\".\"public\".\"mz_source\" IN CLUSTER \"quickstart\" FROM POSTGRES CONNECTION \"materialize\".\"public\".\"pg\" (PUBLICATION = 'mz_source') EXPOSE PROGRESS AS \"materialize\".\"public\".\"mz_source_progress\""
+
+> SHOW CREATE TABLE table_a;
+materialize.public.table_a "CREATE TABLE \"materialize\".\"public\".\"table_a\" (\"pk\" \"pg_catalog\".\"int4\" NOT NULL, \"f2\" \"pg_catalog\".\"text\", CONSTRAINT \"table_a_pkey\" PRIMARY KEY (\"pk\")) FROM SOURCE \"materialize\".\"public\".\"mz_source\" (REFERENCE = \"postgres\".\"public\".\"table_a\") WITH (<DETAILS>)"
 
 #
 # State checking
 #
-> DROP SOURCE table_a
+> DROP TABLE table_a
 
 > SELECT * FROM table_b;
 1 one
@@ -150,12 +157,14 @@ table_g               subsource
 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress    progress
-table_b               subsource
-table_c               subsource
-table_d               subsource
-table_e               subsource
-table_f               subsource
-table_g               subsource
+
+> SHOW TABLES
+table_b               ""
+table_c               ""
+table_d               ""
+table_e               ""
+table_f               ""
+table_g               ""
 
 ! SELECT * FROM table_a;
 contains: unknown catalog item 'table_a'
@@ -170,13 +179,13 @@ INSERT INTO table_b VALUES (3, 'three');
 3 three
 
 # IF EXISTS works
-> DROP SOURCE IF EXISTS table_a;
+> DROP TABLE IF EXISTS table_a;
 
 # Multiple, repetitive tables work
-> DROP SOURCE table_b, table_c, table_b, table_c, table_b, table_c;
+> DROP TABLE table_b, table_c, table_b, table_c, table_b, table_c;
 
 # IF EXISTS works with multiple tables
-> DROP SOURCE IF EXISTS table_c, table_d;
+> DROP TABLE IF EXISTS table_c, table_d;
 
 > CREATE MATERIALIZED VIEW mv_e AS SELECT pk + 1 FROM table_e;
 > CREATE MATERIALIZED VIEW mv_f AS SELECT pk + 1 FROM table_f;
@@ -195,14 +204,14 @@ mv_e quickstart ""
 mv_f quickstart ""
 
 # RESTRICT works
-! DROP SOURCE table_e RESTRICT;
-contains:cannot drop source "table_e": still depended upon by materialized view "mv_e"
+! DROP TABLE table_e RESTRICT;
+contains:cannot drop table "table_e": still depended upon by materialized view "mv_e"
 
 # CASCADE works
-> DROP SOURCE table_e CASCADE;
+> DROP TABLE table_e CASCADE;
 
 # IF NOT EXISTS + CASCADE works
-> DROP SOURCE IF EXISTS table_e, table_f CASCADE;
+> DROP TABLE IF EXISTS table_e, table_f CASCADE;
 
 # TEXT COLUMNS removed from table_f
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
@@ -210,30 +219,33 @@ contains:cannot drop source "table_e": still depended upon by materialized view 
 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress    progress
-table_g               subsource
+
+> SHOW TABLES
+table_g               ""
 
 > SHOW MATERIALIZED VIEWS
 
-> DROP SOURCE table_g;
+> DROP TABLE table_g;
 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress    progress
 
 #
-# Add subsources
+# Add tables
 
-> ALTER SOURCE mz_source ADD SUBSOURCE table_g;
+> CREATE TABLE table_g FROM SOURCE mz_source (REFERENCE table_a);
 
-! ALTER SOURCE mz_source ADD SUBSOURCE table_g;
+! CREATE TABLE table_g FROM SOURCE mz_source (REFERENCE table_a);
 contains:catalog item 'table_g' already exists
 
-> ALTER SOURCE mz_source ADD SUBSOURCE table_a, table_b AS tb;
+> CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
+> CREATE TABLE tb FROM SOURCE mz_source (REFERENCE table_b);
 
 > SELECT * FROM table_a;
 1 one
 2 two
 
-! ALTER SOURCE mz_source ADD SUBSOURCE table_a;
+! CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
 contains:catalog item 'table_a' already exists
 
 > SELECT * FROM tb;
@@ -251,7 +263,7 @@ INSERT INTO table_h VALUES (1, 'one');
 ALTER TABLE table_h REPLICA IDENTITY FULL;
 INSERT INTO table_h VALUES (2, 'two');
 
-> ALTER SOURCE mz_source ADD SUBSOURCE table_h;
+> CREATE TABLE table_h FROM SOURCE mz_source (REFERENCE table_a);
 
 > SELECT * FROM table_h;
 1 one
@@ -259,10 +271,12 @@ INSERT INTO table_h VALUES (2, 'two');
 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress progress
-table_a            subsource
-table_g            subsource
-table_h            subsource
-tb                 subsource
+
+> SHOW TABLES
+table_a            ""
+table_g            ""
+table_h            ""
+tb                 ""
 
 #
 # Complex subsource operations
@@ -275,15 +289,16 @@ INSERT INTO table_a VALUES (3);
 ! SELECT * FROM table_a;
 contains:incompatible schema change
 
-> SELECT error ~~ '%incompatible schema change%' FROM mz_internal.mz_source_statuses WHERE name = 'table_a';
-true
+# TODO: #29373 (introspection tables)
+# > SELECT error ~~ '%incompatible schema change%' FROM mz_internal.mz_source_statuses WHERE name = 'table_a' and type = 'table';
+# true
 
 # Subsource errors not propagated to primary source
 > SELECT error IS NULL FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 true
 
-> DROP SOURCE table_a;
-> ALTER SOURCE mz_source ADD SUBSOURCE table_a;
+> DROP TABLE table_a;
+> CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
 
 > SELECT * FROM table_a;
 1
@@ -301,8 +316,8 @@ INSERT INTO table_a VALUES (4, 'four');
 3
 4
 
-> DROP SOURCE table_a;
-> ALTER SOURCE mz_source ADD SUBSOURCE table_a;
+> DROP TABLE table_a;
+> CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
 
 > SELECT * FROM table_a;
 1 <null>
@@ -315,8 +330,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a ADD COLUMN f3 int DEFAULT 1 NOT NULL;
 INSERT INTO table_a VALUES (5, 'five', 5);
 
-> DROP SOURCE table_a;
-> ALTER SOURCE mz_source ADD SUBSOURCE table_a;
+> DROP TABLE table_a;
+> CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
 
 > SELECT * FROM table_a;
 1 <null> 1
@@ -332,17 +347,17 @@ Explained Query (fast path):
 Target cluster: quickstart
 
 # Can add tables with text columns
-! ALTER SOURCE mz_source ADD SUBSOURCE table_f WITH (TEXT COLUMNS [table_f.f2, table_f.f2]);
+! CREATE TABLE table_f FROM SOURCE mz_source (REFERENCE table_f) WITH (TEXT COLUMNS [f2, f2]);
 contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.table_f.f2
 
-> ALTER SOURCE mz_source ADD SUBSOURCE table_f WITH (TEXT COLUMNS [table_f.f2]);
+> CREATE TABLE table_f FROM SOURCE mz_source (REFERENCE table_f) WITH (TEXT COLUMNS [f2]);
 
 > SELECT * FROM table_f
 1 var0
 2 var1
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"postgres\".\"public\".\"table_f\".\"f2\""
+> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE table_f);
+"\"f2\""
 
 # Drop a table that's in the publication, which shuffles the tables' output
 # indexes, then add a table to the publication and ensure it can be added.
@@ -356,12 +371,9 @@ INSERT INTO table_i VALUES (2, 'var1');
 
 INSERT INTO table_f VALUES (3, 'var1');
 
-> ALTER SOURCE mz_source ADD SUBSOURCE table_i WITH (TEXT COLUMNS [table_i.f2]);
+> CREATE TABLE table_i FROM SOURCE mz_source (REFERENCE table_i) WITH (TEXT COLUMNS [f2]);
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"postgres\".\"public\".\"table_f\".\"f2\", \"postgres\".\"public\".\"table_i\".\"f2\""
-
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
+> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE table_i);
 "\"f2\""
 
 > SELECT * FROM table_f
@@ -369,33 +381,27 @@ INSERT INTO table_f VALUES (3, 'var1');
 2 var1
 3 var1
 
-> DROP SOURCE table_f, table_i;
+> DROP TABLE table_f, table_i;
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
-<null>
-
-! ALTER SOURCE mz_source ADD SUBSOURCE table_e WITH (TEXT COLUMNS (table_z.a));
-contains:invalid TEXT COLUMNS option value: reference to table_z not found in source
-
-! ALTER SOURCE mz_source ADD SUBSOURCE table_e WITH (TEXT COLUMNS [table_f.f2]);
-contains:TEXT COLUMNS refers to table not currently being added
-detail:the following tables are referenced but not added: public.table_f
+! CREATE TABLE table_e FROM SOURCE mz_source (REFERENCE table_e) WITH (TEXT COLUMNS (xyz));
+contains: invalid TEXT COLUMNS option value: column "table_e.xyz" does not exist
 
 # Test adding text cols w/o original text columns
 
 > CREATE SOURCE "mz_source_wo_init_text_cols"
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source'
-  )
-  FOR TABLES (table_a AS t_a);
+  );
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
+> CREATE TABLE t_a FROM SOURCE mz_source_wo_init_text_cols (REFERENCE table_a);
+
+> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE t_a);
 <null>
 
-> ALTER SOURCE mz_source_wo_init_text_cols ADD SUBSOURCE table_f AS t_f WITH (TEXT COLUMNS [table_f.f2]);
+> CREATE TABLE t_f FROM SOURCE mz_source_wo_init_text_cols (REFERENCE table_f) WITH (TEXT COLUMNS [f2]);
 
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
-"\"postgres\".\"public\".\"table_f\".\"f2\""
+> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE t_f);
+"\"f2\""
 
 # add a table after having created the source
 $ postgres-execute connection=postgres://postgres:postgres@postgres

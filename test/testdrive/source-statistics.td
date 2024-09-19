@@ -91,7 +91,13 @@ $ set-sql-timeout duration=2minutes
 # for sources created by previous tests.
 > CREATE SOURCE auction_house_in_source_statistics_td
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+  FROM LOAD GENERATOR AUCTION;
+
+> CREATE TABLE accounts FROM SOURCE auction_house_in_source_statistics_td (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE auction_house_in_source_statistics_td (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE auction_house_in_source_statistics_td (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE auction_house_in_source_statistics_td (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE auction_house_in_source_statistics_td (REFERENCE users);
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds.
@@ -118,12 +124,7 @@ metrics_test_source true 2 2 2 true true
   WHERE s.name IN ('accounts', 'auction_house_in_source_statistics_td', 'auctions', 'bids', 'organizations', 'users')
   GROUP BY s.name
   ORDER BY s.name
-accounts       true      false   true  true  false   true
 auction_house_in_source_statistics_td true true false false true true
-auctions       true      false   true  true  false   true
-bids           true      false   true  true  false   true
-organizations  true      false   true  true  false   true
-users          true      false   true  true  false   true
 
 
 # Assert that the codepath that ensures a 0-value as the first value in `mz_source_statistics` occurs, using a `SUBSCRIBE`.

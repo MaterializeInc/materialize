@@ -12,18 +12,28 @@ $ set-arg-default single-replica-cluster=quickstart
 # Create a load generator source that has several subsources.
 > CREATE SOURCE lga
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+  FROM LOAD GENERATOR AUCTION;
+
+> CREATE TABLE accounts FROM SOURCE lga (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE lga (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE lga (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE lga (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE lga (REFERENCE users);
 
 # By default, `SHOW SUBSOURCES` should show all sources in the schema.
 > SHOW SUBSOURCES
 name           type
 -------------------------
-accounts       subsource
-auctions       subsource
-bids           subsource
 lga_progress   progress
-organizations  subsource
-users          subsource
+
+> SHOW TABLES
+name           comment
+-------------------------
+accounts       ""
+auctions       ""
+bids           ""
+organizations  ""
+users          ""
 
 # Verify the schema filtering by creating two new sources, one in the current
 # schema and one in another schema. Verify that `SHOW SUBSOURCES` shows the
@@ -39,13 +49,17 @@ users          subsource
 > SHOW SUBSOURCES
 name           type
 -------------------------
-accounts       subsource
-auctions       subsource
-bids           subsource
 lga_progress   progress
 lgc_progress   progress
-organizations  subsource
-users          subsource
+
+> SHOW TABLES
+name           comment
+-------------------------
+accounts       ""
+auctions       ""
+bids           ""
+organizations  ""
+users          ""
 
 > SET SCHEMA = other
 > SHOW SUBSOURCES
@@ -57,13 +71,8 @@ lgo_progress   progress
 > SHOW SUBSOURCES FROM public
 name           type
 -------------------------
-accounts       subsource
-auctions       subsource
-bids           subsource
 lga_progress   progress
 lgc_progress   progress
-organizations  subsource
-users          subsource
 
 # Verify that `ON ...` filters to the subsources of the named source.
 > SHOW SUBSOURCES ON lgo

@@ -52,11 +52,13 @@ CREATE PUBLICATION upgrade_pg_cdc_text_col_pub FOR TABLE cdc_enum_table, another
 > CREATE SOURCE upgrade_pg_cdc_source_for_all_tables
   FROM POSTGRES
   CONNECTION pgconn
-  (
-    PUBLICATION 'upgrade_pg_cdc_publication',
-    TEXT COLUMNS (cdc_enum_table.a, another_enum_table.a)
-  )
-  FOR ALL TABLES;
+  (PUBLICATION 'upgrade_pg_cdc_publication');
+
+> CREATE TABLE unused_pub_table FROM SOURCE upgrade_pg_cdc_source_for_all_tables (REFERENCE unused_pub_table);
+> CREATE TABLE cdc_int_table FROM SOURCE upgrade_pg_cdc_source_for_all_tables (REFERENCE cdc_int_table);
+> CREATE TABLE cdc_enum_table FROM SOURCE upgrade_pg_cdc_source_for_all_tables (REFERENCE cdc_enum_table) WITH (TEXT COLUMNS (a));
+> CREATE TABLE another_enum_table FROM SOURCE upgrade_pg_cdc_source_for_all_tables (REFERENCE another_enum_table) WITH (TEXT COLUMNS (a));
+> CREATE TABLE cdc_empty_on_boot_table FROM SOURCE upgrade_pg_cdc_source_for_all_tables (REFERENCE cdc_empty_on_boot_table);
 
 > SELECT * FROM cdc_enum_table;
 var1
@@ -72,11 +74,9 @@ var0
   CONNECTION pgconn
   (
     PUBLICATION 'upgrade_pg_cdc_publication'
-  )
-  FOR TABLES
-  (
-    cdc_int_table AS cdc_int_table_for_tables
   );
+
+> CREATE TABLE cdc_int_table_for_tables FROM SOURCE upgrade_pg_cdc_source_for_tables (REFERENCE cdc_int_table);
 
 > SELECT * FROM cdc_int_table_for_tables;
 1
@@ -97,11 +97,6 @@ SELECT mz_version_num() >= 5600;
   CONNECTION pgconn
   (
     PUBLICATION 'upgrade_pg_cdc_publication'
-  )
-  FOR TABLES
-  (
-    cdc_int_table AS cdc_int_table_zero,
-    cdc_int_table AS cdc_int_table_one
   );
 
 > SELECT * FROM cdc_int_table_zero;

@@ -34,8 +34,9 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
   )
 > CREATE SOURCE mz_source
   IN CLUSTER storage
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
 # Wait for the initial snapshot to be ingested
 > SELECT * FROM t1

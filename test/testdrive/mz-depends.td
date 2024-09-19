@@ -18,7 +18,13 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 
 > CREATE SOURCE with_subsources
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+  FROM LOAD GENERATOR AUCTION;
+
+> CREATE TABLE accounts FROM SOURCE with_subsources (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE with_subsources (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE with_subsources (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE with_subsources (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE with_subsources (REFERENCE users);
 
 > SELECT
   top_level_s.name as source,
@@ -29,11 +35,6 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
   WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
 source          subsource
 -------------------------
-with_subsources accounts
-with_subsources auctions
-with_subsources bids
-with_subsources organizations
-with_subsources users
 with_subsources with_subsources_progress
 
 # make sure dropping works

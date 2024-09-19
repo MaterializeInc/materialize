@@ -7,4 +7,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> ALTER SOURCE mz_source ADD SUBSOURCE public.t3;
+> CREATE TABLE t3 FROM mz_source (REFERENCE public.t3);

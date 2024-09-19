@@ -21,11 +21,13 @@ INSERT INTO t1 VALUES (3);
 2
 3
 
-> SELECT bool_and(error IS NULL)
-  FROM mz_internal.mz_source_statuses
-  WHERE
-      name
-      IN (
-      SELECT name FROM (SHOW SUBSOURCES ON mz_source WHERE type = 'subsource')
-      );
-true
+
+# TODO: #29373 (introspection tables)
+# > SELECT name, type, error
+#   FROM mz_internal.mz_source_statuses
+#   WHERE
+#       name
+#       IN (
+#       SELECT name FROM mz_tables WHERE source_id IS NOT NULL
+#       );
+# t1 table <null>

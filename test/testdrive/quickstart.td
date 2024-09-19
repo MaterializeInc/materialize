@@ -18,18 +18,28 @@
   IN CLUSTER quickstart_tutorial
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '0.05s')
-  FOR ALL TABLES
+
+> CREATE TABLE accounts FROM SOURCE auction_house (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE auction_house (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE auction_house (REFERENCE users);
 
 > SHOW SOURCES
 name                   type            cluster                comment
 --------------------------------------------------------------------------
-accounts               subsource       quickstart_tutorial    ""
-bids                   subsource       quickstart_tutorial    ""
 auction_house          load-generator  quickstart_tutorial    ""
 auction_house_progress progress        <null>                 ""
-auctions               subsource       quickstart_tutorial    ""
-organizations          subsource       quickstart_tutorial    ""
-users                  subsource       quickstart_tutorial    ""
+
+> SHOW TABLES
+name                   comment
+--------------------------------
+accounts               ""
+bids                   ""
+auctions               ""
+organizations          ""
+users                  ""
+
 
 > SELECT id, seller, item FROM auctions WHERE id = 1
 1 1824 "Best Pizza in Town"

@@ -84,8 +84,9 @@ class CreatePostgresCdcTable(Action):
 
                     > CREATE SOURCE {name}_source
                       IN CLUSTER {self.cluster_name}
-                      FROM POSTGRES CONNECTION {name}_connection (PUBLICATION '{name}_publication')
-                      FOR TABLES ({self.postgres_cdc_table.postgres_table.name} AS {name})
+                      FROM POSTGRES CONNECTION {name}_connection (PUBLICATION '{name}_publication');
+
+                    > CREATE TABLE {name} FROM SOURCE {name}_source (REFERENCE {self.postgres_cdc_table.postgres_table.name});
                     """
                 ),
                 mz_service=state.mz_service,

@@ -105,9 +105,27 @@ INSERT INTO drop_table (f1, f2) VALUES (1, 1);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+> CREATE TABLE add_columns FROM SOURCE mz_source (REFERENCE add_columns);
+> CREATE TABLE remove_column FROM SOURCE mz_source (REFERENCE remove_column);
+> CREATE TABLE alter_column FROM SOURCE mz_source (REFERENCE alter_column);
+> CREATE TABLE alter_drop_nullability FROM SOURCE mz_source (REFERENCE alter_drop_nullability);
+> CREATE TABLE alter_add_nullability FROM SOURCE mz_source (REFERENCE alter_add_nullability);
+> CREATE TABLE alter_drop_pk FROM SOURCE mz_source (REFERENCE alter_drop_pk);
+> CREATE TABLE alter_add_pk FROM SOURCE mz_source (REFERENCE alter_add_pk);
+> CREATE TABLE alter_cycle_pk FROM SOURCE mz_source (REFERENCE alter_cycle_pk);
+> CREATE TABLE alter_cycle_pk_off FROM SOURCE mz_source (REFERENCE alter_cycle_pk_off);
+> CREATE TABLE alter_drop_unique FROM SOURCE mz_source (REFERENCE alter_drop_unique);
+> CREATE TABLE alter_add_unique FROM SOURCE mz_source (REFERENCE alter_add_unique);
+> CREATE TABLE alter_extend_column FROM SOURCE mz_source (REFERENCE alter_extend_column);
+> CREATE TABLE alter_decimal FROM SOURCE mz_source (REFERENCE alter_decimal);
+> CREATE TABLE alter_table_rename FROM SOURCE mz_source (REFERENCE alter_table_rename);
+> CREATE TABLE alter_table_rename_column FROM SOURCE mz_source (REFERENCE alter_table_rename_column);
+> CREATE TABLE alter_table_change_attnum FROM SOURCE mz_source (REFERENCE alter_table_change_attnum);
+> CREATE TABLE alter_table_supported FROM SOURCE mz_source (REFERENCE alter_table_supported);
+> CREATE TABLE truncate_table FROM SOURCE mz_source (REFERENCE truncate_table);
+> CREATE TABLE drop_table FROM SOURCE mz_source (REFERENCE drop_table);
 
 #
 # Add column

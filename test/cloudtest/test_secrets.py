@@ -137,8 +137,9 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
           > CREATE SOURCE source_with_deleted_secret
             IN CLUSTER to_be_killed
             FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
-            (PUBLICATION 'mz_source')
-            FOR ALL TABLES;
+            (PUBLICATION 'mz_source');
+
+          > CREATE TABLE t1 FROM SOURCE source_with_deleted_secret (REFERENCE t1);
 
           > SELECT COUNT(*) > 0 FROM t1;
           true
@@ -160,8 +161,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             """
             ! CREATE SOURCE some_pg_source
               FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
-              (PUBLICATION 'mz_source')
-              FOR ALL TABLES;
+              (PUBLICATION 'mz_source');
             contains: NotFound
 
             ! CREATE SOURCE some_kafka_source
@@ -194,8 +194,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             """
             ! CREATE SOURCE some_pg_source
               FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
-              (PUBLICATION 'mz_source')
-              FOR ALL TABLES;
+              (PUBLICATION 'mz_source');
             contains: NotFound
 
             ! CREATE SOURCE some_kafka_source
@@ -229,8 +228,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             """
             ! CREATE SOURCE some_pg_source
               FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
-              (PUBLICATION 'mz_source')
-              FOR ALL TABLES;
+              (PUBLICATION 'mz_source');
             contains: NotFound
 
             ! CREATE SOURCE some_kafka_source

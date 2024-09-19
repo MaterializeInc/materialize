@@ -57,47 +57,31 @@ CREATE TABLE geometrycollection_type (f1 GEOMETRYCOLLECTION);
 INSERT INTO geometrycollection_type VALUES (ST_GeomFromText('GEOMETRYCOLLECTION(POINT(10 10), POINT(30 30), LINESTRING(15 15, 20 20))'));
 
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.geometry_type);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+! CREATE TABLE geometry_type FROM SOURCE mz_source (REFERENCE public.geometry_type);
 contains:referenced tables use unsupported types
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.geometry_type_with_srid);
+! CREATE TABLE geometry_type_with_srid FROM SOURCE mz_source (REFERENCE public.geometry_type_with_srid);
 contains:referenced tables use unsupported types
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.point_type);
+! CREATE TABLE point_type FROM SOURCE mz_source (REFERENCE public.point_type);
 contains:referenced tables use unsupported types
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.linestring_type);
+! CREATE TABLE linestring_type FROM SOURCE mz_source (REFERENCE public.linestring_type);
 contains:referenced tables use unsupported types
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.polygon_type);
+! CREATE TABLE polygon_type FROM SOURCE mz_source (REFERENCE public.polygon_type);
 contains:referenced tables use unsupported types
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.multipoint_type);
+! CREATE TABLE multipoint_type FROM SOURCE mz_source (REFERENCE public.multipoint_type);
 contains:referenced tables use unsupported types
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.multilinestring_type);
+! CREATE TABLE multilinestring_type FROM SOURCE mz_source (REFERENCE public.multilinestring_type);
 contains:referenced tables use unsupported types
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.multipolygon_type);
+! CREATE TABLE multipolygon_type FROM SOURCE mz_source (REFERENCE public.multipolygon_type);
 contains:referenced tables use unsupported types
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.geometrycollection_type);
+! CREATE TABLE geometrycollection_type FROM SOURCE mz_source (REFERENCE public.geometrycollection_type);
 contains:referenced tables use unsupported types

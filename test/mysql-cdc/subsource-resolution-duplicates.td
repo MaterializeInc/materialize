@@ -33,26 +33,19 @@ INSERT INTO t VALUES (1);
 CREATE TABLE other.t (f1 INT);
 INSERT INTO other.t VALUES (1);
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
-contains:multiple subsources would be named t
-detail:referenced tables with duplicate name: other.t, public.t
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.t AS x, public.t as Y);
-contains:multiple subsources refer to table public.t
-detail: subsources referencing table: x, y
+> CREATE TABLE t FROM SOURCE mz_source (REFERENCE public.t);
+! CREATE TABLE t FROM SOURCE mz_source (REFERENCE other.t);
+contains:catalog item 't' already exists
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR SCHEMAS (other);
+# multiple tables on the same source table
+> CREATE TABLE x FROM SOURCE mz_source (REFERENCE public.t);
+> CREATE TABLE y FROM SOURCE mz_source (REFERENCE public.t);
 
 > SHOW sources
  mz_source          mysql     quickstart  ""
  mz_source_progress progress  <null>      ""
- t                  subsource quickstart  ""
 
 $ mysql-execute name=mysql
 DROP DATABASE other;

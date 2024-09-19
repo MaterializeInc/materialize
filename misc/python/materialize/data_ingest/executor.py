@@ -371,7 +371,13 @@ class MySqlExecutor(Executor):
                 f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
                     FROM MYSQL CONNECTION mysql{self.num}
-                    FOR TABLES (mysql.{identifier(self.table)} AS {identifier(self.table)})""",
+                    """,
+            )
+            self.execute(
+                cur,
+                f"""CREATE TABLE {identifier(self.table)}
+                    FROM SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
+                    (REFERENCE mysql.{identifier(self.table)})""",
             )
 
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
@@ -492,7 +498,13 @@ class PgExecutor(Executor):
                 f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
                     FROM POSTGRES CONNECTION pg{self.num} (PUBLICATION '{self.source}')
-                    FOR TABLES ({identifier(self.table)} AS {identifier(self.table)})""",
+                    """,
+            )
+            self.execute(
+                cur,
+                f"""CREATE TABLE {identifier(self.table)}
+                    FROM SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
+                    (REFERENCE {identifier(self.table)})""",
             )
 
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:

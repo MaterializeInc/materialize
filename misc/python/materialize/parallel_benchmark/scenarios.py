@@ -113,8 +113,9 @@ class PgReadReplica(Scenario):
                     CREATE PUBLICATION mz_source FOR ALL TABLES;
 
                     > CREATE SOURCE mz_source
-                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-                      FOR ALL TABLES;
+                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+                    > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
                     > CREATE MATERIALIZED VIEW mv_sum AS
                       SELECT COUNT(*) FROM t1;
@@ -175,8 +176,9 @@ class PgReadReplicaRTR(Scenario):
                     CREATE PUBLICATION mz_source2 FOR ALL TABLES;
 
                     > CREATE SOURCE mz_source2
-                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2')
-                      FOR ALL TABLES;
+                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2');
+
+                    > CREATE TABLE t2 FROM SOURCE mz_source2 (REFERENCE t2);
 
                     > CREATE MATERIALIZED VIEW mv_sum AS
                       SELECT COUNT(*) FROM t2;
@@ -558,7 +560,8 @@ class CommandQueryResponsibilitySegregation(Scenario):
 
                     > CREATE SOURCE mz_cqrs_source
                       FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_cqrs_source')
-                      FOR ALL TABLES;
+
+                    > CREATE TABLE t1 FROM SOURCE mz_cqrs_source (REFERENCE t1);
 
                     > CREATE MATERIALIZED VIEW mv_cqrs AS
                       SELECT t1.date, SUM(t1.id) FROM t1 JOIN t1 AS t2 ON true JOIN t1 AS t3 ON true JOIN t1 AS t4 ON true GROUP BY t1.date;
@@ -638,8 +641,9 @@ class OperationalDataStore(Scenario):
                     CREATE PUBLICATION mz_source FOR ALL TABLES;
 
                     > CREATE SOURCE mz_source
-                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-                      FOR ALL TABLES;
+                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+                    > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
                     > CREATE MATERIALIZED VIEW mv_sum AS
                       SELECT COUNT(*) FROM t1;
@@ -800,8 +804,14 @@ class ReadReplicaBenchmark(Scenario):
                         PASSWORD SECRET pgpass
                       )
                     > CREATE SOURCE mz_source3
-                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source3')
-                      FOR ALL TABLES;
+                      FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source3');
+
+                    > CREATE TABLE customers FROM SOURCE mz_source3 (REFERENCE customers);
+                    > CREATE TABLE accounts FROM SOURCE mz_source3 (REFERENCE accounts);
+                    > CREATE TABLE securities FROM SOURCE mz_source3 (REFERENCE securities);
+                    > CREATE TABLE trades FROM SOURCE mz_source3 (REFERENCE trades);
+                    > CREATE TABLE orders FROM SOURCE mz_source3 (REFERENCE orders);
+                    > CREATE TABLE market_data FROM SOURCE mz_source3 (REFERENCE market_data);
 
                     > CREATE VIEW customer_portfolio AS
                       SELECT c.customer_id, c.name, a.account_id, s.ticker, s.name AS security_name,

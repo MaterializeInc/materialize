@@ -31,8 +31,8 @@ $ mysql-execute name=mysql
 CREATE TABLE add_columns (f1 INTEGER);
 INSERT INTO add_columns VALUES (1);
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.add_columns);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE add_columns FROM SOURCE mz_source (REFERENCE public.add_columns);
 
 > SELECT * FROM add_columns;
 1
@@ -66,8 +66,8 @@ $ mysql-execute name=mysql
 CREATE TABLE drop_columns (f1 INTEGER, f2 INTEGER);
 INSERT INTO drop_columns VALUES (1, 1);
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.drop_columns);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE drop_columns FROM SOURCE mz_source (REFERENCE public.drop_columns);
 
 > SELECT * FROM drop_columns;
 1 1
@@ -88,8 +88,8 @@ $ mysql-execute name=mysql
 CREATE TABLE alter_column (f1 INTEGER, f2 VARCHAR(2));
 INSERT INTO alter_column VALUES (2, '12');
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.alter_column);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE alter_column FROM SOURCE mz_source (REFERENCE public.alter_column);
 
 $ mysql-execute name=mysql
 ALTER TABLE alter_column MODIFY f2 INT;
@@ -108,8 +108,8 @@ $ mysql-execute name=mysql
 CREATE TABLE reorder_column (f1 INTEGER, f2 INTEGER);
 INSERT INTO reorder_column VALUES (1, 2);
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.reorder_column);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE reorder_column FROM SOURCE mz_source (REFERENCE public.reorder_column);
 
 $ mysql-execute name=mysql
 ALTER TABLE reorder_column MODIFY f1 INT AFTER f2;
@@ -129,8 +129,8 @@ $ mysql-execute name=mysql
 CREATE TABLE rename_column (f1 INTEGER, f2 INTEGER);
 INSERT INTO rename_column VALUES (1, 2);
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.rename_column);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE rename_column FROM SOURCE mz_source (REFERENCE public.rename_column);
 
 $ mysql-execute name=mysql
 ALTER TABLE rename_column CHANGE f1 f3 INT;
@@ -150,8 +150,8 @@ $ mysql-execute name=mysql
 CREATE TABLE no_column_change (f1 INT);
 INSERT INTO no_column_change VALUES (1);
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.no_column_change);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE no_column_change FROM SOURCE mz_source (REFERENCE public.no_column_change);
 
 $ mysql-execute name=mysql
 ALTER TABLE no_column_change CHANGE f1 f1 INT;
@@ -172,8 +172,8 @@ $ mysql-execute name=mysql
 CREATE TABLE alter_column_2 (f1 INTEGER, f2 VARCHAR(2));
 INSERT INTO alter_column_2 VALUES (2, '12');
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.alter_column_2);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE alter_column_2 FROM SOURCE mz_source (REFERENCE public.alter_column_2);
 
 $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS other;
@@ -197,8 +197,8 @@ USE public;
 CREATE TABLE alter_column_nullable (f1 INTEGER, f2 VARCHAR(2));
 INSERT INTO alter_column_nullable VALUES (2, '12');
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.alter_column_nullable);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE alter_column_nullable FROM SOURCE mz_source (REFERENCE public.alter_column_nullable);
 
 $ mysql-execute name=mysql
 ALTER TABLE alter_column_nullable MODIFY f2 VARCHAR(2) NOT NULL;
@@ -219,8 +219,8 @@ $ mysql-execute name=mysql
 CREATE TABLE alter_column_nullable_2 (f1 INTEGER, f2 VARCHAR(2) NOT NULL);
 INSERT INTO alter_column_nullable_2 VALUES (2, '12');
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.alter_column_nullable_2);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE alter_column_nullable_2 FROM SOURCE mz_source (REFERENCE public.alter_column_nullable_2);
 
 $ mysql-execute name=mysql
 ALTER TABLE alter_column_nullable_2 MODIFY f2 VARCHAR(2);
@@ -240,8 +240,8 @@ $ mysql-execute name=mysql
 CREATE TABLE alter_column_uq (f1 INTEGER, f2 VARCHAR(2));
 INSERT INTO alter_column_uq VALUES (2, '12');
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.alter_column_uq);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE alter_column_uq FROM SOURCE mz_source (REFERENCE public.alter_column_uq);
 
 $ mysql-execute name=mysql
 ALTER TABLE alter_column_uq ADD CONSTRAINT uq_f2 UNIQUE (f1);
@@ -263,8 +263,8 @@ CREATE TABLE alter_column_uq_2 (f1 INTEGER, f2 VARCHAR(2));
 ALTER TABLE alter_column_uq_2 ADD CONSTRAINT uq_f2 UNIQUE (f1);
 INSERT INTO alter_column_uq_2 VALUES (2, '12');
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.alter_column_uq_2);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE alter_column_uq_2 FROM SOURCE mz_source (REFERENCE public.alter_column_uq_2);
 
 $ mysql-execute name=mysql
 ALTER TABLE alter_column_uq_2 DROP INDEX uq_f2;
@@ -284,8 +284,8 @@ USE public;
 CREATE TABLE alter_table_rename (f1 INTEGER);
 INSERT INTO alter_table_rename VALUES (1);
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.alter_table_rename);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE alter_table_rename FROM SOURCE mz_source (REFERENCE public.alter_table_rename);
 
 $ mysql-execute name=mysql
 ALTER TABLE alter_table_rename RENAME TO alter_table_renamed;
@@ -303,8 +303,8 @@ $ mysql-execute name=mysql
 CREATE TABLE alter_table_rename_2 (f1 INTEGER);
 INSERT INTO alter_table_rename_2 VALUES (1);
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.alter_table_rename_2);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE alter_table_rename_2 FROM SOURCE mz_source (REFERENCE public.alter_table_rename_2);
 
 $ mysql-execute name=mysql
 RENAME TABLE alter_table_rename_2 TO alter_table_rename_3;
@@ -322,8 +322,8 @@ $ mysql-execute name=mysql
 CREATE TABLE drop_table (f1 INTEGER);
 INSERT INTO drop_table VALUES (1);
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.drop_table);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE drop_table FROM SOURCE mz_source (REFERENCE public.drop_table);
 
 $ mysql-execute name=mysql
 DROP TABLE drop_table;
@@ -341,8 +341,8 @@ $ mysql-execute name=mysql
 CREATE TABLE trunc_table (f1 INTEGER);
 INSERT INTO trunc_table VALUES (1);
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.trunc_table);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE trunc_table FROM SOURCE mz_source (REFERENCE public.trunc_table);
 
 $ mysql-execute name=mysql
 TRUNCATE TABLE trunc_table;
@@ -360,8 +360,8 @@ $ mysql-execute name=mysql
 CREATE TABLE trunc_table_2 (f1 INTEGER);
 INSERT INTO trunc_table_2 VALUES (1);
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.trunc_table_2);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE trunc_table_2 FROM SOURCE mz_source (REFERENCE public.trunc_table_2);
 
 $ mysql-execute name=mysql
 TRUNCATE trunc_table_2;

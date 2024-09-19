@@ -36,5 +36,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
   IN CLUSTER storage
   FROM POSTGRES
   CONNECTION pg
-  (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+  (PUBLICATION 'mz_source');
+
+> CREATE TABLE ten FROM SOURCE mz_source (REFERENCE ten);
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);

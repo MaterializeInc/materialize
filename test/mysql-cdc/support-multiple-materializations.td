@@ -38,9 +38,11 @@ INSERT INTO t1(f1) VALUES (true),(false);
 
 INSERT INTO t2(t1_id, name) VALUES (1, 'example');
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE public.t2);
+
 
 > CREATE MATERIALIZED VIEW t1_mat AS
   SELECT * FROM t1
@@ -58,9 +60,10 @@ INSERT INTO t2(t1_id, name) VALUES (1, 'example');
 
 # verify that dropping things allows recreation
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE public.t2);
 
 > CREATE MATERIALIZED VIEW joiner AS
   SELECT t2.id, t1.f1, t2.name

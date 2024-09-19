@@ -47,8 +47,9 @@ INSERT INTO tls_data VALUES (1), (2);
 COMMIT;
 
 > CREATE SOURCE mysql_source_ssl FROM MYSQL
-  CONNECTION mysql_ssl
-  FOR TABLES (tls_schema.tls_data);
+  CONNECTION mysql_ssl;
+
+> CREATE TABLE tls_data FROM SOURCE mysql_source_ssl (REFERENCE tls_schema.tls_data);
 
 > SELECT COUNT(*) FROM tls_data;
 2

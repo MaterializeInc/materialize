@@ -49,12 +49,6 @@ GRANT ALL ON public.* TO priv;
 # still no privileges on schema other
 
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR SCHEMAS (public, other);
-contains:No tables found in referenced schemas
-detail:missing schemas: other
-
 #
 # SELECT errors
 #
@@ -63,12 +57,6 @@ $ mysql-execute name=mysql
 # Note that it is not possible in MySQL to grant permissions on a schema and revoke them on a single table.
 # Grant permissions only on the schema 'other' but not on table 's' in it.
 GRANT ALL ON other TO priv;
-
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR SCHEMAS (public, other);
-contains:No tables found in referenced schemas
-detail:missing schemas: other
 
 $ mysql-execute name=mysql
 CREATE TABLE other.u (a int);
@@ -80,11 +68,15 @@ GRANT SELECT ON other.u TO priv;
 GRANT INDEX ON other.s TO priv;
 
 # A new error since the tables are now visible but we are missing some privileges
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR SCHEMAS (other);
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+! CREATE TABLE s FROM SOURCE mz_source (REFERENCE other.s);
 contains:User lacks required MySQL privileges
-detail:Missing MySQL privileges: 'LOCK TABLES' on 'other.s', 'SELECT' on 'other.s', 'LOCK TABLES' on 'other.u', 'REPLICATION SLAVE' on '*.*'
+detail:Missing MySQL privileges: 'LOCK TABLES' on 'other.s', 'SELECT' on 'other.s', 'REPLICATION SLAVE' on '*.*'
+
+! CREATE TABLE u FROM SOURCE mz_source (REFERENCE other.u);
+contains:User lacks required MySQL privileges
+detail:Missing MySQL privileges: 'LOCK TABLES' on 'other.u', 'REPLICATION SLAVE' on '*.*
 
 
 # fix table privileges, use wildcard for LOCK TABLES
@@ -92,18 +84,15 @@ $ mysql-execute name=mysql
 GRANT SELECT ON other.s TO priv;
 GRANT LOCK TABLES ON other.* TO priv;
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR SCHEMAS (other);
+! CREATE TABLE u FROM SOURCE mz_source (REFERENCE other.s);
 contains:User lacks required MySQL privileges
 detail:Missing MySQL privileges: 'REPLICATION SLAVE' on '*.*'
 
 $ mysql-execute name=mysql
 GRANT REPLICATION SLAVE ON *.* TO priv;
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR SCHEMAS (other);
+> CREATE TABLE s FROM SOURCE mz_source (REFERENCE other.s);
+> CREATE TABLE u FROM SOURCE mz_source (REFERENCE other.u);
 
 # confirm the source works
 $ mysql-execute name=mysql
@@ -126,9 +115,9 @@ CREATE TABLE other.z (a int);
 INSERT INTO other.z VALUES (1);
 GRANT INDEX ON other.z TO 'priv';
 
-! CREATE SOURCE mz_source_other
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (other.z);
+> CREATE SOURCE mz_source_other
+  FROM MYSQL CONNECTION mysql_conn;
+! CREATE TABLE other.z FROM SOURCE mz_source_other (REFERENCE other.z);
 contains:User lacks required MySQL privileges
 detail:Missing MySQL privileges: 'SELECT' on 'other.z'
 
@@ -136,9 +125,7 @@ detail:Missing MySQL privileges: 'SELECT' on 'other.z'
 $ mysql-execute name=mysql
 GRANT SELECT ON other.z TO 'r1';
 
-> CREATE SOURCE mz_source_other
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (other.z);
+> CREATE TABLE z FROM SOURCE mz_source_other (REFERENCE other.z);
 
 > SELECT * FROM z;
 1

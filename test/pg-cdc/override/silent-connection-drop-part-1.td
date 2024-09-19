@@ -47,8 +47,9 @@ INSERT INTO table_1 VALUES (3, 'three');
 
 > CREATE SOURCE mz_source
   IN CLUSTER sconn_drop_cluster
-  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source')
-  FOR TABLES (table_1);
+  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source');
+
+> CREATE TABLE table_1 FROM SOURCE mz_source (REFERENCE table_1);
 
 > SELECT * FROM table_1;
 1 one

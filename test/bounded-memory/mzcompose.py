@@ -87,8 +87,9 @@ class PgCdcScenario(Scenario):
         """
         > CREATE SOURCE mz_source
           IN CLUSTER clusterd
-          FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-          FOR ALL TABLES;
+          FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+        > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
         """
@@ -130,8 +131,9 @@ class MySqlCdcScenario(Scenario):
         """
         > CREATE SOURCE mz_source
           IN CLUSTER clusterd
-          FROM MYSQL CONNECTION mysql_conn
-          FOR ALL TABLES;
+          FROM MYSQL CONNECTION mysql_conn;
+
+        > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 
         > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
         """
@@ -308,8 +310,8 @@ SCENARIOS = [
             CREATE PUBLICATION mz_source FOR ALL TABLES;
 
             > CREATE SOURCE mz_source
-              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-              FOR TABLES (t1);
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+            > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
             > SELECT COUNT(*) > 0 FROM t1;
             true

@@ -36,16 +36,15 @@ INSERT INTO t2 VALUES (5);
 
 CREATE PUBLICATION mz_source FOR TABLE t1;
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (t1);
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 
 > SELECT * FROM t1;
 1
 
 > DROP SOURCE mz_source CASCADE;
 
-! CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (t2);
+> CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+! CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE t2);
 contains:reference to t2 not found in source

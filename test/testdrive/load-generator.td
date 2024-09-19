@@ -48,19 +48,30 @@ exact:COUNTER load generators do not support SCALE FACTOR values
 
 > CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION (AS OF 300, UP TO 301) FOR ALL TABLES;
+  FROM LOAD GENERATOR AUCTION (AS OF 300, UP TO 301);
+
+> CREATE TABLE accounts FROM SOURCE auction_house (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE auction_house (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE auction_house (REFERENCE users);
 
 > SHOW CREATE SOURCE auction_house
-"materialize.public.auction_house" "CREATE SOURCE \"materialize\".\"public\".\"auction_house\" IN CLUSTER \"${arg.single-replica-cluster}\" FROM LOAD GENERATOR AUCTION (AS OF = 300, UP TO = 301) FOR ALL TABLES EXPOSE PROGRESS AS \"materialize\".\"public\".\"auction_house_progress\""
+"materialize.public.auction_house" "CREATE SOURCE \"materialize\".\"public\".\"auction_house\" IN CLUSTER \"${arg.single-replica-cluster}\" FROM LOAD GENERATOR AUCTION (AS OF = 300, UP TO = 301) EXPOSE PROGRESS AS \"materialize\".\"public\".\"auction_house_progress\""
+
+> SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) FROM SOURCE \"materialize\".\"public\".\"auction_house\" (REFERENCE = \"auction\".\"accounts\") WITH (DETAILS = '1a040a021002')"
 
 > SHOW SOURCES
-accounts                subsource      ${arg.single-replica-cluster}    ""
 auction_house           load-generator ${arg.single-replica-cluster}    ""
 auction_house_progress  progress       <null>                           ""
-auctions                subsource      ${arg.single-replica-cluster}    ""
-bids                    subsource      ${arg.single-replica-cluster}    ""
-organizations           subsource      ${arg.single-replica-cluster}    ""
-users                   subsource      ${arg.single-replica-cluster}    ""
+
+> SHOW TABLES
+accounts                ""
+auctions                ""
+bids                    ""
+organizations           ""
+users                   ""
 
 > SELECT count(*) FROM bids
 255
@@ -78,16 +89,24 @@ contains:LOAD GENERATOR source validation: FOR TABLES (..) unsupported
 > CREATE SCHEMA another;
 > CREATE SOURCE another.auction_house
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+  FROM LOAD GENERATOR AUCTION;
+
+> CREATE TABLE another.accounts FROM SOURCE another.auction_house (REFERENCE accounts);
+> CREATE TABLE another.auctions FROM SOURCE another.auction_house (REFERENCE auctions);
+> CREATE TABLE another.bids FROM SOURCE another.auction_house (REFERENCE bids);
+> CREATE TABLE another.organizations FROM SOURCE another.auction_house (REFERENCE organizations);
+> CREATE TABLE another.users FROM SOURCE another.auction_house (REFERENCE users);
 
 > SHOW SOURCES FROM another;
-accounts                subsource      ${arg.single-replica-cluster}    ""
 auction_house           load-generator ${arg.single-replica-cluster}    ""
 auction_house_progress  progress       <null>                           ""
-auctions                subsource      ${arg.single-replica-cluster}    ""
-bids                    subsource      ${arg.single-replica-cluster}    ""
-organizations           subsource      ${arg.single-replica-cluster}    ""
-users                   subsource      ${arg.single-replica-cluster}    ""
+
+> SHOW TABLES FROM another;
+accounts                ""
+auctions                ""
+bids                    ""
+organizations           ""
+users                   ""
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
@@ -100,9 +119,10 @@ users                   subsource      ${arg.single-replica-cluster}    ""
   FORMAT JSON
   ENVELOPE UPSERT;
 
-# Show that AST of subsource contains REFERENCES option
-> SHOW CREATE SOURCE accounts
-materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) OF SOURCE \"materialize\".\"public\".\"auction_house\" WITH (EXTERNAL REFERENCE = \"mz_load_generators\".\"auction\".\"accounts\")"
+$ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
+
+> SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE \"materialize\".\"public\".\"accounts\" (\"id\" \"pg_catalog\".\"int8\" NOT NULL, \"org_id\" \"pg_catalog\".\"int8\" NOT NULL, \"balance\" \"pg_catalog\".\"int8\" NOT NULL, UNIQUE (\"id\")) FROM SOURCE \"materialize\".\"public\".\"auction_house\" (REFERENCE = \"auction\".\"accounts\") WITH (<DETAILS>)"
 
 # CLOCK load generator source
 

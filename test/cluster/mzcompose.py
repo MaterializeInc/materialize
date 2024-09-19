@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """
-Functional tests which require separate clusterd containers (intead of the
+Functional tests which require separate clusterd containers (instead of the
 usual clusterd included in the materialized container).
 """
 
@@ -3222,7 +3222,16 @@ def workflow_test_incident_70(c: Composition) -> None:
         c.sql(
             dedent(
                 f"""
-                CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor}) FOR ALL TABLES;
+                CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor});
+
+                CREATE TABLE customer FROM SOURCE gen (REFERENCE customer);
+                CREATE TABLE lineitem FROM SOURCE gen (REFERENCE lineitem);
+                CREATE TABLE nation FROM SOURCE gen (REFERENCE nation);
+                CREATE TABLE orders FROM SOURCE gen (REFERENCE orders);
+                CREATE TABLE part FROM SOURCE gen (REFERENCE part);
+                CREATE TABLE partsupp FROM SOURCE gen (REFERENCE partsupp);
+                CREATE TABLE region FROM SOURCE gen (REFERENCE region);
+                CREATE TABLE supplier FROM SOURCE gen (REFERENCE supplier);
 
                 {mz_view_create_statements_sql}
                 """
@@ -4149,7 +4158,7 @@ def workflow_test_github_26215(c: Composition, parser: WorkflowArgumentParser) -
                 > DECLARE c CURSOR FOR SUBSCRIBE (
                     SELECT write_frontier
                     FROM mz_internal.mz_frontiers
-                    JOIN mz_sources ON (id = object_id)
+                    JOIN mz_tables ON (id = object_id)
                     WHERE name = 'lineitem'
                   )
 
@@ -4189,8 +4198,16 @@ def workflow_test_github_26215(c: Composition, parser: WorkflowArgumentParser) -
 
             CREATE SOURCE lgtpch
             IN CLUSTER source
-            FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.001, TICK INTERVAL '1s')
-            FOR ALL TABLES;
+            FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.001, TICK INTERVAL '1s');
+
+            CREATE TABLE customer FROM SOURCE lgtpch (REFERENCE customer);
+            CREATE TABLE lineitem FROM SOURCE lgtpch (REFERENCE lineitem);
+            CREATE TABLE nation FROM SOURCE lgtpch (REFERENCE nation);
+            CREATE TABLE orders FROM SOURCE lgtpch (REFERENCE orders);
+            CREATE TABLE part FROM SOURCE lgtpch (REFERENCE part);
+            CREATE TABLE partsupp FROM SOURCE lgtpch (REFERENCE partsupp);
+            CREATE TABLE region FROM SOURCE lgtpch (REFERENCE region);
+            CREATE TABLE supplier FROM SOURCE lgtpch (REFERENCE supplier);
             """,
         )
 

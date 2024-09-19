@@ -47,9 +47,12 @@ CREATE TABLE t4 (f1 TEXT) CHARACTER SET ascii COLLATE ascii_general_ci;
 INSERT INTO t4 VALUES ('aaa');
 INSERT INTO t4 VALUES ('abc');
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE public.t2);
+> CREATE TABLE t3 FROM SOURCE mz_source (REFERENCE public.t3);
+> CREATE TABLE t4 FROM SOURCE mz_source (REFERENCE public.t4);
 
 > SELECT COUNT(*) > 0 FROM t1;
 true

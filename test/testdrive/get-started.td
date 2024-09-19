@@ -15,18 +15,28 @@ $ set-arg-default single-replica-cluster=quickstart
 > SET cluster TO ${arg.single-replica-cluster}
 
 > CREATE SOURCE demo
-  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms') FOR ALL TABLES
+  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms')
+
+> CREATE TABLE accounts FROM SOURCE demo (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE demo (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE demo (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE demo (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE demo (REFERENCE users);
 
 > SHOW SOURCES
 name          type           cluster                        comment
 -------------------------------------------------------------------
-accounts      subsource      ${arg.single-replica-cluster}  ""
-auctions      subsource      ${arg.single-replica-cluster}  ""
-bids          subsource      ${arg.single-replica-cluster}  ""
 demo          load-generator ${arg.single-replica-cluster}  ""
 demo_progress progress       <null>                         ""
-organizations subsource      ${arg.single-replica-cluster}  ""
-users         subsource      ${arg.single-replica-cluster}  ""
+
+> SHOW TABLES
+name          comment
+-----------------------
+accounts      ""
+auctions      ""
+bids          ""
+organizations ""
+users         ""
 
 > SHOW COLUMNS FROM auctions
 end_time false "timestamp with time zone" ""

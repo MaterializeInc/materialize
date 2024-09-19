@@ -38,16 +38,17 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SCHEMA a;
 > CREATE SOURCE a.mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (t1);
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+> CREATE TABLE a.t1 FROM SOURCE a.mz_source (REFERENCE t1);
 
 > SELECT * FROM a.t1;
 1
 
 > CREATE SCHEMA another;
 > CREATE SOURCE another.mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (t1, t2);
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+> CREATE TABLE another.t1 FROM SOURCE another.mz_source (REFERENCE t1);
+> CREATE TABLE another.t2 FROM SOURCE another.mz_source (REFERENCE t2);
 
 > SELECT * FROM another.t1;
 1
@@ -58,8 +59,9 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE SCHEMA foo;
 > CREATE SCHEMA bar;
 > CREATE SOURCE foo.mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (t1 as table1, t2 as bar.table2);
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+> CREATE TABLE foo.table1 FROM SOURCE foo.mz_source (REFERENCE t1);
+> CREATE TABLE bar.table2 FROM SOURCE foo.mz_source (REFERENCE t2);
 
 ! SELECT * FROM table1;
 contains: unknown
@@ -77,8 +79,10 @@ contains: unknown
 
 > CREATE SCHEMA baz;
 > CREATE SOURCE baz.mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR SCHEMAS (public);
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+> CREATE TABLE baz.t1 FROM SOURCE baz.mz_source (REFERENCE t1);
+> CREATE TABLE baz.t2 FROM SOURCE baz.mz_source (REFERENCE t2);
 
 > SELECT * FROM baz.t1;
 1

@@ -77,4 +77,10 @@ INSERT INTO public_1.table_a VALUES (2, 'two', 'var1', 1000.0);
 ## migrations in v0.110.0
 
 > CREATE SOURCE demo_1
-  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '500ms') FOR ALL TABLES
+  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '500ms')
+
+> CREATE TABLE accounts FROM SOURCE demo_1 (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE demo_1 (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE demo_1 (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE demo_1 (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE demo_1 (REFERENCE users);

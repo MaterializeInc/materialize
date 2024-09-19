@@ -27,7 +27,9 @@ INSERT INTO dummy VALUES (123, "dummy data");
 INSERT INTO dummy VALUES (234, "moar dummy");
 COMMIT;
 
-> CREATE SOURCE foo FROM MYSQL CONNECTION mysq FOR ALL TABLES;
+> CREATE SOURCE foo FROM MYSQL CONNECTION mysq;
+> CREATE TABLE dummy FROM SOURCE foo (REFERENCE public.dummy);
+
 > SELECT * FROM dummy;
 123 "dummy data"
 234 "moar dummy"
