@@ -924,7 +924,7 @@ impl Coordinator {
         }];
 
         let catalog_result = self
-            .catalog_transact_and_apply_side_effects(Some(ctx.session()), ops)
+            .catalog_transact_and_apply_side_effects(Some(ctx), ops)
             .await;
 
         match catalog_result {
@@ -1122,7 +1122,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_drop_objects(
         &mut self,
-        session: &Session,
+        ctx: &mut ExecuteContext,
         plan::DropObjectsPlan {
             drop_ids,
             object_type,
@@ -1135,7 +1135,7 @@ impl Coordinator {
             if !referenced_ids_hashset.contains(obj_id) {
                 let object_info = ErrorMessageObjectDescription::from_id(
                     obj_id,
-                    &self.catalog().for_session(session),
+                    &self.catalog().for_session(ctx.session()),
                 )
                 .to_string();
                 objects.push(object_info);
@@ -1143,7 +1143,8 @@ impl Coordinator {
         }
 
         if !objects.is_empty() {
-            session.add_notice(AdapterNotice::CascadeDroppedObject { objects });
+            ctx.session()
+                .add_notice(AdapterNotice::CascadeDroppedObject { objects });
         }
 
         let DropOps {
@@ -1151,25 +1152,28 @@ impl Coordinator {
             dropped_active_db,
             dropped_active_cluster,
             dropped_in_use_indexes,
-        } = self.sequence_drop_common(session, drop_ids).await?;
+        } = self.sequence_drop_common(ctx.session(), drop_ids).await?;
 
-        self.catalog_transact_and_apply_side_effects(Some(session), ops)
+        self.catalog_transact_and_apply_side_effects(Some(ctx), ops)
             .await?;
 
         fail::fail_point!("after_sequencer_drop_replica");
 
         if dropped_active_db {
-            session.add_notice(AdapterNotice::DroppedActiveDatabase {
-                name: session.vars().database().to_string(),
-            });
+            ctx.session()
+                .add_notice(AdapterNotice::DroppedActiveDatabase {
+                    name: ctx.session().vars().database().to_string(),
+                });
         }
         if dropped_active_cluster {
-            session.add_notice(AdapterNotice::DroppedActiveCluster {
-                name: session.vars().cluster().to_string(),
-            });
+            ctx.session()
+                .add_notice(AdapterNotice::DroppedActiveCluster {
+                    name: ctx.session().vars().cluster().to_string(),
+                });
         }
         for dropped_in_use_index in dropped_in_use_indexes {
-            session.add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
+            ctx.session()
+                .add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
             self.metrics
                 .optimization_notices
                 .with_label_values(&["DroppedInUseIndex"])

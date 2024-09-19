@@ -21,12 +21,13 @@ use tracing::{info_span, Instrument};
 
 use crate::catalog::side_effects::CatalogSideEffect;
 use crate::coord::Coordinator;
-use crate::{AdapterError, ResultExt};
+use crate::{AdapterError, ExecuteContext, ResultExt};
 
 impl Coordinator {
     #[instrument(level = "debug")]
     pub async fn controller_apply_side_effects(
         &mut self,
+        mut ctx: Option<&mut ExecuteContext>,
         updates: Vec<CatalogSideEffect>,
     ) -> Result<(), AdapterError> {
         let mut tables_to_drop = Vec::new();
@@ -35,7 +36,7 @@ impl Coordinator {
             tracing::info!(?update, "have to apply!");
             match update {
                 CatalogSideEffect::CreateTable(id, table) => {
-                    self.controller_create_table(id, table).await?
+                    self.controller_create_table(&mut ctx, id, table).await?
                 }
                 CatalogSideEffect::DropTable(id) => {
                     tables_to_drop.push(id);
@@ -62,6 +63,7 @@ impl Coordinator {
     #[instrument(level = "debug")]
     async fn controller_create_table(
         &mut self,
+        ctx: &mut Option<&mut ExecuteContext>,
         table_id: GlobalId,
         table: Table,
     ) -> Result<(), AdapterError> {
@@ -84,9 +86,9 @@ impl Coordinator {
                     .await
                     .unwrap_or_terminate("unable to confirm leadership");
 
-                //if let Some(id) = ctx.as_ref().and_then(|ctx| ctx.extra().contents()) {
-                //    self.set_statement_execution_timestamp(id, register_ts);
-                //}
+                if let Some(id) = ctx.as_ref().and_then(|ctx| ctx.extra().contents()) {
+                    self.set_statement_execution_timestamp(id, register_ts);
+                }
 
                 let collection_desc = CollectionDescription::from_desc(
                     table.desc.clone(),

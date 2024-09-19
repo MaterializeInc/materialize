@@ -65,7 +65,7 @@ use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
-use crate::{catalog, flags, AdapterError, TimestampProvider};
+use crate::{catalog, flags, AdapterError, ExecuteContext, TimestampProvider};
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`].
@@ -133,14 +133,14 @@ impl Coordinator {
     #[instrument(name = "coord::catalog_transact_and_apply_side_effects")]
     pub(crate) async fn catalog_transact_and_apply_side_effects(
         &mut self,
-        session: Option<&Session>,
+        ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        let (table_updates, derived_side_effects) = self
-            .catalog_transact_inner(session.map(|session| session.conn_id()), ops)
-            .await?;
+        let conn_id = ctx.as_ref().map(|ctx| ctx.session().conn_id());
+        let (table_updates, derived_side_effects) =
+            self.catalog_transact_inner(conn_id, ops).await?;
 
-        let side_effects_fut = self.controller_apply_side_effects(derived_side_effects);
+        let side_effects_fut = self.controller_apply_side_effects(ctx, derived_side_effects);
 
         // Run our side effects concurrently with the table updates.
         let (side_effects_res, ()) = futures::future::join(
