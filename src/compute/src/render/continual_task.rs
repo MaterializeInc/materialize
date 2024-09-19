@@ -73,7 +73,6 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
@@ -102,6 +101,7 @@ use tracing::debug;
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
 use crate::render::StartSignal;
+use crate::sink::ConsolidatingVec;
 
 pub(crate) struct ContinualTaskCtx<G: Scope<Timestamp = Timestamp>> {
     name: Option<String>,
@@ -347,12 +347,14 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
         }
 
         impl<C: std::fmt::Debug> OpEvent<C> {
-            fn apply(self, state: &mut SinkState<SourceData, (), Timestamp, Diff>) {
+            fn apply(self, state: &mut SinkState<SourceData, Timestamp>) {
                 debug!("ct_sink event {:?}", self);
                 match self {
-                    OpEvent::ToAppend(Event::Data(_cap, x)) => state
-                        .to_append
-                        .extend(x.into_iter().map(|(k, t, d)| ((k, ()), t, d))),
+                    OpEvent::ToAppend(Event::Data(_cap, x)) => {
+                        for (k, t, d) in x {
+                            state.to_append.push(((k, t), d));
+                        }
+                    }
                     OpEvent::ToAppend(Event::Progress(x)) => state.to_append_progress = x,
                     OpEvent::AppendTimes(Event::Data(_cap, x)) => state
                         .append_times
@@ -414,7 +416,7 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
 }
 
 #[derive(Debug)]
-struct SinkState<K, V, T, D> {
+struct SinkState<D, T> {
     /// The known times at which we're going to write data to the output. This
     /// is guaranteed to include all times < append_times_progress, except that
     /// ones < output_progress may have been truncated.
@@ -424,19 +426,19 @@ struct SinkState<K, V, T, D> {
     /// The data we've collected to append to the output. This is often
     /// compacted to advancing times and is expected to be ~empty in the steady
     /// state.
-    to_append: Vec<((K, V), T, D)>,
+    to_append: ConsolidatingVec<(D, T)>,
     to_append_progress: Antichain<T>,
 
     /// A lower bound on the upper of the output.
     output_progress: Antichain<T>,
 }
 
-impl<K: Ord, V: Ord, D: Semigroup> SinkState<K, V, Timestamp, D> {
+impl<D: Ord> SinkState<D, Timestamp> {
     fn new() -> Self {
         SinkState {
             append_times: BTreeSet::new(),
             append_times_progress: Antichain::from_elem(Timestamp::minimum()),
-            to_append: Vec::new(),
+            to_append: ConsolidatingVec::with_min_capacity(128),
             to_append_progress: Antichain::from_elem(Timestamp::minimum()),
             output_progress: Antichain::from_elem(Timestamp::minimum()),
         }
@@ -445,7 +447,7 @@ impl<K: Ord, V: Ord, D: Semigroup> SinkState<K, V, Timestamp, D> {
     /// Returns data to write to the output, if any, and the new upper to use.
     ///
     /// TODO(ct): Remove the Vec allocation here.
-    fn process(&mut self) -> Option<(Antichain<Timestamp>, Vec<((&K, &V), &Timestamp, &D)>)> {
+    fn process(&mut self) -> Option<(Antichain<Timestamp>, Vec<((&D, &()), &Timestamp, &Diff)>)> {
         // We can only append at times >= the output_progress, so pop off
         // anything unnecessary.
         while let Some(x) = self.append_times.first() {
@@ -495,18 +497,16 @@ impl<K: Ord, V: Ord, D: Semigroup> SinkState<K, V, Timestamp, D> {
         // advancing timestamps, consolidating, and filtering out anything at
         // future timestamps.
         let as_of = &[write_ts.clone()];
-        for (_, t, _) in &mut self.to_append {
+        for ((_, t), _) in self.to_append.iter_mut() {
             t.advance_by(AntichainRef::new(as_of))
         }
         // TODO(ct): Metrics for vec len and cap.
-        consolidate_updates(&mut self.to_append);
-        // TODO(ct): Resize the vec down if cap >> len? Or perhaps `Correction`
-        // might already be very close to what we need.
+        self.to_append.consolidate();
 
         let append_data = self
             .to_append
             .iter()
-            .filter_map(|((k, v), t, d)| (t <= write_ts).then_some(((k, v), t, d)))
+            .filter_map(|((k, t), d)| (t <= write_ts).then_some(((k, &()), t, d)))
             .collect();
         Some((Antichain::from_elem(write_ts.step_forward()), append_data))
     }
@@ -754,7 +754,7 @@ mod tests {
     #[mz_ore::test]
     fn ct_sink_state() {
         #[track_caller]
-        fn assert_noop(state: &mut super::SinkState<&'static str, (), Timestamp, i64>) {
+        fn assert_noop(state: &mut super::SinkState<&'static str, Timestamp>) {
             if let Some(ret) = state.process() {
                 panic!("should be nothing to write: {:?}", ret);
             }
@@ -762,7 +762,7 @@ mod tests {
 
         #[track_caller]
         fn assert_write(
-            state: &mut super::SinkState<&'static str, (), Timestamp, i64>,
+            state: &mut super::SinkState<&'static str, Timestamp>,
             expected_upper: u64,
             expected_append: &[&str],
         ) {
@@ -784,8 +784,8 @@ mod tests {
         assert_noop(&mut s);
 
         // Getting data to append is not enough to do anything yet.
-        s.to_append.push((("a", ()), 1.into(), 1));
-        s.to_append.push((("b", ()), 1.into(), 1));
+        s.to_append.push((("a", 1.into()), 1));
+        s.to_append.push((("b", 1.into()), 1));
         assert_noop(&mut s);
 
         // Knowing that this is the only data we'll get for that timestamp is
@@ -831,8 +831,8 @@ mod tests {
 
         // Retract one of the things currently in the collection and add a new
         // thing, to verify the consolidate.
-        s.to_append.push((("a", ()), 5.into(), -1));
-        s.to_append.push((("c", ()), 5.into(), 1));
+        s.to_append.push((("a", 5.into()), -1));
+        s.to_append.push((("c", 5.into()), 1));
         s.to_append_progress = Antichain::from_elem(6.into());
         assert_write(&mut s, 6, &["b", "c"]);
     }
