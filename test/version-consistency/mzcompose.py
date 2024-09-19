@@ -13,7 +13,6 @@ Test the consistency with another mz version.
 
 import argparse
 
-from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
@@ -141,11 +140,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def resolve_tag(tag: str) -> str:
     if tag == "common-ancestor":
-        ancestor_overrides = {
-            # PR#29532 (repr: Fix printing of array ranges) because of pg8000 version upgrade
-            "4e9eb4e8afb4e9cc8979e574d6bef5437c66bf5e": MzVersion.parse_mz("v0.118.0"),
-        }
-        ancestor_overrides.update(ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS)
-        return resolve_ancestor_image_tag(ancestor_overrides)
+        return resolve_ancestor_image_tag(
+            ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
+        )
 
     return tag
