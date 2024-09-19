@@ -35,14 +35,6 @@ class ErrorMessageNormalizer:
             normalized_message,
         )
 
-        if "mz_timestamp out of range (" in normalized_message:
-            # tracked with https://github.com/MaterializeInc/materialize/issues/19822
-            normalized_message = normalized_message[0 : normalized_message.index(" (")]
-
-        if "invalid base64 end sequence (" in normalized_message:
-            # tracked with https://github.com/MaterializeInc/materialize/issues/23497
-            normalized_message = normalized_message[0 : normalized_message.index(" (")]
-
         if (
             "not found in data type record" in normalized_message
             or (
@@ -55,5 +47,8 @@ class ErrorMessageNormalizer:
         ):
             # tracked with https://github.com/MaterializeInc/materialize/issues/28129
             normalized_message = normalized_message.replace("?", "")
+
+        # strip error message details (see #29661, #19822, #23497)
+        normalized_message = re.sub(r" \(.*?\.\)", "", normalized_message)
 
         return normalized_message
