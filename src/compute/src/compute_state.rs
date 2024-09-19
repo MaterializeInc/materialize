@@ -34,6 +34,7 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
+use mz_ore::now::EpochMillis;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
@@ -162,6 +163,9 @@ pub struct ComputeState {
     /// Interval at which to perform server maintenance tasks. Set to a zero interval to
     /// perform maintenance with every `step_or_park` invocation.
     pub server_maintenance_interval: Duration,
+
+    /// The time at which to expire replicas.
+    pub replica_expiration: Option<Timestamp>,
 }
 
 impl ComputeState {
@@ -208,6 +212,7 @@ impl ComputeState {
             read_only_tx,
             read_only_rx,
             server_maintenance_interval: Duration::ZERO,
+            replica_expiration: None,
         }
     }
 
@@ -294,6 +299,21 @@ impl ComputeState {
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
+
+        if self.replica_expiration.is_none() {
+            let offset = COMPUTE_REPLICA_EXPIRATION.get(&self.worker_config);
+            if !offset.is_zero() {
+                // TODO(sdht0): consistently send now() from environmentd.
+                let now = mz_ore::now::SYSTEM_TIME.clone()();
+                let offset: EpochMillis = offset
+                    .as_millis()
+                    .try_into()
+                    .expect("Duration did not fit within u64");
+                let replica_expiration = Timestamp::new(now + offset);
+                info!("Replica frontier expires at {:?}", replica_expiration);
+                self.replica_expiration = Some(replica_expiration)
+            }
+        }
     }
 
     /// Returns the cc or non-cc version of "dataflow_max_inflight_bytes", as
