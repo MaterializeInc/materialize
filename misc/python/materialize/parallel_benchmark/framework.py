@@ -44,7 +44,7 @@ class State:
 def execute_query(cur: psycopg.Cursor, query: str) -> None:
     while True:
         try:
-            cur.execute(query.encode("utf-8"))
+            cur.execute(query.encode())
             break
         except Exception as e:
             if "deadlock detected" in str(e):

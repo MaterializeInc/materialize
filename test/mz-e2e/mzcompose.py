@@ -15,10 +15,9 @@ import argparse
 import csv
 import json
 import os
-import ssl
 import time
 
-import pg8000
+import psycopg
 
 from materialize.mzcompose import (
     _wait_for_pg,
@@ -89,12 +88,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         new_app_password = output.stdout.strip()
         assert "mzp_" in new_app_password
 
-        pg8000.connect(
+        psycopg.connect(
             host=c.cloud_hostname(),
             user=USERNAME,
             password=new_app_password,
             port=6875,
-            ssl_context=ssl.SSLContext(),
+            sslmode="require",
         )
 
         # Assert `mz app-password list`
@@ -256,9 +255,9 @@ def wait_for_cloud(c: Composition) -> None:
         password=APP_PASSWORD,
         port=6875,
         query="SELECT 1",
-        expected=[[1]],
+        expected=[(1,)],
         timeout_secs=900,
         dbname="materialize",
-        ssl_context=ssl.SSLContext(),
+        sslmode="require",
         # print_result=True
     )

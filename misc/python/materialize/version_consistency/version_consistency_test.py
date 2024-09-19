@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 import argparse
 
-from pg8000 import Connection
-from pg8000.exceptions import InterfaceError
+from psycopg import Connection
+from psycopg.errors import OperationalError
 
 from materialize.mz_version import MzVersion
 from materialize.output_consistency.common.configuration import (
@@ -237,7 +237,7 @@ def main() -> int:
         )
         test.evaluation_strategy_name = args.evaluation_strategy
         test.allow_same_version_comparison = args.allow_same_version_comparison
-    except InterfaceError:
+    except OperationalError:
         return 1
 
     result = test.run_output_consistency_tests(

@@ -13,7 +13,7 @@ import threading
 from enum import Enum
 from typing import TYPE_CHECKING, TextIO
 
-import pg8000
+import psycopg
 import requests
 import websocket
 
@@ -41,7 +41,7 @@ class Http(Enum):
 
 class Executor:
     rng: random.Random
-    cur: pg8000.Cursor
+    cur: psycopg.Cursor
     ws: websocket.WebSocket | None
     pg_pid: int
     # Used by INSERT action to prevent writing into different tables in the same transaction
@@ -57,7 +57,7 @@ class Executor:
     def __init__(
         self,
         rng: random.Random,
-        cur: pg8000.Cursor,
+        cur: psycopg.Cursor,
         ws: websocket.WebSocket | None,
         db: "Database",
     ):
@@ -73,7 +73,7 @@ class Executor:
         self.last_status = ""
         self.action_run_since_last_commit_rollback = False
         self.use_ws = self.rng.choice([True, False]) if self.ws else False
-        self.autocommit = cur._c.autocommit
+        self.autocommit = cur.connection.autocommit
         self.mz_service = "materialized"
 
     def set_isolation(self, level: str) -> None:
@@ -86,7 +86,7 @@ class Executor:
                 self.execute("commit")
             else:
                 self.log("commit")
-                self.cur._c.commit()
+                self.cur.connection.commit()
         except QueryError:
             raise
         except Exception as e:
@@ -101,7 +101,7 @@ class Executor:
                 self.execute("rollback")
             else:
                 self.log("rollback")
-                self.cur._c.rollback()
+                self.cur.connection.rollback()
         except QueryError:
             raise
         except Exception as e:
@@ -151,7 +151,7 @@ class Executor:
                         raise QueryError(str(e), query)
                 else:
                     try:
-                        self.cur.execute(query)
+                        self.cur.execute(query.encode())
                     except Exception as e:
                         raise QueryError(str(e), query)
 
@@ -194,7 +194,14 @@ class Executor:
                             )
 
                 if fetch and not use_ws:
-                    self.cur.fetchall()
+                    try:
+                        self.cur.fetchall()
+                    except psycopg.DataError:
+                        # We don't care about psycopg being unable to parse, examples:
+                        # date too large (after year 10K): '97940-08-25'
+                        # timestamp too large (after year 10K): '10876-06-20 00:00:00'
+                        # can't parse interval '-178956970 years -8 months -2147483648 days -2562047788:00:54.775808': days=1252674755; must have magnitude <= 999999999
+                        pass
 
                 return
 

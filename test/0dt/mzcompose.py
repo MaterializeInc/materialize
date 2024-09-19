@@ -15,7 +15,7 @@ version, no upgrade).
 import time
 from textwrap import dedent
 
-from pg8000.exceptions import InterfaceError
+from psycopg.errors import OperationalError
 
 from materialize import buildkite
 from materialize.mzcompose import get_default_system_parameters
@@ -736,8 +736,8 @@ def workflow_basic(c: Composition) -> None:
         for i in range(10):
             try:
                 c.sql("SELECT 1", service="mz_old")
-            except InterfaceError as e:
-                assert "network error" in str(
+            except OperationalError as e:
+                assert "server closed the connection unexpectedly" in str(
                     e
                 ) or "Can't create a connection to host" in str(
                     e
@@ -758,7 +758,7 @@ def workflow_basic(c: Composition) -> None:
                 break
             except CommandFailureCausedUIError:
                 pass
-            except InterfaceError:
+            except OperationalError:
                 pass
             time.sleep(1)
         else:

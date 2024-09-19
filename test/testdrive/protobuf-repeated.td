@@ -68,5 +68,5 @@ message    false     list  ""
 > SELECT bool::text, int32::text, int64::text, float::text, double::text, string::text, bytes::text, enum::text, message::text FROM repeated
 bool    int32  int64  float   double   string     bytes                enum           message
 ----
-{t,f}  {2,1}   {2,1}  {3.2,1} {3.2,1}  {bbb,aaa}  {\x626262,\x616161}  {ENUM1,ENUM0}  "{\"(4,2)\",\"(2,4)\"}"
+{t,f}  {2,1}   {2,1}  {3.2,1} {3.2,1}  {bbb,aaa}  "{\"\\\\x626262\",\"\\\\x616161\"}" {ENUM1,ENUM0} "{\"(4,2)\",\"(2,4)\"}"
 {}     {}      {}     {}      {}       {}         {}                   {}             {}

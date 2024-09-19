@@ -13,8 +13,8 @@ Native Postgres source tests, functional.
 
 import time
 
-import pg8000
-from pg8000 import Connection
+import psycopg
+from psycopg import Connection
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service, ServiceConfig
@@ -191,7 +191,7 @@ def workflow_silent_connection_drop(
     ):
         c.up("postgres")
 
-        pg_conn = pg8000.connect(
+        pg_conn = psycopg.connect(
             host="localhost",
             user="postgres",
             password="postgres",

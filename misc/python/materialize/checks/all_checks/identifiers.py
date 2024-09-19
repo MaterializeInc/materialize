@@ -78,7 +78,7 @@ class Identifiers(Check):
         strings = naughty_strings()
         values = (rng or Random(0)).sample(strings, len(self.IDENT_KEYS))
         self.ident = {
-            key: value.encode("utf-8")[:255].decode("utf-8", "ignore")
+            key: value.encode()[:255].decode("utf-8", "ignore")
             for key, value in zip(self.IDENT_KEYS, values)
         }
         # ERROR: invalid input syntax for type bytea: invalid escape sequence

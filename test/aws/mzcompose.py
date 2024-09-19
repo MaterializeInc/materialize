@@ -20,7 +20,7 @@ import json
 import random
 
 import boto3
-from pg8000.dbapi import ProgrammingError
+from psycopg.errors import SystemError
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
@@ -135,8 +135,10 @@ def test_credentials(c: Composition, ctx: TestContext):
     c.sql(f"ALTER SECRET aws_secret_access_key AS '{bad_secret_access_key}'")
     try:
         c.sql("VALIDATE CONNECTION aws_credentials")
-    except ProgrammingError as e:
-        assert "SignatureDoesNotMatch" in e.args[0]["M"]
+    except SystemError as e:
+        assert (
+            e.diag.message_primary and "SignatureDoesNotMatch" in e.diag.message_primary
+        ), e
     else:
         raise RuntimeError("connection validation unexpectedly succeeded")
 
@@ -147,8 +149,10 @@ def test_credentials(c: Composition, ctx: TestContext):
     )
     try:
         c.sql("VALIDATE CONNECTION aws_credentials")
-    except ProgrammingError as e:
-        assert "InvalidClientTokenId" in e.args[0]["M"]
+    except SystemError as e:
+        assert (
+            e.diag.message_primary and "InvalidClientTokenId" in e.diag.message_primary
+        ), e
     else:
         raise RuntimeError("connection validation unexpectedly succeeded")
 
@@ -167,8 +171,8 @@ def test_assume_role(c: Composition, ctx: TestContext):
     # Ensure that validating the connection fails.
     try:
         c.sql("VALIDATE CONNECTION aws_assume_role")
-    except ProgrammingError as e:
-        assert "AccessDenied" in e.args[0]["M"]
+    except SystemError as e:
+        assert e.diag.message_primary and "AccessDenied" in e.diag.message_primary, e
     else:
         raise RuntimeError("connection validation unexpectedly succeeded")
 
@@ -185,17 +189,23 @@ def test_assume_role(c: Composition, ctx: TestContext):
     try:
         try:
             c.sql("VALIDATE CONNECTION aws_assume_role")
-        except ProgrammingError as e:
+        except SystemError as e:
             # Ensure the top line error message is exactly what we expect.
-            assert "role trust policy does not require an external ID" == e.args[0]["M"]
+            assert (
+                "role trust policy does not require an external ID"
+                == e.diag.message_primary
+            )
             # We're not as prescriptive about the detail/hint fields. Just ensure
             # that the details include the exact ARN of the connection's role and
             # that the hint includes a link to further documentation.
-            assert customer_role_arn in e.args[0]["D"]
             assert (
-                "https://materialize.com/s/aws-connection-role-trust-policy"
-                in e.args[0]["H"]
-            )
+                e.diag.message_detail and customer_role_arn in e.diag.message_detail
+            ), e
+            assert (
+                e.diag.message_hint
+                and "https://materialize.com/s/aws-connection-role-trust-policy"
+                in e.diag.message_hint
+            ), e
         else:
             raise RuntimeError("connection validation unexpectedly succeeded")
 

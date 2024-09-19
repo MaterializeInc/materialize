@@ -68,10 +68,11 @@ def workflow_default(c: Composition) -> None:
             while running:
                 for query in queries:
                     start_time = time.time()
-                    cursor.execute(query)
-                    result = cursor.fetchone()[0]
+                    cursor.execute(query.encode())
+                    results = cursor.fetchone()
+                    assert results
                     runtime = time.time() - start_time
-                    print(f"{thread_name}: {result} ({runtime} s)")
+                    print(f"{thread_name}: {results[0]} ({runtime} s)")
 
     threads = [PropagatingThread(target=query, name=f"verify{i}") for i in range(10)]
     for thread in threads:

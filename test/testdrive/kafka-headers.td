@@ -52,7 +52,7 @@ $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keysch
 > SELECT key, f1, f2, list_length(headers), headers::text from headers_src
 key     f1       f2     list_length    headers
 ----------------------------------------------
-fish    fishval  1000   2              "{\"(gus,\\\\x67757366697665)\",\"(gus2,\\\\x67757333)\"}"
+fish    fishval  1000   2              "{\"(gus,\\\"\\\\\\\\x67757366697665\\\")\",\"(gus2,\\\"\\\\\\\\x67757333\\\")\"}"
 fish2   fishval  1000   0              "{}"
 
 # unpacking works
@@ -246,7 +246,7 @@ $ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro ke
 > SELECT key, duplicates, headers::text from duplicate_individual_headers
 key          duplicates                 headers
 -------------------------------------------------
-message_3    message_3_header_3_third   "{\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f6669727374)\",\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f7365636f6e64)\",\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f7468697264)\"}"
+message_3 message_3_header_3_third "{\"(duplicates,\\\"\\\\\\\\x6d6573736167655f335f6865616465725f335f6669727374\\\")\",\"(duplicates,\\\"\\\\\\\\x6d6573736167655f335f6865616465725f335f7365636f6e64\\\")\",\"(duplicates,\\\"\\\\\\\\x6d6573736167655f335f6865616465725f335f7468697264\\\")\"}"
 
 # We can control the header map more granularly with `map_agg`.
 > SELECT

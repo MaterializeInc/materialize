@@ -10,15 +10,14 @@
 
 import datetime
 import os
-import ssl
 import time
 import urllib.parse
 from textwrap import dedent
 
-import pg8000
+import psycopg
 import requests
-from pg8000 import Connection, Cursor
-from pg8000.exceptions import InterfaceError
+from psycopg import Connection, Cursor
+from psycopg.errors import OperationalError
 from requests.exceptions import ReadTimeout
 
 from materialize.cloudtest.util.jwt_key import fetch_jwt
@@ -113,14 +112,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 close_connection_and_cursor(conn1, cursor_on_table, "subscribe_table")
                 close_connection_and_cursor(conn2, cursor_on_mv, "subscribe_mv")
 
-            except (InterfaceError, ReadTimeout) as e:
+            except (OperationalError, ReadTimeout) as e:
                 error_msg_str = str(e)
-                if "network error" in error_msg_str:
-                    print(
-                        "Network error received, probably a cloud downtime, retrying in 1 min"
-                    )
-                    time.sleep(60)
-                elif "Read timed out" in error_msg_str:
+                if "Read timed out" in error_msg_str:
                     print("Read timed out, retrying")
                 else:
                     raise
@@ -199,16 +193,16 @@ def http_sql_query(host: str, query: str, token: str) -> list[list[str]]:
 def create_connection_and_cursor(
     host: str, user_name: str, app_password: str, cursor_statement: str
 ) -> tuple[Connection, Cursor]:
-    conn = pg8000.connect(
+    conn = psycopg.connect(
         host=host,
         user=user_name,
         password=app_password,
         port=6875,
-        ssl_context=ssl.create_default_context(),
+        sslmode="require",
     )
     cursor = conn.cursor()
     cursor.execute("BEGIN")
-    cursor.execute(cursor_statement)
+    cursor.execute(cursor_statement.encode())
 
     return conn, cursor
 
@@ -216,7 +210,7 @@ def create_connection_and_cursor(
 def close_connection_and_cursor(
     connection: Connection, cursor: Cursor, object_to_close: str
 ) -> None:
-    cursor.execute(f"CLOSE {object_to_close}")
+    cursor.execute(f"CLOSE {object_to_close}".encode())
     cursor.execute("ROLLBACK")
     cursor.close()
     connection.close()
@@ -315,17 +309,18 @@ def validate_cursor_on_mv(
     cursor_on_mv.execute("FETCH ALL subscribe_mv WITH (timeout='5s')")
     results = cursor_on_mv.fetchall()
     # First the removal, then the addition if it happens at the same timestamp
-    r = sorted(list(results))  # type: ignore
+    r = list(sorted(list(results)))
     if i == 0:
         assert len(r) == 1, f"Unexpected results: {r}"
     else:
         assert len(r) % 2 == 0, f"Unexpected results: {r}"
-        assert int(r[-2][0]) >= current_time, f"Unexpected results: {r}"
-        assert int(r[-2][1]) == -1, f"Unexpected results: {r}"
-        assert int(r[-2][2]) == i * 100 - 1, f"Unexpected results: {r}"
-    assert int(r[-1][0]) >= current_time, f"Unexpected results: {r}"
-    assert int(r[-1][1]) == 1, f"Unexpected results: {r}"
-    assert int(r[-1][2]) == (i + 1) * 100 - 1, f"Unexpected results: {r}"
+        assert len(r) >= 2
+        assert int(r[-2][0]) >= current_time, f"Unexpected results: {r}"  # type: ignore
+        assert int(r[-2][1]) == -1, f"Unexpected results: {r}"  # type: ignore
+        assert int(r[-2][2]) == i * 100 - 1, f"Unexpected results: {r}"  # type: ignore
+    assert int(r[-1][0]) >= current_time, f"Unexpected results: {r}"  # type: ignore
+    assert int(r[-1][1]) == 1, f"Unexpected results: {r}"  # type: ignore
+    assert int(r[-1][2]) == (i + 1) * 100 - 1, f"Unexpected results: {r}"  # type: ignore
 
 
 def validate_data_through_http_connection(

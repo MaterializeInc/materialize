@@ -41,7 +41,7 @@ class BaseDataStorage:
             )
 
         start_time = time.time()
-        cursor.execute(query)
+        cursor.execute(query.encode())
         result = cursor.fetchall()
         end_time = time.time()
 

@@ -195,7 +195,7 @@ def _accepted_by_shard(
         return True
 
     hash_value = int.from_bytes(
-        hashlib.md5(identifier.encode("utf-8")).digest(), byteorder="big"
+        hashlib.md5(identifier.encode()).digest(), byteorder="big"
     )
     return hash_value % parallelism_count == parallelism_index
 

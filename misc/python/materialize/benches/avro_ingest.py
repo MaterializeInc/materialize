@@ -16,11 +16,11 @@ import time
 from typing import IO, NamedTuple, cast
 
 import docker
-import pg8000
 import psutil
+import psycopg
 import requests
 from docker.models.containers import Container
-from pg8000.dbapi import ProgrammingError
+from psycopg.errors import ProgrammingError
 
 from materialize import MZ_ROOT, mzbuild, ui
 
@@ -136,18 +136,18 @@ def main() -> None:
         network_mode="host",
     )
 
-    conn = pg8000.connect(host="localhost", port=6875, user="materialize")
+    conn = psycopg.connect(host="localhost", port=6875, user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(
             f"""CREATE CONNECTION IF NOT EXISTS csr_conn
             TO CONFLUENT SCHEMA REGISTRY (
                 URL 'http://{args.confluent_host}:8081'
-            )"""
+            )""".encode()
         )
         cur.execute(
             f"""CREATE CONNECTION kafka_conn
-            TO KAFKA (BROKER '{args.confluent_host}:9092', SECURITY PROTOCOL PLAINTEXT)"""
+            TO KAFKA (BROKER '{args.confluent_host}:9092', SECURITY PROTOCOL PLAINTEXT)""".encode()
         )
         cur.execute(
             """CREATE SOURCE src

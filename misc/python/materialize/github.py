@@ -96,7 +96,7 @@ def get_known_issues_from_github() -> (
             continue
 
         try:
-            regex_pattern = re.compile(matches[0].strip().encode("utf-8"))
+            regex_pattern = re.compile(matches[0].strip().encode())
         except:
             issues_with_invalid_regex.append(
                 GitHubIssueWithInvalidRegexp(
