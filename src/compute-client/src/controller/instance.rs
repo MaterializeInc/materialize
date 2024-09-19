@@ -1296,6 +1296,7 @@ where
             initial_storage_as_of: dataflow.initial_storage_as_of,
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
+            timeline: dataflow.timeline,
         };
 
         if augmented_dataflow.is_transient() {

@@ -306,6 +306,9 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             df_desc.until = Antichain::from_elem(until);
         }
 
+        // Capture the timeline.
+        df_desc.timeline = timestamp_ctx.timeline().cloned();
+
         // Construct TransformCtx for global optimization.
         let mut transform_ctx = TransformCtx::global(
             &df_builder,

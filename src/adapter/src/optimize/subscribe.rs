@@ -23,6 +23,7 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::SubscribeFrom;
+use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
@@ -294,7 +295,11 @@ impl GlobalMirPlan<Unresolved> {
     /// We need to resolve timestamps before the `GlobalMirPlan ⇒ GlobalLirPlan`
     /// optimization stage in order to profit from possible single-time
     /// optimizations in the `Plan::finalize_dataflow` call.
-    pub fn resolve(mut self, as_of: Antichain<Timestamp>) -> GlobalMirPlan<Resolved> {
+    pub fn resolve(
+        mut self,
+        as_of: Antichain<Timestamp>,
+        timeline: Option<Timeline>,
+    ) -> GlobalMirPlan<Resolved> {
         // A dataflow description for a `SUBSCRIBE` statement should not have
         // index exports.
         soft_assert_or_log!(
@@ -312,6 +317,9 @@ impl GlobalMirPlan<Unresolved> {
         for (_, sink) in &self.df_desc.sink_exports {
             self.df_desc.until.join_assign(&sink.up_to);
         }
+
+        // Capture the timeline.
+        self.df_desc.timeline = timeline;
 
         GlobalMirPlan {
             df_desc: self.df_desc,

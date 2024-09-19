@@ -36,6 +36,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
+use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
@@ -244,6 +245,9 @@ impl Optimize<LocalMirPlan> for Optimizer {
             refresh_schedule: self.refresh_schedule.clone(),
         };
         df_desc.export_sink(self.sink_id, sink_description);
+
+        // TODO(sdht0): consider other timelines such as `TimelineContext::TimestampIndependent`.
+        df_desc.timeline = Some(Timeline::EpochMilliseconds);
 
         // Prepare expressions in the assembled dataflow.
         let style = ExprPrepStyle::Index;

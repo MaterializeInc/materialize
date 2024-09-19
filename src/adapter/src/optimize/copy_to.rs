@@ -274,6 +274,9 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         };
         df_desc.export_sink(self.select_id, sink_description);
 
+        // Capture the timeline.
+        df_desc.timeline = timestamp_ctx.timeline().cloned();
+
         // Prepare expressions in the assembled dataflow.
         //
         // Resolve all unmaterializable function calls except mz_now(), because
