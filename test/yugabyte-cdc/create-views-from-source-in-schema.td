@@ -1,0 +1,64 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+#
+# Test that CREATE SOURCE can be used to direct the tables to another schema
+#
+
+> CREATE SECRET pgpass AS 'yugabyte'
+> CREATE CONNECTION pg TO YUGABYTE (
+    HOST yugabyte,
+    PORT 5433,
+    DATABASE yugabyte,
+    USER yugabyte,
+    PASSWORD SECRET pgpass
+  )
+
+$ postgres-execute connection=postgres://yugabyte:yugabyte@yugabyte:5433/yugabyte
+ALTER USER yugabyte WITH replication;
+DROP SCHEMA IF EXISTS public CASCADE;
+DROP PUBLICATION IF EXISTS mz_source;
+
+CREATE SCHEMA public;
+
+CREATE TABLE t1 (f1 INTEGER);
+ALTER TABLE t1 REPLICA IDENTITY FULL;
+INSERT INTO t1 VALUES (1);
+
+CREATE TABLE t2 (f1 INTEGER);
+ALTER TABLE t2 REPLICA IDENTITY FULL;
+INSERT INTO t2 VALUES (2);
+
+CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+> DROP SCHEMA IF EXISTS schema1
+
+> CREATE SCHEMA schema1
+
+> CREATE SOURCE mz_source
+  FROM YUGABYTE CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (t1 AS schema1.t1, t2 AS schema1.t2);
+
+# Wait for snapshot to be complete
+> SELECT COUNT(*) > 0 FROM schema1.t1;
+true
+
+$ postgres-execute connection=postgres://yugabyte:yugabyte@yugabyte:5433/yugabyte
+INSERT INTO t1 SELECT * FROM t1;
+INSERT INTO t2 SELECT * FROM t2;
+
+> SELECT * FROM schema1.t1;
+1
+1
+
+> SELECT * FROM schema1.t2;
+2
+2
+
+> DROP SCHEMA schema1 CASCADE;

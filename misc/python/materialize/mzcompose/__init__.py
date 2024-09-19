@@ -97,6 +97,7 @@ def get_default_system_parameters(
         "enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
+        "enable_yugabyte_connection": "true",
         "persist_batch_columnar_format": (
             "both_v2" if version >= MzVersion.parse_mz("v0.112.0-dev") else "row"
         ),
