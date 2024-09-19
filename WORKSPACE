@@ -570,6 +570,7 @@ crates_repository(
         "//:src/compute/Cargo.toml",
         "//:src/controller-types/Cargo.toml",
         "//:src/controller/Cargo.toml",
+        "//:src/durable-cache/Cargo.toml",
         "//:src/dyncfg/Cargo.toml",
         "//:src/dyncfg-launchdarkly/Cargo.toml",
         "//:src/dyncfgs/Cargo.toml",
