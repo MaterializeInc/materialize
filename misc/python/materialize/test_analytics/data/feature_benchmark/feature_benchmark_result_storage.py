@@ -22,6 +22,7 @@ class FeatureBenchmarkResultEntry:
     scenario_version: str
     cycle: int
     scale: str
+    is_regression: bool
     wallclock: ReportMeasurement[float]
     messages: ReportMeasurement[int]
     memory_mz: ReportMeasurement[float]
@@ -52,6 +53,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     scenario_version,
                     cycle,
                     scale,
+                    is_regression,
                     wallclock,
                     messages,
                     memory_mz,
@@ -69,6 +71,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     {as_sanitized_literal(result_entry.scenario_version)},
                     {result_entry.cycle},
                     {as_sanitized_literal(result_entry.scale)},
+                    {result_entry.is_regression},
                     {result_entry.wallclock.result or 'NULL::DOUBLE'},
                     {result_entry.messages.result or 'NULL::INT'},
                     {result_entry.memory_mz.result or 'NULL::DOUBLE'},
@@ -103,6 +106,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     build_job_id,
                     scenario_name,
                     cycle,
+                    is_regression,
                     wallclock,
                     messages,
                     memory_mz,
@@ -116,6 +120,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     {as_sanitized_literal(job_id)},
                     {as_sanitized_literal(discarded_entry.scenario_name)},
                     {discarded_entry.cycle},
+                    {discarded_entry.is_regression},
                     {discarded_entry.wallclock.result or 'NULL::DOUBLE'},
                     {discarded_entry.messages.result or 'NULL::INT'},
                     {discarded_entry.memory_mz.result or 'NULL::DOUBLE'},
