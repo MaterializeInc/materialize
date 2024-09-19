@@ -7,6 +7,7 @@ menu:
     name: "Segment"
 aliases:
   - /sql/create-source/webhook/#connecting-with-segment
+  - /ingest-data/segment/
 ---
 
 This guide walks through the steps to ingest data from [Segment](https://segment.com/)

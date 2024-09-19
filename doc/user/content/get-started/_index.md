@@ -84,8 +84,8 @@ Materialize provides **native connectors** that allow ingesting data from variou
 - [Other databases](/integrations/#other-databases)
 {{</ linkbox >}}
 {{< linkbox title="Webhooks" >}}
-- [Amazon EventBridge](/ingest-data/amazon-eventbridge/)
-- [Segment](/ingest-data/segment/)
+- [Amazon EventBridge](/ingest-data/webhooks/amazon-eventbridge/)
+- [Segment](/ingest-data/webhooks/segment/)
 - [Other webhooks](/sql/create-source/webhook)
 {{</ linkbox >}}
 {{</ multilinkbox >}}

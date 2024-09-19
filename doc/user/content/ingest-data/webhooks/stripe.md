@@ -1,25 +1,25 @@
 ---
-title: "RudderStack"
-description: "How to stream data from RudderStack to Materialize using webhooks"
+title: "Stripe"
+description: "How to stream data from Stripe to Materialize using webhooks"
 menu:
   main:
     parent: "webhooks"
-    name: "RudderStack"
+    name: "Stripe"
+aliases:
+  - /sql/create-source/webhook/#connecting-with-stripe
+  - /ingest-data/stripe/
 ---
 
-This guide walks through the steps to ingest data from [RudderStack](https://rudderstack.com/)
+This guide walks through the steps to ingest data from [Stripe](https://stripe.com/)
 into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}
 {{< /tip >}}
 
-## Before you begin
+### Before you begin
 
-Ensure that you have:
-
-- A RudderStack [account](https://app.rudderstack.com/signup)
-- A RudderStack [source](https://www.rudderstack.com/docs/sources/overview/) set up and running.
+Ensure that you have a Stripe account.
 
 ## Step 1. (Optional) Create a cluster
 
@@ -40,10 +40,10 @@ SET CLUSTER = webhooks_cluster;
 
 ## Step 2. Create a secret
 
-To validate requests between Rudderstack and Materialize, you must create a [secret](/sql/create-secret/):
+To validate requests between Stripe and Materialize, you must create a [secret](/sql/create-secret/):
 
 ```mzsql
-CREATE SECRET rudderstack_webhook_secret AS '<secret_value>';
+CREATE SECRET stripe_webhook_secret AS '<secret_value>';
 ```
 
 Change the `<secret_value>` to a unique value that only you know and store it in a secure location.
@@ -51,25 +51,43 @@ Change the `<secret_value>` to a unique value that only you know and store it in
 ## Step 3. Set up a webhook source
 
 Using the secret from the previous step, create a [webhook source](/sql/create-source/webhook/)
-in Materialize to ingest data from RudderStack. By default, the source will be
+in Materialize to ingest data from Stripe. By default, the source will be
 created in the active cluster; to use a different cluster, use the `IN
 CLUSTER` clause.
 
 ```mzsql
-CREATE SOURCE rudderstack_source
-  FROM WEBHOOK
-    BODY FORMAT JSON
+CREATE SOURCE stripe_source IN CLUSTER webhooks_cluster
+FROM WEBHOOK
+    BODY FORMAT JSON;
     CHECK (
-      WITH (
-        HEADERS,
-        BODY AS request_body,
-        SECRET rudderstack_webhook_secret AS validation_secret
-      )
-      -- The constant_time_eq validation function **does not support** fully
-      -- qualified secret names. We recommend always aliasing the secret name
-      -- for ease of use.
-      constant_time_eq(headers->'authorization', validation_secret)
-);
+        WITH (BODY, HEADERS, SECRET stripe_webhook_secret AS validation_secret)
+        (
+            -- The constant_time_eq validation function **does not support** fully
+            -- qualified secret names. We recommend always aliasing the secret name
+            -- for ease of use.
+            constant_time_eq(
+                -- Sign the timestamp and body.
+                encode(hmac(
+                    (
+                        -- Extract the `t` component from the `Stripe-Signature` header.
+                        regexp_split_to_array(headers->'stripe-signature', ',|=')[
+                            array_position(regexp_split_to_array(headers->'stripe-signature', ',|='), 't')
+                            + 1
+                        ]
+                        || '.' ||
+                        body
+                    ),
+                    validation_secret,
+                    'sha256'
+                ), 'hex'),
+                -- Extract the `v1` component from the `Stripe-Signature` header.
+                regexp_split_to_array(headers->'stripe-signature', ',|=')[
+                    array_position(regexp_split_to_array(headers->'stripe-signature', ',|='), 'v1')
+                    + 1
+                ],
+            )
+        )
+    );
 ```
 
 After a successful run, the command returns a `NOTICE` message containing the
@@ -95,42 +113,24 @@ actors from injecting data into your source, it is **strongly encouraged** that
 you define a `CHECK` statement with your webhook sources.
 {{< /warning >}}
 
-The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).
-This enables a simple and rudimentary way to grant authorization to your webhook source.
+The `CHECK` clause defines how to validate each request. For details on the
+Stripe signing scheme, check out the [Stripe documentation](https://stripe.com/docs/webhooks#verify-manually).
 
-## Step 4. Create a webhook destination in RudderStack
+## Step 4. Create a webhook endpoint in Stripe
 
-To configure the webhook endpoint as a destination in RudderStack, follow the
-steps outlined below:
+1. In Stripe, go to **Developers > Webhooks**.
 
-1.  **Select your RudderStack source**
+2. Click **Add endpoint**.
 
-    Identify the source you wish to add a webhook endpoint to. If you don't have
-    a source set up, follow the steps outlined in the Rudderstack
-    [Getting Started](https://www.rudderstack.com/docs/dashboard-guides/sources/) guide.
+3. Enter the webhook URL from the previous step in the *Endpoint URL* field.
 
-1.  **Add a webhook destination and connect it to the Rudderstack source**
-    1. Navigate to the **Add Destination** menu.
-    1. Select the **Webhook** option.
-    1. Assign a name to your destination and click **Continue**.
+4. Configure the events you'd like to receive.
 
-#### Connection settings
+5. Create the endpoint.
 
-On the **Connection Settings** page:
-
-- **Webhook URL**: Define the endpoint where events will be dispatched by RudderStack. Use the URL from **Step 3.**.
-
-- **URL method**: Use the `POST` method to send events to Materialize.
-
-- **Headers**: These headers get added to the RudderStack request sent to your webhook. For this setup, ensure that the following headers are added:
-
-    - `Content-Type`: `application/json`
-    - `Authorization`: Use the secret created in **Step 2.**.
+6. Copy the signing secret and save it for the next step.
 
 ## Step 5. Validate incoming data
-
-With the source set up in Materialize and the webhook destination configured in
-Rudderstack, you can now query the incoming data:
 
 1. [In the Materialize console](https://console.materialize.com/), navigate to
    the **SQL Shell**.
@@ -138,11 +138,10 @@ Rudderstack, you can now query the incoming data:
 1. Use SQL queries to inspect and analyze the incoming data:
 
     ```mzsql
-    SELECT * FROM rudderstack_source LIMIT 10;
+    SELECT * FROM stripe_source LIMIT 10;
     ```
 
-    If you don't see any data, head over to the [RudderStack console](https://app.rudderstack.com/)
-    and try to sync your source to trigger a new data ingestion.
+    You may need to wait for webhook-generating events in Stripe to occur.
 
 ## Step 6. Transform incoming data
 
@@ -153,13 +152,17 @@ top of your webhook source that uses [`jsonb` operators](https://materialize.com
 to map the individual fields to columns with the required data types.
 
 ```mzsql
-CREATE VIEW json_parsed AS
-  SELECT
-    (body -> '_metadata' ->> 'nodeVersion')::text AS nodeVersion,
-    (body ->> 'channel')::text AS channel,
-    (body ->> 'event')::text AS event,
-    (body ->> 'userId')::text AS userId
-  FROM rudderstack_source;
+CREATE VIEW parse_stripe AS SELECT
+    body->>'api_version' AS api_version,
+    to_timestamp((body->'created')::int) AS created,
+    body->'data' AS data,
+    body->'id' AS id,
+    (body->'livemode')::boolean AS livemode,
+    body->'object' AS object,
+    body->>'pending_webhooks' AS pending_webhooks,
+    body->'request'->'idempotency_key' AS idempotency_key,
+    body->>'type' AS type
+FROM stripe_source;
 ```
 
 {{< json-parser >}}
@@ -179,8 +182,8 @@ efficiently remove duplicates. For more details, refer to the webhook source
 
 ## Next steps
 
-With Materialize ingesting your Rudderstack data, you can start exploring it,
+With Materialize ingesting your Stripe data, you can start exploring it,
 computing real-time results that stay up-to-date as new data arrives, and
 serving results efficiently. For more details, check out the
-[Rudderstack documentation](https://rudderstack.com/docs/) and the
+[Stripe documentation](https://stripe.com/docs/webhooks) and the
 [webhook source reference documentation](/sql/create-source/webhook/).

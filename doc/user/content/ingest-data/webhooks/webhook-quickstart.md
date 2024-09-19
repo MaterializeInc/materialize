@@ -7,6 +7,8 @@ menu:
     weight: 1
     name: "Quickstart"
     identifier: "quickstart-webhooks"
+aliases:
+  - /ingest-data/webhook-quickstart/
 ---
 
 Webhook sources let your applications push webhook events into Materialize. This

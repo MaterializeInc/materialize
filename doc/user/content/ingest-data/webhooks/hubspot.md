@@ -5,6 +5,8 @@ menu:
   main:
     parent: "webhooks"
     name: "HubSpot"
+aliases:
+  - /ingest-data/hubspot/
 ---
 
 This guide walks through the steps to ingest data from [HubSpot](https://www.hubspot.com/)

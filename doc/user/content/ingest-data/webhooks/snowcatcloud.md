@@ -5,6 +5,8 @@ menu:
   main:
     parent: "webhooks"
     name: "SnowcatCloud"
+aliases:
+  - /ingest-data/snowcatcloud/
 ---
 
 This guide walks through the steps to ingest data from [SnowcatCloud](https://www.snowcatcloud.com/)
