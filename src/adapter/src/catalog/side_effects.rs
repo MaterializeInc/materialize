@@ -10,7 +10,11 @@
 //! Side effects derived from catalog changes that can be applied to a
 //! controller.
 
-use mz_catalog::memory::objects::{CatalogItem, StateDiff, StateUpdateKind, Table};
+use mz_catalog::memory::objects::{
+    CatalogItem, Connection, Index, MaterializedView, Source, StateDiff, StateUpdateKind, Table,
+};
+use mz_cluster_client::ReplicaId;
+use mz_controller_types::ClusterId;
 use mz_ore::instrument;
 use mz_repr::GlobalId;
 
@@ -22,6 +26,18 @@ use crate::catalog::CatalogState;
 pub enum CatalogSideEffect {
     CreateTable(GlobalId, Table),
     DropTable(GlobalId),
+    DropSource(GlobalId, Source),
+    DropView(GlobalId),
+    DropMaterializedView(GlobalId, MaterializedView),
+    DropSink(GlobalId),
+    DropIndex(GlobalId, Index),
+    DropSecret(GlobalId),
+    DropConnection(GlobalId, Connection),
+    DropCluster(ClusterId),
+    DropClusterReplica {
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    },
 }
 
 impl CatalogState {
@@ -36,6 +52,14 @@ impl CatalogState {
         // WIP: Exhaustive match?
         match kind {
             StateUpdateKind::Item(item) => self.generate_item_update(item.id, diff),
+            StateUpdateKind::Cluster(cluster) => {
+                self.generate_cluster_update(cluster.id.clone(), diff)
+            }
+            StateUpdateKind::ClusterReplica(replica) => self.generate_cluster_replica_update(
+                replica.cluster_id.clone(),
+                replica.replica_id.clone(),
+                diff,
+            ),
             _ => Vec::new(),
         }
     }
@@ -44,19 +68,95 @@ impl CatalogState {
         let entry = self.get_entry(&id);
         let id = entry.id();
 
-        // WIP: Exhaustive match?
-        let updates = match entry.item() {
-            CatalogItem::Table(table) => match diff {
-                StateDiff::Addition => {
+        let updates = match diff {
+            StateDiff::Addition => match entry.item() {
+                CatalogItem::Table(table) => {
                     vec![CatalogSideEffect::CreateTable(id, table.clone())]
                 }
-                StateDiff::Retraction => {
-                    vec![CatalogSideEffect::DropTable(id)]
+                _ => {
+                    // Not handling anything but creating tables using the side
+                    // effects framework yet.
+                    Vec::new()
                 }
             },
-            _ => {
-                // WIP!
+            StateDiff::Retraction => match entry.item() {
+                CatalogItem::Table(_) => {
+                    vec![CatalogSideEffect::DropTable(id)]
+                }
+                CatalogItem::Source(source) => {
+                    vec![CatalogSideEffect::DropSource(id, source.clone())]
+                }
+                CatalogItem::View(_) => {
+                    vec![CatalogSideEffect::DropView(id)]
+                }
+                CatalogItem::MaterializedView(mv) => {
+                    vec![CatalogSideEffect::DropMaterializedView(id, mv.clone())]
+                }
+                CatalogItem::Sink(_) => {
+                    vec![CatalogSideEffect::DropSink(id)]
+                }
+                CatalogItem::Index(index) => {
+                    vec![CatalogSideEffect::DropIndex(id, index.clone())]
+                }
+                CatalogItem::Secret(_) => {
+                    vec![CatalogSideEffect::DropSecret(id)]
+                }
+                CatalogItem::Connection(conn) => {
+                    vec![CatalogSideEffect::DropConnection(id, conn.clone())]
+                }
+                CatalogItem::Type(_) => {
+                    // Nothing to do!
+                    Vec::new()
+                }
+                CatalogItem::Func(_) => {
+                    // Nothing to do!
+                    Vec::new()
+                }
+                CatalogItem::Log(_) => {
+                    unreachable!("cannot drop builtin log source")
+                }
+            },
+        };
+
+        updates
+    }
+
+    fn generate_cluster_update(
+        &self,
+        cluster_id: ClusterId,
+        diff: StateDiff,
+    ) -> Vec<CatalogSideEffect> {
+        let updates = match diff {
+            StateDiff::Addition => {
+                // TODO: Only handling drops via the side effects framework for
+                // now.
                 Vec::new()
+            }
+            StateDiff::Retraction => {
+                vec![CatalogSideEffect::DropCluster(cluster_id)]
+            }
+        };
+
+        updates
+    }
+
+    fn generate_cluster_replica_update(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        diff: StateDiff,
+    ) -> Vec<CatalogSideEffect> {
+        let updates = match diff {
+            StateDiff::Addition => {
+                // TODO: Only handling drops via the side effects framework for
+                // now.
+                Vec::new()
+            }
+            StateDiff::Retraction => {
+                vec![CatalogSideEffect::DropClusterReplica {
+                    cluster_id,
+                    replica_id,
+                }]
             }
         };
 
