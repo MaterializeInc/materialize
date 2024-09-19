@@ -2075,6 +2075,17 @@ pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
+pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_kafka_source_tables",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_KAFKA_SOURCE_TABLES_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("topic", ScalarType::String.nullable(false))
+        .finish(),
+    is_retained_metrics_object: true,
+    access: vec![PUBLIC_SELECT],
+});
 pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_object_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
@@ -8147,6 +8158,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_POSTGRES_SOURCES),
         Builtin::Table(&MZ_POSTGRES_SOURCE_TABLES),
         Builtin::Table(&MZ_MYSQL_SOURCE_TABLES),
+        Builtin::Table(&MZ_KAFKA_SOURCE_TABLES),
         Builtin::Table(&MZ_SINKS),
         Builtin::Table(&MZ_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEWS),

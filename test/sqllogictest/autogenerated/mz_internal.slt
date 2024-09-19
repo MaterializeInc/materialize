@@ -342,6 +342,12 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  table_name  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_kafka_source_tables' ORDER BY position
+----
+1  id  text
+2  topic  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sessions' ORDER BY position
 ----
 1  id  uuid
@@ -618,6 +624,7 @@ mz_global_frontiers
 mz_history_retention_strategies
 mz_hydration_statuses
 mz_internal_cluster_replicas
+mz_kafka_source_tables
 mz_materialization_dependencies
 mz_materialization_lag
 mz_materialized_view_refresh_strategies
