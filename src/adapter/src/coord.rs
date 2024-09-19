@@ -219,6 +219,7 @@ mod caught_up;
 pub mod cluster_scheduling;
 mod command_handler;
 pub mod consistency;
+mod controller_apply;
 mod ddl;
 mod indexes;
 mod introspection;

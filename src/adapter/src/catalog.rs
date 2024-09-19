@@ -16,6 +16,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert;
 use std::sync::Arc;
 
+#[cfg(test)]
+use crate::catalog::side_effects::CatalogSideEffect;
 use futures::future::BoxFuture;
 use futures::{Future, FutureExt};
 use itertools::Itertools;
@@ -104,6 +106,7 @@ use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 mod builtin_table_updates;
 pub(crate) mod consistency;
 mod migrate;
+pub(crate) mod side_effects;
 
 mod apply;
 mod open;
@@ -1519,13 +1522,20 @@ impl Catalog {
     /// Listen for and apply all unconsumed updates to the durable catalog state.
     // TODO(jkosh44) When this method is actually used outside of a test we can remove the
     // `#[cfg(test)]` annotation.
+    // WIP: Structured return type?
     #[cfg(test)]
     async fn sync_to_current_updates(
         &mut self,
-    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
+    ) -> Result<
+        (
+            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+            Vec<CatalogSideEffect>,
+        ),
+        CatalogError,
+    > {
         let updates = self.storage().await.sync_to_current_updates().await?;
-        let builtin_table_updates = self.state.apply_updates(updates)?;
-        Ok(builtin_table_updates)
+        let (builtin_table_updates, side_effects) = self.state.apply_updates(updates)?;
+        Ok((builtin_table_updates, side_effects))
     }
 }
 
