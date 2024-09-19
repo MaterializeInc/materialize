@@ -736,7 +736,8 @@ message ProtoDomainLimit {
 message ProtoEvalError {
     message ProtoUnsupported {
         string feature = 1;
-        reserved 2; // issue_no
+        reserved "issue_no";
+        reserved 2;
         optional uint64 discussion_no = 3;
     };
     message ProtoInvalidLayer {
