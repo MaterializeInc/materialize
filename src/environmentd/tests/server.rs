@@ -4627,19 +4627,20 @@ async fn test_cert_reloading() {
     check_pgwire(&conn_str, &ca.ca_cert_path(), next_x509.clone()).await;
 }
 
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
-async fn test_builtin_connection_alterations_are_preserved_across_restarts() {
+fn test_builtin_connection_alterations_are_preserved_across_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
-    let harness = test_util::TestHarness::default().data_directory(data_dir.path());
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .unsafe_mode();
 
     {
-        let server = harness.clone().start().await;
-        let client = server
-            .connect()
-            .internal()
+        let server = harness.clone().start_blocking();
+        let mut client = server
+            .pg_config_internal()
             .user(&ANALYTICS_USER.name)
-            .await
+            .connect(postgres::NoTls)
             .unwrap();
 
         let row = client
@@ -4649,7 +4650,6 @@ async fn test_builtin_connection_alterations_are_preserved_across_restarts() {
             WHERE name = 'mz_analytics'",
                 &[],
             )
-            .await
             .expect("success");
         let sql: String = row.get("create_sql");
         assert_eq!(
@@ -4659,12 +4659,11 @@ async fn test_builtin_connection_alterations_are_preserved_across_restarts() {
     }
 
     {
-        let server = harness.clone().start().await;
-        let client = server
-            .connect()
-            .internal()
+        let server = harness.clone().start_blocking();
+        let mut client = server
+            .pg_config_internal()
             .user(&ANALYTICS_USER.name)
-            .await
+            .connect(postgres::NoTls)
             .unwrap();
 
         let row = client
@@ -4674,7 +4673,6 @@ async fn test_builtin_connection_alterations_are_preserved_across_restarts() {
             WHERE name = 'mz_analytics'",
                 &[],
             )
-            .await
             .expect("success");
         let sql: String = row.get("create_sql");
         assert_eq!(
@@ -4687,7 +4685,6 @@ async fn test_builtin_connection_alterations_are_preserved_across_restarts() {
                 "ALTER CONNECTION mz_internal.mz_analytics SET (ASSUME ROLE ARN = 'foo')",
                 &[],
             )
-            .await
             .expect("success");
 
         let row = client
@@ -4697,7 +4694,6 @@ async fn test_builtin_connection_alterations_are_preserved_across_restarts() {
             WHERE name = 'mz_analytics'",
                 &[],
             )
-            .await
             .expect("success");
         let sql: String = row.get("create_sql");
         assert_eq!(
@@ -4707,12 +4703,11 @@ async fn test_builtin_connection_alterations_are_preserved_across_restarts() {
     }
 
     {
-        let server = harness.clone().start().await;
-        let client = server
-            .connect()
-            .internal()
+        let server = harness.clone().start_blocking();
+        let mut client = server
+            .pg_config_internal()
             .user(&ANALYTICS_USER.name)
-            .await
+            .connect(postgres::NoTls)
             .unwrap();
 
         let row = client
@@ -4722,7 +4717,6 @@ async fn test_builtin_connection_alterations_are_preserved_across_restarts() {
             WHERE name = 'mz_analytics'",
                 &[],
             )
-            .await
             .expect("success");
         let sql: String = row.get("create_sql");
         assert_eq!(

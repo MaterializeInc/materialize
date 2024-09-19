@@ -1761,6 +1761,7 @@ pub mod datadriven {
         let builder = BatchBuilderInternal::new(
             cfg.clone(),
             Arc::clone(&datadriven.client.metrics),
+            schemas.clone(),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
             datadriven.client.metrics.user.clone(),
             lower,
@@ -1772,7 +1773,6 @@ pub mod datadriven {
             Some(upper.clone()),
         );
         let mut builder = BatchBuilder {
-            stats_schemas: schemas.clone(),
             builder,
             metrics: Arc::clone(&datadriven.client.metrics),
             key_buf: vec![],

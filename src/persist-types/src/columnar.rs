@@ -95,7 +95,7 @@ pub trait ColumnEncoder<T> {
     /// Appends a null value onto this encoder.
     fn append_null(&mut self);
 
-    /// Finish this encoder, returning an immutable column and statistics.
+    /// Finish this encoder, returning an immutable column.
     fn finish(self) -> Self::FinishedColumn;
 }
 

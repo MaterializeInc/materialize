@@ -21,6 +21,7 @@ use futures_util::TryFutureExt;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
+use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
@@ -660,7 +661,7 @@ where
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
-        real_schemas: Schemas<K, V>,
+        write_schemas: Schemas<K, V>,
     ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
         // Currently, we give any excess budget to write parallelism. If we had
@@ -676,6 +677,7 @@ where
         let mut batch = BatchBuilderInternal::<K, V, T, D>::new(
             cfg.batch.clone(),
             Arc::clone(&metrics),
+            write_schemas.clone(),
             Arc::clone(&shard_metrics),
             metrics.compaction.batch.clone(),
             desc.lower().clone(),
@@ -700,7 +702,7 @@ where
                     desc.upper().elements()
                 ),
                 *shard_id,
-                StructuredSort::<K, V, T, D>::new(real_schemas.clone()),
+                StructuredSort::<K, V, T, D>::new(write_schemas.clone()),
                 blob,
                 Arc::clone(&metrics),
                 shard_metrics,
@@ -720,35 +722,42 @@ where
                 metrics.compaction.not_all_prefetched.inc();
             }
 
-            // Reuse the allocations for individual keys and values
-            let mut key_vec = vec![];
-            let mut val_vec = vec![];
             loop {
-                let fetch_start = Instant::now();
-                let Some(updates) = consolidator
-                    .next_chunk(cfg.compaction_yield_after_n_updates)
-                    .await?
-                else {
-                    break;
-                };
-                timings.part_fetching += fetch_start.elapsed();
-                for ((k, v), t, d) in updates.records().iter() {
-                    key_vec.clear();
-                    key_vec.extend_from_slice(k);
-                    val_vec.clear();
-                    val_vec.extend_from_slice(v);
-                    crate::batch::validate_schema(&real_schemas, &key_vec, &val_vec, None, None);
-                    batch
-                        .add(
-                            &real_schemas,
-                            &key_vec,
-                            &val_vec,
-                            &T::decode(t),
-                            &D::decode(d),
+                let mut chunks = vec![];
+                let mut total_bytes = 0;
+                // We attempt to pull chunks out of the consolidator that match our target size,
+                // but it's possible that we may get smaller chunks... for example, if not all
+                // parts have been fetched yet. Loop until we've got enough data to justify flushing
+                // it out to blob (or we run out of data.)
+                while total_bytes < cfg.batch.blob_target_size {
+                    let fetch_start = Instant::now();
+                    let Some(chunk) = consolidator
+                        .next_chunk(
+                            cfg.compaction_yield_after_n_updates,
+                            cfg.batch.blob_target_size - total_bytes,
                         )
-                        .await?;
+                        .await?
+                    else {
+                        break;
+                    };
+                    timings.part_fetching += fetch_start.elapsed();
+                    total_bytes += chunk.goodbytes();
+                    chunks.push(chunk);
+                    tokio::task::yield_now().await;
                 }
-                tokio::task::yield_now().await;
+
+                if chunks.is_empty() {
+                    break;
+                }
+
+                // In the hopefully-common case of a single chunk, this will not copy.
+                let updates = BlobTraceUpdates::concat::<K, V>(
+                    chunks,
+                    write_schemas.key.as_ref(),
+                    write_schemas.val.as_ref(),
+                    &metrics.columnar,
+                )?;
+                batch.flush_many(updates).await?;
             }
         } else {
             let mut consolidator = Consolidator::<T, D>::new(
@@ -793,13 +802,13 @@ where
                     key_vec.extend_from_slice(k);
                     val_vec.clear();
                     val_vec.extend_from_slice(v);
-                    crate::batch::validate_schema(&real_schemas, &key_vec, &val_vec, None, None);
-                    batch.add(&real_schemas, &key_vec, &val_vec, &t, &d).await?;
+                    crate::batch::validate_schema(&write_schemas, &key_vec, &val_vec, None, None);
+                    batch.add(&key_vec, &val_vec, &t, &d).await?;
                 }
                 tokio::task::yield_now().await;
             }
         }
-        let mut batch = batch.finish(&real_schemas, desc.upper().clone()).await?;
+        let mut batch = batch.finish(desc.upper().clone()).await?;
 
         // We use compaction as a method of getting inline writes out of state,
         // to make room for more inline writes. This happens in
@@ -814,7 +823,7 @@ where
                     &cfg.batch,
                     &metrics.compaction.batch,
                     &isolated_runtime,
-                    &real_schemas,
+                    &write_schemas,
                 )
                 .await;
         }

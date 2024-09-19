@@ -420,6 +420,49 @@ pub struct ArrayIdx<'a> {
     pub array: &'a ArrayOrd,
 }
 
+#[inline]
+fn list_range<'a>(
+    offsets: &OffsetBuffer<i32>,
+    values: &'a ArrayOrd,
+    idx: usize,
+) -> impl Iterator<Item = ArrayIdx<'a>> {
+    let offsets = offsets.inner();
+    let from = offsets[idx].as_usize();
+    let to = offsets[idx + 1].as_usize();
+    (from..to).map(|i| values.at(i))
+}
+
+impl<'a> ArrayIdx<'a> {
+    /// Returns the rough amount of space required for this entry in bytes.
+    /// (Not counting nulls, dictionary encoding, or other space optimizations.)
+    pub fn goodbytes(&self) -> usize {
+        match self.array {
+            ArrayOrd::Null(_) => 0,
+            ArrayOrd::Bool(_) => size_of::<bool>(),
+            ArrayOrd::Int8(_) => size_of::<i8>(),
+            ArrayOrd::Int16(_) => size_of::<i16>(),
+            ArrayOrd::Int32(_) => size_of::<i32>(),
+            ArrayOrd::Int64(_) => size_of::<i64>(),
+            ArrayOrd::UInt8(_) => size_of::<u8>(),
+            ArrayOrd::UInt16(_) => size_of::<u16>(),
+            ArrayOrd::UInt32(_) => size_of::<u32>(),
+            ArrayOrd::UInt64(_) => size_of::<u64>(),
+            ArrayOrd::Float32(_) => size_of::<f32>(),
+            ArrayOrd::Float64(_) => size_of::<f64>(),
+            ArrayOrd::String(a) => a.value(self.idx).len(),
+            ArrayOrd::Binary(a) => a.value(self.idx).len(),
+            ArrayOrd::FixedSizeBinary(a) => a.value_length().as_usize(),
+            ArrayOrd::List(_, offsets, nested) => {
+                // Range over the list, summing up the bytes for each entry.
+                list_range(offsets, nested, self.idx)
+                    .map(|a| a.goodbytes())
+                    .sum()
+            }
+            ArrayOrd::Struct(_, nested) => nested.iter().map(|a| a.at(self.idx).goodbytes()).sum(),
+        }
+    }
+}
+
 impl<'a> Ord for ArrayIdx<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
         #[inline]
@@ -476,26 +519,13 @@ impl<'a> Ord for ArrayIdx<'a> {
             (
                 ArrayOrd::List(s_nulls, s_offset, s_values),
                 ArrayOrd::List(o_nulls, o_offset, o_values),
-            ) => {
-                #[inline]
-                fn range<'a>(
-                    offsets: &OffsetBuffer<i32>,
-                    values: &'a ArrayOrd,
-                    idx: usize,
-                ) -> impl Iterator<Item = ArrayIdx<'a>> {
-                    let offsets = offsets.inner();
-                    let from = offsets[idx].as_usize();
-                    let to = offsets[idx + 1].as_usize();
-                    (from..to).map(|i| values.at(i))
-                }
-                match (is_null(s_nulls, self.idx), is_null(o_nulls, other.idx)) {
-                    (false, true) => Ordering::Less,
-                    (true, true) => Ordering::Equal,
-                    (true, false) => Ordering::Greater,
-                    (false, false) => range(s_offset, s_values, self.idx)
-                        .cmp(range(o_offset, o_values, other.idx)),
-                }
-            }
+            ) => match (is_null(s_nulls, self.idx), is_null(o_nulls, other.idx)) {
+                (false, true) => Ordering::Less,
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, false) => list_range(s_offset, s_values, self.idx)
+                    .cmp(list_range(o_offset, o_values, other.idx)),
+            },
             // For structs, we iterate over the same index in each field for each input,
             // comparing them lexicographically in order.
             (ArrayOrd::Struct(s_nulls, s_cols), ArrayOrd::Struct(o_nulls, o_cols)) => {
