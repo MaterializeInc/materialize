@@ -267,37 +267,6 @@ impl Coordinator {
         global_timelines.get_mut(timeline).expect("inserted above")
     }
 
-    /// Groups together storage and compute resources into a [`CollectionIdBundle`]
-    pub(crate) fn build_collection_id_bundle(
-        &self,
-        storage_ids: impl IntoIterator<Item = GlobalId>,
-        compute_ids: impl IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
-        clusters: impl IntoIterator<Item = ComputeInstanceId>,
-    ) -> CollectionIdBundle {
-        let mut compute: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
-
-        // Collect all compute_ids.
-        for (instance_id, id) in compute_ids {
-            compute.entry(instance_id).or_default().insert(id);
-        }
-
-        // Collect all GlobalIds associated with a compute instance ID.
-        let cluster_set: BTreeSet<_> = clusters.into_iter().collect();
-        for (_timeline, TimelineState { read_holds, .. }) in &self.global_timelines {
-            let compute_ids = read_holds
-                .compute_ids()
-                .filter(|(instance_id, _id)| cluster_set.contains(instance_id));
-            for (instance_id, id) in compute_ids {
-                compute.entry(instance_id).or_default().insert(id);
-            }
-        }
-
-        CollectionIdBundle {
-            storage_ids: storage_ids.into_iter().collect(),
-            compute_ids: compute,
-        }
-    }
-
     /// Given a [`Timeline`] and a [`CollectionIdBundle`], removes all of the "storage ids"
     /// and "compute ids" in the bundle, from the timeline.
     pub(crate) fn remove_resources_associated_with_timeline(
