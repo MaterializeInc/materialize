@@ -25,8 +25,7 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
 use crate::ast::{
-    AstInfo, ColumnName, Expr, Ident, OrderByExpr, UnresolvedItemName, Version,
-    WithOptionValue,
+    AstInfo, ColumnName, Expr, Ident, OrderByExpr, UnresolvedItemName, Version, WithOptionValue,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
