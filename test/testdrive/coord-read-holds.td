@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Make sure the Coordinator maintains read holds and that up-to-date objects are
 # "immediately" queryable.
 
@@ -36,6 +38,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
   )
 
 > CREATE SOURCE mz_source
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
 
