@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::stream::{BoxStream, FuturesUnordered};
+use futures::stream::BoxStream;
 use futures::FutureExt;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
@@ -222,6 +222,11 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     maintenance_ticker: tokio::time::Interval,
     /// Whether maintenance work was scheduled.
     maintenance_scheduled: bool,
+
+    /// Shared transmit channel for replicas to send responses.
+    instance_response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
+    /// Receive end for replica responses.
+    instance_response_rx: mpsc::UnboundedReceiver<StorageResponse<T>>,
 }
 
 #[async_trait(?Send)]
@@ -452,7 +457,12 @@ where
 
     fn create_instance(&mut self, id: StorageInstanceId) {
         let metrics = self.metrics.for_instance(id);
-        let mut instance = Instance::new(self.envd_epoch, metrics, self.now.clone());
+        let mut instance = Instance::new(
+            self.envd_epoch,
+            metrics,
+            self.now.clone(),
+            self.instance_response_tx.clone(),
+        );
         if self.initialized {
             instance.send(StorageCommand::InitializationComplete);
         }
@@ -1787,20 +1797,13 @@ where
             return;
         }
 
-        let mut instance_responses = self
-            .instances
-            .values_mut()
-            .map(|instance| instance.recv())
-            .collect::<FuturesUnordered<_>>();
-
-        use tokio_stream::StreamExt;
         self.stashed_response = tokio::select! {
             // Order matters here. We want to process internal commands
             // before processing external commands.
             biased;
 
             Some(m) = self.internal_response_queue.recv() => Some(m),
-            Some(m) = instance_responses.next() => m,
+            Some(m) = self.instance_response_rx.recv() => Some(m),
             _ = self.maintenance_ticker.tick() => {
                 self.maintenance_scheduled = true;
                 None
@@ -2332,6 +2335,8 @@ where
         let mut maintenance_ticker = tokio::time::interval(Duration::from_secs(1));
         maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
+        let (instance_response_tx, instance_response_rx) = mpsc::unbounded_channel();
+
         Self {
             build_info,
             collections: BTreeMap::default(),
@@ -2372,6 +2377,8 @@ where
             migrated_storage_collections: BTreeSet::new(),
             maintenance_ticker,
             maintenance_scheduled: false,
+            instance_response_rx,
+            instance_response_tx,
         }
     }
 
