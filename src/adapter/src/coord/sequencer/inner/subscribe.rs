@@ -283,7 +283,10 @@ impl Coordinator {
 
         self.store_transaction_read_holds(ctx.session(), read_holds);
 
-        let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
+        let global_mir_plan = global_mir_plan.resolve(
+            Antichain::from_elem(as_of),
+            determination.timestamp_context.timeline().cloned(),
+        );
 
         // Optimize LIR
         let span = Span::current();

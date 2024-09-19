@@ -34,6 +34,7 @@ use mz_repr::explain::trace_plan;
 use mz_repr::GlobalId;
 use mz_sql::names::QualifiedItemName;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::notice::{IndexAlreadyExists, IndexKeyEmpty};
@@ -161,6 +162,9 @@ impl Optimize<Index> for Optimizer {
             key: index.keys.clone(),
         };
         df_desc.export_index(self.exported_index_id, index_desc, on_desc.typ().clone());
+
+        // TODO(sdht0): consider other timelines such as `TimelineContext::TimestampIndependent`.
+        df_desc.timeline = Some(Timeline::EpochMilliseconds);
 
         // Prepare expressions in the assembled dataflow.
         let style = ExprPrepStyle::Index;

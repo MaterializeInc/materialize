@@ -255,7 +255,7 @@ impl Coordinator {
         let read_holds = self.acquire_read_holds(&id_bundle);
         let as_of = read_holds.least_valid_read();
 
-        let global_mir_plan = global_mir_plan.resolve(as_of);
+        let global_mir_plan = global_mir_plan.resolve(as_of, None);
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(

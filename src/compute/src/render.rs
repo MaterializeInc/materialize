@@ -199,10 +199,14 @@ pub fn build_compute_dataflow<A: Allocate>(
         .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
         .collect::<Vec<_>>();
 
-    let expire_at = compute_state
-        .replica_expiration
-        .map(Antichain::from_elem)
-        .unwrap_or_default();
+    let expire_at = if dataflow.timeline == Some(Timeline::EpochMilliseconds) {
+        compute_state
+            .replica_expiration
+            .map(Antichain::from_elem)
+            .unwrap_or_default()
+    } else {
+        Antichain::new()
+    };
 
     let until = dataflow.until.meet(&expire_at);
 
