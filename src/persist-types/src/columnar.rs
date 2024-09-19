@@ -107,7 +107,7 @@ pub trait Schema2<T>: Debug + Send + Sync {
     type Statistics: DynStats + 'static;
 
     /// Type that is able to decode values of `T` from [`Self::ArrowColumn`].
-    type Decoder: ColumnDecoder<T> + Debug;
+    type Decoder: ColumnDecoder<T> + Debug + Send + Sync;
     /// Type that is able to encoder values of `T`.
     type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn> + Debug;
 
