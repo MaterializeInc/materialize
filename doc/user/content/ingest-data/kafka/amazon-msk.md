@@ -5,6 +5,7 @@ aliases:
   - /integrations/aws-msk/
   - /integrations/amazon-msk/
   - /connect-sources/amazon-msk/
+  - /ingest-data/amazon-msk/
 menu:
   main:
     parent: "kafka"

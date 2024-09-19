@@ -5,6 +5,7 @@ aliases:
   - /integrations/aws-kafka/
   - /integrations/amazon-kafka/
   - /connect-sources/amazon-kafka/
+  - /ingest-data/kafka-self-hosted/
 menu:
   main:
     parent: "kafka"

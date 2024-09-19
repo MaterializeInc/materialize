@@ -4,6 +4,7 @@ description: "How to securely connect WarpStream to Materialize for efficient da
 aliases:
   - /integrations/warpstream/
   - /connect-sources/warpstream/
+  - /ingest-data/warpstream/
 menu:
   main:
     parent: "kafka"
