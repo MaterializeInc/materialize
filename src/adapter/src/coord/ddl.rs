@@ -59,6 +59,7 @@ use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionRes
 use crate::coord::Coordinator;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::timeline::{TimelineContext, TimelineState};
+use crate::coord::controller_commands::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{EventDetails, SegmentClientExt};
@@ -80,10 +81,15 @@ impl Coordinator {
     /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`] and runs
     /// builtin table updates concurrently with any side effects (e.g. creating
     /// collections).
+    // TODO(aljoscha): Remove this method once all call-sites have been migrated
+    // to the newer catalog_transact_with_context. The latter is what allows us
+    // to apply controller commands that we derive from catalog chanages to the
+    // controller either when initially applying the ops to the catalog _or_
+    // when following catalog changes from another process.
     #[instrument(name = "coord::catalog_transact_with_side_effects")]
     pub(crate) async fn catalog_transact_with_side_effects<F>(
         &mut self,
-        ctx: Option<&mut ExecuteContext>,
+        mut ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
         side_effect: F,
     ) -> Result<(), AdapterError>
@@ -94,9 +100,29 @@ impl Coordinator {
             ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
             + 'static,
     {
-        let table_updates = self
+        let (table_updates, controller_state_updates) = self
             .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
             .await?;
+
+        // We can't run this concurrently with the explicit side effects,
+        // because both want to borrow self mutably.
+        let controller_state_updates_res = self
+            .controller_apply_catalog_updates(ctx.as_deref_mut(), controller_state_updates)
+            .await;
+
+        // We would get into an inconsistent state if we updated the catalog but
+        // then failed to apply commands/updates to the controller. Easiest
+        // thing to do is panic and let restart/bootstrap handle it.
+        controller_state_updates_res.expect("cannot fail to apply controller commands");
+
+        // Note: It's important that we keep the function call inside macro, this way we only run
+        // the consistency checks if soft assertions are enabled.
+        mz_ore::soft_assert_eq_no_log!(
+            self.check_consistency(),
+            Ok(()),
+            "coordinator inconsistency detected"
+        );
+
         let side_effects_fut = side_effect(self, ctx);
 
         // Run our side effects concurrently with the table updates.
@@ -113,6 +139,50 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`] and runs
+    /// builtin table updates concurrently with any controller commands that are
+    /// generated as part of applying the given `ops` (e.g. creating
+    /// collections).
+    #[instrument(name = "coord::catalog_transact_with_context")]
+    pub(crate) async fn catalog_transact_with_context(
+        &mut self,
+        ctx: Option<&mut ExecuteContext>,
+        ops: Vec<catalog::Op>,
+    ) -> Result<(), AdapterError> {
+        let conn_id = ctx.as_ref().map(|ctx| ctx.session().conn_id());
+        let (table_updates, controller_state_updates) =
+            self.catalog_transact_inner(conn_id, ops).await?;
+
+        let controller_apply_fut =
+            self.controller_apply_catalog_updates(ctx, controller_state_updates);
+
+        // Apply controller commands concurrently with the table updates.
+        let (controller_apply_res, ()) = futures::future::join(
+            controller_apply_fut.instrument(info_span!(
+                "coord::catalog_transact_with_context::side_effects_fut"
+            )),
+            table_updates.instrument(info_span!(
+                "coord::catalog_transact_with_context::table_updates"
+            )),
+        )
+        .await;
+
+        // We would get into an inconsistent state if we updated the catalog but
+        // then failed to apply commands/updates to the controller. Easiest
+        // thing to do is panic and let restart/bootstrap handle it.
+        controller_apply_res.expect("cannot fail to apply controller commands");
+
+        // Note: It's important that we keep the function call inside macro, this way we only run
+        // the consistency checks if soft assertions are enabled.
+        mz_ore::soft_assert_eq_no_log!(
+            self.check_consistency(),
+            Ok(()),
+            "coordinator inconsistency detected"
+        );
+
+        Ok(())
+    }
+
     /// Same as [`Self::catalog_transact_inner`] but awaits the table updates.
     #[instrument(name = "coord::catalog_transact_conn")]
     pub(crate) async fn catalog_transact_conn(
@@ -120,10 +190,33 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        let table_updates = self.catalog_transact_inner(conn_id, ops).await?;
-        table_updates
-            .instrument(info_span!("coord::catalog_transact_conn::table_updates"))
-            .await;
+        let (table_updates, controller_state_updates) =
+            self.catalog_transact_inner(conn_id, ops).await?;
+
+        let controller_apply_fut =
+            self.controller_apply_catalog_updates(None, controller_state_updates);
+
+        // Apple controller commands concurrently with the table updates.
+        let (controller_apply_res, ()) = futures::future::join(
+            controller_apply_fut
+                .instrument(info_span!("coord::catalog_transact_conn::side_effects_fut")),
+            table_updates.instrument(info_span!("coord::catalog_transact_conn::table_updates")),
+        )
+        .await;
+
+        // We would get into an inconsistent state if we updated the catalog but
+        // then failed to apply commands/updates to the controller. Easiest
+        // thing to do is panic and let restart/bootstrap handle it.
+        controller_apply_res.expect("cannot fail to apply controller commands");
+
+        // Note: It's important that we keep the function call inside macro, this way we only run
+        // the consistency checks if soft assertions are enabled.
+        mz_ore::soft_assert_eq_no_log!(
+            self.check_consistency(),
+            Ok(()),
+            "coordinator inconsistency detected"
+        );
+
         Ok(())
     }
 
@@ -203,7 +296,7 @@ impl Coordinator {
         &mut self,
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
-    ) -> Result<BuiltinTableAppendNotify, AdapterError> {
+    ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>), AdapterError> {
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly);
         }
@@ -562,6 +655,7 @@ impl Coordinator {
 
         let TransactionResult {
             builtin_table_updates,
+            controller_state_updates,
             audit_events,
         } = catalog
             .transact(
@@ -807,15 +901,7 @@ impl Coordinator {
             }
         }
 
-        // Note: It's important that we keep the function call inside macro, this way we only run
-        // the consistency checks if sort assertions are enabled.
-        mz_ore::soft_assert_eq_no_log!(
-            self.check_consistency(),
-            Ok(()),
-            "coordinator inconsistency detected"
-        );
-
-        Ok(builtin_update_notify)
+        Ok((builtin_update_notify, controller_state_updates))
     }
 
     fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {

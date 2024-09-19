@@ -223,6 +223,7 @@ pub(crate) mod timestamp_selection;
 
 mod caught_up;
 mod command_handler;
+pub mod controller_commands;
 mod ddl;
 mod indexes;
 mod introspection;

@@ -97,6 +97,8 @@ pub use crate::catalog::transact::{
 };
 use crate::command::CatalogDump;
 use crate::coord::TargetCluster;
+#[cfg(test)]
+use crate::coord::controller_commands::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Portal, PreparedStatement, Session};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
@@ -1509,10 +1511,17 @@ impl Catalog {
     #[cfg(test)]
     async fn sync_to_current_updates(
         &mut self,
-    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
+    ) -> Result<
+        (
+            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+            Vec<ParsedStateUpdate>,
+        ),
+        CatalogError,
+    > {
         let updates = self.storage().await.sync_to_current_updates().await?;
-        let builtin_table_updates = self.state.apply_updates(updates)?;
-        Ok(builtin_table_updates)
+        let (builtin_table_updates, controller_state_updates) =
+            self.state.apply_updates(updates)?;
+        Ok((builtin_table_updates, controller_state_updates))
     }
 }
 
