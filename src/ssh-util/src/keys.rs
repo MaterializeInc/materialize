@@ -192,12 +192,18 @@ pub struct SshKeyPairSet {
 }
 
 impl SshKeyPairSet {
-    /// Generates a new key pair set with random key pairs.
+    // Generates a new key pair set with random key pairs.
     pub fn new() -> Result<SshKeyPairSet, anyhow::Error> {
-        Ok(SshKeyPairSet {
-            primary: SshKeyPair::new()?,
-            secondary: SshKeyPair::new()?,
-        })
+        Ok(SshKeyPairSet::from_parts(
+            SshKeyPair::new()?,
+            SshKeyPair::new()?,
+        ))
+    }
+
+    /// Creates a new key pair set from an existing primary and secondary key
+    /// pair.
+    pub fn from_parts(primary: SshKeyPair, secondary: SshKeyPair) -> SshKeyPairSet {
+        SshKeyPairSet { primary, secondary }
     }
 
     /// Rotate the key pairs in the set.

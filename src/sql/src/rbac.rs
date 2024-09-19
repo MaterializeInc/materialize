@@ -392,7 +392,6 @@ fn generate_rbac_requirements(
             if_not_exists: _,
             connection: _,
             validate: _,
-            public_key_set: _,
         }) => RbacRequirements {
             privileges: vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),

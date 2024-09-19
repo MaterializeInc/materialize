@@ -62,7 +62,7 @@ use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
-use mz_sql::plan::ClusterSchedule;
+use mz_sql::plan::{ClusterSchedule, ConnectionDetails, SshKey};
 use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -988,18 +988,14 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::String(&schema_id.to_string()),
                 Datum::String(name),
-                Datum::String(match connection.connection {
-                    mz_storage_types::connections::Connection::Kafka { .. } => "kafka",
-                    mz_storage_types::connections::Connection::Csr { .. } => {
-                        "confluent-schema-registry"
-                    }
-                    mz_storage_types::connections::Connection::Postgres { .. } => "postgres",
-                    mz_storage_types::connections::Connection::Aws(..) => "aws",
-                    mz_storage_types::connections::Connection::AwsPrivatelink(..) => {
-                        "aws-privatelink"
-                    }
-                    mz_storage_types::connections::Connection::Ssh { .. } => "ssh-tunnel",
-                    mz_storage_types::connections::Connection::MySql { .. } => "mysql",
+                Datum::String(match connection.details {
+                    ConnectionDetails::Kafka { .. } => "kafka",
+                    ConnectionDetails::Csr { .. } => "confluent-schema-registry",
+                    ConnectionDetails::Postgres { .. } => "postgres",
+                    ConnectionDetails::Aws(..) => "aws",
+                    ConnectionDetails::AwsPrivatelink(..) => "aws-privatelink",
+                    ConnectionDetails::Ssh { .. } => "ssh-tunnel",
+                    ConnectionDetails::MySql { .. } => "mysql",
                 }),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -1008,11 +1004,11 @@ impl CatalogState {
             ]),
             diff,
         }];
-        match connection.connection {
-            mz_storage_types::connections::Connection::Kafka(ref kafka) => {
+        match connection.details {
+            ConnectionDetails::Kafka(ref kafka) => {
                 updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
             }
-            mz_storage_types::connections::Connection::Aws(ref aws_config) => {
+            ConnectionDetails::Aws(ref aws_config) => {
                 match self.pack_aws_connection_update(id, aws_config, diff) {
                     Ok(update) => {
                         updates.push(update);
@@ -1022,7 +1018,7 @@ impl CatalogState {
                     }
                 }
             }
-            mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
+            ConnectionDetails::AwsPrivatelink(_) => {
                 if let Some(aws_principal_context) = self.aws_principal_context.as_ref() {
                     updates.push(self.pack_aws_privatelink_connection_update(
                         id,
@@ -1033,13 +1029,16 @@ impl CatalogState {
                     tracing::error!(%id, "missing AWS principal context; cannot write row to mz_aws_privatelink_connections table");
                 }
             }
-            mz_storage_types::connections::Connection::Csr(_)
-            | mz_storage_types::connections::Connection::Postgres(_)
-            // SSH connection table updates are handled elsewhere. The content of the table is
-            // stored in the secret controller, not the durable catalog, which requires special
-            // handling.
-            | mz_storage_types::connections::Connection::Ssh(_)
-            | mz_storage_types::connections::Connection::MySql(_) => (),
+            ConnectionDetails::Ssh {
+                ref key_1,
+                ref key_2,
+                ..
+            } => {
+                updates.push(self.pack_ssh_tunnel_connection_update(id, key_1, key_2, diff));
+            }
+            ConnectionDetails::Csr(_)
+            | ConnectionDetails::Postgres(_)
+            | ConnectionDetails::MySql(_) => (),
         };
         updates
     }
@@ -1047,15 +1046,16 @@ impl CatalogState {
     pub(crate) fn pack_ssh_tunnel_connection_update(
         &self,
         id: GlobalId,
-        (public_key_primary, public_key_secondary): &(String, String),
+        key_1: &SshKey,
+        key_2: &SshKey,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         BuiltinTableUpdate {
             id: &*MZ_SSH_TUNNEL_CONNECTIONS,
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::String(public_key_primary),
-                Datum::String(public_key_secondary),
+                Datum::String(key_1.public_key().as_str()),
+                Datum::String(key_2.public_key().as_str()),
             ]),
             diff,
         }

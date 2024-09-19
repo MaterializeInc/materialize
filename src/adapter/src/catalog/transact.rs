@@ -187,18 +187,14 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
-    /// Performs updates to weird builtin tables, such as `mz_ssh_tunnel_connections` and
-    /// `mz_cluster_replica_statuses`. Their contents are not fully derived from catalog state.
-    /// `mz_ssh_tunnel_connections` is derived from the secrets controller, however, it still must
-    /// be kept in-sync with the catalog state. Storing the contents of the table in the durable
-    /// catalog would simplify the situation, but then we'd have to somehow encode public keys the
-    /// CREATE SQL of connections, which is annoying. In order to successfully balance all of these
-    /// constraints, we handle all updates to the table separately. `mz_cluster_replica_statuses`
-    /// is ephemeral state and should be a builtin source.
+    /// Performs updates to weird builtin tables, such as
+    /// `mz_cluster_replica_statuses`, which is ephemeral state and should be a
+    /// builtin source.
     ///
-    /// TODO(jkosh44) In a multi-writer or high availability catalog world, this will not work. If
-    /// a process crashes after updating the durable catalog but before updating the builtin table,
-    /// then another listening catalog will never know to update the builtin table.
+    /// TODO(jkosh44) In a multi-writer or high availability catalog world, this
+    /// will not work. If a process crashes after updating the durable catalog
+    /// but before updating the builtin table, then another listening catalog
+    /// will never know to update the builtin table.
     WeirdBuiltinTableUpdates {
         builtin_table_update: BuiltinTableUpdate,
         audit_log: Vec<(EventType, ObjectType, EventDetails)>,

@@ -16,6 +16,22 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 id public_key_1 public_key_2
 ----------------------------
 
+! CREATE CONNECTION louisoix TO SSH TUNNEL (
+    HOST 'chaos.example.com',
+    USER 'louisoix',
+    PORT 22,
+    PUBLIC KEY 1 = 'bad'
+  );
+contains:the PUBLIC KEY 1 option cannot be explicitly specified
+
+! CREATE CONNECTION louisoix TO SSH TUNNEL (
+    HOST 'chaos.example.com',
+    USER 'louisoix',
+    PORT 22,
+    PUBLIC KEY 2 = 'bad'
+  );
+contains:the PUBLIC KEY 2 option cannot be explicitly specified
+
 > CREATE CONNECTION louisoix TO SSH TUNNEL (
     HOST 'chaos.example.com',
     USER 'louisoix',

@@ -728,6 +728,8 @@ pub enum ConnectionOptionName {
     Port,
     ProgressTopic,
     ProgressTopicReplicationFactor,
+    PublicKey1,
+    PublicKey2,
     Region,
     SaslMechanisms,
     SaslPassword,
@@ -763,6 +765,8 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::ProgressTopicReplicationFactor => {
                 "PROGRESS TOPIC REPLICATION FACTOR"
             }
+            ConnectionOptionName::PublicKey1 => "PUBLIC KEY 1",
+            ConnectionOptionName::PublicKey2 => "PUBLIC KEY 2",
             ConnectionOptionName::Region => "REGION",
             ConnectionOptionName::AssumeRoleArn => "ASSUME ROLE ARN",
             ConnectionOptionName::AssumeRoleSessionName => "ASSUME ROLE SESSION NAME",
@@ -806,6 +810,8 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::Port
             | ConnectionOptionName::ProgressTopic
             | ConnectionOptionName::ProgressTopicReplicationFactor
+            | ConnectionOptionName::PublicKey1
+            | ConnectionOptionName::PublicKey2
             | ConnectionOptionName::Region
             | ConnectionOptionName::AssumeRoleArn
             | ConnectionOptionName::AssumeRoleSessionName

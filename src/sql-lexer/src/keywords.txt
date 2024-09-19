@@ -327,6 +327,7 @@ Privileges
 Progress
 Protobuf
 Protocol
+Public
 Publication
 Pushdown
 Query

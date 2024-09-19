@@ -49,7 +49,13 @@ use mz_sql_parser::ast::{
     SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value,
     WithOptionValue,
 };
+use mz_ssh_util::keys::SshKeyPair;
+use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::{
+    AwsPrivatelinkConnection, CsrConnection, KafkaConnection, MySqlConnection, PostgresConnection,
+    SshConnection,
+};
 use mz_storage_types::sinks::{
     S3SinkFormat, SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection,
 };
@@ -637,7 +643,6 @@ pub struct CreateConnectionPlan {
     pub if_not_exists: bool,
     pub connection: Connection,
     pub validate: bool,
-    pub public_key_set: Option<(String, String)>,
 }
 
 #[derive(Debug)]
@@ -1470,7 +1475,68 @@ pub struct WebhookValidationSecret {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
+    pub details: ConnectionDetails,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum ConnectionDetails {
+    Kafka(KafkaConnection<ReferencedConnection>),
+    Csr(CsrConnection<ReferencedConnection>),
+    Postgres(PostgresConnection<ReferencedConnection>),
+    Ssh {
+        connection: SshConnection,
+        key_1: SshKey,
+        key_2: SshKey,
+    },
+    Aws(AwsConnection),
+    AwsPrivatelink(AwsPrivatelinkConnection),
+    MySql(MySqlConnection<ReferencedConnection>),
+}
+
+impl ConnectionDetails {
+    pub fn to_connection(&self) -> mz_storage_types::connections::Connection<ReferencedConnection> {
+        match self {
+            ConnectionDetails::Kafka(c) => {
+                mz_storage_types::connections::Connection::Kafka(c.clone())
+            }
+            ConnectionDetails::Csr(c) => mz_storage_types::connections::Connection::Csr(c.clone()),
+            ConnectionDetails::Postgres(c) => {
+                mz_storage_types::connections::Connection::Postgres(c.clone())
+            }
+            ConnectionDetails::Ssh { connection, .. } => {
+                mz_storage_types::connections::Connection::Ssh(connection.clone())
+            }
+            ConnectionDetails::Aws(c) => mz_storage_types::connections::Connection::Aws(c.clone()),
+            ConnectionDetails::AwsPrivatelink(c) => {
+                mz_storage_types::connections::Connection::AwsPrivatelink(c.clone())
+            }
+            ConnectionDetails::MySql(c) => {
+                mz_storage_types::connections::Connection::MySql(c.clone())
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum SshKey {
+    PublicOnly(String),
+    Both(SshKeyPair),
+}
+
+impl SshKey {
+    pub fn as_key_pair(&self) -> Option<&SshKeyPair> {
+        match self {
+            SshKey::PublicOnly(_) => None,
+            SshKey::Both(key_pair) => Some(key_pair),
+        }
+    }
+
+    pub fn public_key(&self) -> String {
+        match self {
+            SshKey::PublicOnly(s) => s.into(),
+            SshKey::Both(p) => p.ssh_public_key(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

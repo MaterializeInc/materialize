@@ -52,27 +52,28 @@ use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
     ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
     ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
-    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
-    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
-    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
-    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption,
-    KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    Statement, TableConstraint, TableFromSourceOption, TableFromSourceOptionName, TableOption,
-    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
+    ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement, CreateClusterStatement,
+    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
+    CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceOption, CreateSourceOptionName,
+    CreateSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
+    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
+    DropOwnedStatement, Expr, Format, FormatSpecifier, Ident, IfExistsBehavior, IndexOption,
+    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
+    SourceIncludeMetadata, Statement, TableConstraint, TableFromSourceOption,
+    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -136,15 +137,15 @@ use crate::plan::{
     AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
     AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSystemResetAllPlan,
     AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan,
-    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, FullItemName, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
-    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
-    WebhookHeaders, WebhookValidation,
+    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, FullItemName, Index, Ingestion,
+    MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig,
+    Secret, Sink, Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
+    WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
 use crate::session::vars::{
@@ -4478,18 +4479,17 @@ generate_extracted_config!(CreateConnectionOption, (Validate, bool));
 
 pub fn plan_create_connection(
     scx: &StatementContext,
-    stmt: CreateConnectionStatement<Aug>,
+    mut stmt: CreateConnectionStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let create_sql = normalize::create_statement(scx, Statement::CreateConnection(stmt.clone()))?;
     let CreateConnectionStatement {
         name,
         connection_type,
         values,
         if_not_exists,
         with_options,
-    } = stmt;
+    } = stmt.clone();
     let connection_options_extracted = connection::ConnectionOptionExtracted::try_from(values)?;
-    let connection = connection_options_extracted.try_into_connection(scx, connection_type)?;
+    let details = connection_options_extracted.try_into_connection_details(scx, connection_type)?;
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     let options = CreateConnectionOptionExtracted::try_from(with_options)?;
@@ -4502,7 +4502,7 @@ pub fn plan_create_connection(
             scx.catalog
                 .system_vars()
                 .enable_default_connection_validation()
-                && connection.validate_by_default()
+                && details.to_connection().validate_by_default()
         }
     };
 
@@ -4516,15 +4516,31 @@ pub fn plan_create_connection(
         });
     }
 
+    // For SSH connections, overwrite the public key options based on the
+    // connection details, in case we generated new keys during planning.
+    if let ConnectionDetails::Ssh { key_1, key_2, .. } = &details {
+        stmt.values.retain(|v| {
+            v.name != ConnectionOptionName::PublicKey1 && v.name != ConnectionOptionName::PublicKey2
+        });
+        stmt.values.push(ConnectionOption {
+            name: ConnectionOptionName::PublicKey1,
+            value: Some(WithOptionValue::Value(Value::String(key_1.public_key()))),
+        });
+        stmt.values.push(ConnectionOption {
+            name: ConnectionOptionName::PublicKey2,
+            value: Some(WithOptionValue::Value(Value::String(key_2.public_key()))),
+        });
+    }
+    let create_sql = normalize::create_statement(scx, Statement::CreateConnection(stmt))?;
+
     let plan = CreateConnectionPlan {
         name,
         if_not_exists,
         connection: crate::plan::Connection {
             create_sql,
-            connection,
+            details,
         },
         validate,
-        public_key_set: None,
     };
     Ok(Plan::CreateConnection(plan))
 }

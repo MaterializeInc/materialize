@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::Context;
 use array_concat::concat_arrays;
 use itertools::Itertools;
 use maplit::btreemap;
@@ -25,6 +26,7 @@ use mz_sql_parser::ast::{
     KafkaBroker, KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName,
     KafkaBrokerTunnel,
 };
+use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::{
     AwsAssumeRole, AwsAuth, AwsConnection, AwsConnectionReference, AwsCredentials,
 };
@@ -39,7 +41,7 @@ use mz_storage_types::connections::{
 use crate::names::Aug;
 use crate::plan::statement::{Connection, ResolvedItemName};
 use crate::plan::with_options::{self, TryFromValue};
-use crate::plan::{PlanError, StatementContext};
+use crate::plan::{ConnectionDetails, PlanError, SshKey, StatementContext};
 use crate::session::vars::{self, ENABLE_AWS_MSK_IAM_AUTH};
 
 generate_extracted_config!(
@@ -60,6 +62,8 @@ generate_extracted_config!(
     (Port, u16),
     (ProgressTopic, String),
     (ProgressTopicReplicationFactor, i32),
+    (PublicKey1, String),
+    (PublicKey2, String),
     (Region, String),
     (SaslMechanisms, String),
     (SaslPassword, with_options::Secret),
@@ -147,7 +151,7 @@ pub(super) fn validate_options_per_connection_type(
             SslMode,
             User,
         ],
-        CreateConnectionType::Ssh => &[Host, Port, User],
+        CreateConnectionType::Ssh => &[Host, Port, User, PublicKey1, PublicKey2],
         CreateConnectionType::MySql => &[
             AwsPrivatelink,
             Host,
@@ -185,14 +189,14 @@ impl ConnectionOptionExtracted {
         validate_options_per_connection_type(t, self.seen.clone())
     }
 
-    pub fn try_into_connection(
+    pub fn try_into_connection_details(
         self,
         scx: &StatementContext,
         connection_type: CreateConnectionType,
-    ) -> Result<Connection<ReferencedConnection>, PlanError> {
+    ) -> Result<ConnectionDetails, PlanError> {
         self.ensure_only_valid_options(connection_type)?;
 
-        let connection: Connection<ReferencedConnection> = match connection_type {
+        let connection: ConnectionDetails = match connection_type {
             CreateConnectionType::Aws => {
                 let credentials = match (
                     self.access_key_id,
@@ -231,7 +235,7 @@ impl ConnectionOptionExtracted {
                     }
                 };
 
-                Connection::Aws(AwsConnection {
+                ConnectionDetails::Aws(AwsConnection {
                     auth,
                     endpoint: match self.endpoint {
                         // TODO(benesch): this should not treat an empty endpoint as equivalent to a `NULL`
@@ -276,12 +280,12 @@ impl ConnectionOptionExtracted {
                         });
                     }
                 }
-                Connection::AwsPrivatelink(connection)
+                ConnectionDetails::AwsPrivatelink(connection)
             }
             CreateConnectionType::Kafka => {
                 let (tls, sasl) = plan_kafka_security(scx, &self)?;
 
-                Connection::Kafka(KafkaConnection {
+                ConnectionDetails::Kafka(KafkaConnection {
                     brokers: self.get_brokers(scx)?,
                     default_tunnel: scx
                         .build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?,
@@ -341,7 +345,7 @@ impl ConnectionOptionExtracted {
                 }
                 let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
-                Connection::Csr(CsrConnection {
+                ConnectionDetails::Csr(CsrConnection {
                     url,
                     tls_root_cert: self.ssl_certificate_authority,
                     tls_identity,
@@ -384,7 +388,7 @@ impl ConnectionOptionExtracted {
                 }
                 let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
-                Connection::Postgres(PostgresConnection {
+                ConnectionDetails::Postgres(PostgresConnection {
                     database: self
                         .database
                         .ok_or_else(|| sql_err!("DATABASE option is required"))?,
@@ -407,21 +411,36 @@ impl ConnectionOptionExtracted {
                     },
                 })
             }
-            CreateConnectionType::Ssh => Connection::Ssh(SshConnection {
-                host: self
-                    .host
-                    .ok_or_else(|| sql_err!("HOST option is required"))?,
-                port: self.port.unwrap_or(22_u16),
-                user: match self
-                    .user
-                    .ok_or_else(|| sql_err!("USER option is required"))?
-                {
-                    StringOrSecret::String(user) => user,
-                    StringOrSecret::Secret(_) => {
-                        sql_bail!("SSH connections do not support supplying USER value as SECRET")
+            CreateConnectionType::Ssh => {
+                let ensure_key = |public_key| match public_key {
+                    Some(public_key) => Ok::<_, anyhow::Error>(SshKey::PublicOnly(public_key)),
+                    None => {
+                        let key = SshKeyPair::new().context("creating SSH key")?;
+                        Ok(SshKey::Both(key))
                     }
-                },
-            }),
+                };
+                ConnectionDetails::Ssh {
+                    connection: SshConnection {
+                        host: self
+                            .host
+                            .ok_or_else(|| sql_err!("HOST option is required"))?,
+                        port: self.port.unwrap_or(22_u16),
+                        user: match self
+                            .user
+                            .ok_or_else(|| sql_err!("USER option is required"))?
+                        {
+                            StringOrSecret::String(user) => user,
+                            StringOrSecret::Secret(_) => {
+                                sql_bail!(
+                                    "SSH connections do not support supplying USER value as SECRET"
+                                )
+                            }
+                        },
+                    },
+                    key_1: ensure_key(self.public_key1)?,
+                    key_2: ensure_key(self.public_key2)?,
+                }
+            }
             CreateConnectionType::MySql => {
                 let cert = self.ssl_certificate;
                 let key = self.ssl_key.map(|secret| secret.into());
@@ -459,7 +478,7 @@ impl ConnectionOptionExtracted {
                 }
                 let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
-                Connection::MySql(MySqlConnection {
+                ConnectionDetails::MySql(MySqlConnection {
                     password: self.password.map(|password| password.into()),
                     host: self
                         .host
