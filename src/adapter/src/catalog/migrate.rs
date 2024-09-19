@@ -23,6 +23,7 @@ use semver::Version;
 use tracing::info;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::open::into_consolidatable_updates_startup;
+use crate::catalog::side_effects::CatalogSideEffect;
 use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
 
 async fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
@@ -84,7 +85,13 @@ pub(crate) async fn migrate(
     item_updates: Vec<StateUpdate>,
     _now: NowFn,
     _boot_ts: Timestamp,
-) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, anyhow::Error> {
+) -> Result<
+    (
+        Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+        Vec<CatalogSideEffect>,
+    ),
+    anyhow::Error,
+> {
     let catalog_version = tx.get_catalog_content_version();
     let catalog_version = match catalog_version {
         Some(v) => Version::parse(&v)?,
@@ -127,7 +134,8 @@ pub(crate) async fn migrate(
             diff: diff.try_into().expect("valid diff"),
         })
         .collect();
-    let mut ast_builtin_table_updates = state.apply_updates_for_bootstrap(item_updates).await;
+    let (mut ast_builtin_table_updates, mut ast_side_effects) =
+        state.apply_updates_for_bootstrap(item_updates).await;
 
     info!("migrating from catalog version {:?}", catalog_version);
 
@@ -161,15 +169,17 @@ pub(crate) async fn migrate(
     // input and stages arbitrary transformations to the catalog on `tx`.
 
     let op_item_updates = tx.get_and_commit_op_updates();
-    let item_builtin_table_updates = state.apply_updates_for_bootstrap(op_item_updates).await;
+    let (item_builtin_table_updates, item_side_effects) =
+        state.apply_updates_for_bootstrap(op_item_updates).await;
 
     ast_builtin_table_updates.extend(item_builtin_table_updates);
+    ast_side_effects.extend(item_side_effects);
 
     info!(
         "migration from catalog version {:?} complete",
         catalog_version
     );
-    Ok(ast_builtin_table_updates)
+    Ok((ast_builtin_table_updates, ast_side_effects))
 }
 
 // Add new migrations below their appropriate heading, and precede them with a

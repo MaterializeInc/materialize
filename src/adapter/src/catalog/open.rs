@@ -365,7 +365,12 @@ impl Catalog {
             }
         }
 
-        let builtin_table_update = state.apply_updates_for_bootstrap(pre_item_updates).await;
+        // When initializing/bootstrapping, we don't use the side effects but
+        // instead load the catalog fully and then go ahead and apply the side
+        // effects. Maybe we _should_ instead use the same logic and return and
+        // use the side effects from here.
+        let (builtin_table_update, _side_effects) =
+            state.apply_updates_for_bootstrap(pre_item_updates).await;
         builtin_table_updates.extend(builtin_table_update);
 
         let last_seen_version = txn
@@ -373,7 +378,7 @@ impl Catalog {
             .unwrap_or_else(|| "new".to_string());
 
         // Migrate item ASTs.
-        let builtin_table_update = if !config.skip_migrations {
+        let (builtin_table_update, _side_effect) = if !config.skip_migrations {
             migrate::migrate(
                 &mut state,
                 &mut txn,
@@ -394,7 +399,8 @@ impl Catalog {
         };
         builtin_table_updates.extend(builtin_table_update);
 
-        let builtin_table_update = state.apply_updates_for_bootstrap(post_item_updates).await;
+        let (builtin_table_update, _side_effect) =
+            state.apply_updates_for_bootstrap(post_item_updates).await;
         builtin_table_updates.extend(builtin_table_update);
 
         // Migrate builtin items.
@@ -552,8 +558,9 @@ impl Catalog {
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
         let updates = txn.get_and_commit_op_updates();
-        let builtin_updates = state.apply_updates(updates)?;
+        let (builtin_updates, side_effects) = state.apply_updates(updates)?;
         assert_eq!(builtin_updates, Vec::new());
+        assert!(side_effects.is_empty());
         txn.commit().await?;
         drop(storage);
 
@@ -819,7 +826,12 @@ impl Catalog {
                 }),
         )?;
         let updates = txn.get_and_commit_op_updates();
-        let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
+
+        // When initializing/bootstrapping, we don't use the side effects but
+        // instead load the catalog fully and then go ahead and apply the side
+        // effects. Maybe we _should_ instead use the same logic and return and
+        // use the side effects from here.
+        let (builtin_table_update, _side_effect) = state.apply_updates_for_bootstrap(updates).await;
         builtin_table_updates.extend(builtin_table_update);
         for CreateOp {
             id,
@@ -843,7 +855,13 @@ impl Catalog {
                 privileges.all_values_owned().collect(),
             )?;
             let updates = txn.get_and_commit_op_updates();
-            let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
+
+            // When initializing/bootstrapping, we don't use the controller
+            // updates but instead load the catalog fully and then go ahead and
+            // apply the side effects. Maybe we _should_ instead use the same
+            // logic and return and use the side effects from here.
+            let (builtin_table_update, _side_effect) =
+                state.apply_updates_for_bootstrap(updates).await;
             builtin_table_updates.extend(builtin_table_update);
         }
         Ok(builtin_table_updates)

@@ -56,6 +56,7 @@ use serde_json::json;
 use tracing::{event, info_span, warn, Instrument, Level};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
+use crate::catalog::side_effects::CatalogSideEffect;
 use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -68,6 +69,9 @@ use crate::{catalog, flags, AdapterError, TimestampProvider};
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`].
+    ///
+    /// This asserts that there are no side effects being generated from
+    /// applying the given `ops`.
     #[instrument(name = "coord::catalog_transact")]
     pub(crate) async fn catalog_transact(
         &mut self,
@@ -81,6 +85,14 @@ impl Coordinator {
     /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`] and runs
     /// builtin table updates concurrently with any side effects (e.g. creating
     /// collections).
+    ///
+    /// This asserts that there are no side effects being generated from
+    /// applying the given `ops`.
+    // TODO(aljoscha): Remove this method once all call-sites have been migrated
+    // to the newer catalog_transact_and_apply_side_effects. The latter is what
+    // allows us to apply side effects to the controller either when initially
+    // applying the ops to the catalog _or_ when following catalog changes from
+    // another process.
     #[instrument(name = "coord::catalog_transact_with_side_effects")]
     pub(crate) async fn catalog_transact_with_side_effects<'c, F, Fut>(
         &'c mut self,
@@ -92,9 +104,12 @@ impl Coordinator {
         F: FnOnce(&'c mut Coordinator) -> Fut,
         Fut: Future<Output = ()>,
     {
-        let table_updates = self
+        let (table_updates, derived_side_effects) = self
             .catalog_transact_inner(session.map(|session| session.conn_id()), ops)
             .await?;
+
+        assert!(derived_side_effects.is_empty(), "cannot apply ops that produce side effects when using catalog_transact_with_side_effects");
+
         let side_effects_fut = side_effect(self);
 
         // Run our side effects concurrently with the table updates.
@@ -111,17 +126,60 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`] and runs
+    /// builtin table updates concurrently with any side effects that are
+    /// generated as part of applying the given `ops` (e.g. creating
+    /// collections).
+    #[instrument(name = "coord::catalog_transact_and_apply_side_effects")]
+    pub(crate) async fn catalog_transact_and_apply_side_effects(
+        &mut self,
+        session: Option<&Session>,
+        ops: Vec<catalog::Op>,
+    ) -> Result<(), AdapterError> {
+        let (table_updates, derived_side_effects) = self
+            .catalog_transact_inner(session.map(|session| session.conn_id()), ops)
+            .await?;
+
+        let side_effects_fut = self.controller_apply_side_effects(derived_side_effects);
+
+        // Run our side effects concurrently with the table updates.
+        let (side_effects_res, ()) = futures::future::join(
+            side_effects_fut.instrument(info_span!(
+                "coord::catalog_transact_with_side_effects::side_effects_fut"
+            )),
+            table_updates.instrument(info_span!(
+                "coord::catalog_transact_with_side_effects::table_updates"
+            )),
+        )
+        .await;
+
+        // We would get into an inconsistent state if we updated the catalog but
+        // then failed to apply the side effects to the controller. Easiest
+        // thing to do is panic and let restart/bootstrap handle it.
+        side_effects_res.expect("cannot fail to apply side effects");
+
+        Ok(())
+    }
+
     /// Same as [`Self::catalog_transact_inner`] but awaits the table updates.
+    ///
+    /// This asserts that there are no side effects being generated from
+    /// applying the given `ops`.
     #[instrument(name = "coord::catalog_transact_conn")]
     pub(crate) async fn catalog_transact_conn(
         &mut self,
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        let table_updates = self.catalog_transact_inner(conn_id, ops).await?;
+        let (table_updates, derived_side_effects) =
+            self.catalog_transact_inner(conn_id, ops).await?;
+
+        assert!(derived_side_effects.is_empty(), "cannot apply ops that produce side effects when using catalog_transact_with_side_effects");
+
         table_updates
             .instrument(info_span!("coord::catalog_transact_conn::table_updates"))
             .await;
+
         Ok(())
     }
 
@@ -185,7 +243,7 @@ impl Coordinator {
         &mut self,
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
-    ) -> Result<BuiltinTableAppendNotify, AdapterError> {
+    ) -> Result<(BuiltinTableAppendNotify, Vec<CatalogSideEffect>), AdapterError> {
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly);
         }
@@ -504,6 +562,7 @@ impl Coordinator {
 
         let TransactionResult {
             mut builtin_table_updates,
+            side_effects,
             audit_events,
         } = catalog
             .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
@@ -602,10 +661,9 @@ impl Coordinator {
                     assert_eq!(should_be_empty, became_empty, "emptiness did not match!");
                 }
             }
-            if !tables_to_drop.is_empty() {
-                let ts = self.get_local_write_ts().await;
-                self.drop_tables(tables_to_drop, ts.timestamp);
-            }
+            // TODO(aljoscha): When we wire up side-effects for sources, make
+            // sure we drop tables before sources.
+            //
             // Note that we drop tables before sources since there can be a weak dependency
             // on sources from tables in the storage controller that will result in error
             // logging that we'd prefer to avoid. This isn't an actual dependency issue but
@@ -803,7 +861,7 @@ impl Coordinator {
             "coordinator inconsistency detected"
         );
 
-        Ok(builtin_update_notify)
+        Ok((builtin_update_notify, side_effects))
     }
 
     fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
@@ -842,14 +900,6 @@ impl Coordinator {
             .storage
             .drop_sources(storage_metadata, sources)
             .unwrap_or_terminate("cannot fail to drop sources");
-    }
-
-    fn drop_tables(&mut self, tables: Vec<GlobalId>, ts: Timestamp) {
-        let storage_metadata = self.catalog.state().storage_metadata();
-        self.controller
-            .storage
-            .drop_tables(storage_metadata, tables, ts)
-            .unwrap_or_terminate("cannot fail to drop tables");
     }
 
     fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = GlobalId>) {

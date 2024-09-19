@@ -409,7 +409,11 @@ async fn migrate_builtin_items_0dt(
     };
 
     let updates = txn.get_and_commit_op_updates();
-    let builtin_table_updates = state.apply_updates_for_bootstrap(updates).await;
+    // When initializing/bootstrapping, we don't use the side effects but
+    // instead load the catalog fully and then go ahead and apply the controller
+    // updates. Maybe we _should_ instead use the same logic and return and use
+    // the side effects from here.
+    let (builtin_table_updates, _side_effects) = state.apply_updates_for_bootstrap(updates).await;
 
     let cleanup_action = async move {
         if !read_only {
