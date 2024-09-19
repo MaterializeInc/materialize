@@ -19,7 +19,6 @@ use futures::future::{BoxFuture, FutureExt};
 use futures::stream::FuturesOrdered;
 use futures::{Future, StreamExt, future};
 use itertools::Itertools;
-use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_PASSWORD_AUTH};
@@ -1160,6 +1159,17 @@ impl Coordinator {
                 }
             },
         };
+
+        let is_webhook = if let TableDataSource::DataSource {
+            desc: DataSourceDesc::Webhook { .. },
+            timeline: _,
+        } = &data_source
+        {
+            true
+        } else {
+            false
+        };
+
         let table = Table {
             create_sql: Some(table.create_sql),
             desc: table.desc,
@@ -1177,167 +1187,16 @@ impl Coordinator {
             owner_id: *ctx.session().current_role_id(),
         }];
 
-        let catalog_result = self
-            .catalog_transact_with_ddl_transaction(ctx, ops, move |coord, ctx| {
-                Box::pin(async move {
-                    // The table data_source determines whether this table will be written to
-                    // by environmentd (e.g. with INSERT INTO statements) or by the storage layer
-                    // (e.g. a source-fed table).
-                    let (collections, register_ts, read_policies) = match table.data_source {
-                        TableDataSource::TableWrites { defaults: _ } => {
-                            // Determine the initial validity for the table.
-                            let register_ts = coord.get_local_write_ts().await.timestamp;
+        let catalog_result = self.catalog_transact_with_context(Some(ctx), ops).await;
 
-                            // After acquiring `register_ts` but before using it, we need to
-                            // be sure we're still the leader. Otherwise a new generation
-                            // may also be trying to use `register_ts` for a different
-                            // purpose.
-                            //
-                            // See database-issues#8273.
-                            coord
-                                .catalog
-                                .confirm_leadership()
-                                .await
-                                .unwrap_or_terminate("unable to confirm leadership");
-
-                            if let Some(id) = ctx.as_ref().and_then(|ctx| ctx.extra().contents()) {
-                                coord.set_statement_execution_timestamp(id, register_ts);
-                            }
-
-                            // When initially creating a table it should only have a single version.
-                            let relation_version = RelationVersion::root();
-                            assert_eq!(table.desc.latest_version(), relation_version);
-                            let relation_desc = table
-                                .desc
-                                .at_version(RelationVersionSelector::Specific(relation_version));
-                            // We assert above we have a single version, and thus we are the primary.
-                            let collection_desc =
-                                CollectionDescription::for_table(relation_desc, None);
-                            let collections = vec![(global_id, collection_desc)];
-
-                            let compaction_window = table
-                                .custom_logical_compaction_window
-                                .unwrap_or(CompactionWindow::Default);
-                            let read_policies =
-                                BTreeMap::from([(compaction_window, btreeset! { table_id })]);
-
-                            (collections, Some(register_ts), read_policies)
-                        }
-                        TableDataSource::DataSource {
-                            desc: data_source,
-                            timeline,
-                        } => {
-                            match data_source {
-                                DataSourceDesc::IngestionExport {
-                                    ingestion_id,
-                                    external_reference: _,
-                                    details,
-                                    data_config,
-                                } => {
-                                    // TODO: It's a little weird that a table will be present in this
-                                    // source status collection, we might want to split out into a separate
-                                    // status collection.
-                                    let source_status_item_id =
-                                        coord.catalog().resolve_builtin_storage_collection(
-                                            &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                                        );
-                                    let status_collection_id = Some(
-                                        coord
-                                            .catalog()
-                                            .get_entry(&source_status_item_id)
-                                            .latest_global_id(),
-                                    );
-                                    // TODO(parkmycar): We should probably check the type here, but I'm not sure if
-                                    // this will always be a Source or a Table.
-                                    let ingestion_id =
-                                        coord.catalog().get_entry(&ingestion_id).latest_global_id();
-                                    // Create the underlying collection with the latest schema from the Table.
-                                    let collection_desc = CollectionDescription::<Timestamp> {
-                                        desc: table
-                                            .desc
-                                            .at_version(RelationVersionSelector::Latest),
-                                        data_source: DataSource::IngestionExport {
-                                            ingestion_id,
-                                            details,
-                                            data_config: data_config
-                                                .into_inline_connection(coord.catalog.state()),
-                                        },
-                                        since: None,
-                                        status_collection_id,
-                                        timeline: Some(timeline.clone()),
-                                    };
-
-                                    let collections = vec![(global_id, collection_desc)];
-                                    let read_policies = coord
-                                        .catalog()
-                                        .state()
-                                        .source_compaction_windows(vec![table_id]);
-
-                                    (collections, None, read_policies)
-                                }
-                                DataSourceDesc::Webhook { .. } => {
-                                    if let Some(url) =
-                                        coord.catalog().state().try_get_webhook_url(&table_id)
-                                    {
-                                        if let Some(ctx) = ctx.as_ref() {
-                                            ctx.session().add_notice(
-                                                AdapterNotice::WebhookSourceCreated { url },
-                                            )
-                                        }
-                                    }
-
-                                    // Create the underlying collection with the latest schema from the Table.
-                                    assert_eq!(
-                                        table.desc.latest_version(),
-                                        RelationVersion::root(),
-                                        "found webhook with more than 1 relation version, {:?}",
-                                        table.desc
-                                    );
-                                    let desc = table.desc.latest();
-
-                                    let collection_desc = CollectionDescription {
-                                        desc,
-                                        data_source: DataSource::Webhook,
-                                        since: None,
-                                        status_collection_id: None,
-                                        timeline: Some(timeline.clone()),
-                                    };
-                                    let collections = vec![(global_id, collection_desc)];
-                                    let read_policies = coord
-                                        .catalog()
-                                        .state()
-                                        .source_compaction_windows(vec![table_id]);
-
-                                    (collections, None, read_policies)
-                                }
-                                _ => unreachable!("CREATE TABLE data source got {:?}", data_source),
-                            }
-                        }
-                    };
-
-                    // Create the collections.
-                    let storage_metadata = coord.catalog.state().storage_metadata();
-                    coord
-                        .controller
-                        .storage
-                        .create_collections(storage_metadata, register_ts, collections)
-                        .await
-                        .unwrap_or_terminate("cannot fail to create collections");
-
-                    // Mark the register timestamp as completed.
-                    if let Some(register_ts) = register_ts {
-                        coord.apply_local_write(register_ts).await;
-                    }
-
-                    // Initialize the Read Policies.
-                    for (compaction_window, storage_policies) in read_policies {
-                        coord
-                            .initialize_storage_read_policies(storage_policies, compaction_window)
-                            .await;
-                    }
-                })
-            })
-            .await;
+        if is_webhook {
+            // try_get_webhook_url will make up a URL for things that are not
+            // webhooks, so we guard against that here.
+            if let Some(url) = self.catalog().state().try_get_webhook_url(&table_id) {
+                ctx.session()
+                    .add_notice(AdapterNotice::WebhookSourceCreated { url })
+            }
+        }
 
         match catalog_result {
             Ok(()) => Ok(ExecuteResponse::CreatedTable),
@@ -1533,7 +1392,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_drop_objects(
         &mut self,
-        session: &Session,
+        ctx: &mut ExecuteContext,
         plan::DropObjectsPlan {
             drop_ids,
             object_type,
@@ -1546,7 +1405,7 @@ impl Coordinator {
             if !referenced_ids_hashset.contains(obj_id) {
                 let object_info = ErrorMessageObjectDescription::from_id(
                     obj_id,
-                    &self.catalog().for_session(session),
+                    &self.catalog().for_session(ctx.session()),
                 )
                 .to_string();
                 objects.push(object_info);
@@ -1554,7 +1413,8 @@ impl Coordinator {
         }
 
         if !objects.is_empty() {
-            session.add_notice(AdapterNotice::CascadeDroppedObject { objects });
+            ctx.session()
+                .add_notice(AdapterNotice::CascadeDroppedObject { objects });
         }
 
         let DropOps {
@@ -1562,24 +1422,27 @@ impl Coordinator {
             dropped_active_db,
             dropped_active_cluster,
             dropped_in_use_indexes,
-        } = self.sequence_drop_common(session, drop_ids)?;
+        } = self.sequence_drop_common(ctx.session(), drop_ids)?;
 
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact_with_context(Some(ctx), ops).await?;
 
         fail::fail_point!("after_sequencer_drop_replica");
 
         if dropped_active_db {
-            session.add_notice(AdapterNotice::DroppedActiveDatabase {
-                name: session.vars().database().to_string(),
-            });
+            ctx.session()
+                .add_notice(AdapterNotice::DroppedActiveDatabase {
+                    name: ctx.session().vars().database().to_string(),
+                });
         }
         if dropped_active_cluster {
-            session.add_notice(AdapterNotice::DroppedActiveCluster {
-                name: session.vars().cluster().to_string(),
-            });
+            ctx.session()
+                .add_notice(AdapterNotice::DroppedActiveCluster {
+                    name: ctx.session().vars().cluster().to_string(),
+                });
         }
         for dropped_in_use_index in dropped_in_use_indexes {
-            session.add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
+            ctx.session()
+                .add_notice(AdapterNotice::DroppedInUseIndex(dropped_in_use_index));
             self.metrics
                 .optimization_notices
                 .with_label_values(&["DroppedInUseIndex"])
@@ -5076,72 +4939,7 @@ impl Coordinator {
             sql: raw_sql_type,
         }];
 
-        let entry = self.catalog().get_entry(&relation_id);
-        let CatalogItem::Table(table) = &entry.item else {
-            let err = format!("expected table, found {:?}", entry.item);
-            return Err(AdapterError::Internal(err));
-        };
-        // Expected schema version, before altering the table.
-        let expected_version = table.desc.latest_version();
-        let existing_global_id = table.global_id_writes();
-
-        self.catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-            Box::pin(async move {
-                let entry = coord.catalog().get_entry(&relation_id);
-                let CatalogItem::Table(table) = &entry.item else {
-                    panic!("programming error, expected table found {:?}", entry.item);
-                };
-                let table = table.clone();
-
-                // Acquire a read hold on the original table for the duration of
-                // the alter to prevent the since of the original table from
-                // getting advanced, while the ALTER is running.
-                let existing_table = crate::CollectionIdBundle {
-                    storage_ids: btreeset![existing_global_id],
-                    compute_ids: BTreeMap::new(),
-                };
-                let existing_table_read_hold = coord.acquire_read_holds(&existing_table);
-
-                let new_version = table.desc.latest_version();
-                let new_desc = table
-                    .desc
-                    .at_version(RelationVersionSelector::Specific(new_version));
-                let register_ts = coord.get_local_write_ts().await.timestamp;
-
-                // Alter the table description, creating a "new" collection.
-                coord
-                    .controller
-                    .storage
-                    .alter_table_desc(
-                        existing_global_id,
-                        new_global_id,
-                        new_desc,
-                        expected_version,
-                        register_ts,
-                    )
-                    .await
-                    .expect("failed to alter desc of table");
-
-                // Initialize the ReadPolicy which ensures we have the correct read holds.
-                let compaction_window = table
-                    .custom_logical_compaction_window
-                    .unwrap_or(CompactionWindow::Default);
-                coord
-                    .initialize_read_policies(
-                        &crate::CollectionIdBundle {
-                            storage_ids: btreeset![new_global_id],
-                            compute_ids: BTreeMap::new(),
-                        },
-                        compaction_window,
-                    )
-                    .await;
-                coord.apply_local_write(register_ts).await;
-
-                // Alter is complete! We can drop our read hold.
-                drop(existing_table_read_hold);
-            })
-        })
-        .await?;
+        self.catalog_transact_with_context(Some(ctx), ops).await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Table))
     }
