@@ -9,6 +9,7 @@
 from functools import partial
 
 from materialize.mz_version import MzVersion
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.expression.expression import (
     Expression,
@@ -17,6 +18,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
+    involves_data_type_category,
     is_any_date_time_expression,
     is_operation_tagged,
     matches_fun_by_any_name,
@@ -54,6 +56,7 @@ MZ_VERSION_0_99_0 = MzVersion.parse_mz("v0.99.0")
 MZ_VERSION_0_107_0 = MzVersion.parse_mz("v0.107.0")
 MZ_VERSION_0_109_0 = MzVersion.parse_mz("v0.109.0")
 MZ_VERSION_0_117_0 = MzVersion.parse_mz("v0.117.0")
+MZ_VERSION_0_118_0 = MzVersion.parse_mz("v0.118.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -186,6 +189,18 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             )
         ):
             return YesIgnore("Contains on list and array introduced in PR 27959")
+
+        if (
+            self.lower_version < MZ_VERSION_0_118_0 <= self.higher_version
+            and expression.matches(
+                partial(
+                    involves_data_type_category,
+                    data_type_category=DataTypeCategory.BYTEA,
+                ),
+                True,
+            )
+        ):
+            return YesIgnore("Changes to byte array presentation in PR 29591")
 
         return super().shall_ignore_expression(expression, row_selection)
 
