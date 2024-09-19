@@ -760,14 +760,18 @@ impl CatalogState {
         force_if_exists_skip: bool,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         self.with_enable_for_item_parsing(|state| {
-            let pcx = PlanContext::zero().with_ignore_if_exists_errors(force_if_exists_skip);
-            let pcx = Some(&pcx);
+            let pcx = PlanContext::catalog().with_ignore_if_exists_errors(force_if_exists_skip);
             let session_catalog = state.for_system_session();
 
             let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
             let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-            let plan =
-                mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
+            let plan = mz_sql::plan::plan(
+                &pcx,
+                &session_catalog,
+                stmt,
+                &Params::empty(),
+                &resolved_ids,
+            )?;
 
             Ok((plan, resolved_ids))
         })
@@ -777,7 +781,7 @@ impl CatalogState {
     #[mz_ore::instrument]
     pub(crate) fn parse_plan(
         create_sql: &str,
-        pcx: Option<&PlanContext>,
+        pcx: &PlanContext,
         catalog: &ConnCatalog,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
@@ -789,7 +793,7 @@ impl CatalogState {
 
     /// Parses the given SQL string into a pair of [`CatalogItem`].
     pub(crate) fn deserialize_item(&self, create_sql: &str) -> Result<CatalogItem, AdapterError> {
-        self.parse_item(create_sql, None, false, None)
+        self.parse_item(create_sql, false, None)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
@@ -797,13 +801,13 @@ impl CatalogState {
     pub(crate) fn parse_item(
         &self,
         create_sql: &str,
-        pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
     ) -> Result<CatalogItem, AdapterError> {
         let session_catalog = self.for_system_session();
+        let plan_context = PlanContext::catalog();
 
-        let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &session_catalog)?;
+        let (plan, resolved_ids) = Self::parse_plan(create_sql, &plan_context, &session_catalog)?;
 
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {

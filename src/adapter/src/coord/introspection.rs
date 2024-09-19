@@ -40,7 +40,7 @@ use mz_ore::soft_panic_or_log;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::SessionCatalog;
-use mz_sql::plan::{Params, Plan, SubscribePlan};
+use mz_sql::plan::{Params, Plan, PlanContext, SubscribePlan};
 use mz_sql::session::user::{RoleMetadata, MZ_SYSTEM_ROLE_ID};
 use mz_storage_client::controller::{IntrospectionType, StorageWriteOp};
 use tracing::{info, Span};
@@ -514,7 +514,13 @@ impl SubscribeSpec {
     fn to_plan(&self, catalog: &dyn SessionCatalog) -> Result<SubscribePlan, anyhow::Error> {
         let parsed = mz_sql::parse::parse(self.sql)?.into_element();
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, parsed.ast)?;
-        let plan = mz_sql::plan::plan(None, catalog, stmt, &Params::empty(), &resolved_ids)?;
+        let plan = mz_sql::plan::plan(
+            &PlanContext::zero(),
+            catalog,
+            stmt,
+            &Params::empty(),
+            &resolved_ids,
+        )?;
         match plan {
             Plan::Subscribe(plan) => Ok(plan),
             _ => bail!("unexpected plan type: {plan:?}"),

@@ -1830,8 +1830,13 @@ impl Params {
 /// Controls planning of a SQL query.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Copy)]
 pub struct PlanContext {
+    /// Current wall time of when we _started_ planning the query.
     pub wall_time: DateTime<Utc>,
+    /// Override statement level "if exists" behavior with skip.
     pub ignore_if_exists_errors: bool,
+    /// If we're planning in the context of a user query, not some internal
+    /// process like Catalog bootstrapping.
+    pub user_query: bool,
 }
 
 impl PlanContext {
@@ -1839,6 +1844,7 @@ impl PlanContext {
         Self {
             wall_time,
             ignore_if_exists_errors: false,
+            user_query: false,
         }
     }
 
@@ -1846,14 +1852,23 @@ impl PlanContext {
     /// planning is required but unused (like in `plan_create_table()`) or in
     /// tests.
     pub fn zero() -> Self {
-        PlanContext {
-            wall_time: now::to_datetime(NOW_ZERO()),
-            ignore_if_exists_errors: false,
-        }
+        PlanContext::new(now::to_datetime(NOW_ZERO()))
+    }
+
+    /// [`PlanContext`] that should be used when opening the catalog.
+    pub fn catalog() -> Self {
+        let mut ctx = PlanContext::zero();
+        ctx.user_query = false;
+        ctx
     }
 
     pub fn with_ignore_if_exists_errors(mut self, value: bool) -> Self {
         self.ignore_if_exists_errors = value;
+        self
+    }
+
+    pub fn for_user_query(mut self) -> Self {
+        self.user_query = true;
         self
     }
 }

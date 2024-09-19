@@ -373,9 +373,10 @@ impl<T: TimestampManipulation> Session<T> {
         match std::mem::take(&mut self.transaction) {
             TransactionStatus::Default => {
                 let id = self.next_transaction_id;
+                let pcx = self.new_pcx(wall_time).for_user_query();
                 self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
                 self.transaction = TransactionStatus::InTransaction(Transaction {
-                    pcx: self.new_pcx(wall_time),
+                    pcx,
                     ops: TransactionOps::None,
                     write_lock_guard: None,
                     access,
@@ -407,9 +408,11 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn start_transaction_implicit(&mut self, wall_time: DateTime<Utc>, stmts: usize) {
         if let TransactionStatus::Default = self.transaction {
             let id = self.next_transaction_id;
+            // All transactions are started in the context of a user query.
+            let pcx = self.new_pcx(wall_time).for_user_query();
             self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
             let txn = Transaction {
-                pcx: self.new_pcx(wall_time),
+                pcx,
                 ops: TransactionOps::None,
                 write_lock_guard: None,
                 access: None,

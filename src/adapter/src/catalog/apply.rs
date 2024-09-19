@@ -609,12 +609,17 @@ impl CatalogState {
                 );
             }
             Builtin::Index(index) => {
+                let compaction_window = index.is_retained_metrics_object.then(|| {
+                    self.system_config()
+                        .metrics_retention()
+                        .try_into()
+                        .expect("invalid metrics retention")
+                });
                 let mut item = self
                     .parse_item(
                         &index.create_sql(),
-                        None,
                         index.is_retained_metrics_object,
-                        if index.is_retained_metrics_object { Some(self.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
+                        compaction_window,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -737,7 +742,6 @@ impl CatalogState {
                 let mut item = self
                     .parse_item(
                         connection.sql,
-                        None,
                         false,
                         None,
                     )
@@ -1182,7 +1186,7 @@ impl CatalogState {
                     let handle = mz_ore::task::spawn(
                         || "parse view",
                         async move {
-                            let res = task_state.parse_item(&create_sql, None, false, None);
+                            let res = task_state.parse_item(&create_sql, false, None);
                             (id, res)
                         }
                         .instrument(span),
