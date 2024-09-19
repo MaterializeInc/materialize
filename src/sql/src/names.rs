@@ -1135,7 +1135,8 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::Func(global_id)
             | CommentObjectId::Connection(global_id)
             | CommentObjectId::Type(global_id)
-            | CommentObjectId::Secret(global_id) => ObjectId::Item(global_id),
+            | CommentObjectId::Secret(global_id)
+            | CommentObjectId::ContinualTask(global_id) => ObjectId::Item(global_id),
             CommentObjectId::Role(id) => ObjectId::Role(id),
             CommentObjectId::Database(id) => ObjectId::Database(id),
             CommentObjectId::Schema(id) => ObjectId::Schema(id),
@@ -1188,6 +1189,7 @@ pub enum CommentObjectId {
     Connection(GlobalId),
     Type(GlobalId),
     Secret(GlobalId),
+    ContinualTask(GlobalId),
     Role(RoleId),
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),

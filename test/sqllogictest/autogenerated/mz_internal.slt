@@ -619,6 +619,7 @@ mz_compute_hydration_statuses
 mz_compute_hydration_times
 mz_compute_operator_hydration_statuses
 mz_compute_operator_hydration_statuses_per_worker
+mz_continual_tasks
 mz_frontiers
 mz_global_frontiers
 mz_history_retention_strategies
@@ -657,6 +658,7 @@ mz_show_cluster_replicas
 mz_show_clusters
 mz_show_columns
 mz_show_connections
+mz_show_continual_tasks
 mz_show_database_privileges
 mz_show_databases
 mz_show_default_privileges

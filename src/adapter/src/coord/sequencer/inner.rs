@@ -2610,7 +2610,7 @@ impl Coordinator {
                         }
                     }
                     match entry.item().typ() {
-                        typ @ (Func | View | MaterializedView) => {
+                        typ @ (Func | View | MaterializedView | ContinualTask) => {
                             ids_to_check.extend(entry.uses());
                             let valid_id = id.is_user() || matches!(typ, Func);
                             valid_id
@@ -2947,7 +2947,9 @@ impl Coordinator {
         }];
         self.catalog_transact_with_side_effects(Some(session), ops, |coord| async {
             let cluster = match coord.catalog().get_entry(&plan.id).item() {
-                CatalogItem::Table(_) | CatalogItem::MaterializedView(_) => None,
+                CatalogItem::Table(_)
+                | CatalogItem::MaterializedView(_)
+                | CatalogItem::ContinualTask(_) => None,
                 CatalogItem::Index(index) => Some(index.cluster_id),
                 CatalogItem::Source(_) => {
                     let read_policies = coord.catalog().source_read_policies(plan.id);

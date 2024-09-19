@@ -1126,6 +1126,11 @@ impl Catalog {
             .filter(|role| role.is_user())
     }
 
+    pub fn user_continual_tasks(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_continual_task() && entry.id().is_user())
+    }
+
     pub fn system_privileges(&self) -> &PrivilegeMap {
         &self.state.system_privileges
     }
@@ -1308,6 +1313,7 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::Schema(_) => ObjectType::Schema,
         CommentObjectId::Cluster(_) => ObjectType::Cluster,
         CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
+        CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
     }
 }
 
@@ -1337,6 +1343,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Database => ObjectType::Database,
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
+            mz_sql::catalog::ObjectType::ContinualTask => ObjectType::ContinualTask,
         },
         SystemObjectType::System => ObjectType::System,
     }

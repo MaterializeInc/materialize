@@ -28,9 +28,9 @@ use mz_catalog::builtin::{
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
-    Database, DefaultPrivileges, Index, MaterializedView, Role, Schema, Secret, Sink, Source,
-    Table, TableDataSource, Type, View,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, ContinualTask,
+    DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, Role, Schema, Secret,
+    Sink, Source, Table, TableDataSource, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -38,7 +38,6 @@ use mz_controller::clusters::{
     UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -315,7 +314,8 @@ impl CatalogState {
             CatalogItem::Log(_) => out.push(id),
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
-            | CatalogItem::Connection(_)) => {
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_)) => {
                 // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
                 for id in &item.references().0 {
                     self.introspection_dependencies_inner(*id, out);
@@ -954,27 +954,14 @@ impl CatalogState {
                 desc,
                 continual_task,
                 ..
-            }) => {
-                // TODO(ct): Figure out how to make this survive restarts. The
-                // expr we saved still had the LocalId placeholders for the
-                // output, but we don't have access to the real Id here.
-                let optimized_expr = OptimizedMirRelationExpr::declare_optimized(
-                    mz_expr::MirRelationExpr::constant(Vec::new(), desc.typ().clone()),
-                );
-                // TODO(ct): CatalogItem::ContinualTask
-                CatalogItem::MaterializedView(MaterializedView {
-                    create_sql: continual_task.create_sql,
-                    raw_expr: Arc::new(continual_task.expr.clone()),
-                    optimized_expr: Arc::new(optimized_expr),
-                    desc,
-                    resolved_ids,
-                    cluster_id: continual_task.cluster_id,
-                    non_null_assertions: continual_task.non_null_assertions,
-                    custom_logical_compaction_window: continual_task.compaction_window,
-                    refresh_schedule: continual_task.refresh_schedule,
-                    initial_as_of: continual_task.as_of.map(Antichain::from_elem),
-                })
-            }
+            }) => CatalogItem::ContinualTask(ContinualTask {
+                create_sql: continual_task.create_sql,
+                raw_expr: Arc::new(continual_task.expr.clone()),
+                desc,
+                resolved_ids,
+                cluster_id: continual_task.cluster_id,
+                initial_as_of: continual_task.as_of.map(Antichain::from_elem),
+            }),
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
                 on: index.on,
@@ -1338,7 +1325,8 @@ impl CatalogState {
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
             | CatalogItemType::Secret
-            | CatalogItemType::Connection => schema.items[builtin.name()].clone(),
+            | CatalogItemType::Connection
+            | CatalogItemType::ContinualTask => schema.items[builtin.name()].clone(),
         }
     }
 
@@ -1748,6 +1736,7 @@ impl CatalogState {
                     CatalogItemType::Connection => CommentObjectId::Connection(global_id),
                     CatalogItemType::Type => CommentObjectId::Type(global_id),
                     CatalogItemType::Secret => CommentObjectId::Secret(global_id),
+                    CatalogItemType::ContinualTask => CommentObjectId::ContinualTask(global_id),
                 }
             }
             ObjectId::Role(role_id) => CommentObjectId::Role(role_id),
@@ -2105,7 +2094,8 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id) => Some(*id),
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::ContinualTask(id) => Some(*id),
             CommentObjectId::Role(_)
             | CommentObjectId::Database(_)
             | CommentObjectId::Schema(_)
@@ -2133,7 +2123,8 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id) => {
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::ContinualTask(id) => {
                 let item = self.get_entry(&id);
                 let name = self.resolve_full_name(item.name(), Some(conn_id));
                 name.to_string()

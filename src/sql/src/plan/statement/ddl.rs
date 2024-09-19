@@ -4981,7 +4981,8 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
             | CatalogItemType::Sink
             | CatalogItemType::Type
             | CatalogItemType::Secret
-            | CatalogItemType::Connection => true,
+            | CatalogItemType::Connection
+            | CatalogItemType::ContinualTask => true,
             CatalogItemType::Index => false,
         },
     }
@@ -6680,6 +6681,7 @@ pub fn plan_comment(
         }
     }
 
+    // TODO(ct): Add ::ContinualTask variant.
     let (object_id, column_pos) = match &object {
         com_ty @ CommentObjectType::Table { name }
         | com_ty @ CommentObjectType::View { name }

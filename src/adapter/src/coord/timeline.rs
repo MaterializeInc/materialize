@@ -19,7 +19,7 @@ use chrono::{DateTime, Utc};
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
-use mz_catalog::memory::objects::{CatalogItem, MaterializedView, View};
+use mz_catalog::memory::objects::{CatalogItem, ContinualTask, MaterializedView, View};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
@@ -333,7 +333,8 @@ impl Coordinator {
                     match entry.item() {
                         CatalogItem::Table(_)
                         | CatalogItem::Source(_)
-                        | CatalogItem::MaterializedView(_) => {
+                        | CatalogItem::MaterializedView(_)
+                        | CatalogItem::ContinualTask(_) => {
                             id_bundle.storage_ids.insert(entry.id());
                         }
                         CatalogItem::Index(index) => {
@@ -459,6 +460,11 @@ impl Coordinator {
                         // need to block and wait for the materialized view to advance.
                         timelines.insert(TimelineContext::TimestampDependent);
                         ids.extend(optimized_expr.depends_on());
+                    }
+                    CatalogItem::ContinualTask(ContinualTask { raw_expr, .. }) => {
+                        // See comment in MaterializedView
+                        timelines.insert(TimelineContext::TimestampDependent);
+                        ids.extend(raw_expr.depends_on());
                     }
                     CatalogItem::Table(table) => {
                         timelines.insert(TimelineContext::TimelineDependent(table.timeline()));

@@ -1111,6 +1111,7 @@ impl RustType<proto::CatalogItemType> for CatalogItemType {
             CatalogItemType::Func => proto::CatalogItemType::Func,
             CatalogItemType::Secret => proto::CatalogItemType::Secret,
             CatalogItemType::Connection => proto::CatalogItemType::Connection,
+            CatalogItemType::ContinualTask => proto::CatalogItemType::ContinualTask,
         }
     }
 
@@ -1126,6 +1127,7 @@ impl RustType<proto::CatalogItemType> for CatalogItemType {
             proto::CatalogItemType::Func => CatalogItemType::Func,
             proto::CatalogItemType::Secret => CatalogItemType::Secret,
             proto::CatalogItemType::Connection => CatalogItemType::Connection,
+            proto::CatalogItemType::ContinualTask => CatalogItemType::ContinualTask,
             proto::CatalogItemType::Unknown => {
                 return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"));
             }
@@ -1152,6 +1154,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             ObjectType::Database => proto::ObjectType::Database,
             ObjectType::Schema => proto::ObjectType::Schema,
             ObjectType::Func => proto::ObjectType::Func,
+            ObjectType::ContinualTask => proto::ObjectType::ContinualTask,
         }
     }
 
@@ -1172,6 +1175,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             proto::ObjectType::Database => Ok(ObjectType::Database),
             proto::ObjectType::Schema => Ok(ObjectType::Schema),
             proto::ObjectType::Func => Ok(ObjectType::Func),
+            proto::ObjectType::ContinualTask => Ok(ObjectType::ContinualTask),
             proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),
@@ -1345,6 +1349,9 @@ impl RustType<proto::comment_key::Object> for CommentObjectId {
             CommentObjectId::Database(database_id) => {
                 proto::comment_key::Object::Database(database_id.into_proto())
             }
+            CommentObjectId::ContinualTask(global_id) => {
+                proto::comment_key::Object::ContinualTask(global_id.into_proto())
+            }
             CommentObjectId::Schema((database, schema)) => {
                 proto::comment_key::Object::Schema(proto::ResolvedSchema {
                     database: Some(database.into_proto()),
@@ -1395,6 +1402,9 @@ impl RustType<proto::comment_key::Object> for CommentObjectId {
             }
             proto::comment_key::Object::Secret(global_id) => {
                 CommentObjectId::Secret(global_id.into_rust()?)
+            }
+            proto::comment_key::Object::ContinualTask(global_id) => {
+                CommentObjectId::ContinualTask(global_id.into_rust()?)
             }
             proto::comment_key::Object::Role(role_id) => {
                 CommentObjectId::Role(role_id.into_rust()?)
@@ -1537,6 +1547,9 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for mz_audit_log::ObjectTyp
             mz_audit_log::ObjectType::Connection => {
                 proto::audit_log_event_v1::ObjectType::Connection
             }
+            mz_audit_log::ObjectType::ContinualTask => {
+                proto::audit_log_event_v1::ObjectType::ContinualTask
+            }
             mz_audit_log::ObjectType::Database => proto::audit_log_event_v1::ObjectType::Database,
             mz_audit_log::ObjectType::Func => proto::audit_log_event_v1::ObjectType::Func,
             mz_audit_log::ObjectType::Index => proto::audit_log_event_v1::ObjectType::Index,
@@ -1563,6 +1576,9 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for mz_audit_log::ObjectTyp
             }
             proto::audit_log_event_v1::ObjectType::Connection => {
                 Ok(mz_audit_log::ObjectType::Connection)
+            }
+            proto::audit_log_event_v1::ObjectType::ContinualTask => {
+                Ok(mz_audit_log::ObjectType::ContinualTask)
             }
             proto::audit_log_event_v1::ObjectType::Database => {
                 Ok(mz_audit_log::ObjectType::Database)

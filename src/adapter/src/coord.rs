@@ -2039,6 +2039,39 @@ impl Coordinator {
                         );
                     }
                 }
+                CatalogItem::ContinualTask(ct) => {
+                    policies_to_set
+                        .entry(policy.expect("continual tasks have a compaction window"))
+                        .or_insert_with(Default::default)
+                        .storage_ids
+                        .insert(entry.id());
+
+                    let mut df_desc = self
+                        .catalog()
+                        .try_get_physical_plan(&entry.id())
+                        .expect("added in `bootstrap_dataflow_plans`")
+                        .clone();
+
+                    if let Some(initial_as_of) = ct.initial_as_of.clone() {
+                        df_desc.set_initial_as_of(initial_as_of);
+                    }
+
+                    let df_meta = self
+                        .catalog()
+                        .try_get_dataflow_metainfo(&entry.id())
+                        .expect("added in `bootstrap_dataflow_plans`");
+
+                    if self.catalog().state().system_config().enable_mz_notices() {
+                        // Collect optimization hint updates.
+                        self.catalog().state().pack_optimizer_notices(
+                            &mut builtin_table_updates,
+                            df_meta.optimizer_notices.iter(),
+                            1,
+                        );
+                    }
+
+                    self.ship_dataflow(df_desc, ct.cluster_id, None).await;
+                }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
