@@ -589,6 +589,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c,
         args.this_tag,
         scenarios_scheduled_to_run,
+        scenarios_with_regressions,
         args.scale,
         latest_report_by_scenario_name,
         discarded_reports_by_scenario_name,
@@ -729,6 +730,7 @@ def upload_results_to_test_analytics(
     c: Composition,
     this_tag: str | None,
     scenario_classes: list[type[Scenario]],
+    scenarios_with_regressions: list[type[Scenario]],
     scale: str | None,
     latest_report_by_scenario_name: dict[str, Report],
     discarded_reports_by_scenario_name: dict[str, list[Report]],
@@ -752,7 +754,12 @@ def upload_results_to_test_analytics(
         report = latest_report_by_scenario_name[scenario_name]
 
         result_entries.append(
-            _create_feature_benchmark_result_entry(scenario_cls, report, scale)
+            _create_feature_benchmark_result_entry(
+                scenario_cls,
+                report,
+                scale,
+                is_regression=scenario_cls in scenarios_with_regressions,
+            )
         )
 
         for discarded_report in discarded_reports_by_scenario_name.get(
@@ -760,7 +767,7 @@ def upload_results_to_test_analytics(
         ):
             discarded_entries.append(
                 _create_feature_benchmark_result_entry(
-                    scenario_cls, discarded_report, scale
+                    scenario_cls, discarded_report, scale, is_regression=True
                 )
             )
 
@@ -779,9 +786,7 @@ def upload_results_to_test_analytics(
 
 
 def _create_feature_benchmark_result_entry(
-    scenario_cls: type[Scenario],
-    report: Report,
-    scale: str | None,
+    scenario_cls: type[Scenario], report: Report, scale: str | None, is_regression: bool
 ) -> feature_benchmark_result_storage.FeatureBenchmarkResultEntry:
     scenario_name = scenario_cls.__name__
     scenario_group = scenario_cls.__bases__[0].__name__
@@ -794,6 +799,7 @@ def _create_feature_benchmark_result_entry(
         scenario_version=str(scenario_version),
         cycle=report.cycle_number,
         scale=scale or "default",
+        is_regression=is_regression,
         wallclock=measurements[MeasurementType.WALLCLOCK],
         messages=measurements[MeasurementType.MESSAGES],
         memory_mz=measurements[MeasurementType.MEMORY_MZ],
