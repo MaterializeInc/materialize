@@ -401,9 +401,9 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 ##### Default connections {#kafka-privatelink-default}
 
-[Redpanda Cloud](/ingest-data/redpanda-cloud/)) does not require listing every
-broker individually. In this case, you should specify a PrivateLink connection
-and the port of the bootstrap server instead.
+[Redpanda Cloud](/ingest-data/redpanda/redpanda-cloud/)) does not require
+listing every broker individually. In this case, you should specify a
+PrivateLink connection and the port of the bootstrap server instead.
 
 ##### Default connection syntax {#kafka-privatelink-default-syntax}
 
