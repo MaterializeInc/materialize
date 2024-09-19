@@ -190,17 +190,24 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Contains on list and array introduced in PR 27959")
 
-        if (
-            self.lower_version < MZ_VERSION_0_118_0 <= self.higher_version
-            and expression.matches(
+        if self.lower_version < MZ_VERSION_0_118_0 <= self.higher_version:
+            if expression.matches(
+                partial(
+                    involves_data_type_category,
+                    data_type_category=DataTypeCategory.RANGE,
+                ),
+                True,
+            ):
+                return YesIgnore("Changes to array range presentation in PR 29532")
+
+            if expression.matches(
                 partial(
                     involves_data_type_category,
                     data_type_category=DataTypeCategory.BYTEA,
                 ),
                 True,
-            )
-        ):
-            return YesIgnore("Changes to byte array presentation in PR 29591")
+            ):
+                return YesIgnore("Changes to byte array presentation in PR 29591")
 
         return super().shall_ignore_expression(expression, row_selection)
 
