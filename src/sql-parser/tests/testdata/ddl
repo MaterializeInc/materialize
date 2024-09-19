@@ -2635,6 +2635,20 @@ error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROK
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
                                                ^
 
+parse-statement
+CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah', PUBLIC KEY 3 = 'abc'
+----
+error: Expected 1 or 2 after PUBLIC KEY, found number "3"
+CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah', PUBLIC KEY 3 = 'abc'
+                                                                                                      ^
+
+parse-statement
+CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah', PUBLIC abc
+----
+error: Expected KEY, found identifier "abc"
+CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah', PUBLIC abc
+                                                                                                  ^
+
 parse-statement roundtrip
 CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST 'ssh-bastion', PORT 1234, USER 'blah')
 ----
