@@ -3264,7 +3264,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
 pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
         name: "mz_cluster_replica_frontiers",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_CATALOG_SCHEMA,
         oid: oid::SOURCE_MZ_CLUSTER_REPLICA_FRONTIERS_OID,
         data_source: IntrospectionType::ReplicaFrontiers,
         desc: RelationDesc::builder()
@@ -5094,7 +5094,7 @@ WITH
             true AS hydrated,
             NULL::interval AS hydration_time
         FROM mz_materialized_views mv
-        JOIN mz_internal.mz_cluster_replica_frontiers f ON f.object_id = mv.id
+        JOIN mz_catalog.mz_cluster_replica_frontiers f ON f.object_id = mv.id
         WHERE f.write_frontier IS NULL
     )
 SELECT * FROM dataflows
@@ -7154,7 +7154,7 @@ sinks AS (
     LEFT JOIN mz_internal.mz_sink_statuses ss USING (id)
     JOIN mz_catalog.mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
-    LEFT JOIN mz_internal.mz_cluster_replica_frontiers f
+    LEFT JOIN mz_catalog.mz_cluster_replica_frontiers f
         ON (f.object_id = s.id AND f.replica_id = r.id)
 )
 SELECT * FROM indexes

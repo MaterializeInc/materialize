@@ -102,13 +102,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  refresh_hydration_time_estimate  interval
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
-----
-1  object_id  text
-2  replica_id  text
-3  write_frontier  mz_timestamp
-
-query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics' ORDER BY position
 ----
 1  replica_id  text
@@ -604,7 +597,6 @@ mz_aggregates
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
-mz_cluster_replica_frontiers
 mz_cluster_replica_history
 mz_cluster_replica_metrics
 mz_cluster_replica_metrics_history
