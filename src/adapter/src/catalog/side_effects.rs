@@ -11,12 +11,16 @@
 //! controller.
 
 use mz_catalog::memory::objects::{
-    CatalogItem, Connection, Index, MaterializedView, Source, StateDiff, StateUpdateKind, Table,
+    CatalogItem, Connection, DataSourceDesc, Index, MaterializedView, Source, StateDiff,
+    StateUpdateKind, Table,
 };
 use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
 use mz_ore::instrument;
 use mz_repr::GlobalId;
+use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::connections::PostgresConnection;
+use mz_storage_types::sources::GenericSourceConnection;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::CatalogState;
@@ -27,6 +31,7 @@ pub enum CatalogSideEffect {
     CreateTable(GlobalId, Table),
     DropTable(GlobalId),
     DropSource(GlobalId, Source),
+    DropReplicationSlot(PostgresConnection, String),
     DropView(GlobalId),
     DropMaterializedView(GlobalId, MaterializedView),
     DropSink(GlobalId),
@@ -84,7 +89,22 @@ impl CatalogState {
                     vec![CatalogSideEffect::DropTable(id)]
                 }
                 CatalogItem::Source(source) => {
-                    vec![CatalogSideEffect::DropSource(id, source.clone())]
+                    let mut updates = vec![CatalogSideEffect::DropSource(id, source.clone())];
+
+                    if let DataSourceDesc::Ingestion { ingestion_desc, .. } = &source.data_source {
+                        match &ingestion_desc.desc.connection {
+                            GenericSourceConnection::Postgres(conn) => {
+                                let conn = conn.clone().into_inline_connection(self);
+                                updates.push(CatalogSideEffect::DropReplicationSlot(
+                                    conn.connection.clone(),
+                                    conn.publication_details.slot.clone(),
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    updates
                 }
                 CatalogItem::View(_) => {
                     vec![CatalogSideEffect::DropView(id)]
