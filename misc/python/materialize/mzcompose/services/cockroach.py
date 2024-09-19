@@ -21,7 +21,7 @@ from materialize.mzcompose.service import (
 
 
 class Cockroach(Service):
-    DEFAULT_COCKROACH_TAG = "v24.2.0"
+    DEFAULT_COCKROACH_TAG = "v24.1.4"
 
     def __init__(
         self,

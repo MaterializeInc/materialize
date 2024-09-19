@@ -10,7 +10,7 @@
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
 
-FROM cockroachdb/cockroach:v24.2.0 AS crdb
+FROM cockroachdb/cockroach:v24.1.4 AS crdb
 
 MZFROM ubuntu-base
 
