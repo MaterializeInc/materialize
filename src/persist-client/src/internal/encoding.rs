@@ -23,6 +23,7 @@ use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::{PartStats, ProtoStructStats};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
@@ -57,7 +58,6 @@ use crate::internal::trace::{
     ActiveCompaction, FlatTrace, SpineId, ThinMerge, ThinSpineBatch, Trace,
 };
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
-use crate::schema::SchemaId;
 use crate::{cfg, PersistConfig, ShardId, WriterId};
 
 #[derive(Debug)]
@@ -241,16 +241,6 @@ impl RustType<String> for WriterId {
             Ok(x) => Ok(x),
             Err(_) => Err(TryFromProtoError::InvalidShardId(proto)),
         }
-    }
-}
-
-impl RustType<u64> for SchemaId {
-    fn into_proto(&self) -> u64 {
-        self.0.into_proto()
-    }
-
-    fn from_proto(proto: u64) -> Result<Self, TryFromProtoError> {
-        Ok(SchemaId(proto.into_rust()?))
     }
 }
 

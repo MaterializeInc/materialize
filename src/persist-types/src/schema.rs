@@ -9,11 +9,57 @@
 
 //! Persist schema evolution.
 
+use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::{new_null_array, Array, AsArray, ListArray, StructArray};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, SchemaBuilder};
 use itertools::Itertools;
+use mz_ore::cast::CastFrom;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+
+/// An ordered identifier for a pair of key and val schemas registered to a
+/// shard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
+#[serde(try_from = "String", into = "String")]
+pub struct SchemaId(pub usize);
+
+impl std::fmt::Display for SchemaId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "h{}", self.0)
+    }
+}
+
+impl From<SchemaId> for String {
+    fn from(schema_id: SchemaId) -> Self {
+        schema_id.to_string()
+    }
+}
+
+impl TryFrom<String> for SchemaId {
+    type Error = String;
+    fn try_from(encoded: String) -> Result<Self, Self::Error> {
+        let encoded = match encoded.strip_prefix('h') {
+            Some(x) => x,
+            None => return Err(format!("invalid SchemaId {}: incorrect prefix", encoded)),
+        };
+        let schema_id = u64::from_str(encoded)
+            .map_err(|err| format!("invalid SchemaId {}: {}", encoded, err))?;
+        Ok(SchemaId(usize::cast_from(schema_id)))
+    }
+}
+
+impl RustType<u64> for SchemaId {
+    fn into_proto(&self) -> u64 {
+        self.0.into_proto()
+    }
+
+    fn from_proto(proto: u64) -> Result<Self, TryFromProtoError> {
+        Ok(SchemaId(proto.into_rust()?))
+    }
+}
 
 /// Returns a function to migrate arrow data encoded by `old` to be the same
 /// DataType as arrow data encoded by `new`, if `new` is backward compatible

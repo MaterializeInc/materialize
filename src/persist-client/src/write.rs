@@ -21,6 +21,7 @@ use futures::StreamExt;
 use mz_ore::instrument;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType};
 use proptest_derive::Arbitrary;
@@ -43,7 +44,6 @@ use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HandleDebugState, HollowBatch};
 use crate::read::ReadHandle;
-use crate::schema::SchemaId;
 use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).

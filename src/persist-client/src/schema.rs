@@ -11,7 +11,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
@@ -19,47 +18,14 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::data_type;
-use mz_persist_types::schema::{backward_compatible, Migration};
+use mz_persist_types::schema::{backward_compatible, Migration, SchemaId};
 use mz_persist_types::{Codec, Codec64};
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 
 use crate::internal::apply::Applier;
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{SchemaCacheMetrics, SchemaMetrics};
 use crate::internal::state::EncodedSchemas;
-
-/// An ordered identifier for a pair of key and val schemas registered to a
-/// shard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-#[serde(try_from = "String", into = "String")]
-pub struct SchemaId(pub(crate) usize);
-
-impl std::fmt::Display for SchemaId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "h{}", self.0)
-    }
-}
-
-impl From<SchemaId> for String {
-    fn from(schema_id: SchemaId) -> Self {
-        schema_id.to_string()
-    }
-}
-
-impl TryFrom<String> for SchemaId {
-    type Error = String;
-    fn try_from(encoded: String) -> Result<Self, Self::Error> {
-        let encoded = match encoded.strip_prefix('h') {
-            Some(x) => x,
-            None => return Err(format!("invalid SchemaId {}: incorrect prefix", encoded)),
-        };
-        let schema_id = u64::from_str(encoded)
-            .map_err(|err| format!("invalid SchemaId {}: {}", encoded, err))?;
-        Ok(SchemaId(usize::cast_from(schema_id)))
-    }
-}
 
 /// The result returned by [crate::PersistClient::compare_and_evolve_schema].
 #[derive(Debug)]

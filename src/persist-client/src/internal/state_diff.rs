@@ -18,6 +18,7 @@ use differential_dataflow::trace::Description;
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{SeqNo, VersionedData};
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::Codec64;
 use mz_proto::TryFromProtoError;
 use timely::progress::{Antichain, Timestamp};
@@ -33,7 +34,6 @@ use crate::internal::state::{
 };
 use crate::internal::trace::{FueledMergeRes, SpineId, ThinMerge, ThinSpineBatch, Trace};
 use crate::read::LeasedReaderId;
-use crate::schema::SchemaId;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig, ShardId};
 
