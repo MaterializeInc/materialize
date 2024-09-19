@@ -61,6 +61,7 @@ use tracing::{Instrument, info_span, warn};
 use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
+use crate::coord::controller_commands::parsed_state_updates::{self, ParsedStateUpdate};
 use crate::util::index_sql;
 
 /// Maintains the state of retractions while applying catalog state updates for a single timestamp.
@@ -101,8 +102,12 @@ impl CatalogState {
         &mut self,
         updates: Vec<StateUpdate>,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+    ) -> (
+        Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+        Vec<ParsedStateUpdate>,
+    ) {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
+        let mut controller_state_updates = Vec::with_capacity(updates.len());
         let updates = sort_updates(updates);
 
         let mut groups: Vec<Vec<_>> = Vec::new();
@@ -115,25 +120,29 @@ impl CatalogState {
 
             for update in updates {
                 let next_apply_state = BootstrapApplyState::new(update);
-                let (next_apply_state, builtin_table_update) = apply_state
-                    .step(
-                        next_apply_state,
-                        self,
-                        &mut retractions,
-                        local_expression_cache,
-                    )
-                    .await;
+                let (next_apply_state, (builtin_table_update, controller_state_update)) =
+                    apply_state
+                        .step(
+                            next_apply_state,
+                            self,
+                            &mut retractions,
+                            local_expression_cache,
+                        )
+                        .await;
                 apply_state = next_apply_state;
                 builtin_table_updates.extend(builtin_table_update);
+                controller_state_updates.extend(controller_state_update);
             }
 
             // Apply remaining state.
-            let builtin_table_update = apply_state
+            let (builtin_table_update, controller_state_update) = apply_state
                 .apply(self, &mut retractions, local_expression_cache)
                 .await;
             builtin_table_updates.extend(builtin_table_update);
+            controller_state_updates.extend(controller_state_update);
         }
-        builtin_table_updates
+
+        (builtin_table_updates, controller_state_updates)
     }
 
     /// Update in-memory catalog state from a list of updates made to the durable catalog state.
@@ -143,21 +152,29 @@ impl CatalogState {
     pub(crate) fn apply_updates(
         &mut self,
         updates: Vec<StateUpdate>,
-    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
+    ) -> Result<
+        (
+            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+            Vec<ParsedStateUpdate>,
+        ),
+        CatalogError,
+    > {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
+        let mut controller_state_updates = Vec::with_capacity(updates.len());
         let updates = sort_updates(updates);
 
         for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
             let mut retractions = InProgressRetractions::default();
-            let builtin_table_update = self.apply_updates_inner(
+            let (builtin_table_update, parsed_catalog_updates_op) = self.apply_updates_inner(
                 updates.collect(),
                 &mut retractions,
                 &mut LocalExpressionCache::Closed,
             )?;
             builtin_table_updates.extend(builtin_table_update);
+            controller_state_updates.extend(parsed_catalog_updates_op);
         }
 
-        Ok(builtin_table_updates)
+        Ok((builtin_table_updates, controller_state_updates))
     }
 
     #[instrument(level = "debug")]
@@ -166,7 +183,13 @@ impl CatalogState {
         updates: Vec<StateUpdate>,
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
+    ) -> Result<
+        (
+            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+            Vec<ParsedStateUpdate>,
+        ),
+        CatalogError,
+    > {
         soft_assert_no_log!(
             updates.iter().map(|update| update.ts).all_equal(),
             "all timestamps should be equal: {updates:?}"
@@ -175,13 +198,25 @@ impl CatalogState {
         let mut update_system_config = false;
 
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        for StateUpdate { kind, ts: _, diff } in updates {
+        let mut controller_state_updates = Vec::new();
+
+        for StateUpdate { kind, ts, diff } in updates {
             if matches!(kind, StateUpdateKind::SystemConfiguration(_)) {
                 update_system_config = true;
             }
 
             match diff {
                 StateDiff::Retraction => {
+                    // We want the parsed controller state updates to match the
+                    // state of the catalog _before_ applying a retraction. So
+                    // that we can still have useful in-memory state to work
+                    // with.
+                    if let Some(update) =
+                        parsed_state_updates::parse_state_update(self, kind.clone(), ts, diff)
+                    {
+                        controller_state_updates.push(update);
+                    }
+
                     // We want the builtin table retraction to match the state of the catalog
                     // before applying the update.
                     builtin_table_updates
@@ -191,9 +226,18 @@ impl CatalogState {
                 StateDiff::Addition => {
                     self.apply_update(kind.clone(), diff, retractions, local_expression_cache)?;
                     // We want the builtin table addition to match the state of the catalog
-                    // after applying the update.
+                    // after applying the update. So that already have useful
+                    // in-memory state to work with.
                     builtin_table_updates
                         .extend(self.generate_builtin_table_update(kind.clone(), diff));
+
+                    // We want the parsed controller state updates to match the
+                    // state of the catalog _after_ applying an addition.
+                    if let Some(update) =
+                        parsed_state_updates::parse_state_update(self, kind.clone(), ts, diff)
+                    {
+                        controller_state_updates.push(update);
+                    }
                 }
             }
         }
@@ -202,7 +246,7 @@ impl CatalogState {
             self.system_configuration.dyncfg_updates();
         }
 
-        Ok(builtin_table_updates)
+        Ok((builtin_table_updates, controller_state_updates))
     }
 
     #[instrument(level = "debug")]
@@ -2275,7 +2319,10 @@ impl BootstrapApplyState {
         state: &mut CatalogState,
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+    ) -> (
+        Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+        Vec<ParsedStateUpdate>,
+    ) {
         match self {
             BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions) => {
                 let restore = state.system_configuration.clone();
@@ -2288,7 +2335,7 @@ impl BootstrapApplyState {
                 )
                 .await;
                 state.system_configuration = restore;
-                builtin_table_updates
+                (builtin_table_updates, Vec::new())
             }
             BootstrapApplyState::Items(updates) => state.with_enable_for_item_parsing(|state| {
                 state
@@ -2309,7 +2356,10 @@ impl BootstrapApplyState {
         local_expression_cache: &mut LocalExpressionCache,
     ) -> (
         BootstrapApplyState,
-        Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+        (
+            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+            Vec<ParsedStateUpdate>,
+        ),
     ) {
         match (self, next) {
             (
@@ -2320,13 +2370,16 @@ impl BootstrapApplyState {
                 builtin_view_additions.extend(next_builtin_view_additions);
                 (
                     BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions),
-                    Vec::new(),
+                    (Vec::new(), Vec::new()),
                 )
             }
             (BootstrapApplyState::Items(mut updates), BootstrapApplyState::Items(next_updates)) => {
                 // Continue batching item updates.
                 updates.extend(next_updates);
-                (BootstrapApplyState::Items(updates), Vec::new())
+                (
+                    BootstrapApplyState::Items(updates),
+                    (Vec::new(), Vec::new()),
+                )
             }
             (
                 BootstrapApplyState::Updates(mut updates),
@@ -2334,14 +2387,17 @@ impl BootstrapApplyState {
             ) => {
                 // Continue batching updates.
                 updates.extend(next_updates);
-                (BootstrapApplyState::Updates(updates), Vec::new())
+                (
+                    BootstrapApplyState::Updates(updates),
+                    (Vec::new(), Vec::new()),
+                )
             }
             (apply_state, next_apply_state) => {
                 // Apply the current batch and start batching new apply state.
-                let builtin_table_update = apply_state
+                let updates = apply_state
                     .apply(state, retractions, local_expression_cache)
                     .await;
-                (next_apply_state, builtin_table_update)
+                (next_apply_state, updates)
             }
         }
     }

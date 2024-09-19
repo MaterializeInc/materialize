@@ -3398,7 +3398,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 }
 
 /// A single update to the catalog state.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StateUpdate {
     pub kind: StateUpdateKind,
     pub ts: Timestamp,

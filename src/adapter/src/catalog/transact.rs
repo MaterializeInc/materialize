@@ -71,6 +71,7 @@ use crate::catalog::{
 };
 use crate::coord::ConnMeta;
 use crate::coord::cluster_scheduling::SchedulingDecision;
+use crate::coord::controller_commands::parsed_state_updates::ParsedStateUpdate;
 use crate::util::ResultExt;
 
 #[derive(Debug, Clone)]
@@ -327,6 +328,9 @@ impl ReplicaCreateDropReason {
 
 pub struct TransactionResult {
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
+    /// Updates that have been derived from the catalog changes that are
+    /// relevant to controller(s).
+    pub controller_state_updates: Vec<ParsedStateUpdate>,
     pub audit_events: Vec<VersionedEvent>,
 }
 
@@ -421,6 +425,7 @@ impl Catalog {
 
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
+        let mut controller_state_updates = vec![];
         let mut audit_events = vec![];
         let mut storage = self.storage().await;
         let mut tx = storage
@@ -435,6 +440,7 @@ impl Catalog {
             ops,
             temporary_ids,
             &mut builtin_table_updates,
+            &mut controller_state_updates,
             &mut audit_events,
             &mut tx,
             &self.state,
@@ -470,6 +476,7 @@ impl Catalog {
 
         Ok(TransactionResult {
             builtin_table_updates,
+            controller_state_updates,
             audit_events,
         })
     }
@@ -491,6 +498,7 @@ impl Catalog {
         mut ops: Vec<Op>,
         temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        parsed_catalog_updates: &mut Vec<ParsedStateUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &CatalogState,
@@ -556,11 +564,13 @@ impl Catalog {
             let mut updates: Vec<_> = tx.get_and_commit_op_updates();
             updates.extend(temporary_item_updates);
             if !updates.is_empty() {
-                let op_builtin_table_updates = state.to_mut().apply_updates(updates)?;
+                let (op_builtin_table_updates, op_controller_state_updates) =
+                    state.to_mut().apply_updates(updates.clone())?;
                 let op_builtin_table_updates = state
                     .to_mut()
                     .resolve_builtin_table_updates(op_builtin_table_updates);
                 builtin_table_updates.extend(op_builtin_table_updates);
+                parsed_catalog_updates.extend(op_controller_state_updates);
             }
         }
 
@@ -578,11 +588,13 @@ impl Catalog {
 
             let updates = tx.get_and_commit_op_updates();
             if !updates.is_empty() {
-                let op_builtin_table_updates = state.to_mut().apply_updates(updates)?;
+                let (op_builtin_table_updates, op_controller_state_updates) =
+                    state.to_mut().apply_updates(updates.clone())?;
                 let op_builtin_table_updates = state
                     .to_mut()
                     .resolve_builtin_table_updates(op_builtin_table_updates);
                 builtin_table_updates.extend(op_builtin_table_updates);
+                parsed_catalog_updates.extend(op_controller_state_updates);
             }
 
             match state {

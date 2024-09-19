@@ -1522,7 +1522,7 @@ impl CatalogState {
     /// Gets a reference to the specified replica of the specified cluster.
     ///
     /// Panics if either the cluster or the replica does not exist.
-    pub(super) fn get_cluster_replica(
+    pub(crate) fn get_cluster_replica(
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,

@@ -510,7 +510,12 @@ async fn migrate_builtin_collections_incompatible(
         .collect();
 
     let updates = txn.get_and_commit_op_updates();
-    let builtin_table_updates = state
+    // When initializing/bootstrapping, we don't use the controller state
+    // updates but instead load the catalog fully and then go ahead and apply
+    // commands to the controller(s). Maybe we _should_ instead use the same
+    // logic and return and use the updates from here. But that's at the very
+    // least future work.
+    let (builtin_table_updates, _controller_state_updates) = state
         .apply_updates_for_bootstrap(updates, local_expr_cache)
         .await;
 
