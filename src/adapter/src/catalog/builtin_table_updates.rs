@@ -1245,15 +1245,18 @@ impl CatalogState {
             })
             .into_element()
             .ast;
-        let query = match &create_stmt {
-            Statement::CreateMaterializedView(stmt) => &stmt.query,
+        let query_string = match &create_stmt {
+            Statement::CreateMaterializedView(stmt) => {
+                let mut query_string = stmt.query.to_ast_string_stable();
+                // PostgreSQL appends a semicolon in `pg_matviews.definition`, we
+                // do the same for compatibility's sake.
+                query_string.push(';');
+                query_string
+            }
+            // TODO(ct): Remove.
+            Statement::CreateContinualTask(_) => "TODO(ct)".into(),
             _ => unreachable!(),
         };
-
-        let mut query_string = query.to_ast_string_stable();
-        // PostgreSQL appends a semicolon in `pg_matviews.definition`, we
-        // do the same for compatibility's sake.
-        query_string.push(';');
 
         let mut updates = Vec::new();
 

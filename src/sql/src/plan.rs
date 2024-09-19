@@ -137,6 +137,7 @@ pub enum Plan {
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
     CreateMaterializedView(CreateMaterializedViewPlan),
+    CreateContinualTask(CreateContinualTaskPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
     Comment(CommentPlan),
@@ -259,6 +260,7 @@ impl Plan {
             StatementKind::CreateDatabase => &[PlanKind::CreateDatabase],
             StatementKind::CreateIndex => &[PlanKind::CreateIndex],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
+            StatementKind::CreateContinualTask => &[PlanKind::CreateContinualTask],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
@@ -327,6 +329,7 @@ impl Plan {
             Plan::CreateTable(_) => "create table",
             Plan::CreateView(_) => "create view",
             Plan::CreateMaterializedView(_) => "create materialized view",
+            Plan::CreateContinualTask(_) => "create continual task",
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
             Plan::Comment(_) => "comment",
@@ -701,6 +704,16 @@ pub struct CreateMaterializedViewPlan {
     /// True if the materialized view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
     pub ambiguous_columns: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateContinualTaskPlan {
+    pub name: QualifiedItemName,
+    pub desc: RelationDesc,
+    // TODO(ct): Multiple inputs.
+    pub input_id: GlobalId,
+    pub continual_task: MaterializedView,
+    // TODO(ct): replace, drop_ids, if_not_exists
 }
 
 #[derive(Debug, Clone)]
