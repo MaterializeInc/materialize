@@ -93,7 +93,7 @@ impl Coordinator {
             .catalog_transact_inner(session.map(|session| session.conn_id()), ops)
             .await?;
 
-        assert!(derived_side_effects.is_empty(), "cannot apply ops that produce side effects when using catalog_transact_with_side_effects");
+        assert!(derived_side_effects.is_empty(), "cannot apply ops that produce side effects when using catalog_transact_with_side_effects, but got: {:?}", derived_side_effects);
 
         let side_effects_fut = side_effect(self);
 
@@ -171,7 +171,7 @@ impl Coordinator {
         let (table_updates, derived_side_effects) =
             self.catalog_transact_inner(conn_id, ops).await?;
 
-        assert!(derived_side_effects.is_empty(), "cannot apply ops that produce side effects when using catalog_transact_with_side_effects");
+        assert!(derived_side_effects.is_empty(), "cannot apply ops that produce side effects when using catalog_transact_with_side_effects, but got: {:?}", derived_side_effects);
 
         table_updates
             .instrument(info_span!("coord::catalog_transact_conn::table_updates"))
