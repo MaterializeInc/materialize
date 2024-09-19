@@ -3774,18 +3774,10 @@ pub fn serve(
                         .await
                         .map_err(AdapterError::Orchestrator)?;
 
-                    // TODO(jkosh44) Kick this off as a background task in
-                    // `serve` instead of blocking startup on the pruning.
                     if let Some(retention_period) = storage_usage_retention_period {
-                        let prune_start = Instant::now();
-                        info!("startup: coord serve: storage usage prune beginning");
                         coord
                             .prune_storage_usage_events_on_startup(retention_period)
                             .await;
-                        info!(
-                            "startup: coord serve: storage usage prune complete in {:?}",
-                            prune_start.elapsed()
-                        );
                     }
 
                     Ok(())
