@@ -31,6 +31,7 @@ from materialize.feature_benchmark.benchmark_versioning import (
 )
 from materialize.feature_benchmark.report import Report
 from materialize.mz_version import MzVersion
+from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
@@ -176,7 +177,9 @@ def run_one_scenario(
 
         c.up("testdrive", persistent=True)
 
-        additional_system_parameter_defaults = {"max_clusters": "15"}
+        additional_system_parameter_defaults = (
+            ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS | {"max_clusters": "15"}
+        )
 
         if params is not None:
             for param in params.split(";"):
