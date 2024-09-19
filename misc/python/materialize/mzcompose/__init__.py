@@ -39,6 +39,15 @@ DEFAULT_MZ_VOLUMES = [
 ]
 
 
+# Parameters which disable systems that periodically/unpredictably impact performance
+ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
+    "enable_statement_lifecycle_logging": "false",
+    "persist_catalog_force_compaction_fuel": "0",
+    "statement_logging_default_sample_rate": "0",
+    "statement_logging_max_sample_rate": "0",
+}
+
+
 def get_default_system_parameters(
     version: MzVersion | None = None, zero_downtime: bool = False
 ) -> dict[str, str]:

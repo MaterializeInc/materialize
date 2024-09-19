@@ -23,6 +23,7 @@ import numpy
 from matplotlib.markers import MarkerStyle
 
 from materialize import MZ_ROOT, buildkite
+from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -269,11 +270,8 @@ def run_once(
                 external_cockroach=True,
                 external_minio=True,
                 sanity_restart=False,
-                additional_system_parameter_defaults={
-                    "enable_statement_lifecycle_logging": "false",
-                    "statement_logging_default_sample_rate": "0",
-                    "statement_logging_max_sample_rate": "0",
-                },
+                additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
+                | {"max_connections": "100000"},
             )
         ]
 
@@ -297,11 +295,6 @@ def run_once(
             else:
                 c.up(*service_names)
                 c.up("testdrive", persistent=True)
-                c.sql(
-                    "ALTER SYSTEM SET max_connections = 1000000",
-                    user="mz_system",
-                    port=6877,
-                )
 
                 mz_version = c.query_mz_version()
                 mz_string = f"{mz_version} (docker)"

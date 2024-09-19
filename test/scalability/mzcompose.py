@@ -20,6 +20,7 @@ from jupyter_core.command import main as jupyter_core_command_main
 from matplotlib import pyplot as plt
 
 from materialize import buildkite, git
+from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.materialized import Materialized
@@ -80,6 +81,7 @@ SERVICES = [
     Materialized(
         image="materialize/materialized:latest",
         sanity_restart=False,
+        additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS,
     ),
     Postgres(),
     Balancerd(),
