@@ -46,6 +46,15 @@ class BenchmarkScenarioResult:
     def is_empty(self) -> bool:
         return len(self.metrics) == 0
 
+    def get_metric_by_measurement_type(
+        self, measurement_type: MeasurementType
+    ) -> BenchmarkScenarioMetric | None:
+        for metric in self.metrics:
+            if metric.measurement_type == measurement_type:
+                return metric
+
+        return None
+
 
 class BenchmarkScenarioMetric(Generic[T]):
     def __init__(

@@ -17,6 +17,7 @@ from materialize.feature_benchmark.benchmark_result_evaluator import (
 from materialize.feature_benchmark.measurement import (
     MeasurementType,
 )
+from materialize.feature_benchmark.scenario import Scenario
 from materialize.feature_benchmark.scenario_version import ScenarioVersion
 
 T = TypeVar("T", bound=int | float)
@@ -56,6 +57,9 @@ class Report:
         ), f"Result of scenario {result.scenario_name} already present"
         self._result_by_scenario_name[result.scenario_name] = result
 
+    def get_scenario_names(self) -> list[str]:
+        return list(self._result_by_scenario_name.keys())
+
     def as_string(self, use_colors: bool, limit_to_scenario: str | None = None) -> str:
         output_lines = []
 
@@ -91,7 +95,6 @@ class Report:
         self, scenario_name: str
     ) -> dict[MeasurementType, ReportMeasurement]:
         scenario_result = self.get_scenario_result_by_name(scenario_name)
-        assert scenario_result is not None
 
         this_results = dict()
         for metric in scenario_result.metrics:
@@ -103,11 +106,32 @@ class Report:
 
     def get_scenario_version(self, scenario_name: str) -> ScenarioVersion:
         scenario_result = self.get_scenario_result_by_name(scenario_name)
-        assert scenario_result is not None
-
         return scenario_result.get_scenario_version()
 
     def get_scenario_result_by_name(
         self, scenario_name: str
-    ) -> BenchmarkScenarioResult | None:
+    ) -> BenchmarkScenarioResult:
         return self._result_by_scenario_name[scenario_name]
+
+    def has_scenario_regression(self, scenario_name: str) -> bool:
+        scenario_result = self.get_scenario_result_by_name(scenario_name)
+        evaluator = RelativeThresholdEvaluator(scenario_result.scenario_class)
+
+        for metric in scenario_result.metrics:
+            if evaluator.is_regression(metric):
+                return True
+
+        return False
+
+
+def determine_scenario_classes_with_regressions(
+    selected_report_by_scenario_name: dict[str, Report]
+) -> list[type[Scenario]]:
+    scenario_classes_with_regressions = set()
+
+    for scenario_name, report in selected_report_by_scenario_name.items():
+        if report.has_scenario_regression(scenario_name):
+            scenario_result = report.get_scenario_result_by_name(scenario_name)
+            scenario_classes_with_regressions.add(scenario_result.scenario_class)
+
+    return list(scenario_classes_with_regressions)
