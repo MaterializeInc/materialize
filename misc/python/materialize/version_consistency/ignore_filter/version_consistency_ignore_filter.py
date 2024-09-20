@@ -102,13 +102,13 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
         self, expression: Expression, row_selection: DataRowSelection
     ) -> IgnoreVerdict:
         if (
-            self.lower_version < MZ_VERSION_0_77_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_77_0 <= self.higher_version
             and is_any_date_time_expression(expression)
         ):
             return YesIgnore("Fixed issue regarding time zone handling")
 
         if (
-            self.lower_version < MZ_VERSION_0_78_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_78_0 <= self.higher_version
             and expression.matches(
                 partial(
                     matches_fun_by_any_name,
@@ -120,7 +120,7 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             return YesIgnore("Accepted: no order explicitly specified")
 
         if (
-            self.lower_version < MZ_VERSION_0_81_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_81_0 <= self.higher_version
             and expression.matches(
                 partial(
                     matches_fun_by_any_name,
@@ -134,7 +134,7 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             )
 
         if (
-            self.lower_version < MZ_VERSION_0_88_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_88_0 <= self.higher_version
             and expression.matches(
                 partial(
                     matches_fun_by_name,
@@ -146,7 +146,7 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             return YesIgnore("date_trunc fixed in PR 25202")
 
         if (
-            self.lower_version < MZ_VERSION_0_93_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_93_0 <= self.higher_version
             and expression.matches(
                 partial(
                     matches_op_by_any_pattern,
@@ -161,7 +161,7 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             return YesIgnore("ILIKE fixed in PR 26183")
 
         if (
-            self.lower_version < MZ_VERSION_0_93_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_93_0 <= self.higher_version
             and expression.matches(
                 partial(is_operation_tagged, tag=TAG_REGEX),
                 True,
@@ -170,7 +170,7 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             return YesIgnore("Newline handling in regex fixed in PR 26191")
 
         if (
-            self.lower_version < MZ_VERSION_0_95_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_95_0 <= self.higher_version
             and expression.matches(
                 partial(
                     matches_fun_by_any_name,
@@ -183,7 +183,7 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             return YesIgnore("Type of min(time) / max(time) fixed in PR 26335")
 
         if (
-            self.lower_version < MZ_VERSION_0_99_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_99_0 <= self.higher_version
             and is_any_date_time_expression(expression)
         ):
             return YesIgnore(
@@ -191,7 +191,7 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             )
 
         if (
-            self.lower_version < MZ_VERSION_0_107_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_107_0 <= self.higher_version
             and expression.matches(
                 partial(
                     matches_op_by_pattern,
@@ -202,7 +202,7 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Contains on list and array introduced in PR 27959")
 
-        if self.lower_version < MZ_VERSION_0_118_0 <= self.higher_version:
+        if self.lower_version <= MZ_VERSION_0_118_0 <= self.higher_version:
             if expression.matches(
                 partial(
                     involves_data_type_category,
@@ -241,7 +241,7 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
         if (
-            self.lower_version < MZ_VERSION_0_109_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_109_0 <= self.higher_version
             and self._aggregration_shortcut_changed(
                 query_template, contains_aggregation
             )
@@ -249,7 +249,7 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("Evaluation order changed with PR 28144")
 
         if (
-            self.lower_version < MZ_VERSION_0_117_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_117_0 <= self.higher_version
         ) and query_template.matches_any_expression(
             is_any_date_time_expression,
             True,
@@ -272,7 +272,7 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
         all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         if (
-            self.lower_version < MZ_VERSION_0_117_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_117_0 <= self.higher_version
             and query_template.matches_any_expression(
                 partial(
                     matches_fun_by_name,
@@ -301,7 +301,7 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
         if (
-            self.lower_version < MZ_VERSION_0_117_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_117_0 <= self.higher_version
         ) and query_template.matches_any_expression(
             is_any_date_time_expression,
             True,
@@ -323,7 +323,7 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
         query_output_mode: QueryOutputMode,
     ) -> IgnoreVerdict:
         if (
-            self.lower_version < MZ_VERSION_0_109_0 <= self.higher_version
+            self.lower_version <= MZ_VERSION_0_109_0 <= self.higher_version
             and self._aggregration_shortcut_changed(
                 query_template, contains_aggregation
             )
