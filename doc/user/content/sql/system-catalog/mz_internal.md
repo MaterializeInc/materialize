@@ -141,30 +141,6 @@ The `mz_cluster_schedules` table shows the `SCHEDULE` option specified for each 
 | `type`                              | [`text`]     | `on-refresh`, or `manual`. Default: `manual`                   |
 | `refresh_hydration_time_estimate`   | [`interval`] | The interval given in the `HYDRATION TIME ESTIMATE` option.    |
 
-## `mz_cluster_replica_frontiers`
-
-The `mz_cluster_replica_frontiers` table describes the per-replica frontiers of
-sources, sinks, materialized views, indexes, and subscriptions in the system,
-as observed from the coordinator.
-
-[`mz_compute_frontiers`](../mz_introspection/#mz_compute_frontiers) is similar to
-`mz_cluster_replica_frontiers`, but `mz_compute_frontiers` reports the
-frontiers known to the active compute replica, while
-`mz_cluster_replica_frontiers` reports the frontiers of all replicas. Note also
-that `mz_compute_frontiers` is restricted to compute objects (indexes,
-materialized views, and subscriptions) while `mz_cluster_replica_frontiers`
-contains storage objects that are installed on replicas (sources, sinks) as
-well.
-
-At this time, we do not make any guarantees about the freshness of these numbers.
-
-<!-- RELATION_SPEC mz_internal.mz_cluster_replica_frontiers -->
-| Field            | Type             | Meaning                                                                |
-| -----------------| ---------------- | --------                                                               |
-| `object_id`      | [`text`]         | The ID of the source, sink, index, materialized view, or subscription. |
-| `replica_id`     | [`text`]         | The ID of a cluster replica.                                           |
-| `write_frontier` | [`mz_timestamp`] | The next timestamp at which the output may change.                     |
-
 ## `mz_cluster_replica_metrics`
 
 The `mz_cluster_replica_metrics` table gives the last known CPU and RAM utilization statistics
@@ -570,27 +546,38 @@ system.
 
 ## `mz_postgres_source_tables`
 
-The `mz_postgres_source_tables` table contains the mapping between each
-subsource and the corresponding upstream PostgreSQL table being ingested.
+The `mz_postgres_source_tables` table contains the mapping between each Materialize
+subsource or table and the corresponding upstream PostgreSQL table being ingested.
 
 <!-- RELATION_SPEC mz_internal.mz_postgres_source_tables -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
-| `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `id`                | [`text`]         | The ID of the subsource or table. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
 | `schema_name`       | [`text`]         | The schema of the upstream table being ingested. |
 | `table_name`        | [`text`]         | The name of the upstream table being ingested.   |
 
 ## `mz_mysql_source_tables`
 
-The `mz_mysql_source_tables` table contains the mapping between each
-subsource and the corresponding upstream MySQL table being ingested.
+The `mz_mysql_source_tables` table contains the mapping between each Materialize
+subsource or table and the corresponding upstream MySQL table being ingested.
 
 <!-- RELATION_SPEC mz_internal.mz_mysql_source_tables -->
 | Field               | Type             | Meaning                                                                                                        |
 | ------------------- | ---------------- | --------                                                                                                       |
-| `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
+| `id`                | [`text`]         | The ID of the subsource or table. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
 | `schema_name`       | [`text`]         | The schema ([or, database](https://dev.mysql.com/doc/refman/8.0/en/glossary.html#glos_schema)) of the upstream table being ingested. |
 | `table_name`        | [`text`]         | The name of the upstream table being ingested. |
+
+## `mz_kafka_source_tables`
+
+The `mz_kafka_source_tables` table contains the mapping between each Materialize
+table and the corresponding upstream Kafka topic being ingested.
+
+<!-- RELATION_SPEC mz_internal.mz_kafka_source_tables -->
+| Field               | Type             | Meaning                                                                                                        |
+| ------------------- | ---------------- | --------                                                                                                       |
+| `id`                | [`text`]         | The ID of the table. Corresponds to [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
+| `topic`             | [`text`]         | The topic being ingested. |
 
 <!--
 ## `mz_prepared_statement_history`

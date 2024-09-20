@@ -1,0 +1,36 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE foo (key INT)
+
+# Feature flag is off by default
+statement error CREATE CONTINUAL TASK is not supported
+CREATE CONTINUAL TASK nope (key INT) ON INPUT foo AS (
+    INSERT INTO nope SELECT * FROM foo;
+)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_create_continual_task = true
+----
+COMPLETE 0
+
+# INSERT columns do not match
+statement error CONTINUAL TASK query columns did not match
+CREATE CONTINUAL TASK nope (key STRING) ON INPUT foo AS (
+    INSERT INTO nope SELECT * FROM foo;
+)
+
+# TODO(ct): Make this error (or work!) instead of panic
+# statement error something
+# CREATE CONTINUAL TASK nope (key INT) ON INPUT foo AS (
+#    INSERT INTO nope SELECT null::INT
+# )

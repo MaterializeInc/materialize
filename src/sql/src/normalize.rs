@@ -21,8 +21,9 @@ use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
+    ContinualTaskStmt, CreateConnectionStatement, CreateContinualTaskStatement,
+    CreateIndexStatement, CreateMaterializedViewStatement, CreateSecretStatement,
+    CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
     CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
     CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior,
     MutRecBlock, Op, Query, Statement, TableFactor, UnresolvedItemName, UnresolvedSchemaName,
@@ -413,6 +414,27 @@ pub fn create_statement(
                 }
             }
             *if_exists = IfExistsBehavior::Error;
+        }
+
+        Statement::CreateContinualTask(CreateContinualTaskStatement {
+            name,
+            columns: _,
+            input,
+            stmts,
+            in_cluster: _,
+        }) => {
+            *name = allocate_name(name)?;
+            let mut normalizer = QueryNormalizer::new();
+            normalizer.visit_item_name_mut(input);
+            for stmt in stmts {
+                match stmt {
+                    ContinualTaskStmt::Delete(stmt) => normalizer.visit_delete_statement_mut(stmt),
+                    ContinualTaskStmt::Insert(stmt) => normalizer.visit_insert_statement_mut(stmt),
+                }
+            }
+            if let Some(err) = normalizer.err {
+                return Err(err);
+            }
         }
 
         Statement::CreateIndex(CreateIndexStatement {

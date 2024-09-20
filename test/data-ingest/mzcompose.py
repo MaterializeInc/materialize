@@ -14,9 +14,6 @@ that Materialize can handle it correctly by comparing the results.
 
 import random
 import time
-import traceback
-
-from pg8000.exceptions import InterfaceError
 
 from materialize import buildkite
 from materialize.data_ingest.executor import (
@@ -140,26 +137,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     mz_service = "materialized"
     deploy_generation = 0
 
-    try:
-        for i, workload_class in enumerate(workloads):
-            random.seed(args.seed)
-            print(f"--- Testing workload {workload_class.__name__}")
-            workload = workload_class(c, mz_service, deploy_generation)
-            execute_workload(
-                executor_classes,
-                workload,
-                i,
-                ports,
-                args.runtime,
-                args.verbose,
-            )
-            mz_service = workload.mz_service
-            deploy_generation = workload.deploy_generation
-    except InterfaceError as e:
-        if "network error" in str(e):
-            print(e)
-            traceback.print_exc()
-            # temporary error, invited to retry
-            exit(75)
-
-        raise
+    for i, workload_class in enumerate(workloads):
+        random.seed(args.seed)
+        print(f"--- Testing workload {workload_class.__name__}")
+        workload = workload_class(c, mz_service, deploy_generation)
+        execute_workload(
+            executor_classes,
+            workload,
+            i,
+            ports,
+            args.runtime,
+            args.verbose,
+        )
+        mz_service = workload.mz_service
+        deploy_generation = workload.deploy_generation

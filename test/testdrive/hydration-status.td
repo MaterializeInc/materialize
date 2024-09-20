@@ -274,8 +274,14 @@ mv  hydrated_test_3 true
 
 > CREATE SOURCE src
   IN CLUSTER test
-  FROM LOAD GENERATOR auction
-  FOR ALL TABLES
+  FROM LOAD GENERATOR auction;
+
+> CREATE TABLE accounts FROM SOURCE src (REFERENCE accounts);
+> CREATE TABLE auctions FROM SOURCE src (REFERENCE auctions);
+> CREATE TABLE bids FROM SOURCE src (REFERENCE bids);
+> CREATE TABLE organizations FROM SOURCE src (REFERENCE organizations);
+> CREATE TABLE users FROM SOURCE src (REFERENCE users);
+
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 > CREATE CONNECTION csr_conn
@@ -298,14 +304,9 @@ mv  hydrated_test_3 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-accounts      hydrated_test_3 true
-auctions      hydrated_test_3 true
-bids          hydrated_test_3 true
 mv            hydrated_test_3 true
-organizations hydrated_test_3 true
 src           hydrated_test_3 true
 snk           hydrated_test_3 true
-users         hydrated_test_3 true
 
 # Test dropping replicas.
 
@@ -330,14 +331,9 @@ users         hydrated_test_3 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-accounts      hydrated_test_4 true
-auctions      hydrated_test_4 true
-bids          hydrated_test_4 true
 mv            hydrated_test_4 true
-organizations hydrated_test_4 true
 src           hydrated_test_4 true
 snk           hydrated_test_4 true
-users         hydrated_test_4 true
 
 # Test dropping dataflows.
 

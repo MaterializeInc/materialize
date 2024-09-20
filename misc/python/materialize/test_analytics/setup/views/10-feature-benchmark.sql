@@ -15,6 +15,7 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_day AS
         res.framework_version,
         res.scenario_version,
         res.scale,
+        max(res.is_regression) AS had_regression,
         date_trunc('day', b.date) AS day,
         min(res.wallclock) AS min_wallclock,
         avg(res.wallclock) AS avg_wallclock,
@@ -54,6 +55,7 @@ ON v_feature_benchmark_result_per_day
     framework_version,
     scenario_version,
     scale,
+    had_regression,
     day,
     min_wallclock,
     max_wallclock,
@@ -71,6 +73,7 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_week AS
         res.framework_version,
         res.scenario_version,
         res.scale,
+        max(res.is_regression) AS had_regression,
         date_trunc('week', b.date) AS week,
         min(res.wallclock) AS min_wallclock,
         avg(res.wallclock) AS avg_wallclock,
@@ -108,6 +111,7 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_month AS
         res.framework_version,
         res.scenario_version,
         res.scale,
+        max(res.is_regression) AS had_regression,
         date_trunc('month', b.date) AS month,
         min(res.wallclock) AS min_wallclock,
         avg(res.wallclock) AS avg_wallclock,
@@ -136,3 +140,7 @@ CREATE OR REPLACE VIEW v_feature_benchmark_result_per_month AS
         res.scale,
         date_trunc('month', b.date)
 ;
+
+ALTER VIEW v_feature_benchmark_result_per_day OWNER TO qa;
+ALTER VIEW v_feature_benchmark_result_per_week OWNER TO qa;
+ALTER VIEW v_feature_benchmark_result_per_month OWNER TO qa;

@@ -85,6 +85,7 @@ pub struct ArrowMetrics {
     pub(crate) val: ArrowColumnMetrics,
     pub(crate) part_build_seconds: Counter,
     pub(crate) part_build_count: IntCounter,
+    pub(crate) concat_bytes: IntCounter,
 }
 
 impl ArrowMetrics {
@@ -109,12 +110,17 @@ impl ArrowMetrics {
             name: "mz_persist_columnar_part_build_count",
             help: "number of times we've encoded our structured columnar format",
         ));
+        let concat_bytes: IntCounter = registry.register(metric!(
+            name: "mz_persist_columnar_part_concat_bytes",
+            help: "number of bytes we've copied when concatenating updates",
+        ));
 
         ArrowMetrics {
             key: ArrowColumnMetrics::new(&op_count, &op_seconds, "key"),
             val: ArrowColumnMetrics::new(&op_count, &op_seconds, "val"),
             part_build_seconds,
             part_build_count,
+            concat_bytes,
         }
     }
 

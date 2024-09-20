@@ -74,8 +74,7 @@ class PgCdcBase:
 
                 >[version>=11700] CREATE SOURCE postgres_source1{self.suffix}
                   FROM POSTGRES CONNECTION pg1{self.suffix}
-                  (PUBLICATION 'postgres_source{self.suffix}',
-                   TEXT COLUMNS = (postgres_source_table{self.suffix}.f4));
+                  (PUBLICATION 'postgres_source{self.suffix}');
                 >[version>=11700] CREATE TABLE postgres_source_tableA{self.suffix} FROM SOURCE postgres_source1{self.suffix} (REFERENCE postgres_source_table{self.suffix});
 
                 > CREATE DEFAULT INDEX ON postgres_source_tableA{self.suffix};

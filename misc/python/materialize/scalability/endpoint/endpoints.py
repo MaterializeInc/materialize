@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import pg8000
+import psycopg
 
 from materialize import git
 from materialize.mzcompose.composition import Composition
@@ -92,7 +92,7 @@ class MaterializeNonRemote(Endpoint):
         raise NotImplementedError
 
     def lift_limits(self) -> None:
-        priv_conn = pg8000.connect(
+        priv_conn = psycopg.connect(
             host=self.internal_host(), user="mz_system", port=self.internal_port()
         )
         priv_conn.autocommit = True

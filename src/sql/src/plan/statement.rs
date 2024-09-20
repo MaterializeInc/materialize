@@ -158,6 +158,7 @@ pub fn describe(
         Statement::CreateMaterializedView(stmt) => {
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
+        Statement::CreateContinualTask(stmt) => ddl::describe_create_continual_task(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
 
@@ -343,6 +344,7 @@ pub fn plan(
         Statement::CreateMaterializedView(stmt) => {
             ddl::plan_create_materialized_view(scx, stmt, params)
         }
+        Statement::CreateContinualTask(stmt) => ddl::plan_create_continual_task(scx, stmt, params),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
 
@@ -1037,6 +1039,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateCluster(_) => DDL,
             Statement::CreateClusterReplica(_) => DDL,
             Statement::CreateConnection(_) => DDL,
+            Statement::CreateContinualTask(_) => DDL,
             Statement::CreateDatabase(_) => DDL,
             Statement::CreateIndex(_) => DDL,
             Statement::CreateRole(_) => DDL,

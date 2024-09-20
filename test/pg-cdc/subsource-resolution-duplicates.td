@@ -37,26 +37,37 @@ CREATE TABLE other.t (f1 INT);
 INSERT INTO other.t VALUES (1);
 ALTER TABLE other.t REPLICA IDENTITY FULL;
 
-! CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
-contains:multiple subsources would be named t
-detail:referenced tables with duplicate name: postgres.other.t, postgres.public.t
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
-! CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (public.t AS x, public.t as Y);
-contains:multiple subsources refer to table postgres.public.t
-detail: subsources referencing table: x, y
+! CREATE TABLE t FROM SOURCE mz_source (REFERENCE t);
+contains: reference to t is ambiguous
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR SCHEMAS (other);
+> CREATE TABLE t FROM SOURCE mz_source (REFERENCE public.t);
+
+! CREATE TABLE t FROM SOURCE mz_source (REFERENCE other.t);
+contains:catalog item 't' already exists
+
+> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE other.t);
+
+> DROP TABLE t;
+
+> CREATE TABLE x FROM SOURCE mz_source (REFERENCE public.t);
+
+# multiple subsources may refer to the same table postgres.public.t
+> CREATE TABLE Y FROM SOURCE mz_source (REFERENCE public.t);
+
+> DROP TABLE x;
+
+> CREATE TABLE t FROM SOURCE mz_source (REFERENCE other.t);
 
 > SHOW sources
  mz_source          postgres  quickstart  ""
  mz_source_progress progress  <null>      ""
- t                  subsource quickstart  ""
+
+> SHOW TABLES
+t                  ""
+t2                 ""
+y                  ""
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA other CASCADE;

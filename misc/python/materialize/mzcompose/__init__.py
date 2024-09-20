@@ -17,10 +17,9 @@ documentation][user-docs].
 
 import subprocess
 from collections.abc import Iterable
-from ssl import SSLContext
 from typing import Any, Literal, TypeVar
 
-import pg8000
+import psycopg
 
 from materialize import spawn, ui
 from materialize.mz_version import MzVersion
@@ -38,6 +37,15 @@ DEFAULT_MZ_VOLUMES = [
     "tmp:/share/tmp",
     "scratch:/scratch",
 ]
+
+
+# Parameters which disable systems that periodically/unpredictably impact performance
+ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
+    "enable_statement_lifecycle_logging": "false",
+    "persist_catalog_force_compaction_fuel": "0",
+    "statement_logging_default_sample_rate": "0",
+    "statement_logging_max_sample_rate": "0",
+}
 
 
 def get_default_system_parameters(
@@ -72,6 +80,7 @@ def get_default_system_parameters(
         "compute_hydration_concurrency": "2",
         "disk_cluster_replicas_default": "true",
         "enable_0dt_deployment": "true" if zero_downtime else "false",
+        "enable_0dt_deployment_panic_after_timeout": "true",
         "enable_alter_swap": "true",
         "enable_assert_not_null": "true",
         "enable_columnation_lgalloc": "true",
@@ -133,7 +142,7 @@ def get_default_system_parameters(
         "storage_use_reclock_v2": "true",
         "timestamp_oracle": "postgres",
         "wait_catalog_consolidation_on_startup": "true",
-        "with_0dt_deployment_max_wait": "100d",  # forever, time out and fail test!
+        "with_0dt_deployment_max_wait": "900s",
         # End of list (ordered by name)
     }
 
@@ -188,7 +197,7 @@ def _wait_for_pg(
     password: str | None,
     expected: Iterable[Any] | Literal["any"],
     print_result: bool = False,
-    ssl_context: SSLContext | None = None,
+    sslmode: str = "disable",
 ) -> None:
     """Wait for a pg-compatible database (includes materialized)"""
     obfuscated_password = password[0:1] if password is not None else ""
@@ -197,19 +206,19 @@ def _wait_for_pg(
     error = None
     for remaining in ui.timeout_loop(timeout_secs, tick=0.5):
         try:
-            conn = pg8000.connect(
-                database=dbname,
+            conn = psycopg.connect(
+                dbname=dbname,
                 host=host,
                 port=port,
                 user=user,
                 password=password,
-                timeout=1,
-                ssl_context=ssl_context,
+                connect_timeout=1,
+                sslmode=sslmode,
             )
             # The default (autocommit = false) wraps everything in a transaction.
             conn.autocommit = True
             with conn.cursor() as cur:
-                cur.execute(query)
+                cur.execute(query.encode())
                 if expected == "any" and cur.rowcount == -1:
                     ui.progress(" success!", finish=True)
                     return

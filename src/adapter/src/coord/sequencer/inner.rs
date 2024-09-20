@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
-use futures::{future, Future, FutureExt};
+use futures::{future, Future};
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
@@ -46,7 +46,7 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::StatementContext;
+use mz_sql::plan::{ConnectionDetails, StatementContext};
 use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
 use mz_storage_types::sinks::StorageSinkDesc;
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -112,6 +112,7 @@ use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, ReadHolds};
 
 mod cluster;
+mod create_continual_task;
 mod create_index;
 mod create_materialized_view;
 mod create_view;
@@ -648,7 +649,7 @@ impl Coordinator {
     pub(super) async fn sequence_create_connection(
         &mut self,
         mut ctx: ExecuteContext,
-        mut plan: plan::CreateConnectionPlan,
+        plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
         let connection_gid = match self.catalog_mut().allocate_user_id().await {
@@ -656,29 +657,38 @@ impl Coordinator {
             Err(err) => return ctx.retire(Err(err.into())),
         };
 
-        let public_key_set = match plan.connection.connection {
-            mz_storage_types::connections::Connection::Ssh(_) => {
-                let key_set = match SshKeyPairSet::new() {
-                    Ok(key) => key,
-                    Err(err) => return ctx.retire(Err(err.into())),
+        match &plan.connection.details {
+            ConnectionDetails::Ssh { key_1, key_2, .. } => {
+                let key_1 = match key_1.as_key_pair() {
+                    Some(key_1) => key_1.clone(),
+                    None => {
+                        return ctx.retire(Err(AdapterError::Unstructured(anyhow!(
+                            "the PUBLIC KEY 1 option cannot be explicitly specified"
+                        ))))
+                    }
                 };
+
+                let key_2 = match key_2.as_key_pair() {
+                    Some(key_2) => key_2.clone(),
+                    None => {
+                        return ctx.retire(Err(AdapterError::Unstructured(anyhow!(
+                            "the PUBLIC KEY 2 option cannot be explicitly specified"
+                        ))))
+                    }
+                };
+
+                let key_set = SshKeyPairSet::from_parts(key_1, key_2);
                 let secret = key_set.to_bytes();
-                match self
+                if let Err(err) = self
                     .secrets_controller
                     .ensure(connection_gid, &secret)
                     .await
                 {
-                    Ok(()) => Some(key_set.public_keys()),
-                    Err(err) => return ctx.retire(Err(err.into())),
+                    return ctx.retire(Err(err.into()));
                 }
             }
-            _ => None,
+            _ => (),
         };
-        assert_eq!(
-            plan.public_key_set, None,
-            "public key should not be set yet"
-        );
-        plan.public_key_set = public_key_set;
 
         if plan.validate {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -689,8 +699,8 @@ impl Coordinator {
 
             let connection = plan
                 .connection
-                .connection
-                .clone()
+                .details
+                .to_connection()
                 .into_inline_connection(self.catalog().state());
 
             let current_storage_parameters = self.controller.storage.config().clone();
@@ -745,36 +755,21 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut ops = vec![catalog::Op::CreateItem {
+        let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
-                connection: plan.connection.connection.clone(),
+                details: plan.connection.details.clone(),
                 resolved_ids,
             }),
             owner_id: *session.current_role_id(),
         }];
-        if let Some(public_key_set) = plan.public_key_set {
-            let builtin_table_update = self.catalog().state().pack_ssh_tunnel_connection_update(
-                connection_gid,
-                &public_key_set,
-                1,
-            );
-            let builtin_table_update = self
-                .catalog()
-                .state()
-                .resolve_builtin_table_update(builtin_table_update);
-            ops.push(catalog::Op::WeirdBuiltinTableUpdates {
-                builtin_table_update,
-                audit_log: Vec::new(),
-            });
-        }
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-                match plan.connection.connection {
-                    mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
+                match plan.connection.details {
+                    ConnectionDetails::AwsPrivatelink(ref privatelink) => {
                         let spec = VpcEndpointConfig {
                             aws_service_name: privatelink.service_name.to_owned(),
                             availability_zone_ids: privatelink.availability_zones.to_owned(),
@@ -1260,7 +1255,7 @@ impl Coordinator {
             dropped_active_db,
             dropped_active_cluster,
             dropped_in_use_indexes,
-        } = self.sequence_drop_common(session, drop_ids).await?;
+        } = self.sequence_drop_common(session, drop_ids)?;
 
         self.catalog_transact(Some(session), ops).await?;
 
@@ -1502,7 +1497,7 @@ impl Coordinator {
             dropped_active_db,
             dropped_active_cluster,
             dropped_in_use_indexes,
-        } = self.sequence_drop_common(session, plan.drop_ids).await?;
+        } = self.sequence_drop_common(session, plan.drop_ids)?;
 
         let ops = privilege_revoke_ops
             .chain(default_privilege_revoke_ops)
@@ -1527,7 +1522,7 @@ impl Coordinator {
         Ok(ExecuteResponse::DroppedOwned)
     }
 
-    async fn sequence_drop_common(
+    fn sequence_drop_common(
         &self,
         session: &Session,
         ids: Vec<ObjectId>,
@@ -1548,9 +1543,6 @@ impl Coordinator {
 
         // Clusters we're dropping
         let mut clusters_to_drop = BTreeSet::new();
-
-        // SSH connections we're dropping.
-        let mut ssh_conns_to_drop = Vec::new();
 
         let ids_set = ids.iter().collect::<BTreeSet<_>>();
         for id in &ids {
@@ -1624,12 +1616,6 @@ impl Coordinator {
                                 dependant_objects: dependants,
                             });
                         }
-                    } else if let Ok(connection) = self.catalog().get_entry(id).connection() {
-                        if let mz_storage_types::connections::Connection::Ssh(_) =
-                            &connection.connection
-                        {
-                            ssh_conns_to_drop.push(*id);
-                        }
                     }
                 }
                 _ => {}
@@ -1694,30 +1680,6 @@ impl Coordinator {
             }
         }
 
-        let mut ssh_tunnel_updates = Vec::new();
-        let ssh_conn_secrets = ssh_conns_to_drop.into_iter().map(|ssh_conn| {
-            let secrets_controller = Arc::clone(&self.secrets_controller);
-            async move {
-                let secret = secrets_controller.reader().read(ssh_conn).await?;
-                let key_set = SshKeyPairSet::from_bytes(&secret)?.public_keys();
-                Ok::<_, AdapterError>((ssh_conn, key_set))
-            }
-            .boxed()
-        });
-        let ssh_conn_secrets = future::join_all(ssh_conn_secrets).await;
-        for secret_res in ssh_conn_secrets {
-            let (ssh_conn, key_set) = secret_res?;
-            let ssh_tunnel_update = self
-                .catalog()
-                .state()
-                .pack_ssh_tunnel_connection_update(ssh_conn, &key_set, -1);
-            let ssh_tunnel_update = self
-                .catalog()
-                .state()
-                .resolve_builtin_table_update(ssh_tunnel_update);
-            ssh_tunnel_updates.push(ssh_tunnel_update);
-        }
-
         let ops = role_revokes
             .into_iter()
             .map(|(role_id, member_id, grantor_id)| catalog::Op::RevokeRole {
@@ -1737,12 +1699,6 @@ impl Coordinator {
                     .map(DropObjectInfo::manual_drop_from_object_id)
                     .collect(),
             )))
-            .chain(ssh_tunnel_updates.into_iter().map(|builtin_table_update| {
-                catalog::Op::WeirdBuiltinTableUpdates {
-                    builtin_table_update,
-                    audit_log: Vec::new(),
-                }
-            }))
             .collect();
 
         Ok(DropOps {
@@ -3439,7 +3395,7 @@ impl Coordinator {
 
             Ok(Connection {
                 create_sql: plan.connection.create_sql,
-                connection: plan.connection.connection,
+                details: plan.connection.details,
                 resolved_ids: new_deps,
             })
         };
@@ -3453,8 +3409,8 @@ impl Coordinator {
 
         if validate {
             let connection = conn
-                .connection
-                .clone()
+                .details
+                .to_connection()
                 .into_inline_connection(self.catalog().state());
 
             let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -3513,8 +3469,9 @@ impl Coordinator {
         match self.catalog.get_entry(&id).item() {
             CatalogItem::Connection(curr_conn) => {
                 curr_conn
-                    .connection
-                    .alter_compatible(id, &connection.connection)
+                    .details
+                    .to_connection()
+                    .alter_compatible(id, &connection.details.to_connection())
                     .map_err(StorageError::from)?;
             }
             _ => unreachable!("known to be a connection"),
@@ -3528,8 +3485,8 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
 
-        match connection.connection {
-            mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
+        match connection.details {
+            ConnectionDetails::AwsPrivatelink(ref privatelink) => {
                 let spec = VpcEndpointConfig {
                     aws_service_name: privatelink.service_name.to_owned(),
                     availability_zone_ids: privatelink.availability_zones.to_owned(),

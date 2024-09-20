@@ -249,8 +249,8 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
         input=dedent(
             """
             > CREATE SOURCE s1
-                FROM MYSQL CONNECTION mysql_conn
-                FOR TABLES (public.many_inserts);
+                FROM MYSQL CONNECTION mysql_conn;
+            > CREATE TABLE many_inserts FROM SOURCE s1 (REFERENCE public.many_inserts);
             """
         ),
     )

@@ -133,6 +133,7 @@
 //! ```
 
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -143,6 +144,7 @@ use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
+use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_postgres_util::{simple_query_opt, Client, PostgresError};
 use mz_repr::{Datum, DatumVec, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
@@ -152,11 +154,13 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::operator::StreamExt;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
+use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{Oid, PgLsn};
 use tracing::{error, trace};
 
@@ -180,6 +184,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, RewindRequest>,
+    Stream<G, Infallible>,
     Stream<G, ProgressStatisticsUpdate>,
     Stream<G, ReplicationError>,
     PressOnDropButton,
@@ -191,6 +196,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let (mut raw_handle, raw_data) = builder.new_output();
     let (mut rewinds_handle, rewinds) = builder.new_output();
+    // This output is used to signal to the replication operator that the replication slot has been
+    // created. With the current state of execution serialization there isn't a lot of benefit
+    // of splitting the snapshot and replication phases into two operators.
+    // TODO(petrosagg): merge the two operators in one (while still maintaining separation as
+    // functions/modules)
+    let (_, slot_ready) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (mut snapshot_handle, snapshot) = builder.new_output();
     let (mut definite_error_handle, definite_errors) = builder.new_output();
 
@@ -235,10 +246,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let [
                 data_cap_set,
                 rewind_cap_set,
+                slot_ready_cap_set,
                 snapshot_cap_set,
                 definite_error_cap_set,
                 stats_cap,
-            ]: &mut [_; 5] = caps.try_into().unwrap();
+            ]: &mut [_; 6] = caps.try_into().unwrap();
 
             trace!(
                 %id,
@@ -270,17 +282,34 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 let client = connection_config
                     .connect_replication(&config.config.connection_context.ssh_tunnel_manager)
                     .await?;
-                // The main slot must be created *before* we start snapshotting so that we can be
-                // certain that the temporarly slot created for the snapshot start at an LSN that
-                // is greater than or equal to that of the main slot.
-                super::ensure_replication_slot(&client, &connection.publication_details.slot)
-                    .await?;
 
-                let snapshot_info = export_snapshot(&client).await?;
+                // Attempt to export the snapshot by creating the main replication slot. If that
+                // succeeds then there is no need for creating additional temporary slots.
+                let main_slot = &connection.publication_details.slot;
+                let snapshot_info = match export_snapshot(&client, main_slot, false).await {
+                    Ok(info) => info,
+                    Err(err @ TransientError::ReplicationSlotAlreadyExists) => {
+                        match connection.connection.flavor {
+                            // If we're connecting to a vanilla we have the option of exporting a
+                            // snapshot via a temporary slot
+                            PostgresFlavor::Vanilla => {
+                                let tmp_slot = format!(
+                                    "mzsnapshot_{}",
+                                    uuid::Uuid::new_v4()).replace('-', ""
+                                );
+                                export_snapshot(&client, &tmp_slot, true).await?
+                            }
+                            // No salvation for Yugabyte
+                            PostgresFlavor::Yugabyte => return Err(err),
+                        }
+                    }
+                    Err(err) => return Err(err),
+                };
                 trace!(
                     %id,
                     "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
                 snapshot_handle.give(&snapshot_cap_set[0], snapshot_info);
+                *slot_ready_cap_set = CapabilitySet::new();
 
                 client
             } else {
@@ -560,6 +589,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     (
         snapshot_updates,
         rewinds,
+        slot_ready,
         stats_stream,
         errors,
         button.press_on_drop(),
@@ -567,32 +597,60 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 }
 
 /// Starts a read-only transaction on the SQL session of `client` at a consistent LSN point by
-/// creating a temporary replication slot. Returns a snapshot identifier that can be imported in
+/// creating a replication slot. Returns a snapshot identifier that can be imported in
 /// other SQL session and the LSN of the consistent point.
-async fn export_snapshot(client: &Client) -> Result<(String, MzOffset), TransientError> {
+async fn export_snapshot(
+    client: &Client,
+    slot: &str,
+    temporary: bool,
+) -> Result<(String, MzOffset), TransientError> {
+    match export_snapshot_inner(client, slot, temporary).await {
+        Ok(ok) => Ok(ok),
+        Err(err) => {
+            // We don't want to leave the client inside a failed tx
+            client.simple_query("ROLLBACK;").await?;
+            Err(err)
+        }
+    }
+}
+
+async fn export_snapshot_inner(
+    client: &Client,
+    slot: &str,
+    temporary: bool,
+) -> Result<(String, MzOffset), TransientError> {
     client
         .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
         .await?;
-    // A temporary replication slot is the only way to get the tx in a consistent LSN point
-    let slot = format!("mzsnapshot_{}", uuid::Uuid::new_v4()).replace('-', "");
-    let query =
-        format!("CREATE_REPLICATION_SLOT {slot:?} TEMPORARY LOGICAL \"pgoutput\" USE_SNAPSHOT");
-    let row = simple_query_opt(client, &query).await?.unwrap();
-    let consistent_point: PgLsn = row.get("consistent_point").unwrap().parse().unwrap();
 
-    let row = simple_query_opt(client, "SELECT pg_export_snapshot();")
-        .await?
-        .unwrap();
-    let snapshot = row.get("pg_export_snapshot").unwrap().to_owned();
+    // Note: Using unchecked here is okay because we're using it in a SQL query.
+    let slot = Ident::new_unchecked(slot).to_ast_string();
+    let temporary_str = if temporary { " TEMPORARY" } else { "" };
+    let query =
+        format!("CREATE_REPLICATION_SLOT {slot}{temporary_str} LOGICAL \"pgoutput\" USE_SNAPSHOT");
+    let row = match simple_query_opt(client, &query).await {
+        Ok(row) => Ok(row.unwrap()),
+        Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
+            return Err(TransientError::ReplicationSlotAlreadyExists)
+        }
+        Err(err) => Err(err),
+    }?;
 
     // When creating a replication slot postgres returns the LSN of its consistent point, which is
     // the LSN that must be passed to `START_REPLICATION` to cleanly transition from the snapshot
     // phase to the replication phase. `START_REPLICATION` includes all transactions that commit at
     // LSNs *greater than or equal* to the passed LSN. Therefore the snapshot phase must happen at
     // the greatest LSN that is not beyond the consistent point. That LSN is `consistent_point - 1`
+    let consistent_point: PgLsn = row.get("consistent_point").unwrap().parse().unwrap();
     let consistent_point = u64::from(consistent_point)
         .checked_sub(1)
         .expect("consistent point is always non-zero");
+
+    let row = simple_query_opt(client, "SELECT pg_export_snapshot();")
+        .await?
+        .unwrap();
+    let snapshot = row.get("pg_export_snapshot").unwrap().to_owned();
+
     Ok((snapshot, MzOffset::from(consistent_point)))
 }
 

@@ -433,6 +433,17 @@ pub(super) async fn purify_source_exports(
             if matches!(reference_policy, SourceReferencePolicy::Required) {
                 Err(PgSourcePurificationError::RequiresExternalReferences)?
             }
+
+            // If no external reference is specified, it does not make sense to include
+            // text columns.
+            if !text_columns.is_empty() {
+                Err(
+                    PgSourcePurificationError::UnnecessaryOptionsWithoutReferences(
+                        "TEXT COLUMNS".to_string(),
+                    ),
+                )?
+            }
+
             return Ok(PurifiedSourceExports {
                 source_exports: BTreeMap::new(),
                 normalized_text_columns: vec![],

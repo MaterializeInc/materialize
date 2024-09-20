@@ -119,6 +119,12 @@ pub enum ComputeSinkConnection<S: 'static = ()> {
     Subscribe(SubscribeSinkConnection),
     /// TODO(#25239): Add documentation.
     Persist(PersistSinkConnection<S>),
+    /// TODO(#25239): Add documentation.
+    ///
+    /// TODO(ct): This also writes to persist, but with different behavior
+    /// (conflict resolution, only at input times, etc). It might be time to
+    /// rename PersistSink to something that reflects the differences.
+    ContinualTask(ContinualTaskConnection<S>),
     /// A compute sink to do a oneshot copy to s3.
     CopyToS3Oneshot(CopyToS3OneshotSinkConnection),
 }
@@ -129,6 +135,7 @@ impl<S> ComputeSinkConnection<S> {
         match self {
             ComputeSinkConnection::Subscribe(_) => "subscribe",
             ComputeSinkConnection::Persist(_) => "persist",
+            ComputeSinkConnection::ContinualTask(_) => "continual_task",
             ComputeSinkConnection::CopyToS3Oneshot(_) => "copy_to_s3_oneshot",
         }
     }
@@ -150,6 +157,9 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
             kind: Some(match self {
                 ComputeSinkConnection::Subscribe(_) => Kind::Subscribe(()),
                 ComputeSinkConnection::Persist(persist) => Kind::Persist(persist.into_proto()),
+                ComputeSinkConnection::ContinualTask(continual_task) => {
+                    Kind::ContinualTask(continual_task.into_proto())
+                }
                 ComputeSinkConnection::CopyToS3Oneshot(s3) => {
                     Kind::CopyToS3Oneshot(s3.into_proto())
                 }
@@ -165,6 +175,9 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
         Ok(match kind {
             Kind::Subscribe(_) => ComputeSinkConnection::Subscribe(SubscribeSinkConnection {}),
             Kind::Persist(persist) => ComputeSinkConnection::Persist(persist.into_rust()?),
+            Kind::ContinualTask(continual_task) => {
+                ComputeSinkConnection::ContinualTask(continual_task.into_rust()?)
+            }
             Kind::CopyToS3Oneshot(s3) => ComputeSinkConnection::CopyToS3Oneshot(s3.into_rust()?),
         })
     }
@@ -240,6 +253,38 @@ impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMe
             storage_metadata: proto
                 .storage_metadata
                 .into_rust_if_some("ProtoPersistSinkConnection::storage_metadata")?,
+        })
+    }
+}
+
+/// TODO(ct): Add documentation.
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ContinualTaskConnection<S> {
+    /// TODO(#25239): Add documentation.
+    //
+    // TODO(ct): This can be removed once we render the "input" sources without
+    // the hack.
+    pub input_id: GlobalId,
+    /// TODO(ct): Add documentation.
+    pub storage_metadata: S,
+}
+
+impl RustType<ProtoContinualTaskConnection> for ContinualTaskConnection<CollectionMetadata> {
+    fn into_proto(&self) -> ProtoContinualTaskConnection {
+        ProtoContinualTaskConnection {
+            input_id: Some(self.input_id.into_proto()),
+            storage_metadata: Some(self.storage_metadata.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoContinualTaskConnection) -> Result<Self, TryFromProtoError> {
+        Ok(ContinualTaskConnection {
+            input_id: proto
+                .input_id
+                .into_rust_if_some("ProtoContinualTaskConnection::input_id")?,
+            storage_metadata: proto
+                .storage_metadata
+                .into_rust_if_some("ProtoContinualTaskConnection::output_metadata")?,
         })
     }
 }

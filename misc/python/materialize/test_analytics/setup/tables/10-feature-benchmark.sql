@@ -17,6 +17,7 @@ CREATE TABLE feature_benchmark_result (
    scenario_version TEXT NOT NULL,
    cycle INT, -- nullable for now to not break earlier versions
    scale TEXT NOT NULL,
+   is_regression BOOL, -- nullable for now to not break earlier versions (introduced with data version 21)
    wallclock DOUBLE,
    messages INT,
    memory_mz DOUBLE,
@@ -32,6 +33,7 @@ CREATE TABLE feature_benchmark_discarded_result (
    build_job_id TEXT NOT NULL,
    scenario_name TEXT NOT NULL,
    cycle INT NOT NULL,
+   is_regression BOOL, -- nullable for now to not break earlier versions (introduced with data version 21)
    wallclock DOUBLE,
    messages INT,
    memory_mz DOUBLE,
@@ -42,5 +44,7 @@ CREATE TABLE feature_benchmark_discarded_result (
    wallclock_variance DOUBLE
 );
 
+ALTER TABLE feature_benchmark_result OWNER TO qa;
+ALTER TABLE feature_benchmark_discarded_result OWNER TO qa;
 GRANT SELECT, INSERT, UPDATE ON TABLE feature_benchmark_result TO "hetzner-ci";
 GRANT SELECT, INSERT, UPDATE ON TABLE feature_benchmark_discarded_result TO "hetzner-ci";

@@ -370,7 +370,8 @@ generate_extracted_config!(
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
     (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
     (EnableOuterJoinNullFilter, Option<bool>, Default(None)),
-    (EnableValueWindowFunctionFusion, Option<bool>, Default(None))
+    (EnableValueWindowFunctionFusion, Option<bool>, Default(None)),
+    (EnableReduceUnnestListFusion, Option<bool>, Default(None))
 );
 
 impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
@@ -423,6 +424,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,
                 enable_value_window_function_fusion: v.enable_value_window_function_fusion,
+                enable_reduce_unnest_list_fusion: v.enable_reduce_unnest_list_fusion,
             },
         })
     }

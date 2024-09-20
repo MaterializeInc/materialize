@@ -95,6 +95,7 @@ Confluent
 Connection
 Connections
 Constraint
+Continual
 Copy
 Count
 Counter
@@ -327,6 +328,7 @@ Privileges
 Progress
 Protobuf
 Protocol
+Public
 Publication
 Pushdown
 Query
@@ -342,6 +344,7 @@ Reassign
 Recursion
 Recursive
 Redacted
+Reduce
 Reference
 References
 Refresh
@@ -421,6 +424,7 @@ System
 Table
 Tables
 Tail
+Task
 Temp
 Temporary
 Text
@@ -451,6 +455,7 @@ Uncommitted
 Union
 Unique
 Unknown
+Unnest
 Until
 Up
 Update

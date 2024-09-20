@@ -34,10 +34,12 @@ use mz_ore::now::to_datetime;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_ore::task;
+use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogCluster, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
+use mz_sql::plan::ConnectionDetails;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
     self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
@@ -264,19 +266,19 @@ impl Coordinator {
                                     CatalogItem::Secret(_) => {
                                         secrets_to_drop.push(*id);
                                     }
-                                    CatalogItem::Connection(Connection { connection, .. }) => {
-                                        match connection {
-                                        // SSH connections have an associated secret that should be dropped
-                                        mz_storage_types::connections::Connection::Ssh(_) => {
-                                            secrets_to_drop.push(*id);
+                                    CatalogItem::Connection(Connection { details, .. }) => {
+                                        match details {
+                                            // SSH connections have an associated secret that should be dropped
+                                            ConnectionDetails::Ssh { .. } => {
+                                                secrets_to_drop.push(*id);
+                                            }
+                                            // AWS PrivateLink connections have an associated
+                                            // VpcEndpoint K8S resource that should be dropped
+                                            ConnectionDetails::AwsPrivatelink(_) => {
+                                                vpc_endpoints_to_drop.push(*id);
+                                            }
+                                            _ => (),
                                         }
-                                        // AWS PrivateLink connections have an associated
-                                        // VpcEndpoint K8S resource that should be dropped
-                                        mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
-                                            vpc_endpoints_to_drop.push(*id);
-                                        }
-                                        _ => (),
-                                    }
                                     }
                                     _ => (),
                                 }
@@ -697,10 +699,18 @@ impl Coordinator {
                                         )
                                     })?;
 
+                                // Yugabyte does not support waiting for the replication to become
+                                // inactive before dropping it. That is fine though because in that
+                                // case dropping will fail and we'll go around the retry loop which
+                                // is effectively the same as waiting 60 seconds.
+                                let should_wait = match connection.flavor {
+                                    PostgresFlavor::Vanilla => true,
+                                    PostgresFlavor::Yugabyte => false,
+                                };
                                 mz_postgres_util::drop_replication_slots(
                                     &ssh_tunnel_manager,
                                     config.clone(),
-                                    &[&replication_slot_name],
+                                    &[(&replication_slot_name, should_wait)],
                                 )
                                 .await?;
 
@@ -1352,18 +1362,17 @@ impl Coordinator {
                         ))
                         .or_insert(0) += 1;
                     match item {
-                        CatalogItem::Connection(connection) => {
-                            use mz_storage_types::connections::Connection;
-                            match connection.connection {
-                                Connection::Kafka(_) => new_kafka_connections += 1,
-                                Connection::Postgres(_) => new_postgres_connections += 1,
-                                Connection::MySql(_) => new_mysql_connections += 1,
-                                Connection::AwsPrivatelink(_) => {
-                                    new_aws_privatelink_connections += 1
-                                }
-                                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
+                        CatalogItem::Connection(connection) => match connection.details {
+                            ConnectionDetails::Kafka(_) => new_kafka_connections += 1,
+                            ConnectionDetails::Postgres(_) => new_postgres_connections += 1,
+                            ConnectionDetails::MySql(_) => new_mysql_connections += 1,
+                            ConnectionDetails::AwsPrivatelink(_) => {
+                                new_aws_privatelink_connections += 1
                             }
-                        }
+                            ConnectionDetails::Csr(_)
+                            | ConnectionDetails::Ssh { .. }
+                            | ConnectionDetails::Aws(_) => {}
+                        },
                         CatalogItem::Table(_) => {
                             new_tables += 1;
                         }
@@ -1428,31 +1437,33 @@ impl Coordinator {
                                     ))
                                     .or_insert(0) -= 1;
                                 match entry.item() {
-                            CatalogItem::Connection(connection) => match connection.connection {
-                                mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
-                                    new_aws_privatelink_connections -= 1;
+                                    CatalogItem::Connection(connection) => match connection.details
+                                    {
+                                        ConnectionDetails::AwsPrivatelink(_) => {
+                                            new_aws_privatelink_connections -= 1;
+                                        }
+                                        _ => (),
+                                    },
+                                    CatalogItem::Table(_) => {
+                                        new_tables -= 1;
+                                    }
+                                    CatalogItem::Source(source) => {
+                                        new_sources -=
+                                            source.user_controllable_persist_shard_count()
+                                    }
+                                    CatalogItem::Sink(_) => new_sinks -= 1,
+                                    CatalogItem::MaterializedView(_) => {
+                                        new_materialized_views -= 1;
+                                    }
+                                    CatalogItem::Secret(_) => {
+                                        new_secrets -= 1;
+                                    }
+                                    CatalogItem::Log(_)
+                                    | CatalogItem::View(_)
+                                    | CatalogItem::Index(_)
+                                    | CatalogItem::Type(_)
+                                    | CatalogItem::Func(_) => {}
                                 }
-                                _ => (),
-                            },
-                            CatalogItem::Table(_) => {
-                                new_tables -= 1;
-                            }
-                            CatalogItem::Source(source) => {
-                                new_sources -= source.user_controllable_persist_shard_count()
-                            }
-                            CatalogItem::Sink(_) => new_sinks -= 1,
-                            CatalogItem::MaterializedView(_) => {
-                                new_materialized_views -= 1;
-                            }
-                            CatalogItem::Secret(_) => {
-                                new_secrets -= 1;
-                            }
-                            CatalogItem::Log(_)
-                            | CatalogItem::View(_)
-                            | CatalogItem::Index(_)
-                            | CatalogItem::Type(_)
-                            | CatalogItem::Func(_) => {}
-                        }
                             }
                         }
                     }
@@ -1514,13 +1525,14 @@ impl Coordinator {
                 .connection()
                 .expect("`user_connections()` only returns connection objects");
 
-            use mz_storage_types::connections::Connection;
-            match connection.connection {
-                Connection::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
-                Connection::Postgres(_) => current_postgres_connections += 1,
-                Connection::MySql(_) => current_mysql_connections += 1,
-                Connection::Kafka(_) => current_kafka_connections += 1,
-                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
+            match connection.details {
+                ConnectionDetails::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
+                ConnectionDetails::Postgres(_) => current_postgres_connections += 1,
+                ConnectionDetails::MySql(_) => current_mysql_connections += 1,
+                ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
+                ConnectionDetails::Csr(_)
+                | ConnectionDetails::Ssh { .. }
+                | ConnectionDetails::Aws(_) => {}
             }
         }
         self.validate_resource_limit(

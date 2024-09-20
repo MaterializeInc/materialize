@@ -100,7 +100,7 @@ pub struct RawSourceCreationConfig {
     /// downgraded).
     pub timestamp_interval: Duration,
     /// The function to return a now time.
-    pub now: NowFn,
+    pub now_fn: NowFn,
     /// The metrics & registry that each source instantiates.
     pub metrics: StorageMetrics,
     /// Storage Metadata
@@ -184,7 +184,7 @@ where
 
     let (ingested_upper_tx, ingested_upper_rx) =
         watch::channel(MutableAntichain::new_bottom(C::Time::minimum()));
-    let (_probed_upper_tx, probed_upper_rx) = watch::channel(None);
+    let (probed_upper_tx, probed_upper_rx) = watch::channel(None);
 
     let source_metrics = Arc::new(
         config
@@ -225,6 +225,7 @@ where
                 scope,
                 config.clone(),
                 source_connection,
+                probed_upper_tx,
                 committed_upper,
                 start_signal,
             );
@@ -273,6 +274,7 @@ where
                 scope,
                 config.clone(),
                 source_connection,
+                probed_upper_tx,
                 committed_upper,
                 start_signal,
             );
@@ -313,6 +315,7 @@ fn source_render_operator<G, C>(
     scope: &mut G,
     config: RawSourceCreationConfig,
     source_connection: C,
+    probed_upper_tx: watch::Sender<Option<Probe<C::Time>>>,
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
@@ -334,8 +337,16 @@ where
         trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
     });
 
-    let (input_data, progress, health, stats, tokens) =
+    let (input_data, progress, health, stats, probes, tokens) =
         source_connection.render(scope, config, resume_uppers, start_signal);
+
+    // Broadcasting does more work than necessary, which would be to exchange the probes to the
+    // worker that will be the one minting the bindings but we'd have to thread this information
+    // through and couple the two functions enough that it's not worth the optimization (I think).
+    probes.broadcast().inspect(move |probe| {
+        // We don't care if the receiver is gone
+        let _ = probed_upper_tx.send(Some(probe.clone()));
+    });
 
     crate::source::statistics::process_statistics(
         scope.clone(),
@@ -449,7 +460,7 @@ where
         resume_uppers: _,
         source_resume_uppers: _,
         metrics: _,
-        now: now_fn,
+        now_fn,
         persist_clients,
         source_statistics: _,
         shared_remap_upper,
@@ -532,8 +543,14 @@ where
                         _ => false,
                     })
                     .await
-                    .unwrap();
-                prev_probe = (*new_probe).clone();
+                    .map(|probe| (*probe).clone())
+                    .unwrap_or_else(|_| {
+                        Some(Probe {
+                            probe_ts: (now_fn)().try_into().expect("must fit"),
+                            upstream_frontier: Antichain::new(),
+                        })
+                    });
+                prev_probe = new_probe;
                 let probe = prev_probe.clone().unwrap();
                 (probe.probe_ts, probe.upstream_frontier)
             } else {
@@ -623,7 +640,7 @@ where
         resume_uppers,
         source_resume_uppers: _,
         metrics,
-        now: _,
+        now_fn: _,
         persist_clients: _,
         source_statistics: _,
         shared_remap_upper: _,
@@ -922,7 +939,7 @@ where
         resume_uppers,
         source_resume_uppers: _,
         metrics,
-        now: _,
+        now_fn: _,
         persist_clients: _,
         source_statistics: _,
         shared_remap_upper: _,

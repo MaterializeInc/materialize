@@ -814,7 +814,7 @@ impl MapFilterProject {
     /// with the expectation that `shuffle` describes all input columns, and so the
     /// intermediate results will be able to start at position `shuffle.len()`.
     ///
-    /// The supplied `shuffle` may not list columns that are not "demanded" by the
+    /// The supplied `shuffle` might not list columns that are not "demanded" by the
     /// instance, and so we should ensure that `self` is optimized to not reference
     /// columns that are not demanded.
     pub fn permute(&mut self, mut shuffle: BTreeMap<usize, usize>, new_input_arity: usize) {

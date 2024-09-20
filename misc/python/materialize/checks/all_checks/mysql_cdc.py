@@ -84,8 +84,7 @@ class MySqlCdcBase:
                   FOR TABLES (public.mysql_source_table{self.suffix} AS mysql_source_tableA{self.suffix});
 
                 >[version>=11700] CREATE SOURCE mysql_source1{self.suffix}
-                  FROM MYSQL CONNECTION mysql1{self.suffix}
-                  (TEXT COLUMNS = (public.mysql_source_table{self.suffix}.f4));
+                  FROM MYSQL CONNECTION mysql1{self.suffix};
                 >[version>=11700] CREATE TABLE mysql_source_tableA{self.suffix} FROM SOURCE mysql_source1{self.suffix} (REFERENCE public.mysql_source_table{self.suffix});
 
                 > CREATE DEFAULT INDEX ON mysql_source_tableA{self.suffix};

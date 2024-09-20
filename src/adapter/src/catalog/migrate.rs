@@ -10,14 +10,21 @@
 use std::collections::BTreeMap;
 
 use futures::future::BoxFuture;
-use mz_catalog::builtin::BuiltinTable;
-use mz_catalog::durable::Transaction;
+use mz_catalog::builtin::{BuiltinTable, MZ_CLUSTER_REPLICA_FRONTIERS};
+use mz_catalog::durable::{SystemObjectDescription, Transaction};
 use mz_catalog::memory::objects::StateUpdate;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
+use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA};
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{
+    ConnectionOption, ConnectionOptionName, CreateConnectionStatement, CreateConnectionType, Value,
+    WithOptionValue,
+};
 use mz_sql_parser::ast::{Raw, Statement};
+use mz_ssh_util::keys::SshKeyPairSet;
+use mz_storage_types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -95,7 +102,8 @@ pub(crate) async fn migrate(
         catalog_version
     );
 
-    rewrite_ast_items(tx, |_tx, _id, _stmt| {
+    rewrite_ast_items(tx, |_tx, id, stmt| {
+        let connection_context = state.config.connection_context.clone();
         Box::pin(async move {
             // Add per-item AST migrations below.
             //
@@ -105,6 +113,9 @@ pub(crate) async fn migrate(
             //
             // Migration functions may also take `tx` as input to stage
             // arbitrary changes to the catalog.
+
+            migrate_inject_ssh_public_keys_v0118(connection_context, id, stmt).await;
+
             Ok(())
         })
     })
@@ -181,13 +192,75 @@ pub(crate) async fn migrate(
 // Please include the adapter team on any code reviews that add or edit
 // migrations.
 
+async fn migrate_inject_ssh_public_keys_v0118(
+    connection_context: ConnectionContext,
+    id: GlobalId,
+    stmt: &mut Statement<Raw>,
+) {
+    match stmt {
+        Statement::CreateConnection(CreateConnectionStatement {
+            connection_type: CreateConnectionType::Ssh,
+            values,
+            ..
+        }) => {
+            let secret = connection_context
+                .secrets_reader
+                .read(id)
+                .await
+                .unwrap_or_else(|e| panic!("failed reading secret for SSH key {id}: {e}"));
+            let keyset = SshKeyPairSet::from_bytes(&secret)
+                .unwrap_or_else(|e| panic!("failed decoding SSH key {id}: {e}"));
+
+            values.retain(|v| {
+                v.name != ConnectionOptionName::PublicKey1
+                    && v.name != ConnectionOptionName::PublicKey2
+            });
+            values.push(ConnectionOption {
+                name: ConnectionOptionName::PublicKey1,
+                value: Some(WithOptionValue::Value(Value::String(
+                    keyset.primary().ssh_public_key(),
+                ))),
+            });
+            values.push(ConnectionOption {
+                name: ConnectionOptionName::PublicKey2,
+                value: Some(WithOptionValue::Value(Value::String(
+                    keyset.secondary().ssh_public_key(),
+                ))),
+            });
+        }
+        _ => (),
+    }
+}
+
 // Durable migrations
 
 /// Migrations that run only on the durable catalog before any data is loaded into memory.
 pub(crate) fn durable_migrate(
-    _tx: &mut Transaction,
+    tx: &mut Transaction,
     _boot_ts: Timestamp,
 ) -> Result<(), anyhow::Error> {
+    // We're promoting mz_cluster_replica_frontiers from mz_internal to
+    // mz_catalog in this release. As a special case, if a mapping for
+    // mz_cluster_replica_frontiers exists in the mz_internal schema, rewrite it
+    // in place for the mz_catalog schema instead. This keeps the migration
+    // machinery from creating a new shard for the relation, which is important
+    // because the 0dt machinery relies on this shard to determine when to cut
+    // over to the new version.
+    //
+    // TODO(benesch): remove this for the next release (27 September 2024).
+    let mut mappings = tx.get_system_object_mappings().collect::<Vec<_>>();
+    if let Some(object) = mappings.iter_mut().find(|o| {
+        o.description
+            == SystemObjectDescription {
+                schema_name: MZ_INTERNAL_SCHEMA.into(),
+                object_name: MZ_CLUSTER_REPLICA_FRONTIERS.name.into(),
+                object_type: mz_sql::catalog::CatalogItemType::Source,
+            }
+    }) {
+        object.description.schema_name = MZ_CATALOG_SCHEMA.into();
+    }
+    tx.set_system_object_mappings(mappings)?;
+
     Ok(())
 }
 

@@ -63,8 +63,20 @@ one:two
 > CREATE SCHEMA subsources_size;
 > CREATE SCHEMA subsources_cluster;
 > CREATE CLUSTER subsource_size_s_cluster SIZE '2';
-> CREATE SOURCE subsources_size.s IN CLUSTER subsource_size_s_cluster FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
-> CREATE SOURCE subsources_cluster.s IN CLUSTER cluster1 FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+> CREATE SOURCE subsources_size.s IN CLUSTER subsource_size_s_cluster FROM LOAD GENERATOR AUCTION;
+> CREATE SOURCE subsources_cluster.s IN CLUSTER cluster1 FROM LOAD GENERATOR AUCTION;
+
+> CREATE TABLE subsources_size.accounts FROM SOURCE subsources_size.s (REFERENCE accounts);
+> CREATE TABLE subsources_size.auctions FROM SOURCE subsources_size.s (REFERENCE auctions);
+> CREATE TABLE subsources_size.bids FROM SOURCE subsources_size.s (REFERENCE bids);
+> CREATE TABLE subsources_size.organizations FROM SOURCE subsources_size.s (REFERENCE organizations);
+> CREATE TABLE subsources_size.users FROM SOURCE subsources_size.s (REFERENCE users);
+
+> CREATE TABLE subsources_cluster.accounts FROM SOURCE subsources_cluster.s (REFERENCE accounts);
+> CREATE TABLE subsources_cluster.auctions FROM SOURCE subsources_cluster.s (REFERENCE auctions);
+> CREATE TABLE subsources_cluster.bids FROM SOURCE subsources_cluster.s (REFERENCE bids);
+> CREATE TABLE subsources_cluster.organizations FROM SOURCE subsources_cluster.s (REFERENCE organizations);
+> CREATE TABLE subsources_cluster.users FROM SOURCE subsources_cluster.s (REFERENCE users);
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds. Here we are just ensuring metrics were populated.
@@ -87,8 +99,6 @@ upsert_size true
 upsert_cluster true
 s false
 s false
-bids true
-bids true
 
 # We have to obtain these before we delete the sink.
 $ set-from-sql var=sink-size-id
@@ -118,11 +128,11 @@ JOIN mz_schemas sch
 ON sch.id = s.schema_id
 WHERE s.name IN ('s') AND sch.name = 'subsources_size'
 $ set-from-sql var=subsources-size-bids-id
-SELECT s.id
-FROM mz_sources s
+SELECT t.id
+FROM mz_tables t
 JOIN mz_schemas sch
-ON sch.id = s.schema_id
-WHERE s.name IN ('bids') AND sch.name = 'subsources_size'
+ON sch.id = t.schema_id
+WHERE t.name IN ('bids') AND sch.name = 'subsources_size'
 
 $ set-from-sql var=subsources-cluster-top-level-id
 SELECT s.id
@@ -131,11 +141,11 @@ JOIN mz_schemas sch
 ON sch.id = s.schema_id
 WHERE s.name IN ('s') AND sch.name = 'subsources_cluster'
 $ set-from-sql var=subsources-cluster-bids-id
-SELECT s.id
-FROM mz_sources s
+SELECT t.id
+FROM mz_tables t
 JOIN mz_schemas sch
-ON sch.id = s.schema_id
-WHERE s.name IN ('bids') AND sch.name = 'subsources_cluster'
+ON sch.id = t.schema_id
+WHERE t.name IN ('bids') AND sch.name = 'subsources_cluster'
 
 > DROP SINK sink_size
 > DROP SINK sink_cluster

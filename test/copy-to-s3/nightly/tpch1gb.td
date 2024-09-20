@@ -11,7 +11,16 @@
 $ set-max-tries max-tries=1
 
 > CREATE SCHEMA tpch1gb
-> CREATE SOURCE tpch1gb.source FROM LOAD GENERATOR TPCH (SCALE FACTOR 1) FOR ALL TABLES
+> CREATE SOURCE tpch1gb.source FROM LOAD GENERATOR TPCH (SCALE FACTOR 1)
+
+> CREATE TABLE tpch1gb.customer FROM SOURCE tpch1gb.source (REFERENCE customer);
+> CREATE TABLE tpch1gb.lineitem FROM SOURCE tpch1gb.source (REFERENCE lineitem);
+> CREATE TABLE tpch1gb.nation FROM SOURCE tpch1gb.source (REFERENCE nation);
+> CREATE TABLE tpch1gb.orders FROM SOURCE tpch1gb.source (REFERENCE orders);
+> CREATE TABLE tpch1gb.part FROM SOURCE tpch1gb.source (REFERENCE part);
+> CREATE TABLE tpch1gb.partsupp FROM SOURCE tpch1gb.source (REFERENCE partsupp);
+> CREATE TABLE tpch1gb.region FROM SOURCE tpch1gb.source (REFERENCE region);
+> CREATE TABLE tpch1gb.supplier FROM SOURCE tpch1gb.source (REFERENCE supplier);
 
 > COPY tpch1gb.customer TO 's3://copytos3/test/tpch1gb/csv/customer'
   WITH (

@@ -22,7 +22,9 @@ use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection, PersistSinkConnection,
+};
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
 use mz_dyncfg::ConfigSet;
@@ -650,11 +652,16 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// reported by a currently running `environmentd` deployment, during a 0dt
     /// upgrade.
     ///
+    /// Collections whose write frontier is behind `now` by more than the cutoff
+    /// are ignored.
+    ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
     pub fn collections_caught_up(
         &self,
         allowed_lag: T,
+        cutoff: T,
+        now: T,
         live_frontiers: &BTreeMap<GlobalId, Antichain<T>>,
         exclude_collections: &BTreeSet<GlobalId>,
     ) -> bool {
@@ -673,8 +680,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
             let write_frontier = collection.write_frontier();
 
-            // WIP: Assumes that the String representation remains stable. Is
-            // that okay?
             let live_write_frontier = match live_frontiers.get(&id) {
                 Some(frontier) => frontier,
                 None => {
@@ -690,15 +695,33 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                 }
             };
 
+            // We can't do comparisons and subtractions, so we bump up the live
+            // write frontier by the cutoff, and then compare that against
+            // `now`.
+            let live_write_frontier_plus_cutoff = live_write_frontier
+                .iter()
+                .map(|t| t.step_forward_by(&cutoff));
+            let live_write_frontier_plus_cutoff =
+                Antichain::from_iter(live_write_frontier_plus_cutoff);
+
+            let beyond_all_hope = live_write_frontier_plus_cutoff.less_equal(&now);
+
+            if beyond_all_hope {
+                tracing::info!(?live_write_frontier, ?now, "live write frontier of collection {id} is too far behind 'now', ignoring for caught-up checks");
+                continue;
+            }
+
             // We can't do easy comparisons and subtractions, so we bump up the
             // write frontier by the allowed lag, and then compare that against
             // the write frontier.
-            let bumped_write_frontier = write_frontier
+            let write_frontier_plus_allowed_lag = write_frontier
                 .iter()
                 .map(|t| t.step_forward_by(&allowed_lag));
-            let bumped_write_frontier = Antichain::from_iter(bumped_write_frontier);
+            let bumped_write_plus_allowed_lag =
+                Antichain::from_iter(write_frontier_plus_allowed_lag);
 
-            let within_lag = PartialOrder::less_equal(live_write_frontier, &bumped_write_frontier);
+            let within_lag =
+                PartialOrder::less_equal(live_write_frontier, &bumped_write_plus_allowed_lag);
 
             if !within_lag {
                 // We are not within the allowed lag!
@@ -1267,6 +1290,18 @@ where
                         storage_metadata: metadata,
                     };
                     ComputeSinkConnection::Persist(conn)
+                }
+                ComputeSinkConnection::ContinualTask(conn) => {
+                    let metadata = self
+                        .storage_collections
+                        .collection_metadata(id)
+                        .map_err(|_| DataflowCreationError::CollectionMissing(id))?
+                        .clone();
+                    let conn = ContinualTaskConnection {
+                        input_id: conn.input_id,
+                        storage_metadata: metadata,
+                    };
+                    ComputeSinkConnection::ContinualTask(conn)
                 }
                 ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
                 ComputeSinkConnection::CopyToS3Oneshot(conn) => {

@@ -18,3 +18,5 @@ INNER JOIN build_job bj
 ON ocs.build_job_id = bj.build_job_id
 INNER JOIN build b
 ON bj.build_id = b.build_id;
+
+ALTER VIEW v_output_consistency_stats OWNER TO qa;

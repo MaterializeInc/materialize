@@ -274,17 +274,25 @@ where
     })
 }
 
-// Assuming datums is a List, sort them by the 2nd through Nth elements
-// corresponding to order_by, then return the 1st element.
-pub fn order_aggregate_datums<'a, I>(
+/// Assuming datums is a List, sort them by the 2nd through Nth elements
+/// corresponding to order_by, then return the 1st element.
+///
+/// Near the usages of this function, we sometimes want to produce Datums with a shorter lifetime
+/// than 'a. We have to actually perform the shortening of the lifetime here, inside this function,
+/// because if we were to simply return `impl Iterator<Item = Datum<'a>>`, that wouldn't be
+/// covariant in the item type, because opaque types are always invariant. (Contrast this with how
+/// we perform the shortening _inside_ this function: the input of the `map` is known to
+/// specifically be `std::vec::IntoIter`, which is known to be covariant.)
+pub fn order_aggregate_datums<'a: 'b, 'b, I>(
     datums: I,
     order_by: &[ColumnOrder],
-) -> impl Iterator<Item = Datum<'a>>
+) -> impl Iterator<Item = Datum<'b>>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     order_aggregate_datums_with_rank_inner(datums, order_by)
         .into_iter()
+        // (`payload` is coerced here to `Datum<'b>` in the argument of the closure)
         .map(|(payload, _order_datums)| payload)
 }
 
@@ -385,6 +393,9 @@ where
     })
 }
 
+/// The expected input is in the format of `[((OriginalRow, [EncodedArgs]), OrderByExprs...)]`
+/// The output is in the format of `[result_value, original_row]`.
+/// See an example at `lag_lead`, where the input-output formats are similar.
 fn row_number<'a, I>(
     datums: I,
     callers_temp_storage: &'a RowArena,
@@ -393,36 +404,72 @@ fn row_number<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let datums = order_aggregate_datums(datums, order_by);
-
-    let temp_storage = RowArena::with_capacity(datums.size_hint().0);
-    let datums = datums
-        .into_iter()
-        .map(|d| d.unwrap_list().iter())
-        .flatten()
-        .zip(1i64..)
-        .map(|(d, i)| {
-            temp_storage.make_datum(|packer| {
-                packer.push_list_with(|packer| {
-                    packer.push(Datum::Int64(i));
-                    packer.push(d);
-                });
-            })
-        });
+    // We want to use our own temp_storage here, to avoid flooding `callers_temp_storage` with a
+    // large number of new datums. This is because we don't want to make an assumption about
+    // whether the caller creates a new temp_storage between window partitions.
+    let temp_storage = RowArena::new();
+    let datums = row_number_no_list(datums, &temp_storage, order_by);
 
     callers_temp_storage.make_datum(|packer| {
         packer.push_list(datums);
     })
 }
 
+/// Like `row_number`, but doesn't perform the final wrapping in a list, returning an Iterator
+/// instead.
+fn row_number_no_list<'a: 'b, 'b, I>(
+    datums: I,
+    callers_temp_storage: &'b RowArena,
+    order_by: &[ColumnOrder],
+) -> impl Iterator<Item = Datum<'b>>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let datums = order_aggregate_datums(datums, order_by);
+
+    callers_temp_storage.reserve(datums.size_hint().0);
+    datums
+        .into_iter()
+        .map(|d| d.unwrap_list().iter())
+        .flatten()
+        .zip(1i64..)
+        .map(|(d, i)| {
+            callers_temp_storage.make_datum(|packer| {
+                packer.push_list_with(|packer| {
+                    packer.push(Datum::Int64(i));
+                    packer.push(d);
+                });
+            })
+        })
+}
+
+/// The expected input is in the format of `[((OriginalRow, [EncodedArgs]), OrderByExprs...)]`
+/// The output is in the format of `[result_value, original_row]`.
+/// See an example at `lag_lead`, where the input-output formats are similar.
 fn rank<'a, I>(datums: I, callers_temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let temp_storage = RowArena::new();
+    let datums = rank_no_list(datums, &temp_storage, order_by);
+
+    callers_temp_storage.make_datum(|packer| {
+        packer.push_list(datums);
+    })
+}
+
+/// Like `rank`, but doesn't perform the final wrapping in a list, returning an Iterator
+/// instead.
+fn rank_no_list<'a: 'b, 'b, I>(
+    datums: I,
+    callers_temp_storage: &'b RowArena,
+    order_by: &[ColumnOrder],
+) -> impl Iterator<Item = Datum<'b>>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     // Keep the row used for ordering around, as it is used to determine the rank
     let datums = order_aggregate_datums_with_rank(datums, order_by);
-
-    let temp_storage = RowArena::with_capacity(datums.size_hint().0);
 
     let mut datums = datums
         .into_iter()
@@ -433,7 +480,8 @@ where
         })
         .flatten();
 
-    let datums = datums
+    callers_temp_storage.reserve(datums.size_hint().0);
+    datums
         .next()
         .map_or(vec![], |(first_datum, first_order_row)| {
             // Folding with (last order_by row, last assigned rank, row number, output vec)
@@ -450,19 +498,18 @@ where
                 acc
             })
         }.3).into_iter().map(|(d, i)| {
-        temp_storage.make_datum(|packer| {
+        callers_temp_storage.make_datum(|packer| {
             packer.push_list_with(|packer| {
                 packer.push(Datum::Int64(i));
                 packer.push(d);
             });
         })
-    });
-
-    callers_temp_storage.make_datum(|packer| {
-        packer.push_list(datums);
     })
 }
 
+/// The expected input is in the format of `[((OriginalRow, [EncodedArgs]), OrderByExprs...)]`
+/// The output is in the format of `[result_value, original_row]`.
+/// See an example at `lag_lead`, where the input-output formats are similar.
 fn dense_rank<'a, I>(
     datums: I,
     callers_temp_storage: &'a RowArena,
@@ -471,10 +518,26 @@ fn dense_rank<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
+    let temp_storage = RowArena::new();
+    let datums = dense_rank_no_list(datums, &temp_storage, order_by);
+
+    callers_temp_storage.make_datum(|packer| {
+        packer.push_list(datums);
+    })
+}
+
+/// Like `dense_rank`, but doesn't perform the final wrapping in a list, returning an Iterator
+/// instead.
+fn dense_rank_no_list<'a: 'b, 'b, I>(
+    datums: I,
+    callers_temp_storage: &'b RowArena,
+    order_by: &[ColumnOrder],
+) -> impl Iterator<Item = Datum<'b>>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
     // Keep the row used for ordering around, as it is used to determine the rank
     let datums = order_aggregate_datums_with_rank(datums, order_by);
-
-    let temp_storage = RowArena::with_capacity(datums.size_hint().0);
 
     let mut datums = datums
         .into_iter()
@@ -485,7 +548,8 @@ where
         })
         .flatten();
 
-    let datums = datums
+    callers_temp_storage.reserve(datums.size_hint().0);
+    datums
         .next()
         .map_or(vec![], |(first_datum, first_order_row)| {
             // Folding with (last order_by row, last assigned rank, output vec)
@@ -501,16 +565,12 @@ where
                 acc
             })
         }.2).into_iter().map(|(d, i)| {
-            temp_storage.make_datum(|packer| {
-                packer.push_list_with(|packer| {
-                    packer.push(Datum::Int64(i));
-                    packer.push(d);
-                });
-            })
-        });
-
-    callers_temp_storage.make_datum(|packer| {
-        packer.push_list(datums);
+        callers_temp_storage.make_datum(|packer| {
+            packer.push_list_with(|packer| {
+                packer.push(Datum::Int64(i));
+                packer.push(d);
+            });
+        })
     })
 }
 
@@ -545,6 +605,25 @@ fn lag_lead<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
+    let temp_storage = RowArena::new();
+    let iter = lag_lead_no_list(datums, &temp_storage, order_by, lag_lead_type, ignore_nulls);
+    callers_temp_storage.make_datum(|packer| {
+        packer.push_list(iter);
+    })
+}
+
+/// Like `lag_lead`, but doesn't perform the final wrapping in a list, returning an Iterator
+/// instead.
+fn lag_lead_no_list<'a: 'b, 'b, I>(
+    datums: I,
+    callers_temp_storage: &'b RowArena,
+    order_by: &[ColumnOrder],
+    lag_lead_type: &LagLeadType,
+    ignore_nulls: &bool,
+) -> impl Iterator<Item = Datum<'b>>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
     // Sort the datums according to the ORDER BY expressions and return the (OriginalRow, EncodedArgs) record
     let datums = order_aggregate_datums(datums, order_by);
 
@@ -564,22 +643,18 @@ where
 
     let result = lag_lead_inner(unwrapped_args, lag_lead_type, ignore_nulls);
 
-    let temp_storage = RowArena::with_capacity(result.len());
-    let result = result
+    callers_temp_storage.reserve(result.len());
+    result
         .into_iter()
         .zip_eq(orig_rows)
         .map(|(result_value, original_row)| {
-            temp_storage.make_datum(|packer| {
+            callers_temp_storage.make_datum(|packer| {
                 packer.push_list_with(|packer| {
                     packer.push(result_value);
                     packer.push(original_row);
                 });
             })
-        });
-
-    callers_temp_storage.make_datum(|packer| {
-        packer.push_list(result);
-    })
+        })
 }
 
 /// lag/lead's arguments are in a record. This function unwraps this record.
@@ -777,6 +852,24 @@ fn first_value<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
+    let temp_storage = RowArena::new();
+    let iter = first_value_no_list(datums, &temp_storage, order_by, window_frame);
+    callers_temp_storage.make_datum(|packer| {
+        packer.push_list(iter);
+    })
+}
+
+/// Like `first_value`, but doesn't perform the final wrapping in a list, returning an Iterator
+/// instead.
+fn first_value_no_list<'a: 'b, 'b, I>(
+    datums: I,
+    callers_temp_storage: &'b RowArena,
+    order_by: &[ColumnOrder],
+    window_frame: &WindowFrame,
+) -> impl Iterator<Item = Datum<'b>>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
     // Sort the datums according to the ORDER BY expressions and return the (OriginalRow, InputValue) record
     let datums = order_aggregate_datums(datums, order_by);
 
@@ -794,23 +887,18 @@ where
 
     let results = first_value_inner(args, window_frame);
 
-    let temp_storage = RowArena::with_capacity(results.len());
-    let results_with_orig_rows =
-        results
-            .into_iter()
-            .zip_eq(orig_rows)
-            .map(|(result_value, original_row)| {
-                temp_storage.make_datum(|packer| {
-                    packer.push_list_with(|packer| {
-                        packer.push(result_value);
-                        packer.push(original_row);
-                    });
-                })
-            });
-
-    callers_temp_storage.make_datum(|packer| {
-        packer.push_list(results_with_orig_rows);
-    })
+    callers_temp_storage.reserve(results.len());
+    results
+        .into_iter()
+        .zip_eq(orig_rows)
+        .map(|(result_value, original_row)| {
+            callers_temp_storage.make_datum(|packer| {
+                packer.push_list_with(|packer| {
+                    packer.push(result_value);
+                    packer.push(original_row);
+                });
+            })
+        })
 }
 
 fn first_value_inner<'a>(datums: Vec<Datum<'a>>, window_frame: &WindowFrame) -> Vec<Datum<'a>> {
@@ -885,6 +973,24 @@ fn last_value<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
+    let temp_storage = RowArena::new();
+    let iter = last_value_no_list(datums, &temp_storage, order_by, window_frame);
+    callers_temp_storage.make_datum(|packer| {
+        packer.push_list(iter);
+    })
+}
+
+/// Like `last_value`, but doesn't perform the final wrapping in a list, returning an Iterator
+/// instead.
+fn last_value_no_list<'a: 'b, 'b, I>(
+    datums: I,
+    callers_temp_storage: &'b RowArena,
+    order_by: &[ColumnOrder],
+    window_frame: &WindowFrame,
+) -> impl Iterator<Item = Datum<'b>>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
     // Sort the datums according to the ORDER BY expressions and return the ((OriginalRow, InputValue), OrderByRow) record
     // The OrderByRow is kept around because it is required to compute the peer groups in RANGE mode
     let datums = order_aggregate_datums_with_rank(datums, order_by);
@@ -905,22 +1011,18 @@ where
 
     let results = last_value_inner(args, &order_by_rows, window_frame);
 
-    let temp_storage = RowArena::with_capacity(results.len());
-    let result = results
+    callers_temp_storage.reserve(results.len());
+    results
         .into_iter()
         .zip_eq(original_rows)
         .map(|(result_value, original_row)| {
-            temp_storage.make_datum(|packer| {
+            callers_temp_storage.make_datum(|packer| {
                 packer.push_list_with(|packer| {
                     packer.push(result_value);
                     packer.push(original_row);
                 });
             })
-        });
-
-    callers_temp_storage.make_datum(|packer| {
-        packer.push_list(result);
-    })
+        })
 }
 
 fn last_value_inner<'a>(
@@ -1026,6 +1128,24 @@ fn fused_value_window_func<'a, I>(
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
+    let temp_storage = RowArena::new();
+    let iter = fused_value_window_func_no_list(input_datums, &temp_storage, funcs, order_by);
+    callers_temp_storage.make_datum(|packer| {
+        packer.push_list(iter);
+    })
+}
+
+/// Like `fused_value_window_func`, but doesn't perform the final wrapping in a list, returning an
+/// Iterator instead.
+fn fused_value_window_func_no_list<'a: 'b, 'b, I>(
+    input_datums: I,
+    callers_temp_storage: &'b RowArena,
+    funcs: &Vec<AggregateFunc>,
+    order_by: &Vec<ColumnOrder>,
+) -> impl Iterator<Item = Datum<'b>>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
     let has_last_value = funcs
         .iter()
         .any(|f| matches!(f, AggregateFunc::LastValue { .. }));
@@ -1090,35 +1210,62 @@ where
         }
     }
 
-    // Let's create a new RowArena, to avoid flooding the caller's arena with stuff proportional to
-    // the window partition size. We will use our own arena for internal evaluations, and will use
-    // the caller's at the very end to return the final result Datum.
-    let temp_storage = RowArena::with_capacity(2 * original_rows.len());
-    let results_with_orig_rows = results_per_row.into_iter().enumerate().map(|(i, results)| {
-        temp_storage.make_datum(|packer| {
-            packer.push_list_with(|packer| {
-                packer.push(temp_storage.make_datum(|packer| packer.push_list(results)));
-                packer.push(original_rows[i]);
-            });
+    callers_temp_storage.reserve(2 * original_rows.len());
+    results_per_row
+        .into_iter()
+        .enumerate()
+        .map(move |(i, results)| {
+            callers_temp_storage.make_datum(|packer| {
+                packer.push_list_with(|packer| {
+                    packer
+                        .push(callers_temp_storage.make_datum(|packer| packer.push_list(results)));
+                    packer.push(original_rows[i]);
+                });
+            })
         })
-    });
-
-    callers_temp_storage.make_datum(|packer| {
-        packer.push_list(results_with_orig_rows);
-    })
 }
 
+/// `input_datums` is an entire window partition.
 /// The expected input is in the format of `[((OriginalRow, InputValue), OrderByExprs...)]`
 /// See also in the comment in `window_func_applied_to`.
+///
+/// `wrapped_aggregate`: e.g., for `sum(...) OVER (...)`, this is the `sum(...)`.
+///
+/// Note that this `order_by` doesn't have expressions, only `ColumnOrder`s. For an explanation,
+/// see the comment on `WindowExprType`.
 fn window_aggr<'a, I, A>(
-    input_datums: I, // An entire window partition.
+    input_datums: I,
     callers_temp_storage: &'a RowArena,
-    wrapped_aggregate: &AggregateFunc, // E.g., for `sum(...) OVER (...)`, this is the `sum(...)`.
-    // Note that this `order_by` doesn't have expressions, only `ColumnOrder`s. For an explanation,
-    // see the comment on `WindowExprType`.
+    wrapped_aggregate: &AggregateFunc,
     order_by: &[ColumnOrder],
     window_frame: &WindowFrame,
 ) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+    A: OneByOneAggr,
+{
+    let temp_storage = RowArena::new();
+    let iter = window_aggr_no_list::<I, A>(
+        input_datums,
+        &temp_storage,
+        wrapped_aggregate,
+        order_by,
+        window_frame,
+    );
+    callers_temp_storage.make_datum(|packer| {
+        packer.push_list(iter);
+    })
+}
+
+/// Like `window_aggr`, but doesn't perform the final wrapping in a list, returning an Iterator
+/// instead.
+fn window_aggr_no_list<'a: 'b, 'b, I, A>(
+    input_datums: I,
+    callers_temp_storage: &'b RowArena,
+    wrapped_aggregate: &AggregateFunc,
+    order_by: &[ColumnOrder],
+    window_frame: &WindowFrame,
+) -> impl Iterator<Item = Datum<'b>>
 where
     I: IntoIterator<Item = Datum<'a>>,
     A: OneByOneAggr,
@@ -1142,10 +1289,7 @@ where
     let length = input_datums.len();
     let mut result: Vec<(Datum, Datum)> = Vec::with_capacity(length);
 
-    // Let's create a new RowArena, to avoid flooding the caller's arena with stuff proportional to
-    // the window partition size. We will use our own arena for internal evaluations, and will use
-    // the caller's at the very end to return the final result Datum.
-    let temp_storage = RowArena::with_capacity(length);
+    callers_temp_storage.reserve(length);
 
     // In this degenerate case, all results would be `wrapped_aggregate.default()` (usually null).
     // However, this currently can't happen, because
@@ -1178,7 +1322,7 @@ where
             .iter()
             .map(|(input_value, _original_row, _order_by_row)| input_value.clone())
             .collect_vec(); // I'm open to suggestions on how to remove this `collect_vec()`...
-        let result_value = wrapped_aggregate.eval(input_values, &temp_storage);
+        let result_value = wrapped_aggregate.eval(input_values, callers_temp_storage);
         // Every row will get the above aggregate as result.
         for (_current_datum, original_row, _order_by_row) in input_datums.iter() {
             result.push((result_value, *original_row));
@@ -1309,7 +1453,7 @@ where
                     input_datums,
                     &mut result,
                     A::new(wrapped_aggregate, false),
-                    &temp_storage,
+                    callers_temp_storage,
                 );
             }
             (Rows, CurrentRow, UnboundedFollowing) => {
@@ -1319,7 +1463,7 @@ where
                     input_datums,
                     &mut result,
                     A::new(wrapped_aggregate, true),
-                    &temp_storage,
+                    callers_temp_storage,
                 );
                 result.reverse();
             }
@@ -1330,7 +1474,7 @@ where
                     input_datums,
                     &mut result,
                     A::new(wrapped_aggregate, false),
-                    &temp_storage,
+                    callers_temp_storage,
                 );
             }
             // The next several cases all call `rows_between_offset_and_offset`. Note that the
@@ -1347,7 +1491,7 @@ where
                     input_datums,
                     &mut result,
                     wrapped_aggregate,
-                    &temp_storage,
+                    callers_temp_storage,
                     -start_prec,
                     -end_prec,
                 );
@@ -1363,7 +1507,7 @@ where
                     input_datums,
                     &mut result,
                     wrapped_aggregate,
-                    &temp_storage,
+                    callers_temp_storage,
                     -start_prec,
                     end_fol,
                 );
@@ -1379,7 +1523,7 @@ where
                     input_datums,
                     &mut result,
                     wrapped_aggregate,
-                    &temp_storage,
+                    callers_temp_storage,
                     start_fol,
                     end_fol,
                 );
@@ -1396,7 +1540,7 @@ where
                     input_datums,
                     &mut result,
                     wrapped_aggregate,
-                    &temp_storage,
+                    callers_temp_storage,
                     -start_prec,
                     end_fol,
                 );
@@ -1410,7 +1554,7 @@ where
                     input_datums,
                     &mut result,
                     wrapped_aggregate,
-                    &temp_storage,
+                    callers_temp_storage,
                     start_fol,
                     end_fol,
                 );
@@ -1424,7 +1568,7 @@ where
                     input_datums,
                     &mut result,
                     wrapped_aggregate,
-                    &temp_storage,
+                    callers_temp_storage,
                     start_fol,
                     end_fol,
                 );
@@ -1466,17 +1610,13 @@ where
         }
     }
 
-    let result = result.into_iter().map(|(result_value, original_row)| {
-        temp_storage.make_datum(|packer| {
+    result.into_iter().map(|(result_value, original_row)| {
+        callers_temp_storage.make_datum(|packer| {
             packer.push_list_with(|packer| {
                 packer.push(result_value);
                 packer.push(original_row);
             });
         })
-    });
-
-    callers_temp_storage.make_datum(|packer| {
-        packer.push_list(result);
     })
 }
 
@@ -2199,6 +2339,61 @@ impl AggregateFunc {
         }
     }
 
+    pub fn eval_with_unnest_list<'a, I, W>(
+        &self,
+        datums: I,
+        temp_storage: &'a RowArena,
+    ) -> impl Iterator<Item = Datum<'a>>
+    where
+        I: IntoIterator<Item = Datum<'a>>,
+        W: OneByOneAggr,
+    {
+        // TODO: Use `enum_dispatch` to construct a unified iterator instead of `collect_vec`.
+        assert!(self.can_fuse_with_unnest_list());
+        match self {
+            AggregateFunc::RowNumber { order_by } => {
+                row_number_no_list(datums, temp_storage, order_by).collect_vec()
+            }
+            AggregateFunc::Rank { order_by } => {
+                rank_no_list(datums, temp_storage, order_by).collect_vec()
+            }
+            AggregateFunc::DenseRank { order_by } => {
+                dense_rank_no_list(datums, temp_storage, order_by).collect_vec()
+            }
+            AggregateFunc::LagLead {
+                order_by,
+                lag_lead: lag_lead_type,
+                ignore_nulls,
+            } => lag_lead_no_list(datums, temp_storage, order_by, lag_lead_type, ignore_nulls)
+                .collect_vec(),
+            AggregateFunc::FirstValue {
+                order_by,
+                window_frame,
+            } => first_value_no_list(datums, temp_storage, order_by, window_frame).collect_vec(),
+            AggregateFunc::LastValue {
+                order_by,
+                window_frame,
+            } => last_value_no_list(datums, temp_storage, order_by, window_frame).collect_vec(),
+            AggregateFunc::FusedValueWindowFunc { funcs, order_by } => {
+                fused_value_window_func_no_list(datums, temp_storage, funcs, order_by).collect_vec()
+            }
+            AggregateFunc::WindowAggregate {
+                wrapped_aggregate,
+                order_by,
+                window_frame,
+            } => window_aggr_no_list::<_, W>(
+                datums,
+                temp_storage,
+                wrapped_aggregate,
+                order_by,
+                window_frame,
+            )
+            .collect_vec(),
+            _ => unreachable!("asserted above that `can_fuse_with_unnest_list`"),
+        }
+        .into_iter()
+    }
+
     /// Returns the output of the aggregation function when applied on an empty
     /// input relation.
     pub fn default(&self) -> Datum<'static> {
@@ -2276,6 +2471,72 @@ impl AggregateFunc {
             | AggregateFunc::JsonbObjectAgg { .. }
             | AggregateFunc::MapAgg { .. }
             | AggregateFunc::StringAgg { .. } => Datum::Null,
+        }
+    }
+
+    pub fn can_fuse_with_unnest_list(&self) -> bool {
+        match self {
+            AggregateFunc::RowNumber { .. }
+            | AggregateFunc::Rank { .. }
+            | AggregateFunc::DenseRank { .. }
+            | AggregateFunc::LagLead { .. }
+            | AggregateFunc::FirstValue { .. }
+            | AggregateFunc::LastValue { .. }
+            | AggregateFunc::WindowAggregate { .. }
+            | AggregateFunc::FusedValueWindowFunc { .. } => true,
+            AggregateFunc::ArrayConcat { .. }
+            | AggregateFunc::ListConcat { .. }
+            | AggregateFunc::Any
+            | AggregateFunc::All
+            | AggregateFunc::Dummy
+            | AggregateFunc::MaxNumeric
+            | AggregateFunc::MaxInt16
+            | AggregateFunc::MaxInt32
+            | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxUInt16
+            | AggregateFunc::MaxUInt32
+            | AggregateFunc::MaxUInt64
+            | AggregateFunc::MaxMzTimestamp
+            | AggregateFunc::MaxFloat32
+            | AggregateFunc::MaxFloat64
+            | AggregateFunc::MaxBool
+            | AggregateFunc::MaxString
+            | AggregateFunc::MaxDate
+            | AggregateFunc::MaxTimestamp
+            | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MaxInterval
+            | AggregateFunc::MaxTime
+            | AggregateFunc::MinNumeric
+            | AggregateFunc::MinInt16
+            | AggregateFunc::MinInt32
+            | AggregateFunc::MinInt64
+            | AggregateFunc::MinUInt16
+            | AggregateFunc::MinUInt32
+            | AggregateFunc::MinUInt64
+            | AggregateFunc::MinMzTimestamp
+            | AggregateFunc::MinFloat32
+            | AggregateFunc::MinFloat64
+            | AggregateFunc::MinBool
+            | AggregateFunc::MinString
+            | AggregateFunc::MinDate
+            | AggregateFunc::MinTimestamp
+            | AggregateFunc::MinTimestampTz
+            | AggregateFunc::MinInterval
+            | AggregateFunc::MinTime
+            | AggregateFunc::SumInt16
+            | AggregateFunc::SumInt32
+            | AggregateFunc::SumInt64
+            | AggregateFunc::SumUInt16
+            | AggregateFunc::SumUInt32
+            | AggregateFunc::SumUInt64
+            | AggregateFunc::SumFloat32
+            | AggregateFunc::SumFloat64
+            | AggregateFunc::SumNumeric
+            | AggregateFunc::Count
+            | AggregateFunc::JsonbAgg { .. }
+            | AggregateFunc::JsonbObjectAgg { .. }
+            | AggregateFunc::MapAgg { .. }
+            | AggregateFunc::StringAgg { .. } => false,
         }
     }
 

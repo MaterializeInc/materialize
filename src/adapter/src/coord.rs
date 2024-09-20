@@ -70,7 +70,7 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_CAUGHT_UP_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
-    WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL,
+    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF, WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL,
 };
 use mz_compute_client::as_of_selection;
 use mz_ore::channel::trigger;
@@ -137,7 +137,10 @@ use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
-use mz_sql::plan::{self, AlterSinkPlan, CreateConnectionPlan, OnTimeoutAction, Params, QueryWhen};
+use mz_sql::plan::{
+    self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, OnTimeoutAction, Params,
+    QueryWhen,
+};
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
@@ -2040,9 +2043,7 @@ impl Coordinator {
                         .unwrap_or_terminate("cannot fail to create exports");
                 }
                 CatalogItem::Connection(catalog_connection) => {
-                    if let mz_storage_types::connections::Connection::AwsPrivatelink(conn) =
-                        &catalog_connection.connection
-                    {
+                    if let ConnectionDetails::AwsPrivatelink(conn) = &catalog_connection.details {
                         privatelink_connections.insert(
                             entry.id(),
                             VpcEndpointConfig {
@@ -3287,23 +3288,23 @@ impl Coordinator {
                     .try_into()
                     .expect("must fit into u64");
 
+                let cutoff =
+                    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF.get(self.catalog().system_config().dyncfgs());
+                let cutoff: u64 = cutoff.as_millis().try_into().expect("must fit into u64");
+
+                let now = self.now();
+
                 let compute_caught_up = self.controller.compute.clusters_caught_up(
                     allowed_lag.into(),
+                    cutoff.into(),
+                    now.into(),
                     &live_collection_frontiers,
                     &ctx.exclude_collections,
                 );
 
-                // We also check that we're "hydrated", meaning all collections
-                // have reported an upper at _some_ frontier. This acts as a
-                // back-stop to the case where `mz_cluster_replica_frontiers` is
-                // migrated and we report `0` for a collection frontier.
-                let compute_hydrated = self
-                    .controller
-                    .compute
-                    .clusters_hydrated(&ctx.exclude_collections);
-                tracing::info!(%compute_caught_up, %compute_hydrated, "checked caught-up status of collections");
+                tracing::info!(%compute_caught_up, "checked caught-up status of collections");
 
-                if compute_caught_up && compute_hydrated {
+                if compute_caught_up {
                     let ctx = self.hydration_check.take().expect("known to exist");
                     ctx.trigger.fire();
                 }
@@ -3774,18 +3775,10 @@ pub fn serve(
                         .await
                         .map_err(AdapterError::Orchestrator)?;
 
-                    // TODO(jkosh44) Kick this off as a background task in
-                    // `serve` instead of blocking startup on the pruning.
                     if let Some(retention_period) = storage_usage_retention_period {
-                        let prune_start = Instant::now();
-                        info!("startup: coord serve: storage usage prune beginning");
                         coord
                             .prune_storage_usage_events_on_startup(retention_period)
                             .await;
-                        info!(
-                            "startup: coord serve: storage usage prune complete in {:?}",
-                            prune_start.elapsed()
-                        );
                     }
 
                     Ok(())

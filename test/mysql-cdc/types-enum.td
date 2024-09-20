@@ -32,17 +32,13 @@ USE public;
 CREATE TABLE enum_type (f1 ENUM ('val1', 'val2'), f2 TEXT);
 INSERT INTO enum_type VALUES ('val1', 'val1'), ('val2', 'val2');
 
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
 # TODO: #25881 (enum unsupported)
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+! CREATE TABLE enum_type FROM SOURCE mz_source (REFERENCE public.enum_type);
 contains:referenced tables use unsupported types
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn (
-    TEXT COLUMNS (public.enum_type.f1)
-  )
-  FOR ALL TABLES;
+> CREATE TABLE enum_type FROM SOURCE mz_source (REFERENCE public.enum_type) WITH (TEXT COLUMNS (f1));
 
 > SELECT * FROM enum_type;
 val1 val1

@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{ENABLE_0DT_DEPLOYMENT, WITH_0DT_DEPLOYMENT_MAX_WAIT};
+use mz_adapter_types::dyncfgs::{
+    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+};
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
     ObjectType, SchedulingDecisionsWithReasonsV1, VersionedEvent,
@@ -23,7 +25,8 @@ use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::Transaction;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterConfig, StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
+    CatalogItem, ClusterConfig, DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind,
+    TemporaryItem,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
@@ -184,18 +187,14 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
-    /// Performs updates to weird builtin tables, such as `mz_ssh_tunnel_connections` and
-    /// `mz_cluster_replica_statuses`. Their contents are not fully derived from catalog state.
-    /// `mz_ssh_tunnel_connections` is derived from the secrets controller, however, it still must
-    /// be kept in-sync with the catalog state. Storing the contents of the table in the durable
-    /// catalog would simplify the situation, but then we'd have to somehow encode public keys the
-    /// CREATE SQL of connections, which is annoying. In order to successfully balance all of these
-    /// constraints, we handle all updates to the table separately. `mz_cluster_replica_statuses`
-    /// is ephemeral state and should be a builtin source.
+    /// Performs updates to weird builtin tables, such as
+    /// `mz_cluster_replica_statuses`, which is ephemeral state and should be a
+    /// builtin source.
     ///
-    /// TODO(jkosh44) In a multi-writer or high availability catalog world, this will not work. If
-    /// a process crashes after updating the durable catalog but before updating the builtin table,
-    /// then another listening catalog will never know to update the builtin table.
+    /// TODO(jkosh44) In a multi-writer or high availability catalog world, this
+    /// will not work. If a process crashes after updating the durable catalog
+    /// but before updating the builtin table, then another listening catalog
+    /// will never know to update the builtin table.
     WeirdBuiltinTableUpdates {
         builtin_table_update: BuiltinTableUpdate,
         audit_log: Vec<(EventType, ObjectType, EventDetails)>,
@@ -1037,18 +1036,51 @@ impl Catalog {
                     );
                     let details = match &item {
                         CatalogItem::Source(s) => {
-                            EventDetails::CreateSourceSinkV3(mz_audit_log::CreateSourceSinkV3 {
+                            let cluster_id = match s.data_source {
+                                // Ingestion exports don't have their own cluster, but
+                                // run on their ingestion's cluster.
+                                DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                                    match state.get_entry(&ingestion_id).cluster_id() {
+                                        Some(cluster_id) => Some(cluster_id.to_string()),
+                                        None => None,
+                                    }
+                                }
+                                _ => match item.cluster_id() {
+                                    Some(cluster_id) => Some(cluster_id.to_string()),
+                                    None => None,
+                                },
+                            };
+
+                            EventDetails::CreateSourceSinkV4(mz_audit_log::CreateSourceSinkV4 {
                                 id: id.to_string(),
+                                cluster_id,
                                 name,
                                 external_type: s.source_type().to_string(),
                             })
                         }
                         CatalogItem::Sink(s) => {
-                            EventDetails::CreateSourceSinkV3(mz_audit_log::CreateSourceSinkV3 {
+                            EventDetails::CreateSourceSinkV4(mz_audit_log::CreateSourceSinkV4 {
                                 id: id.to_string(),
+                                cluster_id: Some(s.cluster_id.to_string()),
                                 name,
                                 external_type: s.sink_type().to_string(),
                             })
+                        }
+                        CatalogItem::Index(i) => {
+                            EventDetails::CreateIndexV1(mz_audit_log::CreateIndexV1 {
+                                id: id.to_string(),
+                                name,
+                                cluster_id: i.cluster_id.to_string(),
+                            })
+                        }
+                        CatalogItem::MaterializedView(mv) => {
+                            EventDetails::CreateMaterializedViewV1(
+                                mz_audit_log::CreateMaterializedViewV1 {
+                                    id: id.to_string(),
+                                    name,
+                                    cluster_id: mv.cluster_id.to_string(),
+                                },
+                            )
                         }
                         _ => EventDetails::IdFullNameV1(IdFullNameV1 {
                             id: id.to_string(),
@@ -1974,6 +2006,10 @@ impl Catalog {
                         Duration::parse(VarInput::Flat(&parsed_value))
                             .expect("parsing succeeded above");
                     tx.set_0dt_deployment_max_wait(with_0dt_deployment_max_wait)?;
+                } else if name == ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name() {
+                    let panic_after_timeout =
+                        strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
+                    tx.set_enable_0dt_deployment_panic_after_timeout(panic_after_timeout)?;
                 }
 
                 CatalogState::add_to_audit_log(

@@ -22,4 +22,5 @@ CREATE TABLE build (
 
 CREATE INDEX IN CLUSTER test_analytics ON build (build_id);
 
+ALTER TABLE build OWNER TO qa;
 GRANT SELECT, INSERT, UPDATE ON TABLE build TO "hetzner-ci";

@@ -702,7 +702,7 @@ where
     F: FormatBuffer,
 {
     write!(buf, "\\x{}", hex::encode(bytes));
-    Nestable::Yes
+    Nestable::MayNeedEscaping
 }
 
 pub fn parse_jsonb(s: &str) -> Result<Jsonb, ParseError> {

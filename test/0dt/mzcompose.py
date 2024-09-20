@@ -15,7 +15,7 @@ version, no upgrade).
 import time
 from textwrap import dedent
 
-from pg8000.exceptions import InterfaceError
+from psycopg.errors import OperationalError
 
 from materialize import buildkite
 from materialize.mzcompose import get_default_system_parameters
@@ -159,8 +159,8 @@ def workflow_read_only(c: Composition) -> None:
         > CREATE SOURCE postgres_source
           IN CLUSTER cluster
           FROM POSTGRES CONNECTION pg
-          (PUBLICATION 'postgres_source')
-          FOR TABLES (postgres_source_table);
+          (PUBLICATION 'postgres_source');
+        > CREATE TABLE postgres_source_table FROM SOURCE postgres_source (REFERENCE postgres_source_table)
         > SELECT * FROM postgres_source_table;
         A 0
 
@@ -182,8 +182,8 @@ def workflow_read_only(c: Composition) -> None:
           PASSWORD SECRET mysqlpass);
         > CREATE SOURCE mysql_source
           IN CLUSTER cluster
-          FROM MYSQL CONNECTION mysql
-          FOR TABLES (public.mysql_source_table AS mysql_source_table);
+          FROM MYSQL CONNECTION mysql;
+        > CREATE TABLE mysql_source_table FROM SOURCE mysql_source (REFERENCE public.mysql_source_table);
         > SELECT * FROM mysql_source_table;
         A 0
 
@@ -441,8 +441,8 @@ def workflow_basic(c: Composition) -> None:
         > CREATE SOURCE postgres_source
           IN CLUSTER cluster
           FROM POSTGRES CONNECTION pg
-          (PUBLICATION 'postgres_source')
-          FOR TABLES (postgres_source_table);
+          (PUBLICATION 'postgres_source');
+        > CREATE TABLE postgres_source_table FROM SOURCE postgres_source (REFERENCE postgres_source_table)
         > SELECT * FROM postgres_source_table;
         A 0
 
@@ -464,8 +464,8 @@ def workflow_basic(c: Composition) -> None:
           PASSWORD SECRET mysqlpass);
         > CREATE SOURCE mysql_source1
           IN CLUSTER cluster
-          FROM MYSQL CONNECTION mysql
-          FOR TABLES (public.mysql_source_table AS mysql_source_table);
+          FROM MYSQL CONNECTION mysql;
+        > CREATE TABLE mysql_source_table FROM SOURCE mysql_source1 (REFERENCE public.mysql_source_table);
         > SELECT * FROM mysql_source_table;
         A 0
 
@@ -736,8 +736,8 @@ def workflow_basic(c: Composition) -> None:
         for i in range(10):
             try:
                 c.sql("SELECT 1", service="mz_old")
-            except InterfaceError as e:
-                assert "network error" in str(
+            except OperationalError as e:
+                assert "server closed the connection unexpectedly" in str(
                     e
                 ) or "Can't create a connection to host" in str(
                     e
@@ -758,7 +758,7 @@ def workflow_basic(c: Composition) -> None:
                 break
             except CommandFailureCausedUIError:
                 pass
-            except InterfaceError:
+            except OperationalError:
                 pass
             time.sleep(1)
         else:

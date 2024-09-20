@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from textwrap import dedent
 from typing import Any
 
-from pg8000 import Cursor  # type: ignore
+from psycopg import Cursor
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -78,7 +78,7 @@ class AllowCompactionCheck:
             f"""
                 SELECT mz_cluster_replicas.id FROM mz_clusters, mz_cluster_replicas
                 WHERE cluster_id = mz_clusters.id AND mz_clusters.name = '{cluster}'
-                AND mz_cluster_replicas.name = '{replica}'""",
+                AND mz_cluster_replicas.name = '{replica}'""".encode(),
         )
         return str(get_single_value_from_cursor(cursor))
 
@@ -86,7 +86,7 @@ class AllowCompactionCheck:
         cursor = c.sql_cursor()
         cluster = self.replica.split(".")[0]
         cursor.execute(
-            f"SELECT id FROM mz_clusters WHERE mz_clusters.name = '{cluster}'",
+            f"SELECT id FROM mz_clusters WHERE mz_clusters.name = '{cluster}'".encode(),
         )
         return str(get_single_value_from_cursor(cursor))
 
@@ -153,7 +153,7 @@ class ArrangedIntro(AllowCompactionCheck):
         cursor.execute(
             f"""
                 SELECT idx.id from mz_catalog.mz_sources AS src, mz_catalog.mz_indexes AS idx
-                WHERE src.id = idx.on_id AND idx.cluster_id = '{cluster_id}'"""
+                WHERE src.id = idx.on_id AND idx.cluster_id = '{cluster_id}'""".encode()
         )
         self.ids = [self._format_id(x[0]) for x in cursor.fetchall()]
 

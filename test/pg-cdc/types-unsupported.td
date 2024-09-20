@@ -28,5 +28,7 @@ ALTER TABLE person REPLICA IDENTITY FULL;
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-! CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+! CREATE TABLE person FROM SOURCE mz_source (REFERENCE person);
 contains:referenced tables use unsupported types

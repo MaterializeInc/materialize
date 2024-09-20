@@ -17,7 +17,7 @@ import threading
 import time
 from textwrap import dedent
 
-from pg8000 import Cursor
+from psycopg import Cursor
 
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition

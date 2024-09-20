@@ -45,4 +45,5 @@ IN CLUSTER test_analytics AS
 
 CREATE INDEX IN CLUSTER test_analytics ON mv_ci_failures (branch, build_date, issue);
 
+ALTER MATERIALIZED VIEW mv_ci_failures OWNER TO qa;
 GRANT SELECT ON mv_ci_failures TO "ci-failures";

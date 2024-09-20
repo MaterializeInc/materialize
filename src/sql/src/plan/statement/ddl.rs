@@ -22,7 +22,7 @@ use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_
 use mz_controller_types::{
     is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
 };
-use mz_expr::{CollectionPlan, UnmaterializableFunc};
+use mz_expr::{CollectionPlan, LocalId, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
@@ -52,12 +52,13 @@ use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
     ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
     ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
-    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
-    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
-    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement, CreateClusterStatement,
+    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
+    CreateConnectionType, CreateContinualTaskStatement, CreateDatabaseStatement,
+    CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleStatement,
+    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
+    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
     CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
     CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
@@ -123,7 +124,9 @@ use crate::names::{
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
-use crate::plan::query::{plan_expr, scalar_type_from_catalog, ExprContext, QueryLifetime};
+use crate::plan::query::{
+    plan_expr, scalar_type_from_catalog, scalar_type_from_sql, CteDesc, ExprContext, QueryLifetime,
+};
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
@@ -136,9 +139,10 @@ use crate::plan::{
     AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
     AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSystemResetAllPlan,
     AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan,
-    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan,
+    CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, Index, Ingestion, MaterializedView, Params, Plan,
@@ -146,7 +150,7 @@ use crate::plan::{
     TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
     WebhookHeaders, WebhookValidation,
 };
-use crate::session::vars;
+use crate::session::vars::{self, ENABLE_CREATE_CONTINUAL_TASK};
 use crate::session::vars::{
     ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS, ENABLE_KAFKA_SINK_PARTITION_BY,
     ENABLE_REFRESH_EVERY_MVS,
@@ -2433,6 +2437,13 @@ pub fn describe_create_materialized_view(
     Ok(StatementDesc::new(None))
 }
 
+pub fn describe_create_continual_task(
+    _: &StatementContext,
+    _: CreateContinualTaskStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 pub fn plan_create_materialized_view(
     scx: &StatementContext,
     mut stmt: CreateMaterializedViewStatement<Aug>,
@@ -2704,6 +2715,180 @@ generate_extracted_config!(
     (RetainHistory, OptionalDuration),
     (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
+
+pub fn plan_create_continual_task(
+    scx: &StatementContext,
+    mut stmt: CreateContinualTaskStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&ENABLE_CREATE_CONTINUAL_TASK)?;
+    let cluster_id = match &stmt.in_cluster {
+        None => scx.catalog.resolve_cluster(None)?.id(),
+        Some(in_cluster) => in_cluster.id,
+    };
+    stmt.in_cluster = Some(ResolvedClusterName {
+        id: cluster_id,
+        print_name: None,
+    });
+
+    let create_sql =
+        normalize::create_statement(scx, Statement::CreateContinualTask(stmt.clone()))?;
+
+    let partial_name = normalize::unresolved_item_name(stmt.name)?;
+    let name = scx.allocate_qualified_name(partial_name.clone())?;
+    let desc = {
+        let mut desc_columns = Vec::with_capacity(stmt.columns.capacity());
+        for col in stmt.columns.iter() {
+            desc_columns.push((
+                normalize::column_name(col.name.clone()),
+                ColumnType {
+                    scalar_type: scalar_type_from_sql(scx, &col.data_type)?,
+                    nullable: true,
+                },
+            ));
+        }
+        RelationDesc::from_names_and_types(desc_columns)
+    };
+    let input = scx.get_item_by_resolved_name(&stmt.input)?;
+
+    let mut qcx = QueryContext::root(scx, QueryLifetime::MaterializedView);
+    qcx.ctes.insert(
+        LocalId::new(0),
+        CteDesc {
+            name: name.item.clone(),
+            desc: desc.clone(),
+        },
+    );
+
+    let mut exprs = Vec::new();
+    for stmt in &stmt.stmts {
+        let query = continual_task_query(&name, stmt).ok_or_else(|| sql_err!("TODO(ct)"))?;
+        let query::PlannedRootQuery {
+            mut expr,
+            desc: desc_query,
+            finishing,
+            scope: _,
+        } = query::plan_ct_query(&mut qcx, query)?;
+        // We get back a trivial finishing, see comment in `plan_view`.
+        assert!(finishing.is_trivial(expr.arity()));
+        // TODO(ct): Is this right?
+        expr.bind_parameters(params)?;
+        // TODO(ct): Make this error message more closely match the various ones
+        // given for INSERT/DELETE.
+        if desc_query.iter_types().ne(desc.iter_types()) {
+            sql_bail!(
+                "CONTINUAL TASK query columns did not match: {:?} vs {:?}",
+                desc_query.iter().collect::<Vec<_>>(),
+                desc.iter().collect::<Vec<_>>()
+            );
+        }
+        match stmt {
+            ast::ContinualTaskStmt::Insert(_) => exprs.push(expr),
+            ast::ContinualTaskStmt::Delete(_) => exprs.push(expr.negate()),
+        }
+    }
+    // TODO(ct): Collect things by output and assert that there is only one (or
+    // support multiple outputs).
+    let expr = exprs
+        .into_iter()
+        .reduce(|acc, expr| acc.union(expr))
+        .ok_or_else(|| sql_err!("TODO(ct)"))?;
+
+    let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
+    if let Some(dup) = column_names.iter().duplicates().next() {
+        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+    }
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    // For PostgreSQL compatibility, we need to prevent creating this when there
+    // is an existing object *or* type of the same name.
+    if let Ok(item) = scx.catalog.resolve_item_or_type(&partial_name) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    Ok(Plan::CreateContinualTask(CreateContinualTaskPlan {
+        name,
+        desc,
+        input_id: input.id(),
+        continual_task: MaterializedView {
+            create_sql,
+            expr,
+            column_names,
+            cluster_id,
+            non_null_assertions: Vec::new(),
+            compaction_window: None,
+            refresh_schedule: None,
+            as_of: None,
+        },
+    }))
+}
+
+fn continual_task_query<'a>(
+    ct_name: &QualifiedItemName,
+    stmt: &'a ast::ContinualTaskStmt<Aug>,
+) -> Option<ast::Query<Aug>> {
+    match stmt {
+        ast::ContinualTaskStmt::Insert(ast::InsertStatement {
+            table_name: _,
+            columns,
+            source,
+            returning,
+        }) => {
+            if !columns.is_empty() || !returning.is_empty() {
+                return None;
+            }
+            match source {
+                ast::InsertSource::Query(query) => Some(query.clone()),
+                ast::InsertSource::DefaultValues => None,
+            }
+        }
+        ast::ContinualTaskStmt::Delete(ast::DeleteStatement {
+            table_name: _,
+            alias,
+            using,
+            selection,
+        }) => {
+            if !using.is_empty() {
+                return None;
+            }
+            // Construct a `SELECT *` with the `DELETE` selection as a `WHERE`.
+            let from = ast::TableWithJoins {
+                relation: ast::TableFactor::Table {
+                    // TODO(ct): Huge hack.
+                    name: ResolvedItemName::Cte {
+                        id: LocalId::new(0),
+                        name: ct_name.item.clone(),
+                    },
+                    alias: alias.clone(),
+                },
+                joins: Vec::new(),
+            };
+            let select = ast::Select {
+                from: vec![from],
+                selection: selection.clone(),
+                distinct: None,
+                projection: vec![ast::SelectItem::Wildcard],
+                group_by: Vec::new(),
+                having: None,
+                options: Vec::new(),
+            };
+            let query = ast::Query {
+                ctes: ast::CteBlock::Simple(Vec::new()),
+                body: ast::SetExpr::Select(Box::new(select)),
+                order_by: Vec::new(),
+                limit: None,
+                offset: None,
+            };
+            // Then negate it to turn it into retractions (after planning it).
+            Some(query)
+        }
+    }
+}
 
 pub fn describe_create_sink(
     _: &StatementContext,
@@ -3822,7 +4007,8 @@ generate_extracted_config!(
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
     (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
     (EnableOuterJoinNullFilter, Option<bool>, Default(None)),
-    (EnableValueWindowFunctionFusion, Option<bool>, Default(None))
+    (EnableValueWindowFunctionFusion, Option<bool>, Default(None)),
+    (EnableReduceUnnestListFusion, Option<bool>, Default(None))
 );
 
 /// Convert a [`CreateClusterStatement`] into a [`Plan`].
@@ -3961,6 +4147,7 @@ pub fn plan_create_cluster_inner(
             enable_letrec_fixpoint_analysis,
             enable_outer_join_null_filter,
             enable_value_window_function_fusion,
+            enable_reduce_unnest_list_fusion,
             seen: _,
         } = ClusterFeatureExtracted::try_from(features)?;
         let optimizer_feature_overrides = OptimizerFeatureOverrides {
@@ -3971,6 +4158,7 @@ pub fn plan_create_cluster_inner(
             enable_letrec_fixpoint_analysis,
             enable_outer_join_null_filter,
             enable_value_window_function_fusion,
+            enable_reduce_unnest_list_fusion,
             ..Default::default()
         };
 
@@ -4067,6 +4255,7 @@ pub fn unplan_create_cluster(
                 enable_letrec_fixpoint_analysis,
                 enable_outer_join_null_filter,
                 enable_value_window_function_fusion,
+                enable_reduce_unnest_list_fusion,
             } = optimizer_feature_overrides;
             let features_extracted = ClusterFeatureExtracted {
                 // Seen is ignored when unplanning.
@@ -4078,6 +4267,7 @@ pub fn unplan_create_cluster(
                 enable_letrec_fixpoint_analysis,
                 enable_outer_join_null_filter,
                 enable_value_window_function_fusion,
+                enable_reduce_unnest_list_fusion,
             };
             let features = features_extracted.into_values(scx.catalog);
             let availability_zones = if availability_zones.is_empty() {
@@ -4473,18 +4663,17 @@ generate_extracted_config!(CreateConnectionOption, (Validate, bool));
 
 pub fn plan_create_connection(
     scx: &StatementContext,
-    stmt: CreateConnectionStatement<Aug>,
+    mut stmt: CreateConnectionStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let create_sql = normalize::create_statement(scx, Statement::CreateConnection(stmt.clone()))?;
     let CreateConnectionStatement {
         name,
         connection_type,
         values,
         if_not_exists,
         with_options,
-    } = stmt;
+    } = stmt.clone();
     let connection_options_extracted = connection::ConnectionOptionExtracted::try_from(values)?;
-    let connection = connection_options_extracted.try_into_connection(scx, connection_type)?;
+    let details = connection_options_extracted.try_into_connection_details(scx, connection_type)?;
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     let options = CreateConnectionOptionExtracted::try_from(with_options)?;
@@ -4497,7 +4686,7 @@ pub fn plan_create_connection(
             scx.catalog
                 .system_vars()
                 .enable_default_connection_validation()
-                && connection.validate_by_default()
+                && details.to_connection().validate_by_default()
         }
     };
 
@@ -4511,15 +4700,31 @@ pub fn plan_create_connection(
         });
     }
 
+    // For SSH connections, overwrite the public key options based on the
+    // connection details, in case we generated new keys during planning.
+    if let ConnectionDetails::Ssh { key_1, key_2, .. } = &details {
+        stmt.values.retain(|v| {
+            v.name != ConnectionOptionName::PublicKey1 && v.name != ConnectionOptionName::PublicKey2
+        });
+        stmt.values.push(ConnectionOption {
+            name: ConnectionOptionName::PublicKey1,
+            value: Some(WithOptionValue::Value(Value::String(key_1.public_key()))),
+        });
+        stmt.values.push(ConnectionOption {
+            name: ConnectionOptionName::PublicKey2,
+            value: Some(WithOptionValue::Value(Value::String(key_2.public_key()))),
+        });
+    }
+    let create_sql = normalize::create_statement(scx, Statement::CreateConnection(stmt))?;
+
     let plan = CreateConnectionPlan {
         name,
         if_not_exists,
         connection: crate::plan::Connection {
             create_sql,
-            connection,
+            details,
         },
         validate,
-        public_key_set: None,
     };
     Ok(Plan::CreateConnection(plan))
 }

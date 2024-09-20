@@ -454,6 +454,17 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+  - id: yugabyte-cdc
+    label: "Yugabyte CDC tests"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/yugabyte-cdc]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: yugabyte-cdc
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - group: "Connection tests"
     key: connection-tests
     steps:

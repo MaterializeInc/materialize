@@ -32,7 +32,7 @@ USE public;
 CREATE TABLE set_type (f1 SET ('val1', 'val2', 'val3'));
 INSERT INTO set_type VALUES ('val1,val2'), ('val1,val2,val3'), ('');
 
-! CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+! CREATE TABLE set_type FROM SOURCE mz_source (REFERENCE public.set_type);
 contains:referenced tables use unsupported types

@@ -260,6 +260,7 @@ pub(super) fn normalize_column_refs(
     cols: Vec<UnresolvedItemName>,
     reference_resolver: &SourceReferenceResolver,
     tables: &[MySqlTableDesc],
+    option_name: &str,
 ) -> Result<Vec<WithOptionValue<Aug>>, MySqlSourcePurificationError> {
     let (seq, unknown): (Vec<_>, Vec<_>) = cols.into_iter().partition(|name| {
         let (column_name, qual) = name.0.split_last().expect("non-empty");
@@ -275,7 +276,10 @@ pub(super) fn normalize_column_refs(
     });
 
     if !unknown.is_empty() {
-        return Err(MySqlSourcePurificationError::DanglingColumns { items: unknown });
+        return Err(MySqlSourcePurificationError::DanglingColumns {
+            option_name: option_name.to_string(),
+            items: unknown,
+        });
     }
 
     let mut seq: Vec<_> = seq
@@ -373,6 +377,24 @@ pub(super) async fn purify_source_exports(
             if matches!(reference_policy, SourceReferencePolicy::Required) {
                 Err(MySqlSourcePurificationError::RequiresExternalReferences)?
             }
+
+            // If no external reference is specified, it does not make sense to include
+            // or text or exclude columns.
+            if !text_columns.is_empty() {
+                Err(
+                    MySqlSourcePurificationError::UnnecessaryOptionsWithoutReferences(
+                        "TEXT COLUMNS".to_string(),
+                    ),
+                )?
+            }
+            if !exclude_columns.is_empty() {
+                Err(
+                    MySqlSourcePurificationError::UnnecessaryOptionsWithoutReferences(
+                        "EXCLUDE COLUMNS".to_string(),
+                    ),
+                )?
+            }
+
             return Ok(PurifiedSourceExports {
                 source_exports: BTreeMap::new(),
                 normalized_text_columns: vec![],
@@ -531,11 +553,17 @@ pub(super) async fn purify_source_exports(
     Ok(PurifiedSourceExports {
         source_exports,
         // Normalize column options and remove unused column references.
-        normalized_text_columns: normalize_column_refs(text_columns, &reference_resolver, &tables)?,
+        normalized_text_columns: normalize_column_refs(
+            text_columns,
+            &reference_resolver,
+            &tables,
+            "TEXT COLUMNS",
+        )?,
         normalized_exclude_columns: normalize_column_refs(
             exclude_columns,
             &reference_resolver,
             &tables,
+            "EXCLUDE COLUMNS",
         )?,
     })
 }

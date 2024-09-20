@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Test reporting of controller frontiers through `mz_internal.mz_frontiers` and
-# `mz_internal.mz_cluster_replica_frontiers`.
+# `mz_cluster_replica_frontiers`.
 #
 # These tests rely on testdrive's retry feature, as they query introspection
 # sources whose data might not be immediately available.
@@ -36,7 +36,7 @@
 > SELECT
     mvs.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_materialized_views mvs
     ON frontiers.object_id = mvs.id
   LEFT JOIN mz_cluster_replicas replicas
@@ -66,7 +66,7 @@ mv1
 > SELECT
     indexes.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_indexes indexes
     ON frontiers.object_id = indexes.id
   LEFT JOIN mz_cluster_replicas replicas
@@ -98,7 +98,7 @@ idx1
 > SELECT
     sources.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_sources sources
     ON frontiers.object_id = sources.id
   LEFT JOIN mz_cluster_replicas replicas
@@ -139,7 +139,7 @@ source1_progress
 > SELECT
     sinks.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_sinks sinks
     ON frontiers.object_id = sinks.id
   LEFT JOIN mz_cluster_replicas replicas
@@ -164,7 +164,7 @@ sink1
 
 > SELECT
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_indexes indexes
     ON frontiers.object_id = indexes.id
   JOIN mz_clusters clusters
@@ -223,7 +223,7 @@ mz_frontiers
 > SELECT
     objects.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_objects objects
     ON frontiers.object_id = objects.id
   JOIN mz_cluster_replicas replicas
@@ -244,7 +244,7 @@ mv1  r2
 > SELECT
     objects.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_objects objects
     ON frontiers.object_id = objects.id
   JOIN mz_cluster_replicas replicas
@@ -269,7 +269,7 @@ mv1  r3
 > SELECT
     objects.name,
     replicas.name
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_objects objects
     ON frontiers.object_id = objects.id
   JOIN mz_cluster_replicas replicas
@@ -292,7 +292,7 @@ mv1  r3
 > SELECT
     replicas.name,
     frontiers.write_frontier
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   JOIN mz_materialized_views mvs
     ON frontiers.object_id = mvs.id
   JOIN mz_cluster_replicas replicas
@@ -322,7 +322,7 @@ r3 <null>
 > DROP TABLE t1
 
 > SELECT *
-  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  FROM mz_cluster_replica_frontiers frontiers
   WHERE object_id LIKE 'u%'
 
 > SELECT *

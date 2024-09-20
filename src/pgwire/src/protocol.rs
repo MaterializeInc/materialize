@@ -1721,6 +1721,7 @@ where
             | ExecuteResponse::CreatedIndex { .. }
             | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMaterializedView { .. }
+            | ExecuteResponse::CreatedContinualTask { .. }
             | ExecuteResponse::CreatedRole
             | ExecuteResponse::CreatedSchema { .. }
             | ExecuteResponse::CreatedSecret { .. }

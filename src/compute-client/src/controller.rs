@@ -372,19 +372,29 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// reported by a currently running `environmentd` deployment, during a 0dt
     /// upgrade.
     ///
+    /// Collections whose write frontier is behind `now` by more than the cutoff
+    /// are ignored.
+    ///
     /// For this check, zero-replica clusters are always considered caught up.
     /// Their collections would never normally be considered caught up but it's
     /// clearly intentional that they have no replicas.
     pub fn clusters_caught_up(
         &self,
         allowed_lag: T,
+        cutoff: T,
+        now: T,
         live_frontiers: &BTreeMap<GlobalId, Antichain<T>>,
         exclude_collections: &BTreeSet<GlobalId>,
     ) -> bool {
         let mut result = true;
         for (instance_id, i) in &self.instances {
-            let instance_hydrated =
-                i.collections_caught_up(allowed_lag.clone(), live_frontiers, exclude_collections);
+            let instance_hydrated = i.collections_caught_up(
+                allowed_lag.clone(),
+                cutoff.clone(),
+                now.clone(),
+                live_frontiers,
+                exclude_collections,
+            );
 
             if !instance_hydrated {
                 result = false;

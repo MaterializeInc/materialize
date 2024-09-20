@@ -1889,6 +1889,9 @@ impl<'a> Parser<'a> {
         {
             self.parse_create_materialized_view()
                 .map_parser_err(StatementKind::CreateMaterializedView)
+        } else if self.peek_keywords(&[CONTINUAL, TASK]) {
+            self.parse_create_continual_task()
+                .map_parser_err(StatementKind::CreateContinualTask)
         } else if self.peek_keywords(&[USER]) {
             parser_err!(
                 self,
@@ -2551,6 +2554,7 @@ impl<'a> Parser<'a> {
                 HOST,
                 PASSWORD,
                 PORT,
+                PUBLIC,
                 PROGRESS,
                 REGION,
                 ROLE,
@@ -2596,6 +2600,14 @@ impl<'a> Parser<'a> {
                 HOST => ConnectionOptionName::Host,
                 PASSWORD => ConnectionOptionName::Password,
                 PORT => ConnectionOptionName::Port,
+                PUBLIC => {
+                    self.expect_keyword(KEY)?;
+                    match self.next_token() {
+                        Some(Token::Number(n)) if n == "1" => ConnectionOptionName::PublicKey1,
+                        Some(Token::Number(n)) if n == "2" => ConnectionOptionName::PublicKey2,
+                        t => self.expected(self.peek_prev_pos(), "1 or 2 after PUBLIC KEY", t)?,
+                    }
+                }
                 PROGRESS => {
                     self.expect_keyword(TOPIC)?;
                     match self.parse_keywords(&[REPLICATION, FACTOR]) {
@@ -3563,6 +3575,73 @@ impl<'a> Parser<'a> {
                 query,
                 as_of,
                 with_options,
+            },
+        ))
+    }
+
+    fn parse_create_continual_task(&mut self) -> Result<Statement<Raw>, ParserError> {
+        // TODO(ct): If exists.
+        self.expect_keywords(&[CONTINUAL, TASK])?;
+
+        // TODO(ct): Multiple outputs.
+        let name = self.parse_item_name()?;
+        self.expect_token(&Token::LParen)?;
+        let columns = self.parse_comma_separated(|parser| {
+            // TODO(ct): NOT NULL, etc.
+            Ok(CteMutRecColumnDef {
+                name: parser.parse_identifier()?,
+                data_type: parser.parse_data_type()?,
+            })
+        })?;
+        self.expect_token(&Token::RParen)?;
+        let in_cluster = self.parse_optional_in_cluster()?;
+
+        // TODO(ct): Multiple inputs.
+        self.expect_keywords(&[ON, INPUT])?;
+        let input_table = self.parse_raw_name()?;
+        // TODO(ct): Allow renaming the inserts/deletes so that we can use
+        // something as both an "input" and a "reference".
+
+        self.expect_keyword(AS)?;
+
+        let mut stmts = Vec::new();
+        let mut expecting_statement_delimiter = false;
+        self.expect_token(&Token::LParen)?;
+        // TODO(ct): Dedup this with parse_statements?
+        loop {
+            // ignore empty statements (between successive statement delimiters)
+            while self.consume_token(&Token::Semicolon) {
+                expecting_statement_delimiter = false;
+            }
+
+            if self.consume_token(&Token::RParen) {
+                break;
+            } else if expecting_statement_delimiter {
+                self.expected(self.peek_pos(), "end of statement", self.peek_token())?
+            }
+
+            let stmt = self.parse_statement().map_err(|err| err.error)?.ast;
+            match stmt {
+                Statement::Delete(stmt) => stmts.push(ContinualTaskStmt::Delete(stmt)),
+                Statement::Insert(stmt) => stmts.push(ContinualTaskStmt::Insert(stmt)),
+                _ => {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        "unsupported query in CREATE CONTINUAL TASK"
+                    );
+                }
+            }
+            expecting_statement_delimiter = true;
+        }
+
+        Ok(Statement::CreateContinualTask(
+            CreateContinualTaskStatement {
+                name,
+                columns,
+                in_cluster,
+                input: input_table,
+                stmts,
             },
         ))
     }

@@ -11,7 +11,16 @@ $ set-arg-default single-replica-cluster=quickstart
 
 > CREATE SOURCE tpch
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1) FOR ALL TABLES;
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1);
+
+> CREATE TABLE customer FROM SOURCE tpch (REFERENCE customer);
+> CREATE TABLE lineitem FROM SOURCE tpch (REFERENCE lineitem);
+> CREATE TABLE nation FROM SOURCE tpch (REFERENCE nation);
+> CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
+> CREATE TABLE part FROM SOURCE tpch (REFERENCE part);
+> CREATE TABLE partsupp FROM SOURCE tpch (REFERENCE partsupp);
+> CREATE TABLE region FROM SOURCE tpch (REFERENCE region);
+> CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
 
 > CREATE CONNECTION kafka_fixed TO KAFKA (
     BROKER '${testdrive.kafka-addr}',

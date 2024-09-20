@@ -138,12 +138,15 @@ ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 1000
 
 > CREATE SOURCE "test_slot_source"
   IN CLUSTER cdc_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.pk_table);
+  FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE pk_table FROM SOURCE test_slot_source (REFERENCE public.pk_table);
 
 > SHOW SUBSOURCES ON test_slot_source
-pk_table subsource
 test_slot_source_progress progress
+
+> SHOW TABLES
+pk_table ""
 
 > DROP SOURCE test_slot_source CASCADE;
 
@@ -162,8 +165,9 @@ INSERT INTO pk_table VALUES (4, 'four');
 
 > CREATE SOURCE "test_slot_source"
   IN CLUSTER cdc_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.pk_table);
+  FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE pk_table FROM SOURCE test_slot_source (REFERENCE public.pk_table);
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'test_slot_source';
 stalled
@@ -233,40 +237,27 @@ contains:Address resolved to a private IP
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_enforce_external_addresses = false
 
-! CREATE SOURCE "mz_source"
+> CREATE SOURCE "mz_source"
   IN CLUSTER cdc_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (
-    public."enum_table"
-  );
+  FROM MYSQL CONNECTION mysql_conn;
+
+! CREATE TABLE enum_table FROM SOURCE mz_source (REFERENCE public.enum_table);
 contains:referenced tables use unsupported types
 
-! CREATE SOURCE "mz_source"
-  IN CLUSTER cdc_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (
-    public."enum_table",
-    public.another_enum_table
-  );
+! CREATE TABLE another_enum_table FROM SOURCE mz_source (REFERENCE public.another_enum_table);
 contains:referenced tables use unsupported types
 
-! CREATE SOURCE mz_source
+! CREATE SOURCE mz_source_2
   IN CLUSTER cdc_cluster
   FROM MYSQL CONNECTION mysql_conn (
     PUBLICATION 'mz_source'
-  )
-  FOR TABLES (
-    public.pk_table
   );
 contains: found PUBLICATION
 
-! CREATE SOURCE mz_source
+! CREATE SOURCE mz_source_2
   IN CLUSTER cdc_cluster
   FROM MYSQL CONNECTION mysql_conn (
     DETAILS 'abc'
-  )
-  FOR TABLES (
-    public.pk_table
   );
 contains: CREATE SOURCE specifies DETAILS option
 
@@ -277,47 +268,45 @@ contains: CREATE SOURCE specifies DETAILS option
 # Note: This implicitly tests that enum_table being part of the publication does not
 # prevent us from using other tables as subsources.
 #
-> CREATE SOURCE "mz_source"
-  IN CLUSTER cdc_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (
-    public."pk_table",
-    public."nonpk_table",
-    public."types_table",
-    public."large_text",
-    public."trailing_space_pk",
-    public."trailing_space_nopk",
-    public."multipart_pk",
-    public."nulls_table",
-    public."utf8_table",
-    public."escaped_text_table",
-    public."mixED_CAse",
-    conflict_schema.conflict_table AS public.conflict_table,
-    public."create",
-    public."space table",
-    public."таблица",
-    public."""literal_quotes"""
-  );
+
+> CREATE TABLE "pk_table" FROM SOURCE mz_source (REFERENCE public."pk_table");
+> CREATE TABLE "nonpk_table" FROM SOURCE mz_source (REFERENCE public."nonpk_table");
+> CREATE TABLE "types_table" FROM SOURCE mz_source (REFERENCE public."types_table");
+> CREATE TABLE "large_text" FROM SOURCE mz_source (REFERENCE public."large_text");
+> CREATE TABLE "trailing_space_pk" FROM SOURCE mz_source (REFERENCE public."trailing_space_pk");
+> CREATE TABLE "trailing_space_nopk" FROM SOURCE mz_source (REFERENCE public."trailing_space_nopk");
+> CREATE TABLE "multipart_pk" FROM SOURCE mz_source (REFERENCE public."multipart_pk");
+> CREATE TABLE "nulls_table" FROM SOURCE mz_source (REFERENCE public."nulls_table");
+> CREATE TABLE "utf8_table" FROM SOURCE mz_source (REFERENCE public."utf8_table");
+> CREATE TABLE "escaped_text_table" FROM SOURCE mz_source (REFERENCE public."escaped_text_table");
+> CREATE TABLE "mixED_CAse" FROM SOURCE mz_source (REFERENCE public."mixED_CAse");
+> CREATE TABLE conflict_table FROM SOURCE mz_source (REFERENCE conflict_schema.conflict_table);
+> CREATE TABLE "create" FROM SOURCE mz_source (REFERENCE public."create");
+> CREATE TABLE "space table" FROM SOURCE mz_source (REFERENCE public."space table");
+> CREATE TABLE "таблица" FROM SOURCE mz_source (REFERENCE public."таблица");
+> CREATE TABLE """literal_quotes""" FROM SOURCE mz_source (REFERENCE public."""literal_quotes""");
 
 > SHOW SOURCES
-conflict_table        subsource  cdc_cluster  ""
-create                subsource  cdc_cluster  ""
-escaped_text_table    subsource  cdc_cluster  ""
-large_text            subsource  cdc_cluster  ""
-mixED_CAse            subsource  cdc_cluster  ""
-multipart_pk          subsource  cdc_cluster  ""
 mz_source             mysql      cdc_cluster  ""
 mz_source_progress    progress   <null>        ""
-nonpk_table           subsource  cdc_cluster  ""
-nulls_table           subsource  cdc_cluster  ""
-pk_table              subsource  cdc_cluster  ""
-trailing_space_nopk   subsource  cdc_cluster  ""
-trailing_space_pk     subsource  cdc_cluster  ""
-types_table           subsource  cdc_cluster  ""
-utf8_table            subsource  cdc_cluster  ""
-"\"literal_quotes\""  subsource  cdc_cluster  ""
-"space table"         subsource  cdc_cluster  ""
-таблица               subsource  cdc_cluster  ""
+
+> SHOW TABLES
+conflict_table        ""
+create                ""
+escaped_text_table    ""
+large_text            ""
+mixED_CAse            ""
+multipart_pk          ""
+nonpk_table           ""
+nulls_table           ""
+pk_table              ""
+trailing_space_nopk   ""
+trailing_space_pk     ""
+types_table           ""
+utf8_table            ""
+"\"literal_quotes\""  ""
+"space table"         ""
+таблица               ""
 
 > SELECT schema_name, table_name FROM mz_internal.mz_mysql_source_tables
 public          create
@@ -556,8 +545,11 @@ true
 
 > CREATE SOURCE large_cluster_source
   IN CLUSTER large_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public."pk_table" AS large_cluster_source_pk_table);
+  FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE large_cluster_source_pk_table
+  FROM SOURCE large_cluster_source
+  (REFERENCE public."pk_table");
 
 > SELECT * FROM large_cluster_source_pk_table;
 13 three
@@ -565,8 +557,9 @@ true
 2 two_two
 5 five
 
-> SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table';
-true
+# TODO: #29373 (introspection tables)
+# > SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table' and type = 'table';
+# true
 
 > DROP SOURCE large_cluster_source CASCADE;
 
@@ -627,92 +620,73 @@ DELETE FROM mixED_CAse;
 > SELECT COUNT(*) FROM conflict_table;
 0
 
+> CREATE SOURCE enum_source
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+
 # Reference exists in two schemas, so is not unambiguous
 # TODO: #24797 (explicit schema definition required)
-# ! CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [another_enum_table."колона"]
-#   )
-#   FOR TABLES(
-#     conflict_schema.another_enum_table AS conflict_enum,
-#     public.another_enum_table AS public_enum
-#   );
+# ! CREATE TABLE conflict_enum
+#   FROM SOURCE enum_source
+#   REFERENCE (conflict_schema.another_enum_table)
+#   WITH (TEXT COLUMNS = [another_enum_table."колона"]);
 # contains: invalid TEXT COLUMNS option value: table another_enum_table is ambiguous, consider specifying the schema
 
 # TODO: #24797 (explicit schema definition required)
-# ! CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [foo]
-#   )
-#   FOR TABLES (pk_table);
+# ! CREATE TABLE pk_table
+#   FROM SOURCE enum_source
+#   REFERENCE (pk_table)
+#   WITH (TEXT COLUMNS = [foo]);
 # contains: invalid TEXT COLUMNS option value: column name 'foo' must have at least a table qualification
 
 # TODO: #24797 (explicit schema definition required)
-# ! CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [foo.bar.qux.qax.foo]
-#   )
-#   FOR TABLES (pk_table);
+# ! CREATE TABLE pk_table
+#   FROM SOURCE enum_source
+#   REFERENCE (pk_table)
+#   WITH (TEXT COLUMNS = [foo.bar.qux.qax.foo]);
 # contains: invalid TEXT COLUMNS option value: qualified name did not have between 1 and 3 components: foo.bar.qux.qax
 
 # TODO: #24797 (explicit schema definition required)
-# ! CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [enum_table.a, enum_table.a]
-#   )
-#   FOR TABLES (enum_table);
+# ! CREATE TABLE enum_table
+#   FROM SOURCE enum_source
+#   REFERENCE (enum_table)
+#   WITH (TEXT COLUMNS = [enum_table.a, enum_table.a]);
 # contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.enum_table.a
 
 # TODO: #24797 (explicit schema definition required)
 # utf8_table is not part of mz_source_narrow publication
-# ! CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [enum_table.a, utf8_table.f1]
-#   )
-#   FOR TABLES (enum_table);
+# ! CREATE TABLE enum_table
+#   FROM SOURCE enum_source
+#   REFERENCE (enum_table)
+#   WITH (TEXT COLUMNS = [enum_table.a, utf8_table.f1]);
 # contains: invalid TEXT COLUMNS option value: table utf8_table not found in source
 
 # n.b includes a reference to pk_table, which is not a table that's part of the
 # source, but is part of the publication.
 
-! CREATE SOURCE enum_source
-  IN CLUSTER cdc_cluster
-  FROM MYSQL CONNECTION mysql_conn (
-    TEXT COLUMNS [
-      public.enum_table.a,
-      public.another_enum_table."колона",
-      public.pk_table.pk
-    ]
-  )
-  FOR TABLES (
-    public."enum_table",
-    public.another_enum_table
-  );
-contains:Reference to columns not currently being added
+! CREATE TABLE another_enum_table
+  FROM SOURCE enum_source
+  (REFERENCE public.another_enum_table)
+  WITH (TEXT COLUMNS = ["колона", pk]);
+contains:TEXT COLUMNS refers to table not currently being added
 
-> CREATE SOURCE enum_source
-  IN CLUSTER cdc_cluster
-  FROM MYSQL CONNECTION mysql_conn (
-    TEXT COLUMNS [
-      public.enum_table.a,
-      public.another_enum_table."колона"
-    ]
-  )
-  FOR TABLES (
-    public."enum_table",
-    public.another_enum_table
-  );
+> CREATE TABLE enum_table
+  FROM SOURCE enum_source
+  (REFERENCE public."enum_table")
+  WITH (TEXT COLUMNS = [a]);
+
+> CREATE TABLE another_enum_table
+  FROM SOURCE enum_source
+  (REFERENCE public."another_enum_table")
+  WITH (TEXT COLUMNS = ["колона"]);
 
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
-another_enum_table      subsource cdc_cluster  ""
 enum_source             mysql     cdc_cluster  ""
 enum_source_progress    progress  <null>       ""
-enum_table              subsource cdc_cluster  ""
+
+> SELECT * FROM (SHOW TABLES) WHERE name LIKE '%enum%';
+another_enum_table      ""
+enum_table              ""
 
 > SELECT * FROM enum_table
 var0
@@ -738,15 +712,16 @@ INSERT INTO pk_table VALUES (99999, 'abc');
 
 > CREATE SOURCE another_source
   IN CLUSTER cdc_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR SCHEMAS (
-    another_schema
-  );
+  FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE another_table FROM SOURCE another_source (REFERENCE another_schema.another_table);
 
 > SHOW SOURCES
 another_source          mysql  cdc_cluster     ""
 another_source_progress progress <null>        ""
-another_table           subsource cdc_cluster  ""
+
+> SHOW TABLES
+another_table           ""
 
 > DROP SOURCE another_source CASCADE;
 

@@ -109,6 +109,10 @@ mz_base_types
 BASE TABLE
 materialize
 mz_catalog
+mz_cluster_replica_frontiers
+SOURCE
+materialize
+mz_catalog
 mz_cluster_replica_sizes
 BASE TABLE
 materialize
@@ -277,10 +281,6 @@ mz_aws_privatelink_connection_statuses
 VIEW
 materialize
 mz_internal
-mz_cluster_replica_frontiers
-SOURCE
-materialize
-mz_internal
 mz_cluster_replica_history
 VIEW
 materialize
@@ -362,6 +362,10 @@ VIEW
 materialize
 mz_internal
 mz_internal_cluster_replicas
+BASE TABLE
+materialize
+mz_internal
+mz_kafka_source_tables
 BASE TABLE
 materialize
 mz_internal

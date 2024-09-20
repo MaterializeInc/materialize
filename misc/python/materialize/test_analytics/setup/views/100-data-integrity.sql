@@ -82,3 +82,5 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     GROUP BY issue_id
     HAVING count(*) > 1
 ;
+
+ALTER VIEW v_data_integrity OWNER TO qa;

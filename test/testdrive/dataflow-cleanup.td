@@ -82,7 +82,17 @@ false
 
 > CREATE CLUSTER lgtpch_cluster_cleanup SIZE '1';
 
-> CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_cleanup FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1) FOR ALL TABLES;
+> CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_cleanup FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1);
+
+> CREATE TABLE customer FROM SOURCE lgtpch (REFERENCE customer);
+> CREATE TABLE lineitem FROM SOURCE lgtpch (REFERENCE lineitem);
+> CREATE TABLE nation FROM SOURCE lgtpch (REFERENCE nation);
+> CREATE TABLE orders FROM SOURCE lgtpch (REFERENCE orders);
+> CREATE TABLE part FROM SOURCE lgtpch (REFERENCE part);
+> CREATE TABLE partsupp FROM SOURCE lgtpch (REFERENCE partsupp);
+> CREATE TABLE region FROM SOURCE lgtpch (REFERENCE region);
+> CREATE TABLE supplier FROM SOURCE lgtpch (REFERENCE supplier);
+
 > CREATE MATERIALIZED VIEW q14 AS
   SELECT
     100.00 * sum(case

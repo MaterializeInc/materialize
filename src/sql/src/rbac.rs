@@ -392,7 +392,6 @@ fn generate_rbac_requirements(
             if_not_exists: _,
             connection: _,
             validate: _,
-            public_key_set: _,
         }) => RbacRequirements {
             privileges: vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
@@ -594,6 +593,27 @@ fn generate_rbac_requirements(
                 ),
                 (
                     SystemObjectId::Object(materialized_view.cluster_id.into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+            ],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
+        Plan::CreateContinualTask(plan::CreateContinualTaskPlan {
+            name,
+            desc: _,
+            input_id: _,
+            continual_task,
+        }) => RbacRequirements {
+            privileges: vec![
+                (
+                    SystemObjectId::Object(name.qualifiers.clone().into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+                (
+                    SystemObjectId::Object(continual_task.cluster_id.into()),
                     AclMode::CREATE,
                     role_id,
                 ),

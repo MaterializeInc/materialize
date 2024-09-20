@@ -518,6 +518,76 @@ steps:
               composition: zippy
               args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m]
 
+  - group: CDC with old source syntax
+    key: cdc-old-source-syntax
+    steps:
+
+      - id: mysql-cdc-old-syntax
+        label: MySQL CDC tests %N (before source versioning)
+        parallelism: 2
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc-old-syntax
+              args: ["--mysql-version=8.4.0"]
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: mysql-cdc-resumption-old-syntax
+        label: MySQL CDC resumption tests %N (before source versioning)
+        parallelism: 3
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc-resumption-old-syntax
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: mysql-rtr-old-syntax
+        label: MySQL RTR tests (before source versioning)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-rtr-old-syntax
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: pg-cdc-old-syntax
+        label: Postgres CDC tests (before source versioning)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc-old-syntax
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        # the mzbuild postgres version will be used, which depends on the Dockerfile specification
+
+      - id: pg-cdc-resumption-old-syntax
+        label: Postgres CDC resumption tests %N (before source versioning)
+        parallelism: 2
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc-resumption-old-syntax
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: pg-rtr-old-syntax
+        label: Postgres RTR tests (before source versioning)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-rtr-old-syntax
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+
   - group: AWS
     key: aws
     steps:
@@ -1285,10 +1355,6 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 90
     parallelism: 2
-    retry:
-      automatic:
-        - exit_status: 75
-          limit: 1
     agents:
       queue: hetzner-aarch64-8cpu-16gb
     plugins:
@@ -1444,16 +1510,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: balancerd
-
-  - id: restarts
-    label: Restart test
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: restart
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
 
   - id: legacy-upgrade
     label: Legacy upgrade tests (last version from git)

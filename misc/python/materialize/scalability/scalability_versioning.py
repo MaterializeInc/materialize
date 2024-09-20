@@ -17,22 +17,14 @@ SCALABILITY_FRAMEWORK_DIR = Path(__file__).resolve().parent
 SCALABILITY_WORKLOADS_DIR = SCALABILITY_FRAMEWORK_DIR / "workload" / "workloads"
 
 # Consider increasing the #SCALABILITY_FRAMEWORK_VERSION if changes are expected to impact results!
-SHA256_OF_FRAMEWORK: dict[str, str] = {}
-SHA256_OF_FRAMEWORK["*"] = (
-    "1d0fa12d738b686e62d0fa2612656a1b4a0ac43cbfb377f1ffa5c7952ec4314d"
-)
+SHA256_OF_FRAMEWORK: dict[str, str] = {
+    "*": "062ebd7410e2f7628b719f0ef553ec0466c9b617310b036b45ac13505dcaceda"
+}
 
 # Consider increasing the workload's class #version() if changes are expected to impact results!
-SHA256_BY_WORKLOAD_FILE: dict[str, str] = {}
-SHA256_BY_WORKLOAD_FILE["connection_workloads.py"] = (
-    "025c2df698e38686c66da9ce1afea25b77d2a0059cdcf26a6e831b022133e170"
-)
-SHA256_BY_WORKLOAD_FILE["ddl_workloads.py"] = (
-    "72625e5d50c8a956902a11f139320f0c6b41da0111e488e5a5fe1c4257a7ddc5"
-)
-SHA256_BY_WORKLOAD_FILE["dml_dql_workloads.py"] = (
-    "23f617ab789bed89e880cef7ff884d6b4cc0c2be330ab6916165282f25fbf7e8"
-)
-SHA256_BY_WORKLOAD_FILE["self_test_workloads.py"] = (
-    "471583c9ea29b17ad16566ffcf93b8248e7de204e0a193fa0f08dc46512e96e3"
-)
+SHA256_BY_WORKLOAD_FILE: dict[str, str] = {
+    "connection_workloads.py": "025c2df698e38686c66da9ce1afea25b77d2a0059cdcf26a6e831b022133e170",
+    "ddl_workloads.py": "72625e5d50c8a956902a11f139320f0c6b41da0111e488e5a5fe1c4257a7ddc5",
+    "dml_dql_workloads.py": "23f617ab789bed89e880cef7ff884d6b4cc0c2be330ab6916165282f25fbf7e8",
+    "self_test_workloads.py": "471583c9ea29b17ad16566ffcf93b8248e7de204e0a193fa0f08dc46512e96e3",
+}

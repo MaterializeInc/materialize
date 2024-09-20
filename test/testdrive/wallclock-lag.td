@@ -46,7 +46,7 @@ ALTER SYSTEM SET wallclock_lag_refresh_interval = '1s'
   ENVELOPE DEBEZIUM
 
 > SELECT DISTINCT ON(o.name, r.name)
-    o.name, r.name, l.lag > '0s', l.lag < '5s'
+    o.name, r.name, l.lag >= '0s', l.lag < '5s'
   FROM mz_internal.mz_wallclock_lag_history l
   JOIN mz_objects o ON o.id = l.object_id
   LEFT JOIN mz_cluster_replicas r ON r.id = l.replica_id
@@ -54,43 +54,45 @@ ALTER SYSTEM SET wallclock_lag_refresh_interval = '1s'
   ORDER BY o.name, r.name, l.occurred_at DESC
 idx          r1     true  true
 idx          r2     true  true
-idx_const    r1     false true
-idx_const    r2     false true
+idx_const    r1     true  true
+idx_const    r2     true  true
 mv           r1     true  true
 mv           r2     true  true
 mv           <null> true  true
-mv_const     r1     false true
-mv_const     r2     false true
-mv_const     <null> false true
+mv_const     r1     true  true
+mv_const     r2     true  true
+mv_const     <null> true  true
 snk          <null> true  true
 src          <null> true  true
 src_progress <null> true  true
 tbl          <null> true  true
 
 > SELECT DISTINCT ON(o.name)
-    o.name, l.lag > '0s', l.lag < '5s'
+    o.name, l.lag >= '0s', l.lag < '5s'
   FROM mz_internal.mz_wallclock_global_lag_history l
   JOIN mz_objects o ON o.id = l.object_id
   WHERE l.object_id LIKE 'u%'
-  AND o.name NOT LIKE 'src%'
   ORDER BY o.name, l.occurred_at DESC
 idx          true  true
-idx_const    false true
+idx_const    true  true
 mv           true  true
-mv_const     false true
+mv_const     true  true
 snk          true  true
+src          true  true
+src_progress true  true
 tbl          true  true
 
 > SELECT DISTINCT ON(o.name)
-    o.name, l.lag > '0s', l.lag < '5s'
+    o.name, l.lag >= '0s', l.lag < '5s'
   FROM mz_internal.mz_wallclock_global_lag_recent_history l
   JOIN mz_objects o ON o.id = l.object_id
   WHERE l.object_id LIKE 'u%'
-  AND o.name NOT LIKE 'src%'
   ORDER BY o.name, l.occurred_at DESC
 idx          true  true
-idx_const    false true
+idx_const    true  true
 mv           true  true
-mv_const     false true
+mv_const     true  true
 snk          true  true
+src          true  true
+src_progress true  true
 tbl          true  true

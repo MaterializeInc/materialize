@@ -150,9 +150,11 @@ use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::{
     ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
+use crate::render::continual_task::ContinualTaskCtx;
 use crate::typedefs::{ErrSpine, KeyBatcher};
 
 pub mod context;
+pub(crate) mod continual_task;
 mod errors;
 mod flat_map;
 mod join;
@@ -202,6 +204,10 @@ pub fn build_compute_dataflow<A: Allocate>(
     let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+        // TODO(ct): This should be a config of the source instead, but at least try
+        // to contain the hacks.
+        let mut ct_ctx = ContinualTaskCtx::new(&dataflow);
+
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird
@@ -217,9 +223,16 @@ pub fn build_compute_dataflow<A: Allocate>(
                             .expect("Linear operators should always be valid")
                     });
 
+                    let ct_inserts_transformer = ct_ctx.get_ct_inserts_transformer(*source_id);
+                    let snapshot_mode = if ct_inserts_transformer.is_none() {
+                        SnapshotMode::Include
+                    } else {
+                        SnapshotMode::Exclude
+                    };
+
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) = persist_source::persist_source(
+                    let (ok_stream, err_stream, token) = persist_source::persist_source(
                         inner,
                         *source_id,
                         Arc::clone(&compute_state.persist_clients),
@@ -227,13 +240,27 @@ pub fn build_compute_dataflow<A: Allocate>(
                         &compute_state.worker_config,
                         source.storage_metadata.clone(),
                         dataflow.as_of.clone(),
-                        SnapshotMode::Include,
+                        snapshot_mode,
                         dataflow.until.clone(),
                         mfp.as_mut(),
                         compute_state.dataflow_max_inflight_bytes(),
                         start_signal.clone(),
                         |error| panic!("compute_import: {error}"),
                     );
+
+                    let (mut ok_stream, err_stream) = match ct_inserts_transformer {
+                        None => (ok_stream, err_stream),
+                        Some(inserts_transformer_fn) => {
+                            let (oks, errs, ct_times) = inserts_transformer_fn(
+                                ok_stream.as_collection(),
+                                err_stream.as_collection(),
+                            );
+                            // TODO(ct): Ideally this would be encapsulated by ContinualTaskCtx, but
+                            // the types are tricky.
+                            ct_ctx.ct_times.push(ct_times.leave_region().leave_region());
+                            (oks.inner, errs.inner)
+                        }
+                    };
 
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
@@ -333,6 +360,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         sink_id,
                         &sink,
                         start_signal.clone(),
+                        ct_ctx.input_times(),
                     );
                 }
             });
@@ -396,6 +424,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         sink_id,
                         &sink,
                         start_signal.clone(),
+                        ct_ctx.input_times(),
                     );
                 }
             });

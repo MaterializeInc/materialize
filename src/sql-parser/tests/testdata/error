@@ -49,7 +49,7 @@ SELECT ALL DISTINCT name FROM customer
 parse-statement
 INSERT public.customer (id, name, active) VALUES (1, 2, 3)
 ----
-error: Expected INTO, found identifier "public"
+error: Expected INTO, found PUBLIC
 INSERT public.customer (id, name, active) VALUES (1, 2, 3)
        ^
 

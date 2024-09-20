@@ -140,7 +140,8 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// NB: We may remove this in later iterations of Pv2.
     async fn epoch(&mut self) -> Result<Epoch, CatalogError>;
 
-    /// Get the most recent deployment generation written to the catalog.
+    /// Get the most recent deployment generation written to the catalog. Not necessarily the
+    /// deploy generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError>;
 
     /// Get the `enable_0dt_deployment` config value of this instance.
@@ -156,6 +157,16 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// toggle the flag with LaunchDarkly, but use it in boot before
     /// LaunchDarkly is available.
     async fn get_0dt_deployment_max_wait(&mut self) -> Result<Option<Duration>, CatalogError>;
+
+    /// Get the `enable_0dt_deployment_panic_after_timeout` config value of this
+    /// instance.
+    ///
+    /// This mirrors the `enable_0dt_deployment_panic_after_timeout` "system var"
+    /// so that we can toggle the flag with LaunchDarkly, but use it in boot
+    /// before LaunchDarkly is available.
+    async fn get_enable_0dt_deployment_panic_after_timeout(
+        &mut self,
+    ) -> Result<Option<bool>, CatalogError>;
 
     /// Reports if the remote configuration was synchronized at least once.
     async fn has_system_config_synced_once(&mut self) -> Result<bool, DurableCatalogError>;

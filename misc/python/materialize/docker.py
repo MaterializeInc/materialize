@@ -69,7 +69,8 @@ def _mz_image_tag_exists(image_tag: str) -> bool:
         response = requests.get(
             f"https://hub.docker.com/v2/repositories/materialize/materialized/tags/{image_tag}"
         )
-    except requests.exceptions.ConnectionError:
+        result = response.json()
+    except (requests.exceptions.ConnectionError, requests.exceptions.JSONDecodeError):
         command = [
             "docker",
             "manifest",
@@ -89,7 +90,6 @@ def _mz_image_tag_exists(image_tag: str) -> bool:
                 # do not cache the result of unknown error messages
             return False
 
-    result = response.json()
     if result.get("images"):
         EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
         return True

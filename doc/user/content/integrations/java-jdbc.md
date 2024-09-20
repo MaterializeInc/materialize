@@ -9,7 +9,10 @@ menu:
     name: "Java"
 ---
 
-Materialize is **wire-compatible** with PostgreSQL, which means that Java applications can use common PostgreSQL clients to interact with Materialize. In this guide, we'll use the [PostgreSQL JDBC Driver](https://jdbc.postgresql.org/download.html) to connect to Materialize and issue SQL commands.
+Materialize is **wire-compatible** with PostgreSQL, which means that Java
+applications can use common PostgreSQL clients to interact with Materialize.
+This guide uses the [PostgreSQL JDBC Driver](https://jdbc.postgresql.org/) to
+connect to Materialize and issue SQL commands.
 
 ## Connect
 

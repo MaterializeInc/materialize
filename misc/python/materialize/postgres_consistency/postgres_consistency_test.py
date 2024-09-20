@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 import argparse
 
-from pg8000 import Connection
-from pg8000.exceptions import InterfaceError
+from psycopg import Connection
+from psycopg.errors import OperationalError
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -145,7 +145,7 @@ def main() -> int:
         test.pg_connection = connect(
             args.pg_host, args.pg_port, pg_db_user, args.pg_password
         )
-    except InterfaceError:
+    except OperationalError:
         return 1
 
     result = test.run_output_consistency_tests(

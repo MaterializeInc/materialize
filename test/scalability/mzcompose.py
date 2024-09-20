@@ -20,6 +20,7 @@ from jupyter_core.command import main as jupyter_core_command_main
 from matplotlib import pyplot as plt
 
 from materialize import buildkite, git
+from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.materialized import Materialized
@@ -48,11 +49,11 @@ from materialize.scalability.plot.plot import (
     plot_duration_by_endpoints_for_workload,
     plot_tps_per_connections,
 )
-from materialize.scalability.result.benchmark_result import BenchmarkResult
 from materialize.scalability.result.comparison_outcome import ComparisonOutcome
 from materialize.scalability.result.regression_assessment import RegressionAssessment
 from materialize.scalability.result.result_analyzer import ResultAnalyzer
 from materialize.scalability.result.result_analyzers import DefaultResultAnalyzer
+from materialize.scalability.result.scalability_result import BenchmarkResult
 from materialize.scalability.scalability_versioning import SCALABILITY_FRAMEWORK_VERSION
 from materialize.scalability.schema.schema import Schema, TransactionIsolation
 from materialize.scalability.workload.workload import Workload
@@ -80,6 +81,7 @@ SERVICES = [
     Materialized(
         image="materialize/materialized:latest",
         sanity_restart=False,
+        additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS,
     ),
     Postgres(),
     Balancerd(),

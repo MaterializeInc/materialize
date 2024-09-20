@@ -160,22 +160,22 @@ contains:S3 bucket path is not empty
 $ set-from-sql var=key-1
 SELECT TO_CHAR(now(), 'YYYY-MM-DD')
 
-$ s3-verify-data bucket=copytos3 key=test/1/${key-1}
+$ s3-verify-data bucket=copytos3 key=test/1/${key-1} sort-rows=true
 1
 2
 
-$ s3-verify-data bucket=copytos3 key=test/2
+$ s3-verify-data bucket=copytos3 key=test/2 sort-rows=true
 1
 2
 
-$ s3-verify-data bucket=copytos3 key=test/2_5
+$ s3-verify-data bucket=copytos3 key=test/2_5 sort-rows=true
 a
 1
 
-$ s3-verify-data bucket=copytos3 key=test/3
+$ s3-verify-data bucket=copytos3 key=test/3 sort-rows=true
 "{1,2}",f,Infinity,"{""s"":""abc""}",1,32767,2147483647,9223372036854775807,12345678901234567890123.4567890123456789,2010-10-10,10:10:10,2010-10-10 10:10:10,2010-10-10 08:10:10+00,00:00:00,aaaa,\x5c7841414141,това е,\xd182d0b5d0bad181d182
 
-$ s3-verify-data bucket=copytos3 key=test/4_5
+$ s3-verify-data bucket=copytos3 key=test/4_5 sort-rows=true
 array;int4;jsonb;timestamp
 {1,2};83647;`{"s":"ab``c"}`;2010-10-10 10:10:10
 
@@ -212,15 +212,15 @@ array;int4;jsonb;timestamp
     FORMAT = 'parquet'
   );
 
-$ s3-verify-data bucket=copytos3 key=parquet_test/1/${key-1}
+$ s3-verify-data bucket=copytos3 key=parquet_test/1/${key-1} sort-rows=true
 1
 2
 
-$ s3-verify-data bucket=copytos3 key=parquet_test/2
+$ s3-verify-data bucket=copytos3 key=parquet_test/2 sort-rows=true
 1
 2
 
-$ s3-verify-data bucket=copytos3 key=parquet_test/3
+$ s3-verify-data bucket=copytos3 key=parquet_test/3 sort-rows=true
 {items: [1, 2], dimensions: 1} {items: [1, 2, , 4], dimensions: 2} false inf {"s":"abc"} 85907cb9ac9b4e3584b860dc69368aca 1 32767 2147483647 9223372036854775807 1234567890123456789012.4567890123456789 2010-10-10 10:10:10 2010-10-10T10:10:10 2010-10-10T08:10:10Z aaaa 5c7841414141 това е d182d0b5d0bad181d182
 
 # Confirm that unimplemented types will early exit before writing to s3
@@ -240,7 +240,7 @@ contains:Cannot encode the following columns/types: ["interval: Interval"]
     FORMAT = 'parquet'
   );
 
-$ s3-verify-data bucket=copytos3 key=parquet_test/5
+$ s3-verify-data bucket=copytos3 key=parquet_test/5 sort-rows=true
 1
 
 # Tests for decimal / numeric type

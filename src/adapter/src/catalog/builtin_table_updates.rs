@@ -21,13 +21,13 @@ use mz_catalog::builtin::{
     MZ_CLUSTER_SCHEDULES, MZ_CLUSTER_WORKLOAD_CLASSES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS,
     MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS,
-    MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEWS, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES,
-    MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCES,
-    MZ_POSTGRES_SOURCE_TABLES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS,
-    MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SOURCE_REFERENCES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
-    MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_KAFKA_SOURCE_TABLES, MZ_LIST_TYPES,
+    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
+    MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS,
+    MZ_POSTGRES_SOURCES, MZ_POSTGRES_SOURCE_TABLES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS,
+    MZ_ROLE_PARAMETERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
+    MZ_SOURCE_REFERENCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
+    MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -62,7 +62,7 @@ use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
-use mz_sql::plan::ClusterSchedule;
+use mz_sql::plan::{ClusterSchedule, ConnectionDetails, SshKey};
 use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -535,8 +535,11 @@ impl CatalogState {
                                 // Load generator sources don't have any special
                                 // updates.
                                 "load-generator" => vec![],
-                                // TODO(29373): Add catalog introspection table for kafka source tables.
-                                "kafka" => vec![],
+                                "kafka" => {
+                                    mz_ore::soft_assert_eq_no_log!(external_reference.len(), 1);
+                                    let topic = external_reference[0].to_ast_string();
+                                    self.pack_kafka_source_tables_update(id, &topic, diff)
+                                }
                                 s => unreachable!("{s} sources do not have tables"),
                             }
                         }
@@ -966,6 +969,19 @@ impl CatalogState {
         }]
     }
 
+    fn pack_kafka_source_tables_update(
+        &self,
+        id: GlobalId,
+        topic: &str,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        vec![BuiltinTableUpdate {
+            id: &*MZ_KAFKA_SOURCE_TABLES,
+            row: Row::pack_slice(&[Datum::String(&id.to_string()), Datum::String(topic)]),
+            diff,
+        }]
+    }
+
     fn pack_connection_update(
         &self,
         id: GlobalId,
@@ -988,18 +1004,14 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::String(&schema_id.to_string()),
                 Datum::String(name),
-                Datum::String(match connection.connection {
-                    mz_storage_types::connections::Connection::Kafka { .. } => "kafka",
-                    mz_storage_types::connections::Connection::Csr { .. } => {
-                        "confluent-schema-registry"
-                    }
-                    mz_storage_types::connections::Connection::Postgres { .. } => "postgres",
-                    mz_storage_types::connections::Connection::Aws(..) => "aws",
-                    mz_storage_types::connections::Connection::AwsPrivatelink(..) => {
-                        "aws-privatelink"
-                    }
-                    mz_storage_types::connections::Connection::Ssh { .. } => "ssh-tunnel",
-                    mz_storage_types::connections::Connection::MySql { .. } => "mysql",
+                Datum::String(match connection.details {
+                    ConnectionDetails::Kafka { .. } => "kafka",
+                    ConnectionDetails::Csr { .. } => "confluent-schema-registry",
+                    ConnectionDetails::Postgres { .. } => "postgres",
+                    ConnectionDetails::Aws(..) => "aws",
+                    ConnectionDetails::AwsPrivatelink(..) => "aws-privatelink",
+                    ConnectionDetails::Ssh { .. } => "ssh-tunnel",
+                    ConnectionDetails::MySql { .. } => "mysql",
                 }),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -1008,11 +1020,11 @@ impl CatalogState {
             ]),
             diff,
         }];
-        match connection.connection {
-            mz_storage_types::connections::Connection::Kafka(ref kafka) => {
+        match connection.details {
+            ConnectionDetails::Kafka(ref kafka) => {
                 updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
             }
-            mz_storage_types::connections::Connection::Aws(ref aws_config) => {
+            ConnectionDetails::Aws(ref aws_config) => {
                 match self.pack_aws_connection_update(id, aws_config, diff) {
                     Ok(update) => {
                         updates.push(update);
@@ -1022,7 +1034,7 @@ impl CatalogState {
                     }
                 }
             }
-            mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
+            ConnectionDetails::AwsPrivatelink(_) => {
                 if let Some(aws_principal_context) = self.aws_principal_context.as_ref() {
                     updates.push(self.pack_aws_privatelink_connection_update(
                         id,
@@ -1033,13 +1045,16 @@ impl CatalogState {
                     tracing::error!(%id, "missing AWS principal context; cannot write row to mz_aws_privatelink_connections table");
                 }
             }
-            mz_storage_types::connections::Connection::Csr(_)
-            | mz_storage_types::connections::Connection::Postgres(_)
-            // SSH connection table updates are handled elsewhere. The content of the table is
-            // stored in the secret controller, not the durable catalog, which requires special
-            // handling.
-            | mz_storage_types::connections::Connection::Ssh(_)
-            | mz_storage_types::connections::Connection::MySql(_) => (),
+            ConnectionDetails::Ssh {
+                ref key_1,
+                ref key_2,
+                ..
+            } => {
+                updates.push(self.pack_ssh_tunnel_connection_update(id, key_1, key_2, diff));
+            }
+            ConnectionDetails::Csr(_)
+            | ConnectionDetails::Postgres(_)
+            | ConnectionDetails::MySql(_) => (),
         };
         updates
     }
@@ -1047,15 +1062,16 @@ impl CatalogState {
     pub(crate) fn pack_ssh_tunnel_connection_update(
         &self,
         id: GlobalId,
-        (public_key_primary, public_key_secondary): &(String, String),
+        key_1: &SshKey,
+        key_2: &SshKey,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         BuiltinTableUpdate {
             id: &*MZ_SSH_TUNNEL_CONNECTIONS,
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::String(public_key_primary),
-                Datum::String(public_key_secondary),
+                Datum::String(key_1.public_key().as_str()),
+                Datum::String(key_2.public_key().as_str()),
             ]),
             diff,
         }
@@ -1245,15 +1261,18 @@ impl CatalogState {
             })
             .into_element()
             .ast;
-        let query = match &create_stmt {
-            Statement::CreateMaterializedView(stmt) => &stmt.query,
+        let query_string = match &create_stmt {
+            Statement::CreateMaterializedView(stmt) => {
+                let mut query_string = stmt.query.to_ast_string_stable();
+                // PostgreSQL appends a semicolon in `pg_matviews.definition`, we
+                // do the same for compatibility's sake.
+                query_string.push(';');
+                query_string
+            }
+            // TODO(ct): Remove.
+            Statement::CreateContinualTask(_) => "TODO(ct)".into(),
             _ => unreachable!(),
         };
-
-        let mut query_string = query.to_ast_string_stable();
-        // PostgreSQL appends a semicolon in `pg_matviews.definition`, we
-        // do the same for compatibility's sake.
-        query_string.push(';');
 
         let mut updates = Vec::new();
 

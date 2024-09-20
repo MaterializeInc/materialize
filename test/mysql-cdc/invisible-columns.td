@@ -34,9 +34,8 @@ INSERT INTO t1 (f1, f2, f3) VALUES (10, 20, 30);
 INSERT INTO t1 VALUES (11);
 
 # TODO: #26152 (invisible columns not supported)
-# > CREATE SOURCE mz_source
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR ALL TABLES;
+# > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+# > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
 #
 # > SELECT * FROM t1;
 # 10

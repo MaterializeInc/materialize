@@ -25,8 +25,8 @@ CREATE TABLE table_mysql (a int);
   )
 
 > CREATE SOURCE mysql_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.table_mysql);
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE table_mysql FROM SOURCE mysql_source (REFERENCE public.table_mysql);
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
@@ -53,8 +53,8 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
   )
 
 > CREATE SOURCE pg_source
-  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source')
-  FOR TABLES (table_pg);
+  FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source');
+> CREATE TABLE table_pg FROM SOURCE pg_source (REFERENCE table_pg);
 
 $ kafka-create-topic topic=input
 

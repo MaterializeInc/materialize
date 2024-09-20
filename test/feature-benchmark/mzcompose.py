@@ -22,10 +22,22 @@ from textwrap import dedent
 
 from materialize import buildkite
 from materialize.docker import is_image_tag_of_release_version
+from materialize.feature_benchmark.benchmark_result_evaluator import (
+    BenchmarkResultEvaluator,
+)
+from materialize.feature_benchmark.benchmark_result_selection import (
+    BestBenchmarkResultSelector,
+    get_discarded_reports_per_scenario,
+)
 from materialize.feature_benchmark.benchmark_versioning import (
     FEATURE_BENCHMARK_FRAMEWORK_VERSION,
 )
+from materialize.feature_benchmark.report import (
+    Report,
+    determine_scenario_classes_with_regressions,
+)
 from materialize.mz_version import MzVersion
+from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
@@ -51,10 +63,9 @@ from materialize.version_list import (
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
-from materialize.feature_benchmark.benchmark import Benchmark, Report
-from materialize.feature_benchmark.comparator import (
-    Comparator,
-    RelativeThresholdComparator,
+from materialize.feature_benchmark.benchmark import Benchmark
+from materialize.feature_benchmark.benchmark_result import (
+    BenchmarkScenarioResult,
 )
 from materialize.feature_benchmark.executor import Docker
 from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
@@ -116,14 +127,6 @@ def make_aggregation_class() -> type[Aggregation]:
     return MinAggregation
 
 
-def make_comparator(
-    name: str, type: MeasurementType, relative_threshold: float
-) -> Comparator:
-    return RelativeThresholdComparator(
-        name=name, type=type, threshold=relative_threshold
-    )
-
-
 default_timeout = "1800s"
 
 SERVICES = [
@@ -147,21 +150,16 @@ SERVICES = [
 
 def run_one_scenario(
     c: Composition, scenario_class: type[Scenario], args: argparse.Namespace
-) -> list[Comparator]:
-    name = scenario_class.__name__
-    print(f"--- Now benchmarking {name} ...")
+) -> BenchmarkScenarioResult:
+    scenario_name = scenario_class.__name__
+    print(f"--- Now benchmarking {scenario_name} ...")
 
     measurement_types = [MeasurementType.WALLCLOCK, MeasurementType.MESSAGES]
     if args.measure_memory:
         measurement_types.append(MeasurementType.MEMORY_MZ)
         measurement_types.append(MeasurementType.MEMORY_CLUSTERD)
 
-    comparators = [
-        make_comparator(
-            name=name, type=t, relative_threshold=scenario_class.RELATIVE_THRESHOLD[t]
-        )
-        for t in measurement_types
-    ]
+    result = BenchmarkScenarioResult(scenario_class, measurement_types)
 
     common_seed = round(time.time())
 
@@ -185,7 +183,9 @@ def run_one_scenario(
 
         c.up("testdrive", persistent=True)
 
-        additional_system_parameter_defaults = {"max_clusters": "15"}
+        additional_system_parameter_defaults = (
+            ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS | {"max_clusters": "15"}
+        )
 
         if params is not None:
             for param in params.split(";"):
@@ -264,9 +264,13 @@ def run_one_scenario(
             else:
                 aggregations = benchmark.run()
                 scenario_version = benchmark.create_scenario_instance().version()
-                for aggregation, comparator in zip(aggregations, comparators):
-                    comparator.set_scenario_version(scenario_version)
-                    comparator.append_point(
+                result.set_scenario_version(scenario_version)
+                for aggregation, metric in zip(aggregations, result.metrics):
+                    assert (
+                        aggregation.measurement_type == metric.measurement_type
+                        or aggregation.measurement_type is None
+                    ), f"Aggregation contains {aggregation.measurement_type} but metric contains {metric.measurement_type} as measurement type"
+                    metric.append_point(
                         aggregation.aggregate(),
                         aggregation.unit(),
                         aggregation.name(),
@@ -277,10 +281,10 @@ def run_one_scenario(
         c.rm_volumes("mzdata")
 
         if early_abort:
-            comparators = []
+            result.empty()
             break
 
-    return comparators
+    return result
 
 
 def resolve_tag(tag: str, scenario_class: type[Scenario], scale: str | None) -> str:
@@ -425,11 +429,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--max-retries",
+        "--runs-per-scenario",
         metavar="N",
         type=int,
-        default=5,
-        help="Retry any potential performance regressions up to N times.",
+        default=3,
     )
 
     parser.add_argument(
@@ -486,12 +489,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up(*dependencies)
 
-    scenarios_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
+    scenario_classes_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
         selected_scenarios, lambda scenario_cls: scenario_cls.__name__
     )
 
     if (
-        len(scenarios_scheduled_to_run) == 0
+        len(scenario_classes_scheduled_to_run) == 0
         and buildkite.is_in_buildkite()
         and not os.getenv("CI_EXTRA_ARGS")
     ):
@@ -499,54 +502,39 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             error_summary="No scenarios were selected", errors=[]
         )
 
-    scenarios_with_regressions = []
-    latest_report_by_scenario_name: dict[str, Report] = dict()
-    discarded_reports_by_scenario_name: dict[str, list[Report]] = dict()
+    reports = []
 
-    scenarios_to_run: list[type[Scenario]] = scenarios_scheduled_to_run.copy()
-    for cycle_index in range(0, args.max_retries):
-        cycle_number = cycle_index + 1
+    for run_index in range(0, args.runs_per_scenario):
+        run_number = run_index + 1
         print(
-            f"Cycle {cycle_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios_to_run])}"
+            f"Run {run_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenario_classes_scheduled_to_run])}"
         )
 
-        report = Report(cycle_number=cycle_number)
+        report = Report(cycle_number=run_number)
+        reports.append(report)
 
-        scenarios_to_retry = []
-        for scenario in scenarios_to_run:
-            scenario_name = scenario.__name__
-            comparators = run_one_scenario(c, scenario, args)
+        for scenario_class in scenario_classes_scheduled_to_run:
+            scenario_result = run_one_scenario(c, scenario_class, args)
 
-            if len(comparators) == 0:
+            if scenario_result.is_empty():
                 continue
 
-            report.add_comparisons(comparators)
+            report.add_scenario_result(scenario_result)
 
-            if is_regression(comparators):
-                if _shall_retry_scenario(comparators, cycle_index):
-                    scenarios_to_retry.append(scenario)
-                else:
-                    scenarios_with_regressions.append(scenario)
+        print(f"+++ Benchmark Report for run {run_number}:")
+        print(report)
 
-            if cycle_index > 0:
-                discarded_reports_of_scenario = discarded_reports_by_scenario_name.get(
-                    scenario_name, []
-                )
-                discarded_reports_of_scenario.append(
-                    latest_report_by_scenario_name[scenario_name]
-                )
-                discarded_reports_by_scenario_name[scenario_name] = (
-                    discarded_reports_of_scenario
-                )
+    benchmark_result_selector = BestBenchmarkResultSelector()
+    selected_report_by_scenario_name = (
+        benchmark_result_selector.choose_report_per_scenario(reports)
+    )
+    discarded_reports_by_scenario_name = get_discarded_reports_per_scenario(
+        reports, selected_report_by_scenario_name
+    )
 
-            latest_report_by_scenario_name[scenario_name] = report
-
-            print(f"+++ Benchmark Report for cycle {cycle_number}:")
-            print(report)
-
-        scenarios_to_run = scenarios_to_retry
-        if len(scenarios_to_run) == 0:
-            break
+    scenarios_with_regressions = determine_scenario_classes_with_regressions(
+        selected_report_by_scenario_name
+    )
 
     if len(scenarios_with_regressions) > 0:
         justification_by_scenario_name = _check_regressions_justified(
@@ -591,9 +579,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     upload_results_to_test_analytics(
         c,
         args.this_tag,
-        scenarios_scheduled_to_run,
+        scenario_classes_scheduled_to_run,
+        scenarios_with_regressions,
         args.scale,
-        latest_report_by_scenario_name,
+        selected_report_by_scenario_name,
         discarded_reports_by_scenario_name,
         successful_run,
     )
@@ -603,7 +592,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             error_summary="At least one regression occurred",
             errors=_regressions_to_failure_details(
                 scenarios_with_regressions,
-                latest_report_by_scenario_name,
+                selected_report_by_scenario_name,
                 justification_by_scenario_name,
                 baseline_tag=args.other_tag,
                 scale=args.scale,
@@ -611,17 +600,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
 
-def is_regression(comparators: list[Comparator]) -> bool:
-    return any([c.is_regression() for c in comparators])
-
-
-def _shall_retry_scenario(comparators: list[Comparator], cycle_index: int) -> bool:
-    return any(
-        [
-            c.is_regression() and not (c.is_strong_regression() and cycle_index >= 2)
-            for c in comparators
-        ]
-    )
+def is_regression(
+    evaluator: BenchmarkResultEvaluator, scenario_result: BenchmarkScenarioResult
+) -> bool:
+    return any([evaluator.is_regression(metric) for metric in scenario_result.metrics])
 
 
 def _check_regressions_justified(
@@ -711,7 +693,7 @@ def _regressions_to_failure_details(
         failure_details.append(
             TestFailureDetails(
                 test_case_name_override=f"Scenario '{scenario_name}'",
-                message=f"New regression against {regression_against_tag} (conducted {report.cycle_number} cycles)",
+                message=f"New regression against {regression_against_tag}",
                 details=report.as_string(
                     use_colors=False, limit_to_scenario=scenario_name
                 ),
@@ -725,6 +707,7 @@ def upload_results_to_test_analytics(
     c: Composition,
     this_tag: str | None,
     scenario_classes: list[type[Scenario]],
+    scenarios_with_regressions: list[type[Scenario]],
     scale: str | None,
     latest_report_by_scenario_name: dict[str, Report],
     discarded_reports_by_scenario_name: dict[str, list[Report]],
@@ -745,44 +728,23 @@ def upload_results_to_test_analytics(
 
     for scenario_cls in scenario_classes:
         scenario_name = scenario_cls.__name__
-        scenario_group = scenario_cls.__bases__[0].__name__
         report = latest_report_by_scenario_name[scenario_name]
-        report_measurements = report.measurements_of_this(scenario_name)
-        scenario_version = report.get_scenario_version(scenario_name)
 
         result_entries.append(
-            feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
-                scenario_name=scenario_name,
-                scenario_group=scenario_group,
-                scenario_version=str(scenario_version),
-                cycle=report.cycle_number,
-                scale=scale or "default",
-                wallclock=report_measurements[MeasurementType.WALLCLOCK],
-                messages=report_measurements[MeasurementType.MESSAGES],
-                memory_mz=report_measurements[MeasurementType.MEMORY_MZ],
-                memory_clusterd=report_measurements[MeasurementType.MEMORY_CLUSTERD],
+            _create_feature_benchmark_result_entry(
+                scenario_cls,
+                report,
+                scale,
+                is_regression=scenario_cls in scenarios_with_regressions,
             )
         )
 
         for discarded_report in discarded_reports_by_scenario_name.get(
             scenario_name, []
         ):
-            discarded_measurements = discarded_report.measurements_of_this(
-                scenario_name
-            )
             discarded_entries.append(
-                feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
-                    scenario_name=scenario_name,
-                    scenario_group=scenario_group,
-                    scenario_version=str(scenario_version),
-                    cycle=discarded_report.cycle_number,
-                    scale=scale or "default",
-                    wallclock=discarded_measurements[MeasurementType.WALLCLOCK],
-                    messages=discarded_measurements[MeasurementType.MESSAGES],
-                    memory_mz=discarded_measurements[MeasurementType.MEMORY_MZ],
-                    memory_clusterd=discarded_measurements[
-                        MeasurementType.MEMORY_CLUSTERD
-                    ],
+                _create_feature_benchmark_result_entry(
+                    scenario_cls, discarded_report, scale, is_regression=True
                 )
             )
 
@@ -798,3 +760,25 @@ def upload_results_to_test_analytics(
     except Exception as e:
         # An error during an upload must never cause the build to fail
         test_analytics.on_upload_failed(e)
+
+
+def _create_feature_benchmark_result_entry(
+    scenario_cls: type[Scenario], report: Report, scale: str | None, is_regression: bool
+) -> feature_benchmark_result_storage.FeatureBenchmarkResultEntry:
+    scenario_name = scenario_cls.__name__
+    scenario_group = scenario_cls.__bases__[0].__name__
+    scenario_version = report.get_scenario_version(scenario_name)
+    measurements = report.measurements_of_this(scenario_name)
+
+    return feature_benchmark_result_storage.FeatureBenchmarkResultEntry(
+        scenario_name=scenario_name,
+        scenario_group=scenario_group,
+        scenario_version=str(scenario_version),
+        cycle=report.cycle_number,
+        scale=scale or "default",
+        is_regression=is_regression,
+        wallclock=measurements[MeasurementType.WALLCLOCK],
+        messages=measurements[MeasurementType.MESSAGES],
+        memory_mz=measurements[MeasurementType.MEMORY_MZ],
+        memory_clusterd=measurements[MeasurementType.MEMORY_CLUSTERD],
+    )

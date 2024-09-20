@@ -92,9 +92,28 @@ INSERT INTO truncate_table (f1, f2) VALUES (1, 1);
 CREATE TABLE drop_table (f1 int, f2 int);
 INSERT INTO drop_table (f1, f2) VALUES (1, 1);
 
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE add_columns FROM SOURCE mz_source (REFERENCE public.add_columns);
+> CREATE TABLE remove_column FROM SOURCE mz_source (REFERENCE public.remove_column);
+> CREATE TABLE alter_column_type_1 FROM SOURCE mz_source (REFERENCE public.alter_column_type_1);
+> CREATE TABLE alter_column_type_2 FROM SOURCE mz_source (REFERENCE public.alter_column_type_2);
+> CREATE TABLE alter_drop_nullability FROM SOURCE mz_source (REFERENCE public.alter_drop_nullability);
+> CREATE TABLE alter_add_nullability FROM SOURCE mz_source (REFERENCE public.alter_add_nullability);
+> CREATE TABLE alter_drop_pk FROM SOURCE mz_source (REFERENCE public.alter_drop_pk);
+> CREATE TABLE alter_add_pk FROM SOURCE mz_source (REFERENCE public.alter_add_pk);
+> CREATE TABLE alter_cycle_pk FROM SOURCE mz_source (REFERENCE public.alter_cycle_pk);
+> CREATE TABLE alter_cycle_pk_off FROM SOURCE mz_source (REFERENCE public.alter_cycle_pk_off);
+> CREATE TABLE alter_drop_unique FROM SOURCE mz_source (REFERENCE public.alter_drop_unique);
+> CREATE TABLE alter_add_unique FROM SOURCE mz_source (REFERENCE public.alter_add_unique);
+> CREATE TABLE alter_extend_column FROM SOURCE mz_source (REFERENCE public.alter_extend_column);
+> CREATE TABLE alter_decimal FROM SOURCE mz_source (REFERENCE public.alter_decimal);
+> CREATE TABLE alter_table_rename FROM SOURCE mz_source (REFERENCE public.alter_table_rename);
+> CREATE TABLE alter_table_rename_column FROM SOURCE mz_source (REFERENCE public.alter_table_rename_column);
+> CREATE TABLE alter_table_change_attnum FROM SOURCE mz_source (REFERENCE public.alter_table_change_attnum);
+> CREATE TABLE alter_table_supported FROM SOURCE mz_source (REFERENCE public.alter_table_supported);
+> CREATE TABLE truncate_table FROM SOURCE mz_source (REFERENCE public.truncate_table);
+> CREATE TABLE drop_table FROM SOURCE mz_source (REFERENCE public.drop_table);
 
 #
 # Add column

@@ -17,8 +17,8 @@ import json
 import time
 from textwrap import dedent
 
-import pg8000.exceptions
 import requests
+from psycopg.errors import OperationalError
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -115,7 +115,12 @@ def workflow_github_17578(c: Composition) -> None:
         service="testdrive_no_reset",
         input=dedent(
             """
-            > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+            > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION;
+            > CREATE TABLE accounts FROM SOURCE with_subsources (REFERENCE accounts);
+            > CREATE TABLE auctions FROM SOURCE with_subsources (REFERENCE auctions);
+            > CREATE TABLE bids FROM SOURCE with_subsources (REFERENCE bids);
+            > CREATE TABLE organizations FROM SOURCE with_subsources (REFERENCE organizations);
+            > CREATE TABLE users FROM SOURCE with_subsources (REFERENCE users);
 
             > SELECT DISTINCT
               top_level_s.name as source,
@@ -126,12 +131,22 @@ def workflow_github_17578(c: Composition) -> None:
               WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
             source          subsource
             -------------------------
-            with_subsources accounts
-            with_subsources auctions
-            with_subsources bids
-            with_subsources organizations
-            with_subsources users
             with_subsources with_subsources_progress
+
+            > SELECT DISTINCT
+              s.name AS source,
+              t.name AS table
+              FROM mz_internal.mz_object_dependencies AS d
+              JOIN mz_sources AS s ON s.id = d.referenced_object_id
+              JOIN mz_tables AS t ON t.id = d.object_id
+              WHERE s.name = 'with_subsources';
+            source            table
+            -------------------------
+            with_subsources   bids
+            with_subsources   users
+            with_subsources   accounts
+            with_subsources   auctions
+            with_subsources   organizations
             """
         ),
     )
@@ -153,12 +168,23 @@ def workflow_github_17578(c: Composition) -> None:
               WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
             source          subsource
             -------------------------
-            with_subsources accounts
-            with_subsources auctions
-            with_subsources bids
-            with_subsources organizations
-            with_subsources users
             with_subsources with_subsources_progress
+
+            > SELECT DISTINCT
+              s.name AS source,
+              t.name AS table
+              FROM mz_internal.mz_object_dependencies AS d
+              JOIN mz_sources AS s ON s.id = d.referenced_object_id
+              JOIN mz_tables AS t ON t.id = d.object_id
+              WHERE s.name = 'with_subsources';
+            source            table
+            -------------------------
+            with_subsources   bids
+            with_subsources   users
+            with_subsources   accounts
+            with_subsources   auctions
+            with_subsources   organizations
+
             """
         ),
     )
@@ -367,7 +393,7 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     )
 
     # SQL and HTTP user sessions should work.
-    assert c.sql_query("SELECT 1") == ([1],)
+    assert c.sql_query("SELECT 1") == [(1,)]
     assert requests.post(
         f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
     ).json()["results"][0]["rows"] == [["1"]]
@@ -385,13 +411,13 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     # New SQL and HTTP user sessions should now fail.
     try:
         c.sql_query("SELECT 1")
-    except pg8000.exceptions.DatabaseError as e:
-        assert e.args[0]["C"] == "MZ010"
-        assert e.args[0]["M"] == "login blocked"
+    except OperationalError as e:
+        # assert e.pgcode == "MZ010" # Not exposed by psycopg
+        assert "login blocked" in str(e)
         assert (
-            e.args[0]["D"]
-            == "Your organization has been blocked. Please contact support."
-        )
+            "DETAIL:  Your organization has been blocked. Please contact support."
+            in e.args[0]
+        ), e.args
 
     res = requests.post(
         f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
@@ -405,7 +431,7 @@ def workflow_allow_user_sessions(c: Composition) -> None:
 
     # The cursor from the beginning of the test should still work.
     cursor.execute("SELECT 1")
-    assert cursor.fetchall() == ([1],)
+    assert cursor.fetchall() == [(1,)]
 
     # Re-allow new user sessions.
     c.sql(
@@ -415,14 +441,14 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     )
 
     # SQL and HTTP user sessions should work again.
-    assert c.sql_query("SELECT 1") == ([1],)
+    assert c.sql_query("SELECT 1") == [(1,)]
     assert requests.post(
         f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
     ).json()["results"][0]["rows"] == [["1"]]
 
     # The cursor from the beginning of the test should still work.
     cursor.execute("SELECT 1")
-    assert cursor.fetchall() == ([1],)
+    assert cursor.fetchall() == [(1,)]
 
 
 def workflow_drop_materialize_database(c: Composition) -> None:

@@ -329,6 +329,11 @@ who = "Sean Loiselle <sean@materialize.io>"
 criteria = "safe-to-deploy"
 version = "0.3.26"
 
+[[audits.errno]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.3.9"
+
 [[audits.event-listener]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
@@ -459,10 +464,15 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "3.0.4"
 
+[[audits.jemalloc-pprof]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.2 -> 0.6.0"
+
 [[audits.jemalloc_pprof]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.4.2"
+version = "0.6.0"
 
 [[audits.json-patch]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
@@ -569,6 +579,11 @@ who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.16.0+8.10.0"
 
+[[audits.linux-raw-sys]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.3.8"
+
 [[audits.log]]
 who = "Jan Teske <jteske@posteo.net>"
 criteria = "maintained-and-necessary"
@@ -582,7 +597,7 @@ version = "0.11.3"
 [[audits.mappings]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.5.1"
+version = "0.6.0"
 
 [[audits.memchr]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -841,7 +856,7 @@ importable = false
 [[audits.pprof_util]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.4.0"
+version = "0.6.0"
 
 [[audits.proc-macro2]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
@@ -1005,6 +1020,16 @@ who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.22.0"
 
+[[audits.rustix]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.37.27"
+
+[[audits.rustix]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.38.34"
+
 [[audits.rustls-pemfile]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
@@ -1106,6 +1131,11 @@ criteria = "safe-to-deploy"
 version = "3.1.0"
 
 [[audits.tempfile]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "3.12.0"
+
+[[audits.tempfile]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "3.8.0 -> 3.8.1"
@@ -1124,6 +1154,26 @@ version = "1.0.61"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.17.0"
+
+[[audits.tikv-jemalloc-ctl]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.6.0"
+
+[[audits.tikv-jemalloc-sys]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.6.0"
+
+[[audits.tikv-jemalloc-sys]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.6.0+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7"
+
+[[audits.tikv-jemallocator]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.6.0"
 
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
@@ -1310,45 +1360,95 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.52.0"
 
+[[audits.windows-sys]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.59.0"
+
 [[audits.windows-targets]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.52.4"
+
+[[audits.windows-targets]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
 
 [[audits.windows_aarch64_gnullvm]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.52.4"
 
+[[audits.windows_aarch64_gnullvm]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+
 [[audits.windows_aarch64_msvc]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.52.4"
+
+[[audits.windows_aarch64_msvc]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
 
 [[audits.windows_i686_gnu]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.52.4"
 
+[[audits.windows_i686_gnu]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+
+[[audits.windows_i686_gnullvm]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+
 [[audits.windows_i686_msvc]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.52.4"
+
+[[audits.windows_i686_msvc]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
 
 [[audits.windows_x86_64_gnu]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.52.4"
 
+[[audits.windows_x86_64_gnu]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+
 [[audits.windows_x86_64_gnullvm]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.52.4"
 
+[[audits.windows_x86_64_gnullvm]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
+
 [[audits.windows_x86_64_msvc]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.52.4"
+
+[[audits.windows_x86_64_msvc]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.52.6"
 
 [[audits.winreg]]
 who = "Matt Jibson <matt.jibson@gmail.com>"

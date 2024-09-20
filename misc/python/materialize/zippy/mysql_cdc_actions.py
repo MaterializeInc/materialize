@@ -79,8 +79,9 @@ class CreateMySqlCdcTable(Action):
 
                     > CREATE SOURCE {name}_source
                       IN CLUSTER {self.cluster_name}
-                      FROM MYSQL CONNECTION {name}_conn
-                      FOR TABLES (public.{self.mysql_cdc_table.mysql_table.name} AS {name})
+                      FROM MYSQL CONNECTION {name}_conn;
+
+                    > CREATE TABLE {name} FROM SOURCE {name}_source (REFERENCE public.{self.mysql_cdc_table.mysql_table.name});
                     """
                 ),
                 mz_service=state.mz_service,

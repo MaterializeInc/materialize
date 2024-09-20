@@ -2116,6 +2116,18 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_reduce_unnest_list_fusion,
+        desc: "Enables fusing `Reduce` with `FlatMap UnnestList` for better window function performance",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_create_continual_task,
+        desc: "CREATE CONTINUAL TASK",
+        default: false,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2130,6 +2142,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_cardinality_estimates: vars.enable_cardinality_estimates(),
             enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
             enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
+            enable_reduce_unnest_list_fusion: vars.enable_reduce_unnest_list_fusion(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
         }

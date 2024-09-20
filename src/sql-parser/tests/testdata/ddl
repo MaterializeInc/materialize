@@ -2622,11 +2622,32 @@ CREATE SOURCE example FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT CSV WIT
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("example")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, include_metadata: [], format: Some(Bare(Csv { columns: Count(5), delimiter: ',' })), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
 
 parse-statement
-CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah'
+CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah', PUBLIC KEY 1 = 'abc', PUBLIC KEY 2 = 'def'
 ----
-CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST = 'ssh-bastion', PORT = 1234, USER = 'blah')
+CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST = 'ssh-bastion', PORT = 1234, USER = 'blah', PUBLIC KEY 1 = 'abc', PUBLIC KEY 2 = 'def')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my_ssh_tunnel")]), connection_type: Ssh, if_not_exists: false, values: [ConnectionOption { name: Host, value: Some(Value(String("ssh-bastion"))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: User, value: Some(Value(String("blah"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my_ssh_tunnel")]), connection_type: Ssh, if_not_exists: false, values: [ConnectionOption { name: Host, value: Some(Value(String("ssh-bastion"))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: User, value: Some(Value(String("blah"))) }, ConnectionOption { name: PublicKey1, value: Some(Value(String("abc"))) }, ConnectionOption { name: PublicKey2, value: Some(Value(String("def"))) }], with_options: [] })
+
+parse-statement
+CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
+----
+error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or DATABASE or ENDPOINT or HOST or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or ROLE or SASL or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or URL or USER or USERNAME, found left parenthesis
+CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
+                                               ^
+
+parse-statement
+CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah', PUBLIC KEY 3 = 'abc'
+----
+error: Expected 1 or 2 after PUBLIC KEY, found number "3"
+CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah', PUBLIC KEY 3 = 'abc'
+                                                                                                      ^
+
+parse-statement
+CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah', PUBLIC abc
+----
+error: Expected KEY, found identifier "abc"
+CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah', PUBLIC abc
+                                                                                                  ^
 
 parse-statement roundtrip
 CREATE CONNECTION my_ssh_tunnel TO SSH TUNNEL (HOST 'ssh-bastion', PORT 1234, USER 'blah')

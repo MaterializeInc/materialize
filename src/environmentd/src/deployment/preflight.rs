@@ -36,6 +36,7 @@ pub struct PreflightInput {
     pub openable_adapter_storage: Box<dyn OpenableDurableCatalogState>,
     pub catalog_metrics: Arc<Metrics>,
     pub hydration_max_wait: Duration,
+    pub panic_after_timeout: bool,
 }
 
 /// Output of preflight checks.
@@ -58,6 +59,7 @@ pub async fn preflight_legacy(
         mut openable_adapter_storage,
         catalog_metrics,
         hydration_max_wait: _,
+        panic_after_timeout: _,
     }: PreflightInput,
 ) -> Result<Box<dyn OpenableDurableCatalogState>, CatalogError> {
     tracing::info!("Requested deploy generation {deploy_generation}");
@@ -141,6 +143,7 @@ pub async fn preflight_0dt(
         mut openable_adapter_storage,
         catalog_metrics,
         hydration_max_wait,
+        panic_after_timeout,
     }: PreflightInput,
 ) -> Result<PreflightOutput, CatalogError> {
     info!(%deploy_generation, ?hydration_max_wait, "performing 0dt preflight checks");
@@ -170,11 +173,19 @@ pub async fn preflight_0dt(
                 ()
             };
 
+            let skip_catchup = deployment_state.set_catching_up();
+
             tokio::select! {
                 () = clusters_hydrated_receiver => {
                     info!("all clusters hydrated");
                 }
+                () = skip_catchup => {
+                    info!("skipping waiting for clusters to hydrate due to administrator request");
+                }
                 () = hydration_max_wait_fut => {
+                    if panic_after_timeout {
+                        panic!("not all clusters hydrated within {:?}", hydration_max_wait);
+                    }
                     info!("not all clusters hydrated within {:?}, proceeding now", hydration_max_wait);
                 }
             }

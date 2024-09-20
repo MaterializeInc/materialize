@@ -1431,6 +1431,8 @@ class PostgresSources(Generator):
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_tables = {Tables.COUNT * 10};")
         print("$ postgres-execute connection=postgres://postgres:postgres@postgres")
         print("ALTER USER postgres WITH replication;")
         print("DROP SCHEMA IF EXISTS public CASCADE;")
@@ -1454,10 +1456,14 @@ class PostgresSources(Generator):
             print(
                 f"""> CREATE SOURCE p{i}
               IN CLUSTER single_replica_cluster
-              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (t{i})
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
               """
             )
-
+            print(
+                f"""> CREATE TABLE t{i}
+              FROM SOURCE p{i} (REFERENCE t{i})
+              """
+            )
         for i in cls.all():
             print(f"> SELECT * FROM t{i};\n{i}")
 
@@ -1472,6 +1478,8 @@ class MySqlSources(Generator):
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_tables = {Tables.COUNT * 10};")
         print(
             f"$ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}"
         )
@@ -1497,10 +1505,14 @@ class MySqlSources(Generator):
             print(
                 f"""> CREATE SOURCE m{i}
               IN CLUSTER single_replica_cluster
-              FROM MYSQL CONNECTION mysql FOR TABLES (public.t{i})
+              FROM MYSQL CONNECTION mysql
               """
             )
-
+            print(
+                f"""> CREATE TABLE t{i}
+              FROM SOURCE m{i} (REFERENCE public.t{i})
+              """
+            )
         for i in cls.all():
             print(f"> SELECT * FROM t{i};\n{i}")
 

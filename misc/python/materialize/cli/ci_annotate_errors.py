@@ -146,6 +146,7 @@ IGNORE_RE = re.compile(
     # Fencing warnings are OK in fencing/0dt tests
     | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-|legacy-upgrade-).* \| .*unexpected\ fence\ epoch
     | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-|legacy-upgrade-).* \| .*fenced\ by\ new\ catalog
+    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-|legacy-upgrade-).* \| .*starting\ catalog\ transaction:\ Durable\(Fence\(Epoch
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
     # For platform-checks upgrade tests
     | platform-checks-.* \| .* received\ persist\ state\ from\ the\ future
@@ -458,7 +459,10 @@ def annotate_logged_errors(
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
     buildkite_label: str = os.getenv("BUILDKITE_LABEL", "")
 
-    (known_issues, issues_with_invalid_regex) = get_known_issues_from_github()
+    token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+        "GITHUB_TOKEN"
+    )
+    (known_issues, issues_with_invalid_regex) = get_known_issues_from_github(token)
     unknown_errors: list[ObservedBaseError] = []
     unknown_errors.extend(issues_with_invalid_regex)
 
@@ -478,9 +482,9 @@ def annotate_logged_errors(
         additional_collapsed_error_details_header: str | None = None,
         additional_collapsed_error_details: str | None = None,
     ):
-        search_string = error_message.encode("utf-8")
+        search_string = error_message.encode()
         if error_details is not None:
-            search_string += ("\n" + error_details).encode("utf-8")
+            search_string += ("\n" + error_details).encode()
 
         for issue in known_issues:
             match = issue.regex.search(for_github_re(search_string))

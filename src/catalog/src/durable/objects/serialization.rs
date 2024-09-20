@@ -11,13 +11,14 @@
 
 use mz_audit_log::{
     AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
-    CreateClusterReplicaV1, CreateClusterReplicaV2, CreateOrDropClusterReplicaReasonV1,
-    CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3, DropClusterReplicaV1,
-    DropClusterReplicaV2, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
-    GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, RefreshDecisionWithReasonV1,
-    RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
-    RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1, SchemaV1,
-    SchemaV2, SetV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
+    CreateClusterReplicaV1, CreateClusterReplicaV2, CreateIndexV1, CreateMaterializedViewV1,
+    CreateOrDropClusterReplicaReasonV1, CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3,
+    CreateSourceSinkV4, DropClusterReplicaV1, DropClusterReplicaV2, EventDetails, EventType,
+    EventV1, FromPreviousIdV1, FullNameV1, GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1,
+    RefreshDecisionWithReasonV1, RenameClusterReplicaV1, RenameClusterV1, RenameItemV1,
+    RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1,
+    SchedulingDecisionsWithReasonsV1, SchemaV1, SchemaV2, SetV1, ToNewIdV1, UpdateItemV1,
+    UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
 };
 use mz_compute_client::controller::ComputeReplicaLogging;
 use mz_controller_types::ReplicaId;
@@ -1983,6 +1984,72 @@ impl RustType<proto::audit_log_event_v1::CreateSourceSinkV3> for CreateSourceSin
     }
 }
 
+impl RustType<proto::audit_log_event_v1::CreateSourceSinkV4> for CreateSourceSinkV4 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateSourceSinkV4 {
+        proto::audit_log_event_v1::CreateSourceSinkV4 {
+            id: self.id.to_string(),
+            cluster_id: self.cluster_id.as_ref().map(|id| proto::StringWrapper {
+                inner: id.to_string(),
+            }),
+            name: Some(self.name.into_proto()),
+            external_type: self.external_type.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateSourceSinkV4,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateSourceSinkV4 {
+            id: proto.id,
+            cluster_id: proto.cluster_id.map(|s| s.inner),
+            name: proto.name.into_rust_if_some("CreateSourceSinkV4::name")?,
+            external_type: proto.external_type,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateIndexV1> for CreateIndexV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateIndexV1 {
+        proto::audit_log_event_v1::CreateIndexV1 {
+            id: self.id.to_string(),
+            cluster_id: self.cluster_id.to_string(),
+            name: Some(self.name.into_proto()),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateIndexV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateIndexV1 {
+            id: proto.id,
+            cluster_id: proto.cluster_id,
+            name: proto.name.into_rust_if_some("CreateIndexV1::name")?,
+        })
+    }
+}
+
+impl RustType<proto::audit_log_event_v1::CreateMaterializedViewV1> for CreateMaterializedViewV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateMaterializedViewV1 {
+        proto::audit_log_event_v1::CreateMaterializedViewV1 {
+            id: self.id.to_string(),
+            cluster_id: self.cluster_id.to_string(),
+            name: Some(self.name.into_proto()),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateMaterializedViewV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateMaterializedViewV1 {
+            id: proto.id,
+            cluster_id: proto.cluster_id,
+            name: proto
+                .name
+                .into_rust_if_some("CreateMaterializedViewV1::name")?,
+        })
+    }
+}
+
 impl RustType<proto::audit_log_event_v1::AlterSourceSinkV1> for AlterSourceSinkV1 {
     fn into_proto(&self) -> proto::audit_log_event_v1::AlterSourceSinkV1 {
         proto::audit_log_event_v1::AlterSourceSinkV1 {
@@ -2373,6 +2440,11 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             EventDetails::CreateSourceSinkV1(details) => CreateSourceSinkV1(details.into_proto()),
             EventDetails::CreateSourceSinkV2(details) => CreateSourceSinkV2(details.into_proto()),
             EventDetails::CreateSourceSinkV3(details) => CreateSourceSinkV3(details.into_proto()),
+            EventDetails::CreateSourceSinkV4(details) => CreateSourceSinkV4(details.into_proto()),
+            EventDetails::CreateIndexV1(details) => CreateIndexV1(details.into_proto()),
+            EventDetails::CreateMaterializedViewV1(details) => {
+                CreateMaterializedViewV1(details.into_proto())
+            }
             EventDetails::AlterSourceSinkV1(details) => AlterSourceSinkV1(details.into_proto()),
             EventDetails::AlterSetClusterV1(details) => AlterSetClusterV1(details.into_proto()),
             EventDetails::GrantRoleV1(details) => GrantRoleV1(details.into_proto()),
@@ -2430,6 +2502,13 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             }
             CreateSourceSinkV3(details) => {
                 Ok(EventDetails::CreateSourceSinkV3(details.into_rust()?))
+            }
+            CreateSourceSinkV4(details) => {
+                Ok(EventDetails::CreateSourceSinkV4(details.into_rust()?))
+            }
+            CreateIndexV1(details) => Ok(EventDetails::CreateIndexV1(details.into_rust()?)),
+            CreateMaterializedViewV1(details) => {
+                Ok(EventDetails::CreateMaterializedViewV1(details.into_rust()?))
             }
             AlterSourceSinkV1(details) => Ok(EventDetails::AlterSourceSinkV1(details.into_rust()?)),
             AlterSetClusterV1(details) => Ok(EventDetails::AlterSetClusterV1(details.into_rust()?)),

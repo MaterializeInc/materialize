@@ -18,12 +18,11 @@ import glob
 import itertools
 import os
 import secrets
-import ssl
 import string
 import time
 import urllib.parse
 
-import pg8000
+import psycopg
 
 from materialize import MZ_ROOT
 from materialize.mz_version import MzVersion
@@ -136,12 +135,12 @@ class Redpanda:
             },
         )
 
-        cloud_conn = pg8000.connect(
+        cloud_conn = psycopg.connect(
             host=c.cloud_hostname(),
             user=USERNAME,
             password=APP_PASSWORD,
             port=6875,
-            ssl_context=ssl.SSLContext(),
+            sslmode="require",
         )
         cloud_conn.autocommit = True
         cloud_cursor = cloud_conn.cursor()
@@ -150,7 +149,7 @@ class Redpanda:
             TO AWS PRIVATELINK (
                 SERVICE NAME '{self.aws_private_link}',
                 AVAILABILITY ZONES ('use1-az2')
-            );"""
+            );""".encode()
         )
         cloud_cursor.execute(
             """SELECT principal
@@ -158,7 +157,9 @@ class Redpanda:
             JOIN mz_connections c on plc.id = c.id
             WHERE c.name = 'privatelink_conn';"""
         )
-        privatelink_principal = cloud_cursor.fetchone()[0]
+        results = cloud_cursor.fetchone()
+        assert results
+        privatelink_principal = results[0]
         cloud_cursor.close()
         cloud_conn.close()
 
@@ -308,10 +309,10 @@ def wait_for_cloud(c: Composition) -> None:
         password=APP_PASSWORD,
         port=6875,
         query="SELECT 1",
-        expected=[[1]],
+        expected=[(1,)],
         timeout_secs=900,
         dbname="materialize",
-        ssl_context=ssl.SSLContext(),
+        sslmode="require",
         # print_result=True
     )
 
@@ -326,12 +327,12 @@ def version_check(c: Composition) -> None:
     local_version = c.sql_query("SELECT mz_version();")[0][0].split(" ")[0]
 
     print("Obtaining mz_version() string from the cloud ...")
-    cloud_cursor = pg8000.connect(
+    cloud_cursor = psycopg.connect(
         host=c.cloud_hostname(),
         user=USERNAME,
         password=APP_PASSWORD,
         port=6875,
-        ssl_context=ssl.SSLContext(),
+        sslmode="require",
     ).cursor()
     cloud_cursor.execute("SELECT mz_version()")
     result = cloud_cursor.fetchone()

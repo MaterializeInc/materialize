@@ -22,7 +22,7 @@ use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_repr::ColumnName;
 use mz_repr::GlobalId;
-use mz_sql_parser::ast::Expr;
+use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr};
 use mz_sql_parser::ident;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -1567,6 +1567,17 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         }
 
         result
+    }
+
+    fn fold_create_continual_task_statement(
+        &mut self,
+        stmt: CreateContinualTaskStatement<Raw>,
+    ) -> CreateContinualTaskStatement<Aug> {
+        // TODO(ct): Insert a fake CTE so that using the name of the continual
+        // task in the inserts and deletes resolves.
+        let cte_name = normalize::ident(stmt.name.0.last().expect("TODO(ct)").clone());
+        self.ctes.insert(cte_name, LocalId::new(0));
+        mz_sql_parser::ast::fold::fold_create_continual_task_statement(self, stmt)
     }
 
     fn fold_cte_id(&mut self, _id: <Raw as AstInfo>::CteId) -> <Aug as AstInfo>::CteId {

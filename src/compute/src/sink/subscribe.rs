@@ -42,6 +42,7 @@ where
         _start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
+        _ct_times: Option<Collection<G, (), Diff>>,
     ) -> Option<Rc<dyn Any>> {
         // An encapsulation of the Subscribe response protocol.
         // Used to send rows and progress messages,

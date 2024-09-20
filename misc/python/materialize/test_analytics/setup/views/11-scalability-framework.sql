@@ -116,3 +116,7 @@ CREATE OR REPLACE VIEW v_scalability_framework_result_per_month AS
         res.concurrency,
         date_trunc('month', b.date)
 ;
+
+ALTER VIEW v_scalability_framework_result_per_day OWNER TO qa;
+ALTER VIEW v_scalability_framework_result_per_week OWNER TO qa;
+ALTER VIEW v_scalability_framework_result_per_month OWNER TO qa;

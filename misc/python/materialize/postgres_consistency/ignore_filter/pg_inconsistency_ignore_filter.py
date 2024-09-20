@@ -1213,6 +1213,8 @@ def _error_message_is_about_zero_or_value_ranges(message: str) -> bool:
 def is_unknown_function_or_operation_invocation(error_msg: str) -> bool:
     return (
         "No function matches the given name and argument types" in error_msg
+        or re.search("function (.*?) does not exist", error_msg) is not None
+        or "operator does not exist:" in error_msg
         or "No operator matches the given name and argument types" in error_msg
         or ("WHERE clause error: " in error_msg and "does not exist" in error_msg)
     )

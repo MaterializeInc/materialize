@@ -32,6 +32,12 @@ pub const WITH_0DT_DEPLOYMENT_MAX_WAIT: Config<Duration> = Config::new(
     "How long to wait at most for clusters to be hydrated, when doing a zero-downtime deployment.",
 );
 
+pub const ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT: Config<bool> = Config::new(
+    "enable_0dt_deployment_panic_after_timeout",
+    false,
+    "Whether to panic if the maximum wait time is reached but preflight checks have not succeeded.",
+);
+
 pub const WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL: Config<Duration> = Config::new(
     "0dt_deployment_hydration_check_interval",
     Duration::from_secs(10),
@@ -48,6 +54,12 @@ pub const WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG: Config<Duration> = Config::new(
     "with_0dt_caught_up_check_allowed_lag",
     Duration::from_secs(60),
     "Maximum allowed lag when determining whether collections are caught up for 0dt deployments.",
+);
+
+pub const WITH_0DT_CAUGHT_UP_CHECK_CUTOFF: Config<Duration> = Config::new(
+    "with_0dt_caught_up_check_cutoff",
+    Duration::from_secs(2 * 60 * 60), // 2 hours
+    "Collections whose write frontier is behind 'now' by more than the cutoff are ignored when doing caught-up checks for 0dt deployments.",
 );
 
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
@@ -90,9 +102,11 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ALLOW_USER_SESSIONS)
         .add(&ENABLE_0DT_DEPLOYMENT)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
+        .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)
         .add(&WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL)
         .add(&ENABLE_0DT_CAUGHT_UP_CHECK)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG)
+        .add(&WITH_0DT_CAUGHT_UP_CHECK_CUTOFF)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)

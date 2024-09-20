@@ -626,6 +626,25 @@ message AuditLogEventV1 {
     string external_type = 3;
   }
 
+  message CreateSourceSinkV4 {
+    string id = 1;
+    StringWrapper cluster_id = 2;
+    FullNameV1 name = 3;
+    string external_type = 4;
+  }
+
+  message CreateIndexV1 {
+    string id = 1;
+    string cluster_id = 2;
+    FullNameV1 name = 3;
+  }
+
+  message CreateMaterializedViewV1 {
+    string id = 1;
+    string cluster_id = 2;
+    FullNameV1 name = 3;
+  }
+
   message AlterSourceSinkV1 {
     string id = 1;
     FullNameV1 name = 2;
@@ -742,7 +761,7 @@ message AuditLogEventV1 {
   StringWrapper user = 4;
   EpochMillis occurred_at = 5;
 
-  // next-id: 33
+  // next-id: 40
   oneof details {
     CreateClusterReplicaV1 create_cluster_replica_v1 = 6;
     CreateClusterReplicaV2 create_cluster_replica_v2 = 33;
@@ -775,6 +794,9 @@ message AuditLogEventV1 {
     SetV1 set_v1 = 35;
     Empty reset_all_v1 = 36;
     RotateKeysV1 rotate_keys_v1 = 37;
+    CreateSourceSinkV4 create_source_sink_v4 = 38;
+    CreateIndexV1 create_index_v1 = 39;
+    CreateMaterializedViewV1 create_materialized_view_v1 = 40;
   }
 }
 

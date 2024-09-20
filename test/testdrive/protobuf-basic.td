@@ -101,6 +101,6 @@ message    true      record              ""
 > SELECT bool, int32, int64, sint32, sint64, sfixed32, sfixed64, uint32, uint64, fixed32, fixed64, float, double, bytes, string, enum, message::text FROM basic
 bool  int32  int64  sint32  sint64  sfixed32  sfixed64  uint32  uint64  fixed32  fixed64  float  double  bytes  string enum  message
 ----
-true  1      2      -1      -2      -3        -4        3       4       5        6        1.2    3.2     aaa    bbb    ENUM1 (t,1,2,-1,-2,-3,-4,3,4,5,6,1.2,3.2,\x616161,bbb,ENUM1)
+true  1      2      -1      -2      -3        -4        3       4       5        6        1.2    3.2     aaa    bbb    ENUM1 "(t,1,2,-1,-2,-3,-4,3,4,5,6,1.2,3.2,\"\\\\x616161\",bbb,ENUM1)"
 false 0      0      0       0       0         0         0       0       0        0        0      0       ""     ""     ENUM0 <null>
-false 0      0      0       0       0         0         0       0       0        0        0      0       ""     ""     ENUM0 "(f,0,0,0,0,0,0,0,0,0,0,0,0,\\x,\"\",ENUM0)"
+false 0      0      0       0       0         0         0       0       0        0        0      0       ""     ""     ENUM0 "(f,0,0,0,0,0,0,0,0,0,0,0,0,\"\\\\x\",\"\",ENUM0)"

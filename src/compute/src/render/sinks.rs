@@ -47,6 +47,7 @@ where
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         start_signal: StartSignal,
+        ct_times: Option<Collection<G, (), Diff>>,
     ) {
         soft_assert_or_log!(
             sink.non_null_assertions.is_strictly_sorted(),
@@ -122,6 +123,9 @@ where
         let region_name = match sink.connection {
             ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
             ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),
+            ComputeSinkConnection::ContinualTask(_) => {
+                format!("ContinualTask({:?})", sink_id)
+            }
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 format!("CopyToS3OneshotSink({:?})", sink_id)
             }
@@ -140,6 +144,7 @@ where
                     start_signal,
                     ok_collection.enter_region(inner),
                     err_collection.enter_region(inner),
+                    ct_times.map(|x| x.enter_region(inner)),
                 );
 
                 if let Some(sink_token) = sink_token {
@@ -166,6 +171,9 @@ where
         start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
+        // TODO(ct): Figure out a better way to smuggle this in, potentially by
+        // removing the `SinkRender` trait entirely.
+        ct_times: Option<Collection<G, (), Diff>>,
     ) -> Option<Rc<dyn Any>>;
 }
 
@@ -178,6 +186,7 @@ where
     match connection {
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::Persist(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::ContinualTask(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::CopyToS3Oneshot(connection) => Box::new(connection.clone()),
     }
 }

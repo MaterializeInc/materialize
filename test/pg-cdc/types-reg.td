@@ -42,27 +42,18 @@ INSERT INTO regproc_table VALUES (1::regproc),(2::regproc);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-!CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (regtype_table);
+> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+
+! CREATE TABLE regtype_table FROM SOURCE mz_source (REFERENCE regtype_table);
 contains:table regtype_table contains column f1 of type regtype which Materialize cannot currently ingest
 
-!CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (regclass_table);
+! CREATE TABLE regclass_table FROM SOURCE mz_source (REFERENCE regclass_table);
 contains:table regclass_table contains column f1 of type regclass which Materialize cannot currently ingest
 
-!CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES (regproc_table);
+! CREATE TABLE regproc_table FROM SOURCE mz_source (REFERENCE regproc_table);
 contains:table regproc_table contains column f1 of type regproc which Materialize cannot currently ingest
 
-> CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg (
-    PUBLICATION 'mz_source',
-    TEXT COLUMNS (regproc_table.f1)
-  )
-  FOR TABLES (regproc_table);
+> CREATE TABLE regproc_table FROM SOURCE mz_source (REFERENCE regproc_table) WITH (TEXT COLUMNS = (f1));
 
 > SELECT * FROM regproc_table;
 1
