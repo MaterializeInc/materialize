@@ -1390,8 +1390,13 @@ impl<'a> NameResolver<'a> {
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
                 );
+                let alter_table_enabled =
+                    self.catalog.system_vars().enable_alter_table_add_column();
                 let version = match item.latest_version() {
-                    Some(v) if item.id().is_user() => RelationVersionSelector::Specific(v),
+                    // Only track the version of referenced object if the feature is enabled.
+                    Some(v) if item.id().is_user() && alter_table_enabled => {
+                        RelationVersionSelector::Specific(v)
+                    }
                     _ => RelationVersionSelector::Latest,
                 };
                 ResolvedItemName::Item {
@@ -1459,13 +1464,16 @@ impl<'a> NameResolver<'a> {
                 return ResolvedItemName::Error;
             }
         };
+        let alter_table_enabled = self.catalog.system_vars().enable_alter_table_add_column();
         let version = match version {
             // If there isn't a version specified, and this item supports
             // versioning, track the latest.
             None => match item.latest_version() {
-                Some(v) => RelationVersionSelector::Specific(v),
-                None => RelationVersionSelector::Latest,
+                // Only track the version of the referenced object, if the feature is enabled.
+                Some(v) if alter_table_enabled => RelationVersionSelector::Specific(v),
+                _ => RelationVersionSelector::Latest,
             },
+            // Note: Return the specific version if one is specified, even if the feature is off.
             Some(v) => RelationVersionSelector::Specific(v.into()),
         };
 

@@ -21,13 +21,26 @@ CREATE TABLE t2 (a int);
 statement ok
 CREATE VIEW v1 AS SELECT * FROM [u1 AS "materialize"."public"."t2" VERSION 1];
 
+statement ok
+CREATE VIEW v2 AS SELECT * FROM t2;
+
+# TODO(alter_table): Sort out what is returned from SHOW CREATE.
 query TT
 SHOW CREATE VIEW v1
 ----
 materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t2"␠VERSION␠1
 
+# Note: When the feature is off we should not record versions.
+query TT
+SHOW CREATE VIEW v2
+----
+materialize.public.v2  CREATE␠VIEW␠"materialize"."public"."v2"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t2"
+
 statement ok
 DROP VIEW v1 CASCADE;
+
+statement ok
+DROP VIEW v2 CASCADE;
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_alter_table_add_column = true
@@ -66,6 +79,11 @@ query TT
 SHOW CREATE TABLE t1;
 ----
 materialize.public.t1  CREATE␠TABLE␠"materialize"."public"."t1"␠("a"␠"pg_catalog"."int4"␠NOT␠NULL,␠"b"␠"pg_catalog"."text"␠VERSION␠ADDED␠1)
+
+query TT
+SHOW CREATE VIEW v1;
+----
+materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t1"␠VERSION␠0
 
 statement ok
 CREATE VIEW v2 AS SELECT * FROM t1;
@@ -257,3 +275,37 @@ SELECT * FROM v4 ORDER BY a ASC;
 5  NULL
 6  2020-01-01␠00:00:00
 7  1000-01-01␠00:00:00
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column = false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_dangerous_enable_schema_evolution = false;
+----
+COMPLETE 0
+
+# We should be able to select from existing views even if the feature gets turned off.
+
+query IT
+SELECT * FROM v2 ORDER BY a ASC;
+----
+2  later
+4  later
+5  world
+6  later
+7  bar
+
+statement ok
+INSERT INTO t1 VALUES (8, 'apple', '2024-09-20'::timestamp);
+
+query IT
+SELECT * FROM v2 ORDER BY a ASC;
+----
+2  later
+4  later
+5  world
+6  later
+7  bar
+8  apple
