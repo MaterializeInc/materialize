@@ -4,6 +4,7 @@ description: "How to securely connect a Redpanda Cloud cluster as a source to Ma
 aliases:
   - /integrations/redpanda-cloud/
   - /connect-sources/redpanda-cloud/
+  - /ingest-data/redpanda-cloud/
 menu:
   main:
     parent: "redpanda"

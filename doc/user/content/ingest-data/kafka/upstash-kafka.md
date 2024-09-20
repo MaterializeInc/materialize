@@ -4,6 +4,7 @@ description: "How to securely connect an Upstash Kafka cluster to Materialize as
 aliases:
   - /integrations/upstash-kafka/
   - /connect-sources/upstash-kafka/
+  - /ingest-data/upstash-kafka/
 menu:
   main:
     parent: "kafka"

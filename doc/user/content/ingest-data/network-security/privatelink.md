@@ -43,4 +43,9 @@ the TCP listeners (step 3) and the VPC endpoint service (step 5).
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`: Kafka](/sql/create-source/kafka)
-- Integration guides: [Self-hosted PostgreSQL](/ingest-data/postgres-self-hosted), [Amazon RDS for PostgreSQL](/ingest-data/postgres-amazon-rds), [Self-hosted Kafka](/ingest-data/kafka-self-hosted), [Amazon MSK](/ingest-data/amazon-msk), [Redpanda Cloud](/ingest-data/redpanda-cloud/)
+- Integration guides: [Self-hosted
+  PostgreSQL](/ingest-data/postgres/self-hosted/), [Amazon RDS for
+  PostgreSQL](/ingest-data/postgres/amazon-rds/), [Self-hosted
+  Kafka](/ingest-data/kafka/kafka-self-hosted), [Amazon
+  MSK](/ingest-data/kafka/amazon-msk), [Redpanda
+  Cloud](/ingest-data/redpanda/redpanda-cloud/)

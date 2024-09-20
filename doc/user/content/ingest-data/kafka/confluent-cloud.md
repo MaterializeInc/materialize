@@ -4,6 +4,7 @@ description: "How to securely connect a Confluent Cloud Kafka cluster as a sourc
 aliases:
   - /integrations/confluent-cloud/
   - /connect-sources/confuent-cloud/
+  - /ingest-data/confluent-cloud/
 menu:
   main:
     parent: "kafka"
