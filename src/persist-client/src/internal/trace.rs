@@ -1172,7 +1172,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             // Otherwise, we'll need to introduce fake updates to move merges
             // along.
 
-            // TODO: Tracked in #29459. Once we've finished deleting the legacy
+            // TODO: Tracked in materialize#29459. Once we've finished deleting the legacy
             // spine-diff code, push an empty batch here to move things along.
             return false;
         }

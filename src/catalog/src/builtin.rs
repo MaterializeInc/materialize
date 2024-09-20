@@ -3113,7 +3113,7 @@ SELECT
     name,
     mz_sources.type,
     occurred_at AS last_status_change_at,
-    -- TODO(parkmycar): Report status of webhook source once #20036 is closed.
+    -- TODO(parkmycar): Report status of webhook source once materialize#20036 is closed.
     CASE
             WHEN
                 mz_sources.type = 'webhook' OR

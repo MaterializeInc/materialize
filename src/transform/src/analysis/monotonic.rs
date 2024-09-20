@@ -101,7 +101,7 @@ impl Analysis for Monotonic {
             MirRelationExpr::Constant { rows: Ok(rows), .. } => {
                 rows.iter().all(|(_, diff)| diff > &0)
             }
-            // TODO: #28499 (Investigate if constant expressions with error rows can be marked monotonic)
+            // TODO: materialize#28499 (Investigate if constant expressions with error rows can be marked monotonic)
             MirRelationExpr::Constant { rows: Err(_), .. } => false,
         }
     }

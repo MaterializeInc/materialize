@@ -115,7 +115,7 @@ impl PerWorkerHealthStatus {
                     // HealthStatusUpdate::Ceased is currently unused, so just
                     // treat it as if it were a normal error.
                     //
-                    // TODO: redesign ceased status #25768
+                    // TODO: redesign ceased status materialize#25768
                     HealthStatusUpdate::Ceased { error } => {
                         if Some(error) > namespaced_errors.get(ns).as_deref() {
                             namespaced_errors.insert(*ns, error.to_string());
@@ -566,7 +566,7 @@ impl HealthStatusUpdate {
         }
     }
 
-    // TODO: redesign ceased status #25768
+    // TODO: redesign ceased status materialize#25768
     // Generates a ceasing [`HealthStatusUpdate`] with `update`.
     // pub(crate) fn ceasing(error: String) -> Self {
     //     HealthStatusUpdate::Ceased { error }

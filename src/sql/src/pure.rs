@@ -1923,7 +1923,7 @@ pub fn generate_subsource_statements(
             subsource_stmts
         }
         PurifiedExportDetails::Kafka { .. } => {
-            // TODO: as part of #28430, Kafka sources will begin
+            // TODO: as part of materialize#28430, Kafka sources will begin
             // producing data––we'll need to understand the schema
             // of the output here.
             assert!(

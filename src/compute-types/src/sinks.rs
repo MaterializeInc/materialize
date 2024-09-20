@@ -119,7 +119,7 @@ pub enum ComputeSinkConnection<S: 'static = ()> {
     Subscribe(SubscribeSinkConnection),
     /// TODO(materialize#25239): Add documentation.
     Persist(PersistSinkConnection<S>),
-    /// TODO(#25239): Add documentation.
+    /// TODO(materialize#25239): Add documentation.
     ///
     /// TODO(ct): This also writes to persist, but with different behavior
     /// (conflict resolution, only at input times, etc). It might be time to
@@ -260,7 +260,7 @@ impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMe
 /// TODO(ct): Add documentation.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContinualTaskConnection<S> {
-    /// TODO(#25239): Add documentation.
+    /// TODO(materialize#25239): Add documentation.
     //
     // TODO(ct): This can be removed once we render the "input" sources without
     // the hack.
