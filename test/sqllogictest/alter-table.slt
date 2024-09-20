@@ -11,17 +11,249 @@ mode cockroach
 
 reset-server
 
-query error db error: ERROR: CREATE TABLE with column constraint: VERSION ADDED 1 not yet supported
+query error db error: ERROR: invalid table definition for "t1"
 CREATE TABLE t1 (a int, b text VERSION ADDED 1);
 
 statement ok
 CREATE TABLE t2 (a int);
 
+# TODO(alter_table): Manually specifying a VERSION when referencing an item (maybe?) shouldn't be allowed.
 statement ok
 CREATE VIEW v1 AS SELECT * FROM [u1 AS "materialize"."public"."t2" VERSION 1];
 
-# TODO(alter_table): Stop stripping out the version.
 query TT
 SHOW CREATE VIEW v1
 ----
-materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t2"
+materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t2"␠VERSION␠1
+
+statement ok
+DROP VIEW v1 CASCADE;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_dangerous_enable_schema_evolution = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t1 (a int NOT NULL)
+
+query TTTT
+SHOW COLUMNS FROM t1;
+----
+a  false  integer  (empty)
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3);
+
+statement ok
+CREATE VIEW v1 AS SELECT * FROM t1;
+
+statement ok
+ALTER TABLE t1 ADD COLUMN b text;
+
+query TTTT
+SHOW COLUMNS FROM t1;
+----
+a  false  integer  (empty)
+b  true  text  (empty)
+
+query TT
+SHOW CREATE TABLE t1;
+----
+materialize.public.t1  CREATE␠TABLE␠"materialize"."public"."t1"␠("a"␠"pg_catalog"."int4"␠NOT␠NULL,␠"b"␠"pg_catalog"."text"␠VERSION␠ADDED␠1)
+
+statement ok
+CREATE VIEW v2 AS SELECT * FROM t1;
+
+query TTTT
+SHOW COLUMNS FROM v2;
+----
+a  false  integer  (empty)
+b  true  text  (empty)
+
+statement ok
+CREATE INDEX v2_idx ON v2 (a);
+
+statement ok
+CREATE MATERIALIZED VIEW mv1 AS SELECT SUM(a) FROM t1 WHERE b IS NOT NULL;
+
+statement ok
+INSERT INTO t1 VALUES (4, 'hello'), (5, 'world');
+
+query I
+SELECT * FROM v1;
+----
+1
+2
+3
+4
+5
+
+query I
+SELECT * FROM mv1;
+----
+9
+
+query IT
+SELECT * FROM t1;
+----
+1  NULL
+2  NULL
+3  NULL
+4  hello
+5  world
+
+query IT
+SELECT * FROM v2;
+----
+1  NULL
+2  NULL
+3  NULL
+4  hello
+5  world
+
+statement ok
+ALTER TABLE t1 ADD COLUMN c timestamp;
+
+query TT
+SHOW CREATE TABLE t1;
+----
+materialize.public.t1  CREATE␠TABLE␠"materialize"."public"."t1"␠("a"␠"pg_catalog"."int4"␠NOT␠NULL,␠"b"␠"pg_catalog"."text"␠VERSION␠ADDED␠1,␠"c"␠"pg_catalog"."timestamp"␠VERSION␠ADDED␠2)
+
+query TTTT
+SHOW COLUMNS FROM t1;
+----
+a  false  integer  (empty)
+b  true  text  (empty)
+c  true  timestamp␠without␠time␠zone  (empty)
+
+statement ok
+CREATE VIEW v3 AS SELECT * FROM t1;
+
+query TTTT
+SHOW COLUMNS FROM v3;
+----
+a  false  integer  (empty)
+b  true  text  (empty)
+c  true  timestamp␠without␠time␠zone  (empty)
+
+statement ok
+CREATE VIEW v4 AS SELECT a, c FROM t1;
+
+query TTTT
+SHOW COLUMNS FROM v4;
+----
+a  false  integer  (empty)
+c  true  timestamp␠without␠time␠zone  (empty)
+
+statement ok
+DROP VIEW v1;
+
+statement ok
+INSERT INTO t1 VALUES (6, 'foo', '2020-01-01'::timestamp), (7, 'bar', '1000-01-01'::timestamp);
+
+query I
+SELECT * FROM mv1;
+----
+22
+
+statement ok
+UPDATE t1 SET b = 'later' WHERE a % 2 = 0;
+
+query I
+SELECT * FROM mv1;
+----
+24
+
+query ITT
+SELECT * FROM t1 ORDER BY a ASC;
+----
+1  NULL  NULL
+2  later  NULL
+3  NULL  NULL
+4  later  NULL
+5  world  NULL
+6  later  2020-01-01␠00:00:00
+7  bar  1000-01-01␠00:00:00
+
+query IT
+SELECT * FROM v2 ORDER BY a ASC;
+----
+1  NULL
+2  later
+3  NULL
+4  later
+5  world
+6  later
+7  bar
+
+query ITT
+SELECT * FROM v3 ORDER BY a ASC;
+----
+1  NULL  NULL
+2  later  NULL
+3  NULL  NULL
+4  later  NULL
+5  world  NULL
+6  later  2020-01-01␠00:00:00
+7  bar  1000-01-01␠00:00:00
+
+query IT
+SELECT * FROM v4 ORDER BY a ASC;
+----
+1  NULL
+2  NULL
+3  NULL
+4  NULL
+5  NULL
+6  2020-01-01␠00:00:00
+7  1000-01-01␠00:00:00
+
+statement ok
+DELETE FROM t1 WHERE b IS NULL;
+
+query I
+SELECT * FROM mv1;
+----
+24
+
+query ITT
+SELECT * FROM t1 ORDER BY a ASC;
+----
+2  later  NULL
+4  later  NULL
+5  world  NULL
+6  later  2020-01-01␠00:00:00
+7  bar  1000-01-01␠00:00:00
+
+query IT
+SELECT * FROM v2 ORDER BY a ASC;
+----
+2  later
+4  later
+5  world
+6  later
+7  bar
+
+query ITT
+SELECT * FROM v3 ORDER BY a ASC;
+----
+2  later  NULL
+4  later  NULL
+5  world  NULL
+6  later  2020-01-01␠00:00:00
+7  bar  1000-01-01␠00:00:00
+
+query IT
+SELECT * FROM v4 ORDER BY a ASC;
+----
+2  NULL
+4  NULL
+5  NULL
+6  2020-01-01␠00:00:00
+7  1000-01-01␠00:00:00

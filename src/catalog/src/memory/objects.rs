@@ -29,13 +29,13 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    ColumnName, Diff, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector, ScalarType,
+    ColumnName, ColumnType, Diff, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
     Timestamp, VersionedRelationDesc,
 };
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
-    ColumnDef, ColumnOption, ColumnOptionDef, ColumnVersioned, Expr, Raw, RawDataType, RawItemName,
-    Statement, UnresolvedItemName, Value, WithOptionValue,
+    ColumnDef, ColumnOption, ColumnOptionDef, ColumnVersioned, Expr, Raw, RawDataType, Statement,
+    UnresolvedItemName, Value, WithOptionValue,
 };
 use mz_sql::catalog::{
     CatalogClusterReplica, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
@@ -45,7 +45,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{
     Aug, CommentObjectId, DatabaseId, FullItemName, QualifiedItemName, QualifiedSchemaName,
-    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{
     ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
@@ -55,7 +55,6 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
-use mz_sql_parser::ident;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection};
@@ -1354,6 +1353,46 @@ impl CatalogItem {
             .expect("item must have compaction window");
         *cw = Some(window);
         Ok(res)
+    }
+
+    pub fn add_column(
+        &mut self,
+        name: ColumnName,
+        typ: ColumnType,
+        sql: RawDataType,
+    ) -> Result<(), PlanError> {
+        let CatalogItem::Table(table) = self else {
+            return Err(PlanError::Unsupported {
+                feature: "adding columns to a non-Table".to_string(),
+                discussion_no: None,
+            });
+        };
+        let next_version = table.desc.add_column(name.clone(), typ);
+
+        let update = |ast: &mut Statement<Raw>| match ast {
+            Statement::CreateTable(ref mut stmt) => {
+                let version = ColumnOptionDef {
+                    name: None,
+                    option: ColumnOption::Versioned {
+                        action: ColumnVersioned::Added,
+                        version: next_version.into(),
+                    },
+                };
+                let column = ColumnDef {
+                    name: name.into(),
+                    data_type: sql,
+                    collation: None,
+                    options: vec![version],
+                };
+                stmt.columns.push(column);
+                Ok(())
+            }
+            _ => return Err(()),
+        };
+
+        self.update_sql(update)
+            .map_err(|()| PlanError::Unstructured("expected CREATE TABLE statement".to_string()))?;
+        Ok(())
     }
 
     /// Updates the create_sql field of this item. Returns an error if this is a builtin item,

@@ -4408,17 +4408,61 @@ impl Coordinator {
     }
 
     #[instrument]
-    // TODO(parkmycar): Remove this once we have an actual implementation.
-    #[allow(clippy::unused_async)]
     pub(super) async fn sequence_alter_table(
         &mut self,
-        _session: &Session,
-        _plan: plan::AlterTablePlan,
+        session: &Session,
+        plan::AlterTablePlan {
+            relation_id,
+            column_name,
+            column_type,
+            raw_sql_type,
+        }: plan::AlterTablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        Err(AdapterError::PlanError(plan::PlanError::Unsupported {
-            feature: "ALTER TABLE ... ADD COLUMN ...".to_string(),
-            discussion_no: Some(29607),
-        }))
+        let ops = vec![catalog::Op::AlterAddColumn {
+            id: relation_id,
+            name: column_name,
+            typ: column_type,
+            sql: raw_sql_type,
+        }];
+
+        let entry = self.catalog().get_entry(&relation_id);
+        let CatalogItem::Table(table) = &entry.item else {
+            let err = format!("expected table, found {:?}", entry.item);
+            return Err(AdapterError::Internal(err));
+        };
+        // Expected schema version, before altering the table.
+        let expected_version = table.desc.latest_version();
+
+        self.catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+            let entry = coord.catalog().get_entry(&relation_id);
+            let CatalogItem::Table(table) = &entry.item else {
+                panic!("programming error, expected table found {:?}", entry.item);
+            };
+
+            let desc = table.desc.at_version(RelationVersionSelector::Latest);
+            let forget_ts = coord.get_local_write_ts().await.timestamp;
+            let register_ts = coord.get_local_write_ts().await.timestamp;
+
+            assert!(forget_ts <= register_ts);
+
+            coord
+                .controller
+                .storage
+                .alter_table_desc(
+                    relation_id,
+                    desc,
+                    expected_version.into(),
+                    forget_ts,
+                    register_ts,
+                )
+                .await
+                .expect("failed to alter desc of table");
+
+            coord.apply_local_write(register_ts).await;
+        })
+        .await?;
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Table))
     }
 }
 

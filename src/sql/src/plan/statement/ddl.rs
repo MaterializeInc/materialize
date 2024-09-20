@@ -250,6 +250,13 @@ pub fn plan_create_table(
 
     let names: Vec<_> = columns
         .iter()
+        .filter(|c| {
+            let is_versioned = c
+                .options
+                .iter()
+                .any(|o| matches!(o.option, ColumnOption::Versioned { .. }));
+            !is_versioned
+        })
         .map(|c| normalize::column_name(c.name.clone()))
         .collect();
 
@@ -261,6 +268,7 @@ pub fn plan_create_table(
     // and NOT NULL constraints.
     let mut column_types = Vec::with_capacity(columns.len());
     let mut defaults = Vec::with_capacity(columns.len());
+    let mut changes = BTreeMap::new();
     let mut keys = Vec::new();
 
     for (i, c) in columns.into_iter().enumerate() {
@@ -268,6 +276,7 @@ pub fn plan_create_table(
         let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
+        let mut versioned = false;
         for option in &c.options {
             match &option.option {
                 ColumnOption::NotNull => nullable = false,
@@ -285,12 +294,26 @@ pub fn plan_create_table(
                         nullable = false;
                     }
                 }
+                ColumnOption::Versioned { action, version } => {
+                    let version = RelationVersion::from(*version);
+                    versioned = true;
+
+                    let name = normalize::column_name(c.name.clone());
+                    let typ = ty.clone().nullable(nullable);
+
+                    changes.insert(version, (action.clone(), name, typ));
+                }
                 other => {
                     bail_unsupported!(format!("CREATE TABLE with column constraint: {}", other))
                 }
             }
         }
-        column_types.push(ty.nullable(nullable));
+
+        // TODO(alter_table): This assumes all versioned columns are at the
+        // end. This will no longer be true when we support dropping columns.
+        if !versioned {
+            column_types.push(ty.nullable(nullable));
+        }
         defaults.push(default);
     }
 
@@ -388,6 +411,10 @@ pub fn plan_create_table(
 
     let desc = RelationDesc::new(typ, names);
     let mut desc = VersionedRelationDesc::new(desc);
+    for (version, (_action, name, typ)) in changes.into_iter() {
+        let new_version = desc.add_column(name, typ);
+        assert_eq!(version, new_version);
+    }
 
     let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
 
@@ -811,7 +838,6 @@ pub fn plan_create_source(
             options,
         } => {
             let connection_item = scx.get_item_by_resolved_name(connection)?;
-
             let PgConfigOptionExtracted {
                 details,
                 publication,
@@ -6651,10 +6677,17 @@ pub fn plan_alter_table_add_column(
         }
     }
 
+    let scalar_type = scalar_type_from_sql(scx, &data_type)?;
+    // TODO(alter_table): Support non-nullable columns with default values.
+    let column_type = scalar_type.nullable(true);
+    // "unresolve" our data type so we can later update the persist create_sql.
+    let raw_sql_type = mz_sql_parser::parser::parse_data_type(&data_type.to_ast_string())?;
+
     Ok(Plan::AlterTableAddColumn(AlterTablePlan {
         relation_id,
         column_name,
-        column_type: data_type,
+        column_type,
+        raw_sql_type,
     }))
 }
 

@@ -44,13 +44,13 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    ColumnName, Diff, GlobalId, RelationDesc, RelationVersionSelector, Row, ScalarType, Timestamp,
-    VersionedRelationDesc,
+    ColumnName, ColumnType, Diff, GlobalId, RelationDesc, RelationVersionSelector, Row, ScalarType,
+    Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
-    SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value,
-    WithOptionValue,
+    RawDataType, SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName,
+    Value, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
@@ -77,8 +77,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDataType,
-    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
+    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
+    ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -1211,7 +1211,8 @@ pub struct AlterOwnerPlan {
 pub struct AlterTablePlan {
     pub relation_id: GlobalId,
     pub column_name: ColumnName,
-    pub column_type: ResolvedDataType,
+    pub column_type: ColumnType,
+    pub raw_sql_type: RawDataType,
 }
 
 #[derive(Debug)]
