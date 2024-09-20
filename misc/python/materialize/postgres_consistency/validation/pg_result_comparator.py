@@ -130,7 +130,7 @@ class PostgresResultComparator(ResultComparator):
             or JSON_OBJECT_PATTERN.search(value2)
         ):
             # This is a rather eager pattern to also match concatenated strings.
-            # tracked with #23571
+            # tracked with materialize#23571
             value1 = value1.replace(", ", ",").replace(": ", ":")
             value2 = value2.replace(", ", ",").replace(": ", ":")
 
@@ -177,7 +177,7 @@ class PostgresResultComparator(ResultComparator):
         return value1 == value2
 
     def _normalize_jsonb_timestamp(self, value: str) -> str:
-        # this is due to #28137
+        # this is due to materialize#28137
 
         pattern_for_date = r"\d+-\d+-\d+"
         pattern_for_time = r"\d+:\d+:\d+[+-]\d+"
@@ -206,7 +206,7 @@ class PostgresResultComparator(ResultComparator):
             partial(is_operation_tagged, tag=TAG_JSONB_OBJECT_GENERATION),
             True,
         ):
-            # this is because of #28192
+            # this is because of materialize#28192
             return True
 
         return False
