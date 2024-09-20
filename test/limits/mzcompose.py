@@ -1423,7 +1423,7 @@ class RowsJoinOuter(Generator):
 
 
 class PostgresSources(Generator):
-    COUNT = 500  # high memory consumption
+    COUNT = 300  # high memory consumption, slower  with source tables
 
     @classmethod
     def body(cls) -> None:
@@ -1469,7 +1469,7 @@ class PostgresSources(Generator):
 
 
 class MySqlSources(Generator):
-    COUNT = 500  # high memory consumption
+    COUNT = 300  # high memory consumption, slower with source tables
 
     @classmethod
     def body(cls) -> None:

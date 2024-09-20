@@ -18,7 +18,7 @@ import psycopg
 import requests
 from psycopg import Connection, Cursor
 from psycopg.errors import OperationalError
-from requests.exceptions import ReadTimeout
+from requests.exceptions import ConnectionError, ReadTimeout
 
 from materialize.cloudtest.util.jwt_key import fetch_jwt
 from materialize.mz_env_util import get_cloud_hostname
@@ -112,10 +112,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 close_connection_and_cursor(conn1, cursor_on_table, "subscribe_table")
                 close_connection_and_cursor(conn2, cursor_on_mv, "subscribe_mv")
 
-            except (OperationalError, ReadTimeout) as e:
+            except (OperationalError, ReadTimeout, ConnectionError) as e:
                 error_msg_str = str(e)
                 if "Read timed out" in error_msg_str:
                     print("Read timed out, retrying")
+                elif "closed connection" in error_msg_str:
+                    print("Remote end closed connection, retrying")
                 else:
                     raise
             except FailedTestExecutionError as e:

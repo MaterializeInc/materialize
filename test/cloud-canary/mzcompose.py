@@ -139,6 +139,7 @@ class Redpanda:
             host=c.cloud_hostname(),
             user=USERNAME,
             password=APP_PASSWORD,
+            dbname="materialize",
             port=6875,
             sslmode="require",
         )
@@ -331,6 +332,7 @@ def version_check(c: Composition) -> None:
         host=c.cloud_hostname(),
         user=USERNAME,
         password=APP_PASSWORD,
+        dbname="materialize",
         port=6875,
         sslmode="require",
     ).cursor()
