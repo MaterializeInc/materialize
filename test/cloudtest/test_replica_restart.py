@@ -98,7 +98,6 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
 
 # Test that a crashed (and restarted) cluster replica generates expected notice
 # events.
-@pytest.mark.skip(reason="Hangs occasionally, see materialize#28235")
 def test_crash_clusterd(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("DROP TABLE IF EXISTS t1 CASCADE")
     mz.environmentd.sql("CREATE TABLE t1 (f1 TEXT)")
