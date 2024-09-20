@@ -459,7 +459,10 @@ def annotate_logged_errors(
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
     buildkite_label: str = os.getenv("BUILDKITE_LABEL", "")
 
-    (known_issues, issues_with_invalid_regex) = get_known_issues_from_github()
+    token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+        "GITHUB_TOKEN"
+    )
+    (known_issues, issues_with_invalid_regex) = get_known_issues_from_github(token)
     unknown_errors: list[ObservedBaseError] = []
     unknown_errors.extend(issues_with_invalid_regex)
 
