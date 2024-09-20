@@ -923,9 +923,7 @@ impl Coordinator {
             owner_id: *ctx.session().current_role_id(),
         }];
 
-        let catalog_result = self
-            .catalog_transact_and_apply_side_effects(Some(ctx), ops)
-            .await;
+        let catalog_result = self.catalog_transact_with_context(Some(ctx), ops).await;
 
         match catalog_result {
             Ok(()) => Ok(ExecuteResponse::CreatedTable),
@@ -1154,8 +1152,7 @@ impl Coordinator {
             dropped_in_use_indexes,
         } = self.sequence_drop_common(ctx.session(), drop_ids).await?;
 
-        self.catalog_transact_and_apply_side_effects(Some(ctx), ops)
-            .await?;
+        self.catalog_transact_with_context(Some(ctx), ops).await?;
 
         fail::fail_point!("after_sequencer_drop_replica");
 

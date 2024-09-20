@@ -54,9 +54,6 @@ use crate::{catalog, flags, AdapterError, ExecuteContext, TimestampProvider};
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`].
-    ///
-    /// This asserts that there are no side effects being generated from
-    /// applying the given `ops`.
     #[instrument(name = "coord::catalog_transact")]
     pub(crate) async fn catalog_transact(
         &mut self,
@@ -70,11 +67,8 @@ impl Coordinator {
     /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`] and runs
     /// builtin table updates concurrently with any side effects (e.g. creating
     /// collections).
-    ///
-    /// This asserts that there are no side effects being generated from
-    /// applying the given `ops`.
     // TODO(aljoscha): Remove this method once all call-sites have been migrated
-    // to the newer catalog_transact_and_apply_side_effects. The latter is what
+    // to the newer catalog_transact_with_context. The latter is what
     // allows us to apply side effects to the controller either when initially
     // applying the ops to the catalog _or_ when following catalog changes from
     // another process.
@@ -93,7 +87,24 @@ impl Coordinator {
             .catalog_transact_inner(session.map(|session| session.conn_id()), ops)
             .await?;
 
-        assert!(derived_side_effects.is_empty(), "cannot apply ops that produce side effects when using catalog_transact_with_side_effects, but got: {:?}", derived_side_effects);
+        // We can't run this concurrently with the explicit side effects,
+        // because both want to borrow self mutably.
+        let derived_side_effects_res = self
+            .controller_apply_side_effects(None, derived_side_effects)
+            .await;
+
+        // We would get into an inconsistent state if we updated the catalog but
+        // then failed to apply the side effects to the controller. Easiest
+        // thing to do is panic and let restart/bootstrap handle it.
+        derived_side_effects_res.expect("cannot fail to apply side effects");
+
+        // Note: It's important that we keep the function call inside macro, this way we only run
+        // the consistency checks if sort assertions are enabled.
+        mz_ore::soft_assert_eq_no_log!(
+            self.check_consistency(),
+            Ok(()),
+            "coordinator inconsistency detected"
+        );
 
         let side_effects_fut = side_effect(self);
 
@@ -115,8 +126,8 @@ impl Coordinator {
     /// builtin table updates concurrently with any side effects that are
     /// generated as part of applying the given `ops` (e.g. creating
     /// collections).
-    #[instrument(name = "coord::catalog_transact_and_apply_side_effects")]
-    pub(crate) async fn catalog_transact_and_apply_side_effects(
+    #[instrument(name = "coord::catalog_transact_with_context")]
+    pub(crate) async fn catalog_transact_with_context(
         &mut self,
         ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
@@ -130,10 +141,10 @@ impl Coordinator {
         // Run our side effects concurrently with the table updates.
         let (side_effects_res, ()) = futures::future::join(
             side_effects_fut.instrument(info_span!(
-                "coord::catalog_transact_with_side_effects::side_effects_fut"
+                "coord::catalog_transact_with_context::side_effects_fut"
             )),
             table_updates.instrument(info_span!(
-                "coord::catalog_transact_with_side_effects::table_updates"
+                "coord::catalog_transact_with_context::table_updates"
             )),
         )
         .await;
@@ -159,9 +170,6 @@ impl Coordinator {
     }
 
     /// Same as [`Self::catalog_transact_inner`] but awaits the table updates.
-    ///
-    /// This asserts that there are no side effects being generated from
-    /// applying the given `ops`.
     #[instrument(name = "coord::catalog_transact_conn")]
     pub(crate) async fn catalog_transact_conn(
         &mut self,
@@ -171,11 +179,32 @@ impl Coordinator {
         let (table_updates, derived_side_effects) =
             self.catalog_transact_inner(conn_id, ops).await?;
 
-        assert!(derived_side_effects.is_empty(), "cannot apply ops that produce side effects when using catalog_transact_with_side_effects, but got: {:?}", derived_side_effects);
+        let side_effects_fut = self.controller_apply_side_effects(None, derived_side_effects);
 
-        table_updates
-            .instrument(info_span!("coord::catalog_transact_conn::table_updates"))
-            .await;
+        // Run our side effects concurrently with the table updates.
+        let (side_effects_res, ()) = futures::future::join(
+            side_effects_fut
+                .instrument(info_span!("coord::catalog_transact_conn::side_effects_fut")),
+            table_updates.instrument(info_span!("coord::catalog_transact_conn::table_updates")),
+        )
+        .await;
+
+        // We would get into an inconsistent state if we updated the catalog but
+        // then failed to apply the side effects to the controller. Easiest
+        // thing to do is panic and let restart/bootstrap handle it.
+        side_effects_res.expect("cannot fail to apply side effects");
+
+        // WIP: Do we want to do this check here? We can't do it inside
+        // catalog_transact_inner anymore because we only apply the side effects
+        // out here.
+
+        // Note: It's important that we keep the function call inside macro, this way we only run
+        // the consistency checks if sort assertions are enabled.
+        mz_ore::soft_assert_eq_no_log!(
+            self.check_consistency(),
+            Ok(()),
+            "coordinator inconsistency detected"
+        );
 
         Ok(())
     }
