@@ -29,6 +29,7 @@ use mz_ore::fmt::FormatBuffer;
 use mz_ore::task::JoinHandle;
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
@@ -57,7 +58,7 @@ use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
-use crate::schema::{CaESchema, SchemaId};
+use crate::schema::CaESchema;
 use crate::write::WriterId;
 use crate::{Diagnostics, PersistConfig, ShardId};
 

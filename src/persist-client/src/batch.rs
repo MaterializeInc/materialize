@@ -36,6 +36,7 @@ use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, Blo
 use mz_persist::location::Blob;
 use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
 use mz_persist_types::parquet::{CompressionFormat, EncodingConfig};
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
@@ -58,7 +59,6 @@ use crate::internal::state::{
     BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart, RunMeta, RunOrder,
     WRITE_DIFFS_SUM,
 };
-use crate::schema::SchemaId;
 use crate::stats::{
     encode_updates, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
 };

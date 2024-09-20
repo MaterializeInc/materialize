@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{CaSResult, Indeterminate, SeqNo, VersionedData};
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
@@ -39,7 +40,7 @@ use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
 use crate::rpc::{PubSubSender, PUBSUB_PUSH_DIFF_ENABLED};
-use crate::schema::{SchemaCache, SchemaId};
+use crate::schema::SchemaCache;
 use crate::{Diagnostics, PersistConfig, ShardId};
 
 /// An applier of persist commands.

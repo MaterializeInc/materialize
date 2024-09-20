@@ -26,6 +26,7 @@ use mz_build_info::{build_info, BuildInfo};
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist::location::{Blob, Consensus, ExternalError};
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use timely::progress::Timestamp;
 
@@ -43,7 +44,7 @@ use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, ReadHandle, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
-use crate::schema::{CaESchema, SchemaId};
+use crate::schema::CaESchema;
 use crate::write::{WriteHandle, WriterId};
 
 pub mod async_runtime;

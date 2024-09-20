@@ -881,7 +881,7 @@ mod tests {
             unimplemented!()
         }
 
-        async fn alter_table_desc(
+        fn alter_table_desc(
             &self,
             _table_id: GlobalId,
             _new_desc: RelationDesc,

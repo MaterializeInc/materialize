@@ -37,10 +37,12 @@ use mz_ore::{assert_none, instrument, soft_panic_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_client::schema::CaESchema;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
@@ -1034,9 +1036,10 @@ where
         &mut self,
         table_id: GlobalId,
         new_desc: RelationDesc,
+        expected_schema: SchemaId,
         forget_ts: Self::Timestamp,
         register_ts: Self::Timestamp,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
+    ) -> Result<SchemaId, StorageError<Self::Timestamp>> {
         let shard_id = {
             let Controller {
                 collections,
@@ -1061,9 +1064,7 @@ where
             }
 
             // Now also let StorageCollections know!
-            storage_collections
-                .alter_table_desc(table_id, new_desc.clone())
-                .await?;
+            storage_collections.alter_table_desc(table_id, new_desc.clone())?;
             // StorageCollections was successfully updated, now we can update our
             // in-memory state.
             collection.collection_metadata.relation_desc = new_desc.clone();
@@ -1071,11 +1072,41 @@ where
             collection.collection_metadata.data_shard
         };
 
+        let diagnostics = Diagnostics {
+            shard_name: table_id.to_string(),
+            handle_purpose: "alter_table_desc".to_string(),
+        };
+
         let persist_client = self
             .persist
             .open(self.persist_location.clone())
             .await
             .expect("invalid persist location");
+        let schema_result = persist_client
+            .compare_and_evolve_schema::<SourceData, (), T, Diff>(
+                shard_id,
+                expected_schema,
+                &new_desc,
+                &UnitSchema,
+                diagnostics,
+            )
+            .await
+            .map_err(|e| StorageError::InvalidUsage(e.to_string()))?;
+        let schema_id = match schema_result {
+            CaESchema::Ok(id) => id,
+            // TODO(alter_table): Better handling of these errors.
+            CaESchema::ExpectedMismatch { .. } => {
+                return Err(StorageError::Generic(anyhow::anyhow!(
+                    "schema expected mismatch, {table_id:?}",
+                )))
+            }
+            CaESchema::Incompatible => {
+                return Err(StorageError::Generic(anyhow::anyhow!(
+                    "schema incompatible, {table_id:?}"
+                )))
+            }
+        };
+
         let write_handle = self
             .open_data_handles(&table_id, shard_id, new_desc.clone(), &persist_client)
             .await;
@@ -1083,7 +1114,7 @@ where
         self.persist_table_worker
             .update(table_id, forget_ts, register_ts, write_handle);
 
-        Ok(())
+        Ok(schema_id)
     }
 
     fn export(

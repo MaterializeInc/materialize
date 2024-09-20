@@ -33,6 +33,7 @@ use mz_cluster_client::ReplicaId;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec64, Opaque, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
@@ -471,9 +472,10 @@ pub trait StorageController: Debug {
         &mut self,
         table_id: GlobalId,
         new_desc: RelationDesc,
+        expected_schema: SchemaId,
         forget_ts: Self::Timestamp,
         register_ts: Self::Timestamp,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<SchemaId, StorageError<Self::Timestamp>>;
 
     /// Acquire an immutable reference to the export state, should it exist.
     fn export(

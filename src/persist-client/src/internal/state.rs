@@ -30,7 +30,7 @@ use mz_persist::indexed::encoding::BatchColumnarFormat;
 use mz_persist::location::SeqNo;
 use mz_persist_types::arrow::ProtoArrayData;
 use mz_persist_types::columnar::{ColumnEncoder, Schema2};
-use mz_persist_types::schema::backward_compatible;
+use mz_persist_types::schema::{backward_compatible, SchemaId};
 use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
@@ -52,7 +52,7 @@ use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace,
 };
 use crate::read::LeasedReaderId;
-use crate::schema::{CaESchema, SchemaId};
+use crate::schema::CaESchema;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
