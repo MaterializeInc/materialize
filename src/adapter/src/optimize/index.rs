@@ -101,7 +101,12 @@ impl Index {
         on_version: RelationVersionSelector,
         keys: Vec<mz_expr::MirScalarExpr>,
     ) -> Self {
-        Self { name, on, on_version, keys }
+        Self {
+            name,
+            on,
+            on_version,
+            keys,
+        }
     }
 }
 
