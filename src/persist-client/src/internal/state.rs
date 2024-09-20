@@ -1432,7 +1432,7 @@ where
 
         let existed = self.leased_readers.remove(reader_id).is_some();
         if existed {
-            // TODO(#22789): Re-enable this
+            // TODO(materialize#22789): Re-enable this
             //
             // Temporarily disabling this because we think it might be the cause
             // of the remap since bug. Specifically, a clusterd process has a
@@ -1465,7 +1465,7 @@ where
 
         let existed = self.critical_readers.remove(reader_id).is_some();
         if existed {
-            // TODO(#22789): Re-enable this
+            // TODO(materialize#22789): Re-enable this
             //
             // Temporarily disabling this because we think it might be the cause
             // of the remap since bug. Specifically, a clusterd process has a
@@ -2611,7 +2611,7 @@ pub(crate) mod tests {
             state.collections.expire_leased_reader(&reader2),
             Continue(true)
         );
-        // TODO(#22789): expiry temporarily doesn't advance since
+        // TODO(materialize#22789): expiry temporarily doesn't advance since
         // Switch this assertion back when we re-enable this.
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
@@ -2622,7 +2622,7 @@ pub(crate) mod tests {
             state.collections.expire_leased_reader(&reader3),
             Continue(true)
         );
-        // TODO(#22789): expiry temporarily doesn't advance since
+        // TODO(materialize#22789): expiry temporarily doesn't advance since
         // Switch this assertion back when we re-enable this.
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));

@@ -46,7 +46,7 @@ INSERT INTO t2 VALUES (2);
 > CREATE SCHEMA schema1;
 > CREATE SCHEMA schema2;
 
-# TODO: #24797 (schema must be specified even when no collisions exist): remove public prefix
+# TODO: materialize#24797 (schema must be specified even when no collisions exist): remove public prefix
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE schema1.t1 FROM SOURCE mz_source (REFERENCE public.t1);
 > CREATE TABLE schema2.t1 FROM SOURCE mz_source (REFERENCE public.t2);

@@ -52,7 +52,7 @@ def test_cluster_sizing(mz: MaterializeApplication) -> None:
     "failpoint",
     ["", "after_catalog_drop_replica=panic", "after_sequencer_drop_replica=panic"],
 )
-@pytest.mark.skip(reason="Failpoints mess up the Mz intance #18000")
+@pytest.mark.skip(reason="Failpoints mess up the Mz instance materialize#18000")
 def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
     """Test that dropping a cluster or replica causes the associated clusterds to shut down."""
 
@@ -163,7 +163,7 @@ def test_disk_label(mz: MaterializeApplication) -> None:
     )
 
 
-@pytest.mark.skip(reason="Keeps flaking, see #28327")
+@pytest.mark.skip(reason="Keeps flaking, see materialize#28327")
 def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
     """Test that --cluster-replica-sizes mapping is respected"""
     # Some time for existing cluster drops to complete so we don't try to spin them up again

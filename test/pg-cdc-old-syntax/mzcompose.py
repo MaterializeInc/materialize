@@ -112,7 +112,7 @@ def get_targeted_pg_version(parser: WorkflowArgumentParser) -> str | None:
     return pg_version
 
 
-# TODO: redesign ceased status #25768
+# TODO: redesign ceased status materialize#25768
 # Test that how subsource statuses work across a variety of scenarios
 # def workflow_statuses(c: Composition, parser: WorkflowArgumentParser) -> None:
 #     c.up("materialized", "postgres", "toxiproxy")
@@ -327,11 +327,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if name == "default":
                 continue
 
-            # TODO: Flaky, reenable when #25479 is fixed
+            # TODO: Flaky, reenable when materialize#25479 is fixed
             if name == "statuses":
                 continue
 
-            # TODO: Flaky, reenable when #28989 is fixed
+            # TODO: Flaky, reenable when materialize#28989 is fixed
             if name == "silent-connection-drop":
                 continue
 

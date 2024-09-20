@@ -1624,7 +1624,7 @@ fn test_default_cluster_sizes() {
 }
 
 #[mz_ore::test]
-#[ignore] // TODO: Reenable when #22998 is fixed
+#[ignore] // TODO: Reenable when materialize#22998 is fixed
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();

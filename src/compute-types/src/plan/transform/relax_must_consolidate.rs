@@ -27,7 +27,7 @@ pub struct RelaxMustConsolidate<T = mz_repr::Timestamp> {
 }
 
 impl<T> RelaxMustConsolidate<T> {
-    /// TODO(#25239): Add documentation.
+    /// TODO(materialize#25239): Add documentation.
     pub fn new() -> Self {
         RelaxMustConsolidate {
             _phantom: Default::default(),

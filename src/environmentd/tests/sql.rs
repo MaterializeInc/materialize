@@ -1379,7 +1379,7 @@ fn test_transactional_explain_timestamps() {
 // but please at least keep _something_ that tests that custom compaction windows are working.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18934
-#[ignore] // TODO: Reenable when #29299 is fixed
+#[ignore] // TODO: Reenable when materialize#29299 is fixed
 async fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
     // `mz_catalog_server` tests indexes, `quickstart` tests tables.
@@ -3359,7 +3359,7 @@ async fn test_explain_as_of() {
 
 // Test that RETAIN HISTORY results in the since and upper being separated by the specified amount.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[ignore] // TODO: Reenable when #24957 is fixed
+#[ignore] // TODO: Reenable when materialize#24957 is fixed
 async fn test_retain_history() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();

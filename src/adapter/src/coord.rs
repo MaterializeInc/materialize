@@ -1882,7 +1882,7 @@ impl Coordinator {
         let mut privatelink_connections = BTreeMap::new();
 
         for entry in &entries {
-            // TODO(#26794): we should move this invariant into `CatalogEntry`.
+            // TODO(materialize#26794): we should move this invariant into `CatalogEntry`.
             mz_ore::soft_assert_or_log!(
                 // We only expect user objects to objects obey this invariant.
                 // System objects, for instance, can depend on other system

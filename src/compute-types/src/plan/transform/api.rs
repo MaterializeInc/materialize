@@ -21,13 +21,13 @@ use crate::plan::Plan;
 /// as an immutable reference.
 #[derive(Debug)]
 pub struct TransformConfig {
-    /// TODO(#25239): Add documentation.
+    /// TODO(materialize#25239): Add documentation.
     pub monotonic_ids: BTreeSet<GlobalId>,
 }
 
 /// A transform for [crate::plan::Plan] nodes.
 pub trait Transform<T = mz_repr::Timestamp> {
-    /// TODO(#25239): Add documentation.
+    /// TODO(materialize#25239): Add documentation.
     fn name(&self) -> &'static str;
 
     /// Transform a [Plan] using the given [TransformConfig].
@@ -58,7 +58,7 @@ pub trait Transform<T = mz_repr::Timestamp> {
     ) -> Result<(), RecursionLimitError>;
 }
 
-/// TODO(#25239): Add documentation.
+/// TODO(materialize#25239): Add documentation.
 pub trait BottomUpTransform<T = mz_repr::Timestamp> {
     /// A type representing analysis information to be associated with each
     /// sub-term and exposed to the transformation action callback.

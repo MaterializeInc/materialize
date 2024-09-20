@@ -72,7 +72,7 @@ SELECT
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 VALUES ('three');
 
-# TODO: #29373 (introspection tables)
+# TODO: materialize#29373 (introspection tables)
 # > SELECT
 #     s.name,
 #     SUM(u.offset_committed) > ${previous-offset-committed},
@@ -137,7 +137,7 @@ true
   ORDER BY s.name
 mz_source 1 1
 
-# TODO: #29373 (introspection tables)
+# TODO: materialize#29373 (introspection tables)
 # # Ensure subsource stats show up, and then are removed when we drop subsources.
 # > SELECT
 #     t.name,

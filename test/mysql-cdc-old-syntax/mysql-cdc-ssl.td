@@ -126,7 +126,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
 
-# TODO: #25676 (error not handled properly)
+# TODO: materialize#25676 (error not handled properly)
 # # server: hostssl, client: verify-ca => ERROR
 # > CREATE CONNECTION mysql_conn TO MYSQL (
 #   HOST mysql,
@@ -161,7 +161,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
 
-# TODO: #25676 (error not handled properly)
+# TODO: materialize#25676 (error not handled properly)
 # # server: hostssl, client: verify-identity => ERROR
 # > CREATE CONNECTION mysql_conn TO MYSQL (
 #     HOST mysql,
@@ -174,7 +174,7 @@ DELETE FROM numbers WHERE number = 2;
 # contains:self signed certificate in certificate chain
 # > DROP CONNECTION mysql_conn;
 
-# TODO: #25676
+# TODO: materialize#25676
 # # server: hostssl, client: verify-identity => OK
 # > CREATE CONNECTION mysql_conn TO MYSQL (
 #   HOST mysql,
@@ -218,7 +218,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
 
-# TODO: #25676 (error not handled properly)
+# TODO: materialize#25676 (error not handled properly)
 # # server: hostnossl, client: verify-ca => ERROR
 # > CREATE CONNECTION mysql_conn TO MYSQL (
 #   HOST mysql,
@@ -277,7 +277,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
 
-# TODO: #25676 (error not handled properly)
+# TODO: materialize#25676 (error not handled properly)
 # # server: certuser, client: verify-ca (wrong cert) => ERROR
 # > CREATE CONNECTION mysql_conn TO MYSQL (
 #   HOST mysql,
@@ -316,7 +316,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
 
-# TODO: #25676 (error not handled properly)
+# TODO: materialize#25676 (error not handled properly)
 # # server: certuser, client: verify-identity => OK
 # > CREATE CONNECTION mysql_conn TO MYSQL (
 #   HOST mysql,

@@ -1480,7 +1480,7 @@ pub struct CollectionState {
     ///
     /// The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
     /// collections, so we need to be able to recognize them. This is something we would like to
-    /// change in the future (#16274).
+    /// change in the future (materialize#16274).
     pub is_subscribe_or_copy: bool,
     /// The collection's initial as-of frontier.
     ///

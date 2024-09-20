@@ -10,7 +10,7 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
-# TODO(def-) Reenable when #26733 is fixed
+# TODO(def-) Reenable when materialize#26733 is fixed
 $ skip-if
 SELECT true
 
@@ -165,7 +165,7 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_column_type_2 MODIFY f1 int;
 INSERT INTO alter_column_type_2 VALUES (2048);
 
-# TODO(def-): Reenable when #25660 is fixed
+# TODO(def-): Reenable when materialize#25660 is fixed
 # ! select * from alter_column_type_2;
 # contains:incompatible schema change
 
@@ -201,7 +201,7 @@ INSERT INTO alter_add_nullability VALUES (1);
 1
 1
 
-# TODO: #25040 (changes to columns)
+# TODO: materialize#25040 (changes to columns)
 # ? EXPLAIN SELECT * FROM alter_add_nullability WHERE f1 IS NULL;
 # Explained Query (fast path):
 #   Constant <empty>
@@ -357,7 +357,7 @@ INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_renamed', 'f2_renamed
 contains:incompatible schema change
 
 
-# TODO: #25660 (column drop & recreate detection)
+# TODO: materialize#25660 (column drop & recreate detection)
 # Change column attnum
 
 # > SELECT * from alter_table_change_attnum;
@@ -421,7 +421,7 @@ contains: table was truncated
 $ mysql-execute name=mysql
 DROP TABLE drop_table;
 
-# TODO: redesign ceased status #25768
+# TODO: redesign ceased status materialize#25768
 # > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'drop_table';
 # ceased
 

@@ -366,7 +366,7 @@ class FlagUpdate(Scenario):
                 ),
             ],
             guarantees={
-                # TODO(def-): Lower when #29235 is fixed to prevent regressions
+                # TODO(def-): Lower when materialize#29235 is fixed to prevent regressions
                 "SELECT 1 (reuse connection)": {"avg": 5, "max": 500, "slope": 0.1},
             },
         )
@@ -484,7 +484,7 @@ class InsertWhereNotExists(Scenario):
                 ),
             ],
             conn_pool_size=100,
-            # TODO(def-): Bump per_second and add guarantees when #29371 is fixed
+            # TODO(def-): Bump per_second and add guarantees when materialize#29371 is fixed
         )
 
 

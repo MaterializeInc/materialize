@@ -128,7 +128,7 @@ impl CatalogState {
 
             // push `id` column
             packer.push(Datum::String(id.as_str()));
-            // push `notice_type` column (TODO(21513): encode as int?)
+            // push `notice_type` column (TODO: encode as int?)
             packer.push(Datum::String(notice.kind.as_str()));
             // push `message` column
             packer.push(Datum::String(&notice.message));
@@ -159,7 +159,7 @@ impl CatalogState {
                 },
                 None => Datum::Null,
             });
-            // push `action_type` column (TODO(21513): encode as int?)
+            // push `action_type` column (TODO: encode as int?)
             packer.push(match &notice.action {
                 Action::None => Datum::Null,
                 action => Datum::String(action.kind().as_str()),

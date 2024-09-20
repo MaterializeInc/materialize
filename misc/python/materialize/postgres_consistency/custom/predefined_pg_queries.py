@@ -95,7 +95,7 @@ def create_pg_timezone_names_query() -> QueryTemplate:
         ],
     )
 
-    # TODO #26521: time zones differ
+    # TODO materialize#26521: time zones differ
     excluded_timezones = [
         # abbrev, utc_offset, is_dst differ (as of 2024-04-08)
         "America/Godthab",

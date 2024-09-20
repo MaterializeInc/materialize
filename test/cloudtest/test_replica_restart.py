@@ -49,7 +49,7 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
 
 # Test that an OOMing cluster replica generates expected entries in
 # `mz_cluster_replica_statuses`
-@pytest.mark.skip(reason="Now fails after a Buildkite upgrade #20948")
+@pytest.mark.skip(reason="Now fails after a Buildkite upgrade materialize#20948")
 def test_oom_clusterd(mz: MaterializeApplication) -> None:
     def verify_cluster_oomed() -> None:
         with mz.environmentd.sql_cursor(autocommit=False) as cur:
@@ -98,7 +98,7 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
 
 # Test that a crashed (and restarted) cluster replica generates expected notice
 # events.
-@pytest.mark.skip(reason="Hangs occasionally, see #28235")
+@pytest.mark.skip(reason="Hangs occasionally, see materialize#28235")
 def test_crash_clusterd(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("DROP TABLE IF EXISTS t1 CASCADE")
     mz.environmentd.sql("CREATE TABLE t1 (f1 TEXT)")

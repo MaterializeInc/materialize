@@ -3113,7 +3113,7 @@ SELECT
     name,
     mz_sources.type,
     occurred_at AS last_status_change_at,
-    -- TODO(parkmycar): Report status of webhook source once #20036 is closed.
+    -- TODO(parkmycar): Report status of webhook source once materialize#20036 is closed.
     CASE
             WHEN
                 mz_sources.type = 'webhook' OR
@@ -5046,7 +5046,7 @@ HAVING pg_catalog.sum(count) != 0",
 
 pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
-        // TODO(#27831): Rename this source to `mz_compute_error_counts_raw`. Currently this causes a
+        // TODO(materialize#27831): Rename this source to `mz_compute_error_counts_raw`. Currently this causes a
         // naming conflict because the resolver stumbles over the source with the same name in
         // `mz_introspection` due to the automatic schema translation.
         name: "mz_compute_error_counts_raw_unified",

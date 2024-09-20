@@ -24,9 +24,11 @@ from materialize import buildkite, spawn
 ISSUE_RE = re.compile(
     r"""
     ( TimelyDataflow/timely-dataflow\#(?P<timelydataflow>[0-9]+)
-    | ( materialize\# | materialize/issues/ | \# ) (?P<materialize>[0-9]+)
+    | ( materialize\# | materialize/issues/ ) (?P<materialize>[0-9]+)
     | ( cloud\# | cloud/issues/ ) (?P<cloud>[0-9]+)
     | ( incidents-and-escalations\# | incidents-and-escalations/issues/ ) (?P<incidentsandescalations>[0-9]+)
+    | ( database-issues\# | database-issues/issues/ ) (?P<databaseissues>[0-9]+)
+    | \# (?P<ambiguous>[0-9]+)
     )
     """,
     re.VERBOSE,
@@ -37,6 +39,8 @@ GROUP_REPO = {
     "materialize": "MaterializeInc/materialize",
     "cloud": "MaterializeInc/cloud",
     "incidentsandescalations": "MaterializeInc/incidents-and-escalations",
+    "databaseissues": "MaterializeInc/database-issues",
+    "ambiguous": None,
 }
 
 REFERENCE_RE = re.compile(
@@ -99,12 +103,12 @@ IGNORE_FILENAME_RE = re.compile(
     re.VERBOSE,
 )
 
-FILENAME_REFERENCE_RE = re.compile(r".*\.(td|slt|test)\.gh(?P<materialize>[0-9]+)")
+FILENAME_REFERENCE_RE = re.compile(r".*\.(td|slt|test)\.gh(?P<ambiguous>[0-9]+)")
 
 
 @dataclass
 class IssueRef:
-    repository: str
+    repository: str | None
     issue_id: int
     filename: str
     line_number: int
@@ -168,7 +172,7 @@ def detect_referenced_issues(filename: str) -> list[IssueRef]:
 
                 # Explain plans can look like issue references
                 if (
-                    group == "materialize"
+                    group == "ambiguous"
                     and int(issue_id) < 100
                     and not is_referenced_with_url
                 ):
@@ -187,7 +191,8 @@ def detect_referenced_issues(filename: str) -> list[IssueRef]:
     return issue_refs
 
 
-def is_issue_closed_on_github(repository: str, issue_id: int) -> bool:
+def is_issue_closed_on_github(repository: str | None, issue_id: int) -> bool:
+    assert repository
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -228,6 +233,14 @@ def filter_changed_lines(issue_refs: list[IssueRef]) -> list[IssueRef]:
             (issue_ref.filename, issue_ref.line_number + i) in changed_lines
             for i in range(issue_ref.text.count("\n"))
         )
+    ]
+
+
+def filter_ambiguous_issues(
+    issue_refs: list[IssueRef],
+) -> tuple[list[IssueRef], list[IssueRef]]:
+    return [issue_ref for issue_ref in issue_refs if issue_ref.repository], [
+        issue_ref for issue_ref in issue_refs if not issue_ref.repository
     ]
 
 
@@ -289,10 +302,23 @@ def main() -> int:
         ):
             issue_refs.extend(detect_referenced_issues(filename))
 
+    issue_refs, ambiguous_refs = filter_ambiguous_issues(issue_refs)
+
     if args.changed_lines_only:
         issue_refs = filter_changed_lines(issue_refs)
 
     issue_refs = filter_closed_issues(issue_refs)
+
+    for issue_ref in ambiguous_refs:
+        print(f"--- Ambiguous issue reference: #{issue_ref.issue_id}")
+        if issue_ref.text is not None:
+            print(f"{issue_ref.filename}:{issue_ref.line_number}:")
+            print(issue_ref.text)
+        else:
+            print(f"{issue_ref.filename} (filename)")
+        print(
+            f"Use database-issues#{issue_ref.issue_id} or materialize#{issue_ref.issue_id} instead to have an unambiguous reference"
+        )
 
     for issue_ref in issue_refs:
         url = buildkite.inline_link(
@@ -306,7 +332,7 @@ def main() -> int:
         else:
             print(f"{issue_ref.filename} (filename)")
 
-    return 1 if len(issue_refs) else 0
+    return 1 if issue_refs + ambiguous_refs else 0
 
 
 if __name__ == "__main__":

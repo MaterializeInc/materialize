@@ -11,7 +11,7 @@ aliases:
     - /guides/
 ---
 
-[//]: # "TODO(morsapaes) Once #8396 lands, link the page here"
+[//]: # "TODO(morsapaes) Once materialize#8396 lands, link the page here"
 
 Materialize is **wire-compatible** with PostgreSQL, which means it integrates
 with many SQL clients and other tools in the data ecosystem that support

@@ -690,7 +690,7 @@ where
         );
 
         // Duplicating a large codepath here during the migration.
-        // TODO(#23942): dedup once the migration is complete.
+        // TODO(materialize#23942): dedup once the migration is complete.
         if cfg.batch.expected_order == RunOrder::Structured {
             // If we're not writing down the record metadata, we must always use the old compaction
             // order. (Since that's the default when the metadata's not present.)

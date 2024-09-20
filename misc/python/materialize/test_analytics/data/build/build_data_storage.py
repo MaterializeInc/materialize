@@ -84,7 +84,7 @@ class BuildDataStorage(BaseDataStorage):
         job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
         step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
         step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
-        # TODO: remove NULL casting when #27429 is resolved
+        # TODO: remove NULL casting when materialize#27429 is resolved
         shard_index = buildkite.get_var(
             BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB, "NULL::INT"
         )

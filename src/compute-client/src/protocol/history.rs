@@ -21,7 +21,7 @@ use timely::PartialOrder;
 use crate::metrics::HistoryMetrics;
 use crate::protocol::command::{ComputeCommand, ComputeParameters};
 
-/// TODO(#25239): Add documentation.
+/// TODO(materialize#25239): Add documentation.
 #[derive(Debug)]
 pub struct ComputeCommandHistory<M, T = mz_repr::Timestamp> {
     /// The number of commands at the last time we compacted the history.
@@ -41,7 +41,7 @@ where
     M: Borrow<UIntGauge>,
     T: timely::progress::Timestamp,
 {
-    /// TODO(#25239): Add documentation.
+    /// TODO(materialize#25239): Add documentation.
     pub fn new(metrics: HistoryMetrics<M>) -> Self {
         metrics.reset();
 

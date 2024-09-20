@@ -322,7 +322,7 @@ ALTER SYSTEM SET max_tables = 2
 
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 > CREATE SOURCE mz_source2 FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-# TODO: #29556 (source limit not applied)
+# TODO: materialize#29556 (source limit not applied)
 # ! CREATE SOURCE mz_source3 FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 # contains:creating source would violate max_sources limit (desired: 3, limit: 2, current: 0)
 
@@ -362,7 +362,7 @@ INSERT INTO t4 VALUES (4);
 CREATE PUBLICATION mz_source2 FOR TABLE t4;
 
 # Show that we're at limit
-# TODO: #29556 (source limit not applied)
+# TODO: materialize#29556 (source limit not applied)
 # ! CREATE SOURCE mz_source4
 #   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2');
 # contains:creating source would violate max_sources limit (desired: 4, limit: 3, current: 3)
@@ -373,7 +373,7 @@ CREATE PUBLICATION mz_source2 FOR TABLE t4;
 > CREATE SOURCE mz_source2
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2');
 
-# TODO: #29556 (source limit not applied)
+# TODO: materialize#29556 (source limit not applied)
 # ! CREATE SOURCE mz_source5
 #   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 # contains:creating source would violate max_sources limit (desired: 4, limit: 3, current: 3)

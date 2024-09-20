@@ -152,7 +152,7 @@ CREATE PUBLICATION another_publication FOR TABLE another_schema.another_table;
 
 #
 # Test that slots created for replication sources are deleted on DROP
-# TODO: enable once we land #24586
+# TODO: enable once we land materialize#24586
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
 # Sneak in a test for pg_source_snapshot_statement_timeout, pg_source_wal_sender_timeout
@@ -166,7 +166,7 @@ ALTER SYSTEM SET pg_source_wal_sender_timeout = 0;
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES ("pk_table");
 
-# TODO: enable once we land #24586
+# TODO: enable once we land materialize#24586
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
 
 > SHOW SUBSOURCES ON test_slot_source
@@ -175,7 +175,7 @@ test_slot_source_progress progress
 
 > DROP SOURCE test_slot_source CASCADE
 
-# TODO: enable once we land #24586
+# TODO: enable once we land materialize#24586
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
 $ postgres-execute connection=mz_system

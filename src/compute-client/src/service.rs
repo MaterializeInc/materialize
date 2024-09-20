@@ -65,7 +65,7 @@ impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn C
     }
 }
 
-/// TODO(#25239): Add documentation.
+/// TODO(materialize#25239): Add documentation.
 #[derive(Debug, Clone)]
 pub enum ComputeProtoServiceTypes {}
 
@@ -76,7 +76,7 @@ impl ProtoServiceTypes for ComputeProtoServiceTypes {
     const URL: &'static str = "/mz_compute_client.service.ProtoCompute/CommandResponseStream";
 }
 
-/// TODO(#25239): Add documentation.
+/// TODO(materialize#25239): Add documentation.
 pub type ComputeGrpcClient = GrpcClient<ComputeProtoServiceTypes>;
 
 #[async_trait]

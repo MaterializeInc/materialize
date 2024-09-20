@@ -470,7 +470,7 @@ impl Default for FuseAndCollapse {
         Self {
             // TODO: The relative orders of the transforms have not been
             // determined except where there are comments.
-            // TODO (#6542): All the transforms here except for `ProjectionLifting`
+            // TODO (materialize#6542): All the transforms here except for `ProjectionLifting`
             //  and `RedundantJoin` can be implemented as free functions.
             transforms: vec![
                 Box::new(canonicalization::ProjectionExtraction),
@@ -591,7 +591,7 @@ impl Optimizer {
                     // Lifts the information `!isnull(col)`
                     Box::new(nonnullable::NonNullable),
                     // Lifts the information `col = literal`
-                    // TODO (#6613): this also tries to lift `!isnull(col)` but
+                    // TODO (materialize#6613): this also tries to lift `!isnull(col)` but
                     // less well than the previous transform. Eliminate
                     // redundancy between the two transforms.
                     Box::new(column_knowledge::ColumnKnowledge::default()),

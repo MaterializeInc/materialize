@@ -369,7 +369,7 @@ disruptions = [
             ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
         ],
     ),
-    # TODO: Reenable when #28997 is fixed
+    # TODO: Reenable when materialize#28997 is fixed
     # Disruption(
     #     name="restart-replica",
     #     disruption=lambda c: restart_replica(c),
@@ -454,7 +454,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         # frontier forward. If the targeted replica is crashing, the write
         # frontier cannot advance and thus the read frontier cannot either.
         #
-        # TODO(#27399): Fix this by installing targeted subscribes only on the
+        # TODO(materialize#27399): Fix this by installing targeted subscribes only on the
         #               targeted replica.
         c.sql(
             "ALTER SYSTEM SET enable_introspection_subscribes = false;",

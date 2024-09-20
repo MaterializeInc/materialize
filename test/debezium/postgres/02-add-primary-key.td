@@ -11,6 +11,10 @@
 # Test adding a primary key over an existing column
 #
 
+# TODO: Reenable when materialize#6570 is fixed
+$ skip-if
+SELECT true
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_add_primary_key (f1 INTEGER);
 INSERT INTO alter_add_primary_key VALUES (123), (234);

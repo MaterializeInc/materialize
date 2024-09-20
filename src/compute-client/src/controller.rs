@@ -118,7 +118,7 @@ pub enum ComputeControllerResponse<T> {
 /// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ComputeReplicaConfig {
-    /// TODO(#25239): Add documentation.
+    /// TODO(materialize#25239): Add documentation.
     pub logging: ComputeReplicaLogging,
 }
 
@@ -278,7 +278,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         }
     }
 
-    /// TODO(#25239): Add documentation.
+    /// TODO(materialize#25239): Add documentation.
     pub fn instance_exists(&self, id: ComputeInstanceId) -> bool {
         self.instances.contains_key(&id)
     }
