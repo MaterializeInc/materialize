@@ -2122,8 +2122,8 @@ async fn compile_proto(
     let primary_fd = fds.file(0);
     let message_name = match primary_fd.message_type_size() {
         1 => String::from_utf8_lossy(primary_fd.message_type(0).name()).into_owned(),
-        0 => bail_unsupported!(9598, "Protobuf schemas with no messages"),
-        _ => bail_unsupported!(9598, "Protobuf schemas with multiple messages"),
+        0 => bail_unsupported!(29603, "Protobuf schemas with no messages"),
+        _ => bail_unsupported!(29603, "Protobuf schemas with multiple messages"),
     };
 
     // Encode the file descriptor set into a SQL byte string.

@@ -117,9 +117,7 @@ impl fmt::Display for ExplainError {
             ExplainError::LinearChainsPlusRecursive => {
                 write!(
                     f,
-                    "The linear_chains option is not supported with WITH MUTUALLY RECURSIVE. \
-                If you would like to see added support, then please comment at \
-                https://github.com/MaterializeInc/materialize/issues/19012."
+                    "The linear_chains option is not supported with WITH MUTUALLY RECURSIVE."
                 )
             }
             ExplainError::UnknownError(error) => {

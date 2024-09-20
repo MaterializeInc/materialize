@@ -51,7 +51,7 @@ pub enum PlanError {
     /// This feature is not yet supported, but may be supported at some point in the future.
     Unsupported {
         feature: String,
-        issue_no: Option<usize>,
+        discussion_no: Option<usize>,
     },
     /// This feature is not supported, and will likely never be supported.
     NeverSupported {
@@ -450,10 +450,10 @@ impl PlanError {
 impl fmt::Display for PlanError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Unsupported { feature, issue_no } => {
+            Self::Unsupported { feature, discussion_no } => {
                 write!(f, "{} not yet supported", feature)?;
-                if let Some(issue_no) = issue_no {
-                    write!(f, ", see https://github.com/MaterializeInc/materialize/issues/{} for more details", issue_no)?;
+                if let Some(discussion_no) = discussion_no {
+                    write!(f, ", see https://github.com/MaterializeInc/materialize/discussions/{} for more details", discussion_no)?;
                 }
                 Ok(())
             }

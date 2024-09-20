@@ -81,7 +81,7 @@ where
         DateTimeUnits::Timezone | DateTimeUnits::TimezoneHour | DateTimeUnits::TimezoneMinute => {
             Err(EvalError::Unsupported {
                 feature: format!("'{}' timestamp units", units),
-                issue_no: None,
+                discussion_no: None,
             })
         }
     }

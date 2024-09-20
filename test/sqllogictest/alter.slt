@@ -97,7 +97,7 @@ ALTER VIEW mv SET CLUSTER quickstart
 query error db error: ERROR: v is a view not a materialized view
 ALTER MATERIALIZED VIEW v SET CLUSTER quickstart
 
-query error db error: ERROR: ALTER SINK SET CLUSTER not yet supported, see https://github\.com/MaterializeInc/materialize/issues/20841 for more details
+query error db error: ERROR: ALTER SINK SET CLUSTER not yet supported, see https://github\.com/MaterializeInc/materialize/discussions/29606 for more details
 ALTER SINK v SET CLUSTER quickstart
 
 statement ok

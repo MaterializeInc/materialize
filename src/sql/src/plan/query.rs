@@ -3554,7 +3554,7 @@ fn plan_using_constraint(
                     "column name {} appears more than once in USING clause",
                     c.as_str().quoted()
                 ),
-                issue_no: None,
+                discussion_no: None,
             });
         }
     }
@@ -5396,7 +5396,7 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
                 (Datum::Numeric(d), ScalarType::Numeric { max_scale: None })
             }
         }
-        Value::HexString(_) => bail_unsupported!(3114, "hex string literals"),
+        Value::HexString(_) => bail_unsupported!("hex string literals"),
         Value::Boolean(b) => match b {
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),

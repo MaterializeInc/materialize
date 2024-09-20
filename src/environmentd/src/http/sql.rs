@@ -1296,27 +1296,46 @@ async fn execute_stmt<S: ResultSender>(
             )
             .into()
         }
-        ExecuteResponse::SendingRows { future: mut rows, instance_id, strategy } => {
+        ExecuteResponse::SendingRows {
+            future: mut rows,
+            instance_id,
+            strategy,
+        } => {
             let rows = match await_rows(sender, client, &mut rows).await? {
                 PeekResponseUnary::Rows(rows) => {
-                    RecordFirstRowStream::record(execute_started, client, Some(instance_id), Some(strategy));
+                    RecordFirstRowStream::record(
+                        execute_started,
+                        client,
+                        Some(instance_id),
+                        Some(strategy),
+                    );
                     rows
                 }
                 PeekResponseUnary::Error(e) => {
-                    return Ok(
-                        SqlResult::err(client, Error::Unstructured(anyhow!(e))).into(),
-                    );
+                    return Ok(SqlResult::err(client, Error::Unstructured(anyhow!(e))).into());
                 }
                 PeekResponseUnary::Canceled => {
                     return Ok(SqlResult::err(client, AdapterError::Canceled).into());
                 }
             };
-            SqlResult::rows(client, rows, &desc.relation_desc.expect("RelationDesc must exist")).into()
+            SqlResult::rows(
+                client,
+                rows,
+                &desc.relation_desc.expect("RelationDesc must exist"),
+            )
+            .into()
         }
-        ExecuteResponse::SendingRowsImmediate { rows } => {
-            SqlResult::rows(client, rows, &desc.relation_desc.expect("RelationDesc must exist")).into()
-        }
-        ExecuteResponse::Subscribing { rx, ctx_extra, instance_id } => StatementResult::Subscribe {
+        ExecuteResponse::SendingRowsImmediate { rows } => SqlResult::rows(
+            client,
+            rows,
+            &desc.relation_desc.expect("RelationDesc must exist"),
+        )
+        .into(),
+        ExecuteResponse::Subscribing {
+            rx,
+            ctx_extra,
+            instance_id,
+        } => StatementResult::Subscribe {
             tag: "SUBSCRIBE".into(),
             desc: desc.relation_desc.unwrap(),
             rx: RecordFirstRowStream::new(
@@ -1334,9 +1353,12 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::DeclaredCursor
         | ExecuteResponse::ClosedCursor) => SqlResult::err(
             client,
-            Error::Unstructured(anyhow!("internal error: encountered prohibited ExecuteResponse {:?}.\n\n
-            This is a bug. Can you please file an issue letting us know?\n
-            https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=C-bug%2CC-triage&template=01-bug.yml", ExecuteResponseKind::from(res))),
+            Error::Unstructured(anyhow!(
+                "internal error: encountered prohibited ExecuteResponse {:?}.\n\n
+            This is a bug. Can you please file an bug report letting us know?\n
+            https://github.com/MaterializeInc/materialize/discussions/new?category=bug-reports",
+                ExecuteResponseKind::from(res)
+            )),
         )
         .into(),
     })

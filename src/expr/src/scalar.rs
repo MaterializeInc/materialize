@@ -2424,7 +2424,7 @@ pub enum EvalError {
     DivisionByZero,
     Unsupported {
         feature: String,
-        issue_no: Option<usize>,
+        discussion_no: Option<usize>,
     },
     FloatOverflow,
     FloatUnderflow,
@@ -2542,10 +2542,13 @@ impl fmt::Display for EvalError {
             }
             EvalError::DateBinOutOfRange(message) => f.write_str(message),
             EvalError::DivisionByZero => f.write_str("division by zero"),
-            EvalError::Unsupported { feature, issue_no } => {
+            EvalError::Unsupported {
+                feature,
+                discussion_no,
+            } => {
                 write!(f, "{} not yet supported", feature)?;
-                if let Some(issue_no) = issue_no {
-                    write!(f, ", see https://github.com/MaterializeInc/materialize/issues/{} for more details", issue_no)?;
+                if let Some(discussion_no) = discussion_no {
+                    write!(f, ", see https://github.com/MaterializeInc/materialize/discussions/{} for more details", discussion_no)?;
                 }
                 Ok(())
             }
@@ -2834,9 +2837,12 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::CharacterTooLargeForEncoding(v) => CharacterTooLargeForEncoding(*v),
             EvalError::DateBinOutOfRange(v) => DateBinOutOfRange(v.clone()),
             EvalError::DivisionByZero => DivisionByZero(()),
-            EvalError::Unsupported { feature, issue_no } => Unsupported(ProtoUnsupported {
+            EvalError::Unsupported {
+                feature,
+                discussion_no,
+            } => Unsupported(ProtoUnsupported {
                 feature: feature.clone(),
-                issue_no: issue_no.into_proto(),
+                discussion_no: discussion_no.into_proto(),
             }),
             EvalError::FloatOverflow => FloatOverflow(()),
             EvalError::FloatUnderflow => FloatUnderflow(()),
@@ -2997,7 +3003,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 DivisionByZero(()) => Ok(EvalError::DivisionByZero),
                 Unsupported(v) => Ok(EvalError::Unsupported {
                     feature: v.feature,
-                    issue_no: v.issue_no.into_rust()?,
+                    discussion_no: v.discussion_no.into_rust()?,
                 }),
                 FloatOverflow(()) => Ok(EvalError::FloatOverflow),
                 FloatUnderflow(()) => Ok(EvalError::FloatUnderflow),

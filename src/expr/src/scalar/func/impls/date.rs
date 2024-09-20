@@ -142,7 +142,7 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
         | DateTimeUnits::TimezoneMinute
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
             feature: format!("'{}' timestamp units", units),
-            issue_no: None,
+            discussion_no: None,
         }),
     }
 }

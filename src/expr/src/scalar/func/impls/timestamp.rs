@@ -314,7 +314,7 @@ where
         | DateTimeUnits::IsoDayOfWeek
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
             feature: format!("'{}' timestamp units", units),
-            issue_no: None,
+            discussion_no: None,
         }),
     }
 }
@@ -395,7 +395,7 @@ where
         | DateTimeUnits::TimezoneMinute
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
             feature: format!("'{}' timestamp units", units),
-            issue_no: None,
+            discussion_no: None,
         }),
     }
 }
@@ -544,7 +544,7 @@ pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: &T) -> Resul
         | DateTimeUnits::IsoDayOfWeek
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
             feature: format!("'{}' timestamp units", units),
-            issue_no: None,
+            discussion_no: None,
         }),
     }
 }

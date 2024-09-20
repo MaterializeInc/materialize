@@ -43,7 +43,7 @@ impl LazyUnaryFunc for CastArrayToListOneDim {
                     "casting multi-dimensional array to list; got array with {} dimensions",
                     ndims
                 ),
-                issue_no: None,
+                discussion_no: None,
             });
         }
 

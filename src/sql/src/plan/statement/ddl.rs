@@ -508,7 +508,7 @@ pub fn plan_create_webhook_source(
         ty => {
             return Err(PlanError::Unsupported {
                 feature: format!("{ty} is not a valid BODY FORMAT for a WEBHOOK source"),
-                issue_no: None,
+                discussion_no: None,
             })
         }
     };
@@ -4313,7 +4313,7 @@ pub fn unplan_create_cluster(
             })
         }
         CreateClusterVariant::Unmanaged(_) => {
-            bail_unsupported!(15435, "SHOW CREATE for unmanaged clusters")
+            bail_unsupported!("SHOW CREATE for unmanaged clusters")
         }
     }
 }
@@ -5665,7 +5665,7 @@ pub fn plan_alter_item_set_cluster(
     match object_type {
         ObjectType::MaterializedView => {}
         ObjectType::Index | ObjectType::Sink | ObjectType::Source => {
-            bail_unsupported!(20841, format!("ALTER {object_type} SET CLUSTER"))
+            bail_unsupported!(29606, format!("ALTER {object_type} SET CLUSTER"))
         }
         _ => {
             bail_never_supported!(
@@ -6038,7 +6038,7 @@ pub fn plan_alter_object_swap(
         }
         (object_type, _, _) => Err(PlanError::Unsupported {
             feature: format!("ALTER {object_type} .. SWAP WITH ..."),
-            issue_no: Some(12972),
+            discussion_no: None,
         }),
     }
 }
@@ -6766,7 +6766,7 @@ pub fn plan_comment(
                 r => {
                     return Err(PlanError::Unsupported {
                         feature: format!("Specifying comments on a column of {r}"),
-                        issue_no: Some(21465),
+                        discussion_no: None,
                     });
                 }
             }

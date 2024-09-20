@@ -59,8 +59,7 @@ pub fn extract_protobuf_header(buf: &[u8]) -> Result<(i32, &[u8])> {
         Some(0) => Ok((schema_id, &buf[1..])),
         Some(message_id) => bail!(
             "unsupported Confluent-style protobuf message descriptor id: \
-                expected 0, but found: {}. \
-                See https://github.com/MaterializeInc/materialize/issues/9250",
+                expected 0, but found: {}",
             message_id
         ),
         None => bail!(
