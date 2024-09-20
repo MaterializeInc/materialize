@@ -18,6 +18,10 @@
 # Check out https://www.postgresql.org/docs/13/auth-pg-hba-conf.html
 # for more details.
 
+# TODO: Reenable when materialize#14037 is fixed
+$ skip-if
+SELECT true
+
 > CREATE SECRET ssl_ca AS '${arg.ssl-ca}'
 > CREATE SECRET ssl_cert AS '${arg.ssl-cert}'
 > CREATE SECRET ssl_key AS '${arg.ssl-key}'
@@ -60,8 +64,8 @@ $ set-regex match=(\d{1,3}\.){3}\d{1,3} replacement=(HOST)
   DATABASE postgres
   );
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -91,8 +95,8 @@ contains: invalid CONNECTION: unknown SSL MODE "prefer"
   DATABASE postgres
   );
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -125,8 +129,8 @@ contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostssl"
   DATABASE postgres
   );
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -160,8 +164,8 @@ contains:self signed certificate in certificate chain
   DATABASE postgres
   );
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -195,8 +199,8 @@ contains:self signed certificate in certificate chain
   DATABASE postgres
   );
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -217,8 +221,8 @@ DELETE FROM numbers WHERE number = 2;
   DATABASE postgres
   );
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -278,8 +282,8 @@ contains:self signed certificate in certificate chain
   DATABASE postgres
   );
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -331,8 +335,8 @@ contains:db error: FATAL: certificate authentication failed for user "certuser"
   DATABASE postgres
   );
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
@@ -356,8 +360,8 @@ DELETE FROM numbers WHERE number = 2;
   DATABASE postgres
   );
 > CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-> CREATE TABLE "numbers" FROM SOURCE "mz_source" (REFERENCE "numbers");
+  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
+  FOR TABLES ("numbers");
 > SELECT * FROM "numbers";
 1 true one
 $ postgres-execute connection=postgres://postgres:postgres@postgres:5432

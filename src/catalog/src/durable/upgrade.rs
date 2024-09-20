@@ -92,7 +92,7 @@ macro_rules! objects {
                         fn from(value: StateUpdateKind) -> Self {
                             let kind = value.kind.expect("kind should be set");
                             // TODO: This requires that the json->proto->json roundtrips
-                            // exactly, see #23908.
+                            // exactly, see materialize#23908.
                             StateUpdateKindJson::from_serde(&kind)
                         }
                     }

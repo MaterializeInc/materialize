@@ -12,6 +12,10 @@
 # Currently rejected by the schema registry on the Debezium side. Replication stops
 #
 
+# TODO: Reenable when materialize#6570 is fixed
+$ skip-if
+SELECT true
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_add_column_primary_key (f1 INTEGER);
 INSERT INTO alter_add_column_primary_key VALUES (123);

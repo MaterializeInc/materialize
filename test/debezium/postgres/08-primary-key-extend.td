@@ -12,6 +12,10 @@
 # Currently, this throws an error on the Debezium side and replication stops
 #
 
+# TODO: Reenable when materialize#6570 is fixed
+$ skip-if
+SELECT true
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_extend_primary_key (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE alter_extend_primary_key REPLICA IDENTITY FULL;

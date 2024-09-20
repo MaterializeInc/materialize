@@ -11,6 +11,10 @@
 # Change the definition of a column to be NOT NULL
 #
 
+# TODO: Reenable when materialize#6570 is fixed
+$ skip-if
+SELECT true
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_remove_nullability (f1 INTEGER);
 ALTER TABLE alter_remove_nullability REPLICA IDENTITY FULL;

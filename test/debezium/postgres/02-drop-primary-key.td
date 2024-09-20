@@ -11,6 +11,10 @@
 # Test that dropping the primary key is handled correctly
 #
 
+# TODO: Reenable when materialize#6521 is fixed
+$ skip-if
+SELECT true
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_drop_primary_key (f1 INTEGER PRIMARY KEY);
 INSERT INTO alter_drop_primary_key VALUES (123);

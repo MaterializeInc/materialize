@@ -67,7 +67,8 @@ where
             // TODO(vmarcos): We evaluate the limit expression below for each input update. There
             // is an opportunity to do so for every group key instead if the error handling is
             // integrated with: 1. The intra-timestamp thinning step in monotonic top-k, e.g., by
-            // adding an error output there; 2. The validating reduction on basic top-k (#23687).
+            // adding an error output there; 2. The validating reduction on basic top-k
+            // (materialize#23687).
             let limit_err = match &top_k_plan {
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan { .. }) => None,
                 TopKPlan::MonotonicTopK(MonotonicTopKPlan { limit, .. }) => Some(limit),

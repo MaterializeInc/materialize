@@ -8,14 +8,17 @@
 # by the Apache License, Version 2.0.
 
 #
-# Shrink the number of columns that participate in a primary key
-# Currently, this throws an error on the Debezium side and replication stops
+# Make sure that temporal types are properly replicated, including sub-second precision
 #
 
+# TODO: Reenable when materialize#6535 is fixed
+$ skip-if
+SELECT true
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE alter_shrink_primary_key (f1 INTEGER DEFAULT 1, f2 INTEGER DEFAULT 2, PRIMARY KEY (f1, f2));
-ALTER TABLE alter_shrink_primary_key REPLICA IDENTITY FULL;
-INSERT INTO alter_shrink_primary_key VALUES (123,234),(345,456);
+CREATE TABLE temporal_types (date_col DATE, time_col TIME, timestamp_col TIMESTAMP);
+ALTER TABLE temporal_types REPLICA IDENTITY FULL;
+INSERT INTO temporal_types VALUES ('2011-11-11', '11:11:11.123456', '2011-11-11 11:11:11.123456');
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -23,20 +26,16 @@ INSERT INTO alter_shrink_primary_key VALUES (123,234),(345,456);
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE SOURCE alter_shrink_primary_key
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_shrink_primary_key')
+> CREATE SOURCE temporal_types
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.temporal_types')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_shrink_primary_key;
-123 234
-345 456
+> SELECT * FROM temporal_types;
+2011-11-11 11:11:11.123456 "2011-11-11 11:11:11.123456"
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-ALTER TABLE alter_shrink_primary_key DROP COLUMN f2, ADD PRIMARY KEY (f1);
-INSERT INTO alter_shrink_primary_key VALUES (567);
-DELETE FROM alter_shrink_primary_key WHERE f1 = 123;
+UPDATE temporal_types SET date_col = '2012-12-12', time_col = '12:12:12.234567', timestamp_col = '2012-12-12 12:12:12.234567';
 
-> SELECT * FROM alter_shrink_primary_key;
-345
-567
+> SELECT * FROM temporal_types;
+2012-12-12 12:12:12.234567 "2012-12-12 12:12:12.234567"

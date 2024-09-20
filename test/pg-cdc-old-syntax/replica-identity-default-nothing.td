@@ -14,6 +14,10 @@
 # IDENTITY DEFAULT is the same as USING INDEX (t1_pkey)
 #
 
+# TODO: Reenable when materialize#14802 is fixed
+$ skip-if
+SELECT true
+
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
@@ -43,12 +47,9 @@ ALTER TABLE identity_nothing REPLICA IDENTITY NOTHING;
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-
-> CREATE TABLE identity_default_key_update FROM SOURCE mz_source (REFERENCE identity_default_key_update);
-> CREATE TABLE identity_default_nokey_update FROM SOURCE mz_source (REFERENCE identity_default_nokey_update);
-> CREATE TABLE identity_default_delete FROM SOURCE mz_source (REFERENCE identity_default_delete);
-> CREATE TABLE identity_nothing FROM SOURCE mz_source (REFERENCE identity_nothing);
+> CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
 
 # Make sure that the above sources are fully instantiated so that the DML statements below
 # are sent as actual replication events post-snapshot.

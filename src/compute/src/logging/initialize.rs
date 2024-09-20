@@ -142,7 +142,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
 
         // TODO(vmarcos): If we introduce introspection sources that would match
         // type specialization for keys, we'd need to ensure that type specialized
-        // variants reach the map below (issue #22398).
+        // variants reach the map below (issue materialize#22398).
         collections
             .into_iter()
             .map(|(log, collection)| {

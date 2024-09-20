@@ -112,7 +112,7 @@ fn test_bind_params() {
         .query_one("CREATE VIEW v AS SELECT $3", &[])
         .unwrap_db_error();
     // TODO(benesch): this should be `UNDEFINED_PARAMETER`, but blocked
-    // on #3147.
+    // on materialize#3147.
     assert_eq!(err.message(), "there is no parameter $3");
     assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
 

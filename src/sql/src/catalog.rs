@@ -691,10 +691,10 @@ impl CatalogItemType {
     ///
     /// We don't presently construct types that mirror relational objects,
     /// though we likely will need to in the future for full PostgreSQL
-    /// compatibility (see #23789). For now, we use this method to prevent
-    /// creating types and relational objects that have the same name, so that
-    /// it is a backwards compatible change in the future to introduce a type
-    /// named after each relational object in the system.
+    /// compatibility (see materialize#23789). For now, we use this method to
+    /// prevent creating types and relational objects that have the same name, so
+    /// that it is a backwards compatible change in the future to introduce a
+    /// type named after each relational object in the system.
     pub fn conflicts_with_type(&self) -> bool {
         match self {
             CatalogItemType::Table => true,
