@@ -18,14 +18,14 @@ SELECT * FROM [u123 AS materialize.public.foo]
 ----
 SELECT * FROM [u123 AS materialize.public.foo]
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Id("u123", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Id("u123", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("foo")]), None), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT [u123 AS materialize.public.foo](1)
 ----
 SELECT [u123 AS materialize.public.foo](1)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Function(Function { name: Id("u123", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("foo")])), args: Args { args: [Value(Number("1"))], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Function(Function { name: Id("u123", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("foo")]), None), args: Args { args: [Value(Number("1"))], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM [u123 AS foo]
@@ -47,3 +47,32 @@ SELECT * FROM [u123 AS materialize.public.foo
 error: Expected right square bracket, found EOF
 SELECT * FROM [u123 AS materialize.public.foo
                                              ^
+
+parse-statement
+CREATE VIEW v1 AS SELECT * FROM [ u1 as materialize.public.t1 VERSION 5]
+----
+CREATE VIEW v1 AS SELECT * FROM [u1 AS materialize.public.t1 VERSION 5]
+=>
+CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("v1")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Id("u1", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("t1")]), Some(Version(5))), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+
+parse-statement
+CREATE VIEW "materialize"."public"."v3" AS SELECT * FROM [u1 AS "materialize"."public"."t1" VERSION 3]
+----
+CREATE VIEW materialize.public.v3 AS SELECT * FROM [u1 AS materialize.public.t1 VERSION 3]
+=>
+CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("v3")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Id("u1", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("t1")]), Some(Version(3))), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+
+parse-statement
+CREATE VIEW "materialize"."public"."v3" AS SELECT * FROM [u1 AS "materialize"."public"."t1" VERSION foobar]
+----
+error: Expected literal unsigned integer, found identifier "foobar"
+CREATE VIEW "materialize"."public"."v3" AS SELECT * FROM [u1 AS "materialize"."public"."t1" VERSION foobar]
+                                                                                                    ^
+
+
+parse-statement
+CREATE VIEW "materialize"."public"."v3" AS SELECT * FROM [u1 AS "materialize"."public"."t1" VERSION -101]
+----
+error: Expected literal unsigned integer, found operator "-"
+CREATE VIEW "materialize"."public"."v3" AS SELECT * FROM [u1 AS "materialize"."public"."t1" VERSION -101]
+                                                                                                    ^

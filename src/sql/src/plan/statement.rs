@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::namespaces::is_system_schema;
-use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationVersionSelector, ScalarType};
 use mz_sql_parser::ast::{
     ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
     RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
@@ -637,6 +637,7 @@ impl<'a> StatementContext<'a> {
             qualifiers: qualified.qualifiers,
             full_name,
             print_id: true,
+            version: RelationVersionSelector::Latest,
         })
     }
 
@@ -715,7 +716,7 @@ impl<'a> StatementContext<'a> {
                 let name = normalize::unresolved_item_name(name)?;
                 Ok(self.catalog.resolve_item(&name)?)
             }
-            RawItemName::Id(id, _) => {
+            RawItemName::Id(id, _, _) => {
                 let gid = id.parse()?;
                 Ok(self.catalog.get_item(&gid))
             }
@@ -982,6 +983,7 @@ impl<'a> StatementContext<'a> {
             qualifiers: entry.name().qualifiers.clone(),
             full_name,
             print_id: true,
+            version: RelationVersionSelector::Latest,
         }
     }
 }

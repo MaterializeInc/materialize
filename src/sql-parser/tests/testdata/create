@@ -249,6 +249,13 @@ CREATE TABLE t (x int4) WITH (RETAIN HISTORY = FOR '1 day')
 CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [TableOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1 day"))) }] })
 
 parse-statement
+CREATE TABLE t (x int, y text VERSION ADDED 1) WITH (RETAIN HISTORY = FOR '1 day')
+----
+CREATE TABLE t (x int4, y text VERSION ADDED 1) WITH (RETAIN HISTORY = FOR '1 day')
+=>
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("y"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Versioned { action: Added, version: Version(1) } }] }], constraints: [], if_not_exists: false, temporary: false, with_options: [TableOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1 day"))) }] })
+
+parse-statement
 CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS
 ----
 CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS
@@ -663,3 +670,31 @@ CREATE SUBSOURCE IF NOT EXISTS source.sub (a int, b text) OF SOURCE primary WITH
 CREATE SUBSOURCE IF NOT EXISTS source.sub (a int4, b text) OF SOURCE primary WITH (PROGRESS, EXTERNAL REFERENCE = a.b.c)
 =>
 CreateSubsource(CreateSubsourceStatement { name: UnresolvedItemName([Ident("source"), Ident("sub")]), columns: [ColumnDef { name: Ident("a"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("b"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }], of_source: Some(Name(UnresolvedItemName([Ident("primary")]))), constraints: [], if_not_exists: true, with_options: [CreateSubsourceOption { name: Progress, value: None }, CreateSubsourceOption { name: ExternalReference, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]))) }] })
+
+parse-statement
+CREATE TABLE t (x int, y text VERSION foobar)
+----
+error: Expected ADDED, found identifier "foobar"
+CREATE TABLE t (x int, y text VERSION foobar)
+                                      ^
+
+parse-statement
+CREATE TABLE t (x int, y text VERSION ADDED foobar)
+----
+error: Expected literal unsigned integer, found identifier "foobar"
+CREATE TABLE t (x int, y text VERSION ADDED foobar)
+                                            ^
+
+parse-statement
+CREATE TABLE t (x int, y text VERSION ADDED -10)
+----
+error: Expected literal unsigned integer, found operator "-"
+CREATE TABLE t (x int, y text VERSION ADDED -10)
+                                            ^
+
+parse-statement
+CREATE TABLE t (x int, y text VERSION ADDED '10000')
+----
+error: Expected literal unsigned integer, found string literal "10000"
+CREATE TABLE t (x int, y text VERSION ADDED '10000')
+                                            ^

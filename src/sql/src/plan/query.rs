@@ -406,8 +406,12 @@ pub fn plan_insert_query(
     }
 
     let returning = {
-        let (scope, typ) = if let ResolvedItemName::Item { full_name, .. } = table_name {
-            let desc = table.desc(&full_name)?;
+        let (scope, typ) = if let ResolvedItemName::Item {
+            full_name,
+            version: _,
+            ..
+        } = table_name
+        {
             let scope = Scope::from_source(Some(full_name.clone().into()), desc.iter_names());
             let typ = desc.typ().clone();
             (scope, typ)
@@ -669,9 +673,9 @@ pub fn plan_mutation_query_inner(
     assignments: Vec<Assignment<Aug>>,
     selection: Option<Expr<Aug>>,
 ) -> Result<ReadThenWritePlan, PlanError> {
-    // Get global ID.
+    // Get global ID and version of the relation desc.
     let id = match table_name {
-        ResolvedItemName::Item { id, .. } => id,
+        ResolvedItemName::Item { id, version: _, .. } => id,
         _ => sql_bail!("cannot mutate non-user table"),
     };
 
