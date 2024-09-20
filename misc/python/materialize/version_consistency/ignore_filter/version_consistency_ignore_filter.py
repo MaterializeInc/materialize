@@ -60,11 +60,23 @@ MZ_VERSION_0_118_0 = MzVersion.parse_mz("v0.118.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
-    def __init__(self, mz1_version: MzVersion, mz2_version: MzVersion, uses_dfr: bool):
+    def __init__(
+        self,
+        mz1_version_without_dev_suffix: MzVersion,
+        mz2_version_without_dev_suffix: MzVersion,
+        uses_dfr: bool,
+    ):
+        assert (
+            not mz1_version_without_dev_suffix.is_dev_version()
+        ), "mz1_version is a dev version but that suffix should be dropped"
+        assert (
+            not mz2_version_without_dev_suffix.is_dev_version()
+        ), "mz1_version is a dev version but that suffix should be dropped"
+
         lower_version, higher_version = (
-            (mz1_version, mz2_version)
-            if mz1_version < mz2_version
-            else (mz2_version, mz1_version)
+            (mz1_version_without_dev_suffix, mz2_version_without_dev_suffix)
+            if mz1_version_without_dev_suffix < mz2_version_without_dev_suffix
+            else (mz2_version_without_dev_suffix, mz1_version_without_dev_suffix)
         )
         super().__init__(
             VersionPreExecutionInconsistencyIgnoreFilter(
