@@ -1073,7 +1073,7 @@ where
         };
 
         let diagnostics = Diagnostics {
-            shard_name: shard_id.to_string(),
+            shard_name: table_id.to_string(),
             handle_purpose: "alter_table_desc".to_string(),
         };
 
