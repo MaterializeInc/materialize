@@ -6108,21 +6108,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_version(&mut self) -> Result<Version, ParserError> {
-        let Value::Number(val) = self.parse_number_value()? else {
-            unreachable!("programming error, expected Value::Number")
-        };
-        match val.parse() {
-            Ok(version) => Ok(Version(version)),
-            Err(err) => {
-                tracing::error!(?err, "failed to parse version number");
-                self.prev_token();
-                self.expected(
-                    self.peek_pos(),
-                    "non-negative version number",
-                    self.peek_token(),
-                )
-            }
-        }
+        let version = self.parse_literal_uint()?;
+        Ok(Version(version))
     }
 
     /// Parse a signed literal integer.
