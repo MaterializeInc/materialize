@@ -917,33 +917,8 @@ query T multiline
 EXPLAIN SELECT *, generate_series(1, 100) FROM mz_views
 ----
 Explained Query:
-  CrossJoin type=differential
-    ArrangeBy keys=[[]]
-      ReadIndex on=mz_views mz_views_ind=[*** full scan ***]
-    ArrangeBy keys=[[]]
-      Constant
-        total_rows (diffs absed): 100
-        first_rows:
-          - (1)
-          - (2)
-          - (3)
-          - (4)
-          - (5)
-          - (6)
-          - (7)
-          - (8)
-          - (9)
-          - (10)
-          - (11)
-          - (12)
-          - (13)
-          - (14)
-          - (15)
-          - (16)
-          - (17)
-          - (18)
-          - (19)
-          - (20)
+  FlatMap join_with_constant[(1), (2), (3), ...]()
+    ReadIndex on=mz_views mz_views_ind=[*** full scan ***]
 
 Used Indexes:
   - mz_catalog.mz_views_ind (*** full scan ***)

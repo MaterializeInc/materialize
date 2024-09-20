@@ -45,6 +45,7 @@ pub mod equivalence_propagation;
 pub mod fold_constants;
 pub mod fusion;
 pub mod join_implementation;
+pub mod join_to_flat_map;
 pub mod literal_constraints;
 pub mod literal_lifting;
 pub mod monotonic;
@@ -570,17 +571,26 @@ impl Optimizer {
     pub fn logical_optimizer(ctx: &mut TransformCtx) -> Self {
         let transforms: Vec<Box<dyn Transform>> = vec![
             Box::new(typecheck::Typecheck::new(ctx.typecheck()).strict_join_equivalences()),
-            // 1. Structure-agnostic cleanup
+            // Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(non_null_requirements::NonNullRequirements::default()),
-            // 2. Collapse constants, joins, unions, and lets as much as possible.
+            // Turn some Joins into FlatMaps or Maps.
+            // Before that, we have to run `FoldConstants`, so that we can recognize constant join
+            // inputs.
+            // `JoinToFlatMap` has to run before join fusion, see the doc comment in
+            // `join_to_flat_map.rs`.
+            Box::new(fold_constants::FoldConstants {
+                limit: Some(FOLD_CONSTANTS_LIMIT),
+            }),
+            Box::new(join_to_flat_map::JoinToFlatMap),
+            // Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
             Box::new(fuse_and_collapse()),
-            // 3. Structure-aware cleanup that needs to happen before ColumnKnowledge
+            // Structure-aware cleanup that needs to happen before ColumnKnowledge
             Box::new(threshold_elision::ThresholdElision),
-            // 4. Move predicate information up and down the tree.
-            //    This also fixes the shape of joins in the plan.
+            // Move predicate information up and down the tree.
+            // This also fixes the shape of joins in the plan.
             Box::new(Fixpoint {
                 name: "fixpoint_logical_01",
                 limit: 100,
@@ -600,7 +610,7 @@ impl Optimizer {
                     Box::new(FuseAndCollapse::default()),
                 ],
             }),
-            // 5. Reduce/Join simplifications.
+            // Reduce/Join simplifications.
             Box::new(Fixpoint {
                 name: "fixpoint_logical_02",
                 limit: 100,

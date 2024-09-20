@@ -1,0 +1,393 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t1(x int, t text);
+
+statement ok
+INSERT INTO t1 VALUES (10, 'alma'), (20, 'körte'), (30, 'barack');
+
+## Test all combinations of
+## 1. Needs `permute` or not (see in `join_to_flat_map.rs`);
+## 2. Map or FlatMap (i.e., constant `generate_series` has one result or more);
+## 3. SELECT or FROM clause;
+
+# SELECT clause
+
+query T multiline
+EXPLAIN
+SELECT
+  generate_series(1,1),
+  *
+FROM t1;
+----
+Explained Query:
+  Project (#2, #0, #1)
+    Map (1)
+      ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query IIT
+SELECT
+  generate_series(1,1),
+  *
+FROM t1;
+----
+1  10  alma
+1  20  körte
+1  30  barack
+
+query T multiline
+explain
+select
+  *,
+  generate_series(1,1)
+from t1;
+----
+Explained Query:
+  Map (1)
+    ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query ITI
+select
+  *,
+  generate_series(1,1)
+from t1;
+----
+10  alma  1
+20  körte  1
+30  barack  1
+
+query T multiline
+explain
+select
+  generate_series(1,3),
+  *
+from t1;
+----
+Explained Query:
+  Project (#2, #0, #1)
+    FlatMap join_with_constant[(1), (2), (3)]()
+      ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query IIT
+select
+  generate_series(1,3),
+  *
+from t1;
+----
+1  10  alma
+2  10  alma
+3  10  alma
+1  20  körte
+1  30  barack
+2  20  körte
+2  30  barack
+3  20  körte
+3  30  barack
+
+query T multiline
+explain
+select
+  *,
+  generate_series(1,3)
+from t1;
+----
+Explained Query:
+  FlatMap join_with_constant[(1), (2), (3)]()
+    ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query ITI
+select
+  *,
+  generate_series(1,3)
+from t1;
+----
+10  alma  1
+10  alma  2
+10  alma  3
+20  körte  1
+20  körte  2
+20  körte  3
+30  barack  1
+30  barack  2
+30  barack  3
+
+# FROM clause
+
+query T multiline
+EXPLAIN
+SELECT *
+FROM
+  generate_series(1,1),
+  t1;
+----
+Explained Query:
+  Project (#2, #0, #1)
+    Map (1)
+      ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query IIT
+SELECT *
+FROM
+  generate_series(1,1),
+  t1;
+----
+1  10  alma
+1  20  körte
+1  30  barack
+
+query T multiline
+explain
+select *
+from
+  t1,
+  generate_series(1,1);
+----
+Explained Query:
+  Map (1)
+    ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query ITI
+select *
+from
+  t1,
+  generate_series(1,1);
+----
+10  alma  1
+20  körte  1
+30  barack  1
+
+query T multiline
+EXPLAIN
+SELECT *
+FROM
+  generate_series(1,3),
+  t1;
+----
+Explained Query:
+  Project (#2, #0, #1)
+    FlatMap join_with_constant[(1), (2), (3)]()
+      ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query IIT
+SELECT *
+FROM
+  generate_series(1,3),
+  t1;
+----
+1  10  alma
+2  10  alma
+3  10  alma
+1  20  körte
+1  30  barack
+2  20  körte
+2  30  barack
+3  20  körte
+3  30  barack
+
+query T multiline
+explain
+select *
+from
+  t1,
+  generate_series(1,3);
+----
+Explained Query:
+  FlatMap join_with_constant[(1), (2), (3)]()
+    ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query ITI
+select *
+from
+  t1,
+  generate_series(1,3);
+----
+10  alma  1
+10  alma  2
+10  alma  3
+20  körte  1
+20  körte  2
+20  körte  3
+30  barack  1
+30  barack  2
+30  barack  3
+
+## Non-const `generate_series`. Nothing to do, already a FlatMap.
+
+query T multiline
+EXPLAIN
+SELECT
+  generate_series(1, x),
+  *
+FROM t1;
+----
+Explained Query:
+  Project (#2, #0, #1)
+    FlatMap generate_series(1, #0, 1)
+      ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query IIT
+SELECT
+  generate_series(1, x/10),
+  *
+FROM t1;
+----
+1  10  alma
+1  20  körte
+1  30  barack
+2  20  körte
+2  30  barack
+3  30  barack
+
+query T multiline
+EXPLAIN
+SELECT
+  *,
+  generate_series(1, x)
+FROM t1;
+----
+Explained Query:
+  FlatMap generate_series(1, #0, 1)
+    ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query ITI
+SELECT
+  *,
+  generate_series(1, x/10)
+FROM t1;
+----
+10  alma  1
+20  körte  1
+20  körte  2
+30  barack  1
+30  barack  2
+30  barack  3
+
+# The arity of the constant is >1.
+query T multiline
+explain
+select c1, c1 + t1.x
+from
+  (
+    select 1 as c1, x as c2, 3 as c3
+    from generate_series(1, 3) as x
+    union all
+    select 1, x, 3
+    from generate_series(5, 8) as x
+  ),
+  t1;
+----
+Explained Query:
+  Project (#1, #4)
+    Map ((#1 + #0))
+      FlatMap join_with_constant[(1, 1, 3), (1, 2, 3), (1, 3, 3), ...]()
+        Project (#0)
+          ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+query II
+select c1, c1 + t1.x
+from
+  (
+    select 1 as c1, x as c2, 3 as c3
+    from generate_series(1, 3) as x
+    union all
+    select 1, x, 3
+    from generate_series(5, 8) as x
+  ),
+  t1;
+----
+1  11
+1  11
+1  11
+1  11
+1  11
+1  11
+1  11
+1  21
+1  21
+1  21
+1  21
+1  21
+1  21
+1  21
+1  31
+1  31
+1  31
+1  31
+1  31
+1  31
+1  31

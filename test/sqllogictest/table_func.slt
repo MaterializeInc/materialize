@@ -222,23 +222,8 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT * FROM x, generate_series(1, 10)
 ----
 Explained Query:
-  CrossJoin type=differential // { arity: 3 }
-    implementation
-      %0:x[×] » %1[×]
-    ArrangeBy keys=[[]] // { arity: 2 }
-      ReadStorage materialize.public.x // { arity: 2 }
-    ArrangeBy keys=[[]] // { arity: 1 }
-      Constant // { arity: 1 }
-        - (1)
-        - (2)
-        - (3)
-        - (4)
-        - (5)
-        - (6)
-        - (7)
-        - (8)
-        - (9)
-        - (10)
+  FlatMap join_with_constant[(1), (2), (3), ...]() // { arity: 3 }
+    ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
 

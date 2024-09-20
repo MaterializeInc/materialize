@@ -41,10 +41,17 @@ contains:Invalid data in source, saw retractions (2) for row that does not exist
            LATERAL (SELECT data FROM data WHERE data % 2 = grp.id ORDER BY data LIMIT 2) t
     GROUP BY grp.id;
 
+# With `enable_join_to_flat_map`, we'd catch the negative diff before it reaches the TopK.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_join_to_flat_map = false
+
 > CREATE DEFAULT INDEX ON topk;
 
 ! SELECT * from topk;
 contains:Negative multiplicities in TopK
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_join_to_flat_map = true
 
 # regression scenario per #17908
 ! SELECT DISTINCT data FROM data;
