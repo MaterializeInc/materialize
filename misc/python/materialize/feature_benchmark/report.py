@@ -113,6 +113,16 @@ class Report:
     ) -> BenchmarkScenarioResult:
         return self._result_by_scenario_name[scenario_name]
 
+    def has_scenario_regression(self, scenario_name: str) -> bool:
+        scenario_result = self.get_scenario_result_by_name(scenario_name)
+        evaluator = RelativeThresholdEvaluator(scenario_result.scenario_class)
+
+        for metric in scenario_result.metrics:
+            if evaluator.is_regression(metric):
+                return True
+
+        return False
+
 
 def determine_scenario_classes_with_regressions(
     selected_report_by_scenario_name: dict[str, Report]
@@ -120,11 +130,8 @@ def determine_scenario_classes_with_regressions(
     scenario_classes_with_regressions = set()
 
     for scenario_name, report in selected_report_by_scenario_name.items():
-        scenario_result = report.get_scenario_result_by_name(scenario_name)
-        evaluator = RelativeThresholdEvaluator(scenario_result.scenario_class)
-
-        for metric in scenario_result.metrics:
-            if evaluator.is_regression(metric):
-                scenario_classes_with_regressions.add(scenario_result.scenario_class)
+        if report.has_scenario_regression(scenario_name):
+            scenario_result = report.get_scenario_result_by_name(scenario_name)
+            scenario_classes_with_regressions.add(scenario_result.scenario_class)
 
     return list(scenario_classes_with_regressions)
