@@ -1539,60 +1539,13 @@ where
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> BoxFuture<Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>> {
-        let metadata = match self.storage_collections.collection_metadata(id) {
-            Ok(metadata) => metadata,
-            Err(e) => return async { Err(e) }.boxed(),
-        };
-        let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
-            assert_eq!(txns_id, self.txns_read.txns_id());
-            self.txns_read.clone()
-        });
-        let persist = Arc::clone(&self.persist);
-        async move {
-            let mut read_handle = read_handle_for_snapshot(&persist, id, &metadata).await?;
-            let contents = match txns_read {
-                None => {
-                    // We're not using txn-wal for tables, so we can take a snapshot directly.
-                    read_handle
-                        .snapshot_and_fetch(Antichain::from_elem(as_of))
-                        .await
-                }
-                Some(txns_read) => {
-                    // We _are_ using txn-wal for tables. It advances the physical upper of the
-                    // shard lazily, so we need to ask it for the snapshot to ensure the read is
-                    // unblocked.
-                    //
-                    // Consider the following scenario:
-                    // - Table A is written to via txns at time 5
-                    // - Tables other than A are written to via txns consuming timestamps up to 10
-                    // - We'd like to read A at 7
-                    // - The application process of A's txn has advanced the upper to 5+1, but we need
-                    //   it to be past 7, but the txns shard knows that (5,10) is empty of writes to A
-                    // - This branch allows it to handle that advancing the physical upper of Table A to
-                    //   10 (NB but only once we see it get past the write at 5!)
-                    // - Then we can read it normally.
-                    txns_read.update_gt(as_of.clone()).await;
-                    let data_snapshot = txns_read
-                        .data_snapshot(metadata.data_shard, as_of.clone())
-                        .await;
-                    data_snapshot.snapshot_and_fetch(&mut read_handle).await
-                }
-            };
-            match contents {
-                Ok(contents) => {
-                    let mut snapshot = Vec::with_capacity(contents.len());
-                    for ((data, _), _, diff) in contents {
-                        // TODO(petrosagg): We should accumulate the errors too and let the user
-                        // interprret the result
-                        let row = data.expect("invalid protobuf data").0?;
-                        snapshot.push((row, diff));
-                    }
-                    Ok(snapshot)
-                }
-                Err(_) => Err(StorageError::ReadBeforeSince(id)),
-            }
-        }
-        .boxed()
+        snapshot(
+            id,
+            as_of,
+            &self.storage_collections,
+            &self.txns_read,
+            &self.persist,
+        )
     }
 
     async fn snapshot_latest(
@@ -2800,7 +2753,7 @@ where
     /// Does any work that is required before this controller instance starts
     /// writing to the given introspection collection.
     ///
-    /// This migh include consolidation, deleting older entries or seeding
+    /// This might include consolidation, deleting older entries or seeding
     /// in-memory state of, say, scrapers, with current collection contents.
     async fn prepare_introspection_collection(
         &mut self,
@@ -3763,6 +3716,77 @@ impl From<&IntrospectionType> for CollectionManagerKind {
             | IntrospectionType::SqlText => CollectionManagerKind::AppendOnly,
         }
     }
+}
+
+// TODO(petrosagg): This signature is not very useful in the context of partially ordered times
+// where the as_of frontier might have multiple elements. In the current form the mutually
+// incomparable updates will be accumulated together to a state of the collection that never
+// actually existed. We should include the original time in the updates advanced by the as_of
+// frontier in the result and let the caller decide what to do with the information.
+pub(crate) fn snapshot<T>(
+    id: GlobalId,
+    as_of: T,
+    storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    txns_read: &TxnsRead<T>,
+    persist: &Arc<PersistClientCache>,
+) -> BoxFuture<Result<Vec<(Row, Diff)>, StorageError<T>>>
+where
+    T: Codec64 + From<EpochMillis> + TimestampManipulation,
+{
+    let metadata = match storage_collections.collection_metadata(id) {
+        Ok(metadata) => metadata,
+        Err(e) => return async { Err(e) }.boxed(),
+    };
+    let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
+        assert_eq!(txns_id, txns_read.txns_id());
+        txns_read.clone()
+    });
+    let persist = Arc::clone(persist);
+    async move {
+        let mut read_handle = read_handle_for_snapshot(&persist, id, &metadata).await?;
+        let contents = match txns_read {
+            None => {
+                // We're not using txn-wal for tables, so we can take a snapshot directly.
+                read_handle
+                    .snapshot_and_fetch(Antichain::from_elem(as_of))
+                    .await
+            }
+            Some(txns_read) => {
+                // We _are_ using txn-wal for tables. It advances the physical upper of the
+                // shard lazily, so we need to ask it for the snapshot to ensure the read is
+                // unblocked.
+                //
+                // Consider the following scenario:
+                // - Table A is written to via txns at time 5
+                // - Tables other than A are written to via txns consuming timestamps up to 10
+                // - We'd like to read A at 7
+                // - The application process of A's txn has advanced the upper to 5+1, but we need
+                //   it to be past 7, but the txns shard knows that (5,10) is empty of writes to A
+                // - This branch allows it to handle that advancing the physical upper of Table A to
+                //   10 (NB but only once we see it get past the write at 5!)
+                // - Then we can read it normally.
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
+                data_snapshot.snapshot_and_fetch(&mut read_handle).await
+            }
+        };
+        match contents {
+            Ok(contents) => {
+                let mut snapshot = Vec::with_capacity(contents.len());
+                for ((data, _), _, diff) in contents {
+                    // TODO(petrosagg): We should accumulate the errors too and let the user
+                    // interprret the result
+                    let row = data.expect("invalid protobuf data").0?;
+                    snapshot.push((row, diff));
+                }
+                Ok(snapshot)
+            }
+            Err(_) => Err(StorageError::ReadBeforeSince(id)),
+        }
+    }
+    .boxed()
 }
 
 async fn read_handle_for_snapshot<T>(
