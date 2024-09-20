@@ -105,6 +105,30 @@ class MedianBenchmarkResultSelector(BenchmarkResultSelectorBase):
         return selected_report
 
 
+class BestBenchmarkResultSelector(BenchmarkResultSelectorBase):
+    """Chooses the report with the minimum wallclock value for each scenario and favors reports without regressions"""
+
+    def _select_report_of_single_scenario(
+        self,
+        scenario_name: str,
+        selectable_reports_by_wallclock_value: dict[float, list[Report]],
+        available_wallclock_values: list[float],
+    ) -> Report:
+        best_report_with_regression: Report | None = None
+
+        for wallclock_value in sorted(available_wallclock_values):
+            reports = selectable_reports_by_wallclock_value[wallclock_value]
+            for report in reports:
+                if not report.has_scenario_regression(scenario_name):
+                    # this is the best report without regression (based on wallclock values)
+                    return report
+                elif best_report_with_regression is None:
+                    best_report_with_regression = report
+
+        assert best_report_with_regression is not None, "No report found"
+        return best_report_with_regression
+
+
 def get_discarded_reports_per_scenario(
     reports: list[Report], selected_report_by_scenario_name: dict[str, Report]
 ) -> dict[str, list[Report]]:
