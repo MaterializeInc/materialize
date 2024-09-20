@@ -21,7 +21,7 @@ to Materialize using the [MySQL source](/sql/create-source/mysql/).
 
 {{% mysql-direct/before-you-begin %}}
 
-## A. Configure AlloyDB
+## A. Configure Aurora
 
 ### 1. Enable GTID-based binlog replication
 
