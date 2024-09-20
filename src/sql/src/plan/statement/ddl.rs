@@ -413,7 +413,11 @@ pub fn plan_create_table(
     let mut desc = VersionedRelationDesc::new(desc);
     for (version, (_action, name, typ)) in changes.into_iter() {
         let new_version = desc.add_column(name, typ);
-        assert_eq!(version, new_version);
+        if version != new_version {
+            return Err(PlanError::InvalidTable {
+                name: full_name.item,
+            });
+        }
     }
 
     let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;

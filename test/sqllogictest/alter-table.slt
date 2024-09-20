@@ -12,14 +12,14 @@ mode cockroach
 reset-server
 
 query error db error: ERROR: invalid table definition for "t1"
-CREATE TABLE t1 (a int, b text VERSION ADDED 1);
+CREATE TABLE t1 (a int, b text VERSION ADDED 0);
 
 statement ok
 CREATE TABLE t2 (a int);
 
 # TODO(alter_table): Manually specifying a VERSION when referencing an item (maybe?) shouldn't be allowed.
 statement ok
-CREATE VIEW v1 AS SELECT * FROM [u1 AS "materialize"."public"."t2" VERSION 1];
+CREATE VIEW v1 AS SELECT * FROM [u1 AS "materialize"."public"."t2" VERSION 0];
 
 statement ok
 CREATE VIEW v2 AS SELECT * FROM t2;
@@ -28,7 +28,7 @@ CREATE VIEW v2 AS SELECT * FROM t2;
 query TT
 SHOW CREATE VIEW v1
 ----
-materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t2"␠VERSION␠1
+materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t2"␠VERSION␠0
 
 # Note: When the feature is off we should not record versions.
 query TT
@@ -54,6 +54,9 @@ COMPLETE 0
 
 statement ok
 CREATE TABLE t1 (a int NOT NULL)
+
+query error db error: ERROR: invalid version "1000" for "t2"
+CREATE VIEW v1 AS SELECT * FROM [u1 AS "materialize"."public"."t2" VERSION 1000];
 
 query TTTT
 SHOW COLUMNS FROM t1;

@@ -21,8 +21,8 @@ use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
 use mz_repr::{ColumnName, RelationVersionSelector};
+use mz_repr::{GlobalId, RelationVersion};
 use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, Version};
 use mz_sql_parser::ident;
 use proptest_derive::Arbitrary;
@@ -1474,7 +1474,23 @@ impl<'a> NameResolver<'a> {
                 _ => RelationVersionSelector::Latest,
             },
             // Note: Return the specific version if one is specified, even if the feature is off.
-            Some(v) => RelationVersionSelector::Specific(v.into()),
+            Some(v) => {
+                let specified_version = RelationVersion::from(v);
+                match item.latest_version() {
+                    Some(latest) if latest >= specified_version => {
+                        RelationVersionSelector::Specific(specified_version)
+                    }
+                    _ => {
+                        if self.status.is_ok() {
+                            self.status = Err(PlanError::InvalidVersion {
+                                name: item.name().item.clone(),
+                                version: v.to_string(),
+                            })
+                        }
+                        return ResolvedItemName::Error;
+                    }
+                }
+            }
         };
 
         self.ids.insert(gid.clone());
