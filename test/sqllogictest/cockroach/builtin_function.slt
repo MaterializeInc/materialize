@@ -1762,7 +1762,7 @@ timestamptz
 bytes
 int[]
 
-# TODO(def-): Reenable after #21961 is fixed
+# TODO(def-): Reenable after materialize#21961 is fixed
 # query T
 # VALUES (format_type('anyelement'::regtype, -1)),
 #        (format_type('bit'::regtype, -1)),

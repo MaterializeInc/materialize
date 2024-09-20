@@ -369,7 +369,7 @@ disruptions = [
             ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
         ],
     ),
-    # TODO: Reenable when #28997 is fixed
+    # TODO: Reenable when materialize#28997 is fixed
     # Disruption(
     #     name="restart-replica",
     #     disruption=lambda c: restart_replica(c),

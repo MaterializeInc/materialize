@@ -115,7 +115,7 @@ known_errors = [
     "arrays must not contain null values",  # aclexplode, mz_aclexplode
     "OVER clause not allowed on",  # window functions
     "cannot reference pseudo type",
-    "window functions are not allowed in table function arguments",  # TODO: Remove when #20979 is implemented
+    "window functions are not allowed in table function arguments",  # TODO: Remove when materialize#20979 is implemented
     "window functions are not allowed in OR argument",  # wrong error message
     "window functions are not allowed in AND argument",  # wrong error message
     "window functions are not allowed in aggregate function",

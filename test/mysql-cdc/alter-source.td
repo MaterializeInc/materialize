@@ -44,7 +44,7 @@ $ mysql-execute name=mysql
 CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (9, 'nine');
 
-# TODO: #27585 (expected table was dropped)
+# TODO: materialize#27585 (expected table was dropped)
 $ skip-if
 SELECT true
 
@@ -55,7 +55,7 @@ contains:table was dropped
 ! CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE public.table_a);
 contains:catalog item 'table_a' already exists
 
-# TODO: #27585 (expected table was dropped)
+# TODO: materialize#27585 (expected table was dropped)
 $ skip-end
 
 > DROP SOURCE mz_source CASCADE;
@@ -272,7 +272,7 @@ INSERT INTO table_a VALUES (3);
 ! SELECT * FROM table_a;
 contains:incompatible schema change
 
-# TODO: source status support with #29373
+# TODO: source status support with materialize#29373
 # > SELECT error ~~ '%incompatible schema change%' FROM mz_internal.mz_source_statuses WHERE name = 'table_a';
 # true
 #

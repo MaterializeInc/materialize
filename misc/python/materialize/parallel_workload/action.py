@@ -200,7 +200,7 @@ class FetchAction(Action):
         result = super().errors_to_ignore(exe)
         result.extend(
             [
-                "is not of expected type",  # TODO(def-) Remove when #26549 is fixed
+                "is not of expected type",  # TODO(def-) Remove when materialize#26549 is fixed
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -1041,7 +1041,7 @@ class FlipFlagsAction(Action):
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
 
-        # TODO: Remove when #28576 is fixed
+        # TODO: Remove when materialize#28576 is fixed
         if exe.db.scenario == Scenario.ZeroDowntimeDeploy and flag_name.startswith(
             "persist_use_critical_since_"
         ):
@@ -1861,7 +1861,7 @@ class CreateMySqlSourceAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Reenable when #22770 is fixed
+        # TODO: Reenable when materialize#22770 is fixed
         if exe.db.scenario == Scenario.BackupRestore:
             return False
 
@@ -1933,7 +1933,7 @@ class CreatePostgresSourceAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Reenable when #22770 is fixed
+        # TODO: Reenable when materialize#22770 is fixed
         if exe.db.scenario == Scenario.BackupRestore:
             return False
 
@@ -2227,7 +2227,7 @@ ddl_action_list = ActionList(
         (DropKafkaSinkAction, 4),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
-        # TODO: Reenable when #28108 is fixed
+        # TODO: Reenable when materialize#28108 is fixed
         # (CreateMySqlSourceAction, 4),
         # (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
@@ -2245,7 +2245,7 @@ ddl_action_list = ActionList(
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
         (FlipFlagsAction, 2),
-        # TODO: Reenable when #28962 is fixed
+        # TODO: Reenable when materialize#28962 is fixed
         # (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],

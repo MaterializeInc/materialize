@@ -44,7 +44,7 @@ $ mysql-execute name=mysql
 CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (9, 'nine');
 
-# TODO: #27585 (expected table was dropped)
+# TODO: materialize#27585 (expected table was dropped)
 $ skip-if
 SELECT true
 
@@ -59,7 +59,7 @@ contains:Invalid MySQL table reference: table_a
 ! ALTER SOURCE mz_source ADD SUBSOURCE public.table_a;
 contains:catalog item 'table_a' already exists
 
-# TODO: #27585 (expected table was dropped)
+# TODO: materialize#27585 (expected table was dropped)
 $ skip-end
 
 > DROP SOURCE mz_source CASCADE;

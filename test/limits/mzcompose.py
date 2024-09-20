@@ -1518,7 +1518,7 @@ class MySqlSources(Generator):
 
 
 class WebhookSources(Generator):
-    COUNT = 100  # TODO: Remove when #29358 is fixed
+    COUNT = 100  # TODO: Remove when materialize#29358 is fixed
 
     @classmethod
     def body(cls) -> None:

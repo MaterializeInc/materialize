@@ -13,7 +13,7 @@ $ set-max-tries max-tries=20
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 
-# TODO: #25076 (misleading error message)
+# TODO: materialize#25076 (misleading error message)
 # ! CREATE CONNECTION mysql_conn TO MYSQL (
 #     HOST mysql,
 #     USER root,
@@ -190,7 +190,7 @@ ALTER SYSTEM SET mysql_source_snapshot_lock_wait_timeout = 3600
     PASSWORD SECRET mysqlpass
   )
 contains:failed to lookup address information
-# TODO: #25076 (misleading error message)
+# TODO: materialize#25076 (misleading error message)
 # contains:error connecting to server: failed to lookup address information: Name or service not known: failed to lookup address
 
 ! CREATE CONNECTION no_such_port TO MYSQL (
@@ -200,16 +200,16 @@ contains:failed to lookup address information
     PASSWORD SECRET mysqlpass
   )
 contains:Connection refused
-# TODO: #25076 (misleading error message)
+# TODO: materialize#25076 (misleading error message)
 # contains:error connecting to server: Connection refused
 
-# TODO: #25413 (error not stable)
+# TODO: materialize#25413 (error not stable)
 # ! CREATE CONNECTION no_such_user TO MYSQL (
 #     HOST mysql,
 #     USER no_such_user,
 #     PASSWORD SECRET mysqlpass
 #   )
-# TODO: #25076 (misleading error message)
+# TODO: materialize#25076 (misleading error message)
 # contains:password authentication failed for user "no_such_user"
 
 > CREATE SECRET badpass AS 'badpass'
@@ -628,7 +628,7 @@ DELETE FROM mixED_CAse;
 0
 
 # Reference exists in two schemas, so is not unambiguous
-# TODO: #24797 (explicit schema definition required)
+# TODO: materialize#24797 (explicit schema definition required)
 # ! CREATE SOURCE enum_source
 #   IN CLUSTER cdc_cluster
 #   FROM MYSQL CONNECTION mysql_conn (
@@ -640,7 +640,7 @@ DELETE FROM mixED_CAse;
 #   );
 # contains: invalid TEXT COLUMNS option value: table another_enum_table is ambiguous, consider specifying the schema
 
-# TODO: #24797 (explicit schema definition required)
+# TODO: materialize#24797 (explicit schema definition required)
 # ! CREATE SOURCE enum_source
 #   IN CLUSTER cdc_cluster
 #   FROM MYSQL CONNECTION mysql_conn (
@@ -649,7 +649,7 @@ DELETE FROM mixED_CAse;
 #   FOR TABLES (pk_table);
 # contains: invalid TEXT COLUMNS option value: column name 'foo' must have at least a table qualification
 
-# TODO: #24797 (explicit schema definition required)
+# TODO: materialize#24797 (explicit schema definition required)
 # ! CREATE SOURCE enum_source
 #   IN CLUSTER cdc_cluster
 #   FROM MYSQL CONNECTION mysql_conn (
@@ -658,7 +658,7 @@ DELETE FROM mixED_CAse;
 #   FOR TABLES (pk_table);
 # contains: invalid TEXT COLUMNS option value: qualified name did not have between 1 and 3 components: foo.bar.qux.qax
 
-# TODO: #24797 (explicit schema definition required)
+# TODO: materialize#24797 (explicit schema definition required)
 # ! CREATE SOURCE enum_source
 #   IN CLUSTER cdc_cluster
 #   FROM MYSQL CONNECTION mysql_conn (
@@ -667,7 +667,7 @@ DELETE FROM mixED_CAse;
 #   FOR TABLES (enum_table);
 # contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.enum_table.a
 
-# TODO: #24797 (explicit schema definition required)
+# TODO: materialize#24797 (explicit schema definition required)
 # utf8_table is not part of mz_source_narrow publication
 # ! CREATE SOURCE enum_source
 #   IN CLUSTER cdc_cluster
