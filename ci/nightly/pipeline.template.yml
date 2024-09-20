@@ -659,7 +659,7 @@ steps:
       - id: checks-parallel-drop-create-default-replica
         label: "Checks parallel + DROP/CREATE replica %N"
         depends_on: build-aarch64
-        skip: "Affected by #23882"
+        skip: "Affected by materialize#23882"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -672,7 +672,7 @@ steps:
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd %N"
         depends_on: build-aarch64
-        skip: "Affected by #23882"
+        skip: "Affected by materialize#23882"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -685,7 +685,7 @@ steps:
       - id: checks-parallel-restart-entire-mz
         label: "Checks parallel + restart of the entire Mz %N"
         depends_on: build-aarch64
-        skip: "Affected by #23882"
+        skip: "Affected by materialize#23882"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -698,7 +698,7 @@ steps:
       - id: checks-parallel-restart-environmentd-clusterd-storage
         label: "Checks parallel + restart of environmentd & storage clusterd %N"
         depends_on: build-aarch64
-        skip: "Affected by #23882"
+        skip: "Affected by materialize#23882"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -711,7 +711,7 @@ steps:
       - id: checks-parallel-kill-clusterd-storage
         label: "Checks parallel + kill storage clusterd %N"
         depends_on: build-aarch64
-        skip: "Affected by #23882"
+        skip: "Affected by materialize#23882"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -724,7 +724,7 @@ steps:
       - id: checks-parallel-restart-redpanda
         label: "Checks parallel + restart Redpanda & Debezium %N"
         depends_on: build-aarch64
-        skip: "Affected by #23882"
+        skip: "Affected by materialize#23882"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -876,7 +876,7 @@ steps:
         label: "K8s recovery: storage on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: #25108 (k8s node recovery tests flaky)
+        # TODO: materialize#25108 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -902,7 +902,7 @@ steps:
         label: "K8s recovery: compute on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: #25108 (k8s node recovery tests flaky)
+        # TODO: materialize#25108 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -928,7 +928,7 @@ steps:
         label: "K8s recovery: replicated compute on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: #25108 (k8s node recovery tests flaky)
+        # TODO: materialize#25108 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -954,7 +954,7 @@ steps:
         label: "K8s recovery: envd on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: #25108 (k8s node recovery tests flaky)
+        # TODO: materialize#25108 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1160,7 +1160,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              # TODO(def-) Increase number of joins when #23451 is fixed
+              # TODO(def-) Increase number of joins when materialize#23451 is fixed
               args: [--max-joins=1, --runtime=1500]
 
       - id: sqlsmith-explain
@@ -1172,7 +1172,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              # TODO(def-) Increase number of joins when #23451 is fixed
+              # TODO(def-) Increase number of joins when materialize#23451 is fixed
               args: [--max-joins=5, --explain-only, --runtime=1500]
 
   - group: SQLancer
@@ -1235,7 +1235,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: rqg
               args: ["simple-aggregates", "--seed=$BUILDKITE_JOB_ID"]
-        skip: "flaky until #27954 is fixed"
+        skip: "flaky until materialize#27954 is fixed"
 
       - id: rqg-db3-joins
         label: "RQG dbt3-joins workload"
@@ -1252,7 +1252,7 @@ steps:
       - id: rqg-lateral-joins
         label: "RQG lateral-joins workload"
         depends_on: build-aarch64
-        skip: "flaky until #25865 is fixed"
+        skip: "flaky until materialize#25865 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1286,7 +1286,7 @@ steps:
       - id: rqg-wmr
         label: "RQG WMR workload"
         depends_on: build-aarch64
-        skip: "flaky until #24904 is fixed"
+        skip: "flaky until materialize#24904 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -1342,7 +1342,7 @@ steps:
   - id: retain-history
     label: "Check retain history"
     depends_on: build-aarch64
-    skip: "#24479"
+    skip: "materialize#24479"
     timeout_in_minutes: 15
     agents:
       queue: hetzner-aarch64-8cpu-16gb
@@ -1443,7 +1443,7 @@ steps:
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
-        skip: "TODO(def-): Reenable when #2392 is fixed"
+        skip: "TODO(def-): Reenable when materialize#2392 is fixed"
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
