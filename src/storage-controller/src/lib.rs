@@ -1641,7 +1641,7 @@ where
     // actually existed. We should include the original time in the updates advanced by the as_of
     // frontier in the result and let the caller decide what to do with the information.
     fn snapshot(
-        &mut self,
+        &self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> BoxFuture<Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>> {
@@ -1702,7 +1702,7 @@ where
     }
 
     async fn snapshot_latest(
-        &mut self,
+        &self,
         id: GlobalId,
     ) -> Result<Vec<Row>, StorageError<Self::Timestamp>> {
         let upper = self.recent_upper(id).await?;
@@ -3094,7 +3094,7 @@ where
     ///
     // TODO(guswynn): we need to be more careful about the update time we get here:
     // <https://github.com/MaterializeInc/materialize/issues/25349>
-    async fn snapshot_statistics(&mut self, id: GlobalId, upper: Antichain<T>) -> Vec<Row> {
+    async fn snapshot_statistics(&self, id: GlobalId, upper: Antichain<T>) -> Vec<Row> {
         match upper.as_option() {
             Some(f) if f > &T::minimum() => {
                 let as_of = f.step_back().unwrap();
@@ -3103,7 +3103,7 @@ where
                 snapshot
                     .into_iter()
                     .map(|(row, diff)| {
-                        assert!(diff == 1);
+                        assert_eq!(diff, 1);
                         row
                     })
                     .collect()
@@ -3140,7 +3140,7 @@ where
     ///
     /// Returns a map with latest unpacked row per key.
     async fn partially_truncate_status_history<K>(
-        &mut self,
+        &self,
         collection: IntrospectionType,
         write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
         status_history_desc: StatusHistoryDesc<K>,
