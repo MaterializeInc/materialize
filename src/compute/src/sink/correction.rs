@@ -213,58 +213,76 @@ impl SubAssign<(usize, usize)> for LengthAndCapacity {
 /// The vector is filled with updates until it reaches capacity. At this point, the updates are
 /// consolidated to free up space. This process repeats until the consolidation recovered less than
 /// half of the vector's capacity, at which point the capacity is doubled.
-struct ConsolidatingVec<D>(Vec<(D, Diff)>);
+#[derive(Debug)]
+pub(crate) struct ConsolidatingVec<D> {
+    data: Vec<(D, Diff)>,
+    /// A lower bound for how small we'll shrink the Vec's capacity. NB: The cap
+    /// might start smaller than this.
+    min_capacity: usize,
+}
 
 impl<D: Ord> ConsolidatingVec<D> {
+    pub fn with_min_capacity(min_capacity: usize) -> Self {
+        ConsolidatingVec {
+            data: Vec::new(),
+            min_capacity,
+        }
+    }
+
     /// Return the length of the vector.
-    fn len(&self) -> usize {
-        self.0.len()
+    pub fn len(&self) -> usize {
+        self.data.len()
     }
 
     /// Return the capacity of the vector.
-    fn capacity(&self) -> usize {
-        self.0.capacity()
+    pub fn capacity(&self) -> usize {
+        self.data.capacity()
     }
 
-    // Pushes `item` into the vector.
-    //
-    // If the vector does not have sufficient capacity, we try to consolidate and/or double its
-    // capacity.
-    //
-    // The worst-case cost of this function is O(n log n) in the number of items the vector stores,
-    // but amortizes to O(1).
-    fn push(&mut self, item: (D, Diff)) {
-        let capacity = self.0.capacity();
-        if self.0.len() == capacity {
+    /// Pushes `item` into the vector.
+    ///
+    /// If the vector does not have sufficient capacity, we try to consolidate and/or double its
+    /// capacity.
+    ///
+    /// The worst-case cost of this function is O(n log n) in the number of items the vector stores,
+    /// but amortizes to O(1).
+    pub fn push(&mut self, item: (D, Diff)) {
+        let capacity = self.data.capacity();
+        if self.data.len() == capacity {
             // The vector is full. First, consolidate to try to recover some space.
             self.consolidate();
 
             // If consolidation didn't free at least half the available capacity, double the
             // capacity. This ensures we won't consolidate over and over again with small gains.
-            if self.0.len() > capacity / 2 {
-                self.0.reserve(capacity);
+            if self.data.len() > capacity / 2 {
+                self.data.reserve(capacity);
             }
         }
 
-        self.0.push(item);
+        self.data.push(item);
     }
 
     /// Consolidate the contents.
-    fn consolidate(&mut self) {
-        consolidate(&mut self.0);
+    pub fn consolidate(&mut self) {
+        consolidate(&mut self.data);
 
         // We may have the opportunity to reclaim allocated memory.
         // Given that `push` will double the capacity when the vector is more than half full, and
         // we want to avoid entering into a resizing cycle, we choose to only shrink if the
         // vector's length is less than one fourth of its capacity.
-        if self.0.len() < self.0.capacity() / 4 {
-            self.0.shrink_to_fit();
+        if self.data.len() < self.data.capacity() / 4 {
+            self.data.shrink_to(self.min_capacity);
         }
     }
 
     /// Return an iterator over the borrowed items.
-    fn iter(&self) -> impl Iterator<Item = &(D, Diff)> {
-        self.0.iter()
+    pub fn iter(&self) -> impl Iterator<Item = &(D, Diff)> {
+        self.data.iter()
+    }
+
+    /// Returns mutable access to the underlying items.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut (D, Diff)> {
+        self.data.iter_mut()
     }
 }
 
@@ -273,7 +291,7 @@ impl<D> IntoIterator for ConsolidatingVec<D> {
     type IntoIter = std::vec::IntoIter<(D, Diff)>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+        self.data.into_iter()
     }
 }
 
@@ -282,7 +300,10 @@ impl<D> FromIterator<(D, Diff)> for ConsolidatingVec<D> {
     where
         I: IntoIterator<Item = (D, Diff)>,
     {
-        Self(Vec::from_iter(iter))
+        Self {
+            data: Vec::from_iter(iter),
+            min_capacity: 0,
+        }
     }
 }
 

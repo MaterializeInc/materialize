@@ -12,3 +12,5 @@ mod correction;
 mod persist_sink;
 mod refresh;
 mod subscribe;
+
+pub(crate) use correction::ConsolidatingVec;
