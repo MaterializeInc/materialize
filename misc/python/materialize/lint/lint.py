@@ -37,7 +37,9 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Lint the code",
     )
-    parser.add_argument("--print-duration", action="store_true")
+    parser.add_argument(
+        "--print-duration", action=argparse.BooleanOptionalAction, default=True
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
 
@@ -131,9 +133,9 @@ class LintManager:
 
         failed_checks = []
 
-        for thread in threads:
+        for thread in sorted(threads, key=lambda thread: thread.duration):
             formatted_duration = (
-                f" in {thread.duration.total_seconds():.2f}s"
+                f" [{thread.duration.total_seconds():5.2f}s]"
                 if self.print_duration
                 else ""
             )
