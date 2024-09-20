@@ -82,8 +82,10 @@ members = [
     "src/ssh-util",
     "src/sql",
     "src/sql-lexer",
+    "misc/wasm/sql-lexer-wasm",
     "src/sql-parser",
     "src/sql-pretty",
+    "misc/wasm/sql-pretty-wasm",
     "src/sqllogictest",
     "src/storage",
     "src/storage-client",
@@ -213,12 +215,6 @@ default-members = [
     "src/workspace-hack",
     "test/metabase/smoketest",
     "test/test-util",
-]
-
-exclude = [
-    # All WASM crates are split into their own workspace to avoid needles cache
-    #  invalidations for the core Mz crates.
-    "misc/wasm/*",
 ]
 
 # Use Cargo's new feature resolver, which can handle target-specific features.

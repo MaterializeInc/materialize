@@ -8,6 +8,7 @@ platforms = [
 exact-versions = true
 
 [final-excludes]
+workspace-members = ["mz-sql-lexer-wasm", "mz-sql-pretty-wasm"]
 third-party = [
     { "name" = "tikv-jemalloc-sys" }
 ]

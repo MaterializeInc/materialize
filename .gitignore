@@ -39,7 +39,6 @@ services.log
 /temp
 test/scalability/results/**/*.csv
 test/scalability/results/**/*.png
-misc/wasm/target
 
 # This is un-orthodox, but adding it to the repo would "tie" it to each user's
 # local version of nixpkgs. This way, we can all use the flake and have a

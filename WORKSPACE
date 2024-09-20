@@ -648,6 +648,8 @@ crates_repository(
         "//:test/metabase/smoketest/Cargo.toml",
         "//:test/test-util/Cargo.toml",
         "//:misc/bazel/cargo-gazelle/Cargo.toml",
+        "//:misc/wasm/sql-lexer-wasm/Cargo.toml",
+        "//:misc/wasm/sql-pretty-wasm/Cargo.toml",
     ],
     rust_version = RUST_VERSION,
     # Only used if developing rules_rust.

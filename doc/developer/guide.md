@@ -263,8 +263,11 @@ WASM builds can then be initiated through
 ./bin/wasm-build <path/to/crate>
 ```
 
-WASM crates reside in `misc/wasm/` Cargo workspace, and should be kept out of
-the main Cargo workspace to avoid cache invalidation issues.
+WASM crates reside in `misc/wasm/` subdirectory, and should not be imported by
+crates in the top-level `src/` directory.
+
+To have your crate automatically built and published to npm, add it to the
+`PUBLISH_CRATES` list in `ci/deploy/npm.py`.
 
 ## Running Confluent Platform
 
