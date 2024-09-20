@@ -9,6 +9,8 @@
 
 mode cockroach
 
+reset-server
+
 query error db error: ERROR: CREATE TABLE with column constraint: VERSION ADDED 1 not yet supported
 CREATE TABLE t1 (a int, b text VERSION ADDED 1);
 
