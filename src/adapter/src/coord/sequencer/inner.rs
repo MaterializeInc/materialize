@@ -49,7 +49,7 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::{ConnectionDetails, PlanContext, StatementContext};
+use mz_sql::plan::{ConnectionDetails, StatementContext};
 use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
 use mz_storage_types::sinks::StorageSinkDesc;
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -3370,7 +3370,7 @@ impl Coordinator {
 
             // Re-define our source in terms of the amended statement
             let plan = match mz_sql::plan::plan(
-                &PlanContext::zero(),
+                None,
                 &catalog,
                 Statement::CreateConnection(create_conn_stmt),
                 &Params::empty(),
@@ -3745,7 +3745,7 @@ impl Coordinator {
 
                 // Re-define our source in terms of the amended statement
                 let plan = match mz_sql::plan::plan(
-                    &PlanContext::zero(),
+                    None,
                     &catalog,
                     Statement::CreateSource(create_source_stmt),
                     &Params::empty(),

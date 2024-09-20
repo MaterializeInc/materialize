@@ -96,12 +96,6 @@ pub const DEFAULT_SINK_PARTITION_STRATEGY: Config<&str> = Config::new(
     "The default sink partitioning strategy for an environment. It defaults to 'v0'.",
 );
 
-pub const SKIP_STATEMENT_VALIDATION: Config<bool> = Config::new(
-    "adapter_skip_statement_validation",
-    false,
-    "CYA to skip statement validation.",
-);
-
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -117,5 +111,4 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&DEFAULT_SINK_PARTITION_STRATEGY)
-        .add(&SKIP_STATEMENT_VALIDATION)
 }

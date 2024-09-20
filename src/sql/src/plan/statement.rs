@@ -16,11 +16,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::namespaces::is_system_schema;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationVersionSelector, ScalarType};
-use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::{
-    ColumnDef, ColumnName, ColumnOption, ConnectionDefaultAwsPrivatelink,
-    CreateMaterializedViewStatement, RawItemName, ShowStatement, StatementKind, TableConstraint,
-    UnresolvedDatabaseName, UnresolvedSchemaName,
+    ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
+    RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
+    UnresolvedSchemaName,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
@@ -52,7 +51,6 @@ mod validate;
 
 use crate::session::vars;
 pub(crate) use ddl::PgConfigOptionExtracted;
-use mz_adapter_types::dyncfgs::SKIP_STATEMENT_VALIDATION;
 use mz_controller_types::ClusterId;
 use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_USER_OID};
 use mz_repr::role_id::RoleId;
@@ -272,7 +270,7 @@ pub fn describe(
 /// statements as not necessarily depending on external state.
 #[mz_ore::instrument(level = "debug")]
 pub fn plan(
-    pcx: &PlanContext,
+    pcx: Option<&PlanContext>,
     catalog: &dyn SessionCatalog,
     stmt: Statement<Aug>,
     params: &Params,
@@ -289,7 +287,7 @@ pub fn plan(
     let permitted_plans = Plan::generated_from(&kind);
 
     let scx = &mut StatementContext {
-        pcx: Some(pcx),
+        pcx,
         catalog,
         param_types: RefCell::new(param_types),
         ambiguous_columns: RefCell::new(false),
@@ -308,9 +306,6 @@ pub fn plan(
     {
         scx.require_feature_flag(&vars::ENABLE_UNSAFE_FUNCTIONS)?;
     }
-
-    // Make sure our statement is valid in the current context.
-    validate_statement(&stmt, scx)?;
 
     let plan = match stmt {
         // DDL statements.
@@ -1120,82 +1115,5 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Show(ShowStatement::InspectShard(_)) => Other,
             Statement::ValidateConnection(_) => Other,
         }
-    }
-}
-
-/// Validates this statement can be planned in the provided context.
-fn validate_statement<'a>(
-    stmt: &'a Statement<Aug>,
-    ctx: &'a StatementContext<'a>,
-) -> Result<(), PlanError> {
-    let mut validator = StatementValidator::new(ctx);
-    // Recursively visits the different parts of the Statement.
-    validator.visit_statement(stmt);
-
-    // Statement validation has the possibility of causing sticky panics if
-    // something fails when openning the catalog, so we give ourselves an out.
-    if SKIP_STATEMENT_VALIDATION.get(ctx.catalog.system_vars().dyncfgs()) {
-        if validator.state.is_err() {
-            tracing::warn!(
-                error = ?validator.state,
-                "skipping statement validation when there was an error"
-            );
-        }
-        validator.state = Ok(());
-    }
-
-    // Return the state the validator was left in.
-    validator.state
-}
-
-/// Type that implements [`Visit`] so we can recursively visit nodes of a [`Statement`]
-/// to make sure it's valid in a provided context.
-///
-/// To add additional validates see the impl of [`Visit`] for [`StatementValidator`].
-struct StatementValidator<'a> {
-    ctx: &'a StatementContext<'a>,
-    state: Result<(), PlanError>,
-}
-
-impl<'a> StatementValidator<'a> {
-    pub fn new(ctx: &'a StatementContext<'a>) -> Self {
-        StatementValidator { ctx, state: Ok(()) }
-    }
-
-    /// Returns if we're planning this statement in the context of handling a user query.
-    pub fn is_user_query(&self) -> bool {
-        self.ctx.pcx.map(|c| c.user_query).unwrap_or(false)
-    }
-}
-
-impl<'a> Visit<'a, Aug> for StatementValidator<'a> {
-    fn visit_column_option(&mut self, node: &'a ColumnOption<Aug>) {
-        // Users should not be allowed to manually type VERSION.
-        if self.is_user_query() && matches!(node, ColumnOption::<Aug>::Versioned { .. }) {
-            // Don't double error.
-            if self.state.is_ok() {
-                self.state = Err(PlanError::ManuallyVersioned);
-            }
-        }
-        mz_sql_parser::ast::visit::visit_column_option(self, node);
-    }
-
-    fn visit_item_name(&mut self, node: &'a ResolvedItemName) {
-        let versioned = matches!(
-            node,
-            ResolvedItemName::Item {
-                version: RelationVersionSelector::Specific(_),
-                ..
-            }
-        );
-
-        // Users cannot manually specify the version of a relation.
-        if self.is_user_query() && versioned {
-            // Don't double error.
-            if self.state.is_ok() {
-                self.state = Err(PlanError::ManuallyVersioned);
-            }
-        }
-        mz_sql_parser::ast::visit::visit_item_name(self, node);
     }
 }

@@ -152,6 +152,7 @@ impl CatalogItemRebuilder {
             } => state
                 .parse_item(
                     &sql,
+                    None,
                     is_retained_metrics_object,
                     custom_logical_compaction_window,
                 )
