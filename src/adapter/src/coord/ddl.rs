@@ -1260,10 +1260,13 @@ impl Coordinator {
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
-                .desc(&self.catalog().resolve_full_name(
-                    storage_sink_from_entry.name(),
-                    storage_sink_from_entry.conn_id(),
-                ))
+                .desc(
+                    &self.catalog().resolve_full_name(
+                        storage_sink_from_entry.name(),
+                        storage_sink_from_entry.conn_id(),
+                    ),
+                    sink.from_version,
+                )
                 .expect("indexes can only be built on items with descs")
                 .into_owned(),
             connection: sink

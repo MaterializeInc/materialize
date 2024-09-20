@@ -395,6 +395,18 @@ impl From<RelationVersion> for mz_sql_parser::ast::Version {
     }
 }
 
+impl From<mz_sql_parser::ast::Version> for RelationVersion {
+    fn from(value: mz_sql_parser::ast::Version) -> Self {
+        RelationVersion(value.into_inner())
+    }
+}
+
+impl fmt::Display for RelationVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 impl RustType<ProtoRelationVersion> for RelationVersion {
     fn into_proto(&self) -> ProtoRelationVersion {
         ProtoRelationVersion { value: self.0 }

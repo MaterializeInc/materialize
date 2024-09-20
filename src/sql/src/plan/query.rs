@@ -51,8 +51,8 @@ use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, RowArena,
-    ScalarType,
+    strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType,
+    RelationVersionSelector, Row, RowArena, ScalarType,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
@@ -275,6 +275,14 @@ pub fn plan_insert_query(
             table_name.full_name_str()
         );
     }
+    // Validate we're referring to the table as the latest version.
+    if !table.is_latest() {
+        sql_bail!(
+            "cannot insert into {} at a previous version",
+            table_name.full_name_str().quoted()
+        );
+    }
+
     let desc = table.desc(&scx.catalog.resolve_full_name(table.name()))?;
     let mut defaults = table
         .table_details()
@@ -406,12 +414,8 @@ pub fn plan_insert_query(
     }
 
     let returning = {
-        let (scope, typ) = if let ResolvedItemName::Item {
-            full_name,
-            version: _,
-            ..
-        } = table_name
-        {
+        let (scope, typ) = if let ResolvedItemName::Item { full_name, .. } = table_name {
+            let desc = table.desc(&full_name)?;
             let scope = Scope::from_source(Some(full_name.clone().into()), desc.iter_names());
             let typ = desc.typ().clone();
             (scope, typ)
@@ -558,7 +562,9 @@ pub fn plan_copy_from_rows(
 ) -> Result<HirRelationExpr, PlanError> {
     let scx = StatementContext::new(Some(pcx), catalog);
 
-    let table = catalog.get_item(&id);
+    let table = catalog
+        .get_item(&id)
+        .at_version(RelationVersionSelector::Latest);
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
     let mut defaults = table
@@ -674,13 +680,13 @@ pub fn plan_mutation_query_inner(
     selection: Option<Expr<Aug>>,
 ) -> Result<ReadThenWritePlan, PlanError> {
     // Get global ID and version of the relation desc.
-    let id = match table_name {
-        ResolvedItemName::Item { id, version: _, .. } => id,
+    let (id, version) = match table_name {
+        ResolvedItemName::Item { id, version, .. } => (id, version),
         _ => sql_bail!("cannot mutate non-user table"),
     };
 
     // Perform checks on item with given ID.
-    let item = qcx.scx.get_item(&id);
+    let item = qcx.scx.get_item(&id).at_version(version);
     if item.item_type() != CatalogItemType::Table {
         sql_bail!(
             "cannot mutate {} '{}'",
@@ -6213,9 +6219,14 @@ impl<'a> QueryContext<'a> {
         object: ResolvedItemName,
     ) -> Result<(HirRelationExpr, Scope), PlanError> {
         match object {
-            ResolvedItemName::Item { id, full_name, .. } => {
+            ResolvedItemName::Item {
+                id,
+                full_name,
+                version,
+                ..
+            } => {
                 let name = full_name.into();
-                let item = self.scx.get_item(&id);
+                let item = self.scx.get_item(&id).at_version(version);
                 let desc = item
                     .desc(&self.scx.catalog.resolve_full_name(item.name()))?
                     .clone();

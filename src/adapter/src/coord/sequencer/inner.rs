@@ -36,8 +36,8 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    Datum, Diff, GlobalId, IntoRowIterator, RelationVersionSelector, Row, RowArena, RowIterator,
-    Timestamp,
+    Datum, Diff, GlobalId, IntoRowIterator, RelationVersion, RelationVersionSelector, Row,
+    RowArena, RowIterator, Timestamp,
 };
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
@@ -883,6 +883,11 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
+        // A table should not be versioned when initially created.
+        if table.desc.latest_version() != RelationVersion::root() {
+            return Err(AdapterError::ManuallyVersionedTable { name: name.item });
+        }
+
         let conn_id = if table.temporary {
             Some(ctx.session().conn_id())
         } else {
@@ -953,7 +958,7 @@ impl Coordinator {
                         }
 
                         let collection_desc = CollectionDescription::from_desc(
-                            table.desc.clone(),
+                            table.desc.at_version(RelationVersionSelector::Latest),
                             DataSourceOther::TableWrites,
                         );
                         let storage_metadata = coord.catalog.state().storage_metadata();
@@ -993,8 +998,9 @@ impl Coordinator {
                                     Some(coord.catalog().resolve_builtin_storage_collection(
                                         &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                                     ));
+                                // Create the underlying collection with the latest schema from the Table.
                                 let collection_desc = CollectionDescription::<Timestamp> {
-                                    desc: table.desc.clone(),
+                                    desc: table.desc.at_version(RelationVersionSelector::Latest),
                                     data_source: DataSource::IngestionExport {
                                         ingestion_id,
                                         details,
@@ -1082,6 +1088,7 @@ impl Coordinator {
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
             from: sink.from,
+            from_version: sink.from_version,
             connection: sink.connection,
             partition_strategy: sink.partition_strategy,
             envelope: sink.envelope,
@@ -2354,9 +2361,10 @@ impl Coordinator {
                 .for_session(session)
                 .resolve_full_name(&catalog_entry.name);
             let name = format!("{}", full_name);
+            // TODO(alter_table): Using latest here probably is not correct.
             let relation_desc = catalog_entry
                 .item
-                .desc_opt()
+                .desc_opt(RelationVersionSelector::Latest)
                 .expect("source should have a proper desc")
                 .into_owned();
             let stats_future = self
@@ -2483,14 +2491,16 @@ impl Coordinator {
             // All non-constant values must be planned as read-then-writes.
             _ => {
                 let desc_arity = match self.catalog().try_get_entry(&plan.id) {
-                    Some(table) => table
-                        .desc(
-                            &self
-                                .catalog()
-                                .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
-                        )
-                        .expect("desc called on table")
-                        .arity(),
+                    Some(table) => {
+                        let name = self
+                            .catalog()
+                            .resolve_full_name(table.name(), Some(ctx.session().conn_id()));
+                        // Inserts always happen at the latest version.
+                        table
+                            .desc(&name, RelationVersionSelector::Latest)
+                            .expect("desc called on table")
+                            .arity()
+                    }
                     None => {
                         ctx.retire(Err(AdapterError::Catalog(
                             mz_catalog::memory::error::Error {
@@ -2550,14 +2560,16 @@ impl Coordinator {
 
         // Read then writes can be queued, so re-verify the id exists.
         let desc = match self.catalog().try_get_entry(&id) {
-            Some(table) => table
-                .desc(
-                    &self
-                        .catalog()
-                        .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
-                )
-                .expect("desc called on table")
-                .into_owned(),
+            Some(table) => {
+                let name = self
+                    .catalog()
+                    .resolve_full_name(table.name(), Some(ctx.session().conn_id()));
+                // Inserts always happen at the latest version.
+                table
+                    .desc(&name, RelationVersionSelector::Latest)
+                    .expect("desc called on table")
+                    .into_owned()
+            }
             None => {
                 ctx.retire(Err(AdapterError::Catalog(
                     mz_catalog::memory::error::Error {
@@ -3234,6 +3246,7 @@ impl Coordinator {
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
             from: sink.from,
+            from_version: sink.from_version,
             connection: sink.connection.clone(),
             envelope: sink.envelope,
             version: sink.version,
@@ -3269,7 +3282,7 @@ impl Coordinator {
         let storage_sink_desc = StorageSinkDesc {
             from: sink.from,
             from_desc: from_entry
-                .desc_opt()
+                .desc_opt(sink.from_version)
                 .expect("sinks can only be built on items with descs")
                 .into_owned(),
             connection: sink

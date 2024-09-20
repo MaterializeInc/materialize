@@ -52,8 +52,10 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, ScalarType, Timestamp};
-use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};
+use mz_repr::{
+    Datum, Diff, GlobalId, RelationVersionSelector, Row, RowPacker, ScalarType, Timestamp,
+};
+use mz_sql::ast::{CreateIndexStatement, Expr, Statement, UnresolvedItemName, Value};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
     TypeCategory,
@@ -682,7 +684,9 @@ impl CatalogState {
             }
         }
 
-        if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
+        let name = self.resolve_full_name(entry.name(), entry.conn_id());
+        // Item updates always take place at their latest version.
+        if let Ok(desc) = entry.desc(&name, RelationVersionSelector::Latest) {
             let defaults = match entry.item() {
                 CatalogItem::Table(Table {
                     data_source: TableDataSource::TableWrites { defaults },
@@ -691,7 +695,10 @@ impl CatalogState {
                 _ => None,
             };
             for (i, (column_name, column_type)) in desc.iter().enumerate() {
-                let default: Option<String> = defaults.map(|d| d[i].to_ast_string_stable());
+                let default: Option<String> = defaults.map(|d| {
+                    let default = d.get(i).unwrap_or(&Expr::Value(Value::Null));
+                    default.to_ast_string_stable()
+                });
                 let default: Datum = default
                     .as_ref()
                     .map(|d| Datum::String(d))
@@ -1462,10 +1469,12 @@ impl CatalogState {
 
         for (i, key) in index.keys.iter().enumerate() {
             let on_entry = self.get_entry(&index.on);
+            let name = self.resolve_full_name(on_entry.name(), on_entry.conn_id());
             let nullable = key
                 .typ(
                     &on_entry
-                        .desc(&self.resolve_full_name(on_entry.name(), on_entry.conn_id()))
+                        // Item updates always take place at their latest version.
+                        .desc(&name, RelationVersionSelector::Latest)
                         .expect("can only create indexes on items with a valid description")
                         .typ()
                         .column_types,

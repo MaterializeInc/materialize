@@ -37,7 +37,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType, Timestamp,
+    strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, RelationVersion,
+    RelationVersionSelector, ScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
@@ -386,6 +387,7 @@ pub fn plan_create_table(
     }
 
     let desc = RelationDesc::new(typ, names);
+    let mut desc = VersionedRelationDesc::new(desc);
 
     let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
 
@@ -1719,7 +1721,7 @@ pub fn plan_create_table_from_source(
 
     let table = Table {
         create_sql,
-        desc,
+        desc: VersionedRelationDesc::new(desc),
         temporary: false,
         compaction_window: None,
         data_source: TableDataSource::DataSource(data_source),
@@ -3164,6 +3166,7 @@ fn plan_sink(
         sink: Sink {
             create_sql,
             from: from.id(),
+            from_version: from.current_version(),
             connection: connection_builder,
             partition_strategy,
             envelope,
@@ -3719,6 +3722,7 @@ pub fn plan_create_index(
         index: Index {
             create_sql,
             on: on.id(),
+            on_version: on.current_version(),
             keys,
             cluster_id,
             compaction_window,
@@ -6618,7 +6622,8 @@ pub fn plan_alter_table_add_column(
         match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
             Some(item) => {
                 let item_name = scx.catalog.resolve_full_name(item.name());
-                let desc = item.desc(&item_name)?;
+                let item_vers = item.at_version(RelationVersionSelector::Latest);
+                let desc = item_vers.desc(&item_name)?.into_owned();
                 (item.id(), item_name, desc)
             }
             None => {

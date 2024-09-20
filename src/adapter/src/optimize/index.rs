@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
 use mz_repr::explain::trace_plan;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, RelationVersionSelector};
 use mz_sql::names::QualifiedItemName;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -90,12 +90,18 @@ impl Optimizer {
 pub struct Index {
     name: QualifiedItemName,
     on: GlobalId,
+    on_version: RelationVersionSelector,
     keys: Vec<mz_expr::MirScalarExpr>,
 }
 
 impl Index {
-    pub fn new(name: QualifiedItemName, on: GlobalId, keys: Vec<mz_expr::MirScalarExpr>) -> Self {
-        Self { name, on, keys }
+    pub fn new(
+        name: QualifiedItemName,
+        on: GlobalId,
+        on_version: RelationVersionSelector,
+        keys: Vec<mz_expr::MirScalarExpr>,
+    ) -> Self {
+        Self { name, on, on_version, keys }
     }
 }
 
@@ -144,7 +150,7 @@ impl Optimize<Index> for Optimizer {
         let on_entry = state.get_entry(&index.on);
         let full_name = state.resolve_full_name(&index.name, on_entry.conn_id());
         let on_desc = on_entry
-            .desc(&full_name)
+            .desc(&full_name, index.on_version)
             .expect("can only create indexes on items with a valid description");
 
         let mut df_builder = {
@@ -154,7 +160,12 @@ impl Optimize<Index> for Optimizer {
         };
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 
-        df_builder.import_into_dataflow(&index.on, &mut df_desc, &self.config.features)?;
+        df_builder.import_into_dataflow(
+            &index.on,
+            &index.on_version,
+            &mut df_desc,
+            &self.config.features,
+        )?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         let index_desc = IndexDesc {

@@ -352,7 +352,9 @@ pub(crate) fn add_materialize_comments(
 
         // Adding existing comments if not already provided by user
         for object_id in object_ids {
-            let item = catalog.get_item(&object_id);
+            let item = catalog
+                .get_item(&object_id)
+                .at_version(RelationVersionSelector::Latest);
             let full_name = catalog.resolve_full_name(item.name());
             let full_resolved_name = ResolvedItemName::Item {
                 id: object_id,
@@ -1959,8 +1961,8 @@ async fn purify_csr_connection_proto(
     match seed {
         None => {
             let scx = StatementContext::new(None, &*catalog);
-
-            let ccsr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
+            let item = scx.get_item_by_resolved_name(connection)?;
+            let ccsr_connection = match item.connection()? {
                 Connection::Csr(connection) => connection.clone().into_inline_connection(catalog),
                 _ => sql_bail!("{} is not a schema registry connection", connection),
             };
@@ -2006,7 +2008,8 @@ async fn purify_csr_connection_avro(
     } = csr_connection;
     if seed.is_none() {
         let scx = StatementContext::new(None, &*catalog);
-        let csr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
+        let item = scx.get_item_by_resolved_name(connection)?;
+        let csr_connection = match item.connection()? {
             Connection::Csr(connection) => connection.clone().into_inline_connection(catalog),
             _ => sql_bail!("{} is not a schema registry connection", connection),
         };

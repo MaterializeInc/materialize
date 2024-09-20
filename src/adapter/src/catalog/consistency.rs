@@ -14,7 +14,7 @@
 
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, RelationVersionSelector};
 use mz_sql::catalog::{CatalogItem, DefaultPrivilegeObject};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
@@ -245,7 +245,10 @@ impl CatalogState {
                         Some(entry) => {
                             // TODO: Refactor this to use if-let chains, once they're stable.
                             #[allow(clippy::unnecessary_unwrap)]
-                            if !entry.has_columns() && col_pos.is_some() {
+                            // We always place comments on the most recent version.
+                            if !entry.has_columns(RelationVersionSelector::Latest)
+                                && col_pos.is_some()
+                            {
                                 let col_pos = col_pos.expect("checked above");
                                 comment_inconsistencies.push(CommentInconsistency::NonRelation(
                                     comment_object_id,

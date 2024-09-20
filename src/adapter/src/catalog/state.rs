@@ -975,6 +975,7 @@ impl CatalogState {
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
                 on: index.on,
+                on_version: index.on_version,
                 keys: index.keys.into(),
                 conn_id: None,
                 resolved_ids,
@@ -991,6 +992,7 @@ impl CatalogState {
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
+                from_version: sink.from_version,
                 connection: sink.connection,
                 partition_strategy: sink.partition_strategy,
                 envelope: sink.envelope,

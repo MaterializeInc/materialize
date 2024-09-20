@@ -27,7 +27,7 @@ use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunne
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, ObjectType,
-    SessionCatalog, SystemObjectType,
+    SessionCatalog, SystemObjectType, VersionedCatalogItem,
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
@@ -730,9 +730,11 @@ impl<'a> StatementContext<'a> {
     pub fn get_item_by_resolved_name(
         &self,
         name: &ResolvedItemName,
-    ) -> Result<&dyn CatalogItem, PlanError> {
+    ) -> Result<Box<dyn VersionedCatalogItem>, PlanError> {
         match name {
-            ResolvedItemName::Item { id, .. } => Ok(self.get_item(id)),
+            ResolvedItemName::Item { id, version, .. } => {
+                Ok(self.get_item(id).at_version(*version))
+            }
             ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
             ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }
@@ -741,10 +743,13 @@ impl<'a> StatementContext<'a> {
     pub fn get_column_by_resolved_name(
         &self,
         name: &ColumnName<Aug>,
-    ) -> Result<(&dyn CatalogItem, usize), PlanError> {
+    ) -> Result<(Box<dyn VersionedCatalogItem>, usize), PlanError> {
         match (&name.relation, &name.column) {
-            (ResolvedItemName::Item { id, .. }, ResolvedColumnReference::Column { index, .. }) => {
-                let item = self.get_item(id);
+            (
+                ResolvedItemName::Item { id, version, .. },
+                ResolvedColumnReference::Column { index, .. },
+            ) => {
+                let item = self.get_item(id).at_version(*version);
                 Ok((item, *index))
             }
             _ => unreachable!(

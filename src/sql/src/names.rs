@@ -1390,13 +1390,16 @@ impl<'a> NameResolver<'a> {
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
                 );
+                let version = match item.latest_version() {
+                    Some(v) if item.id().is_user() => RelationVersionSelector::Specific(v),
+                    _ => RelationVersionSelector::Latest,
+                };
                 ResolvedItemName::Item {
                     id: item.id(),
                     qualifiers: item.name().qualifiers.clone(),
                     full_name: self.catalog.resolve_full_name(item.name()),
                     print_id,
-                    // TODO(alter_table): Specify an actual version here.
-                    version: RelationVersionSelector::Latest,
+                    version,
                 }
             }
             Err(mut e) => {
@@ -1436,7 +1439,7 @@ impl<'a> NameResolver<'a> {
         &mut self,
         id: String,
         raw_name: UnresolvedItemName,
-        _version: Option<Version>,
+        version: Option<Version>,
     ) -> ResolvedItemName {
         let gid: GlobalId = match id.parse() {
             Ok(id) => id,
@@ -1456,6 +1459,15 @@ impl<'a> NameResolver<'a> {
                 return ResolvedItemName::Error;
             }
         };
+        let version = match version {
+            // If there isn't a version specified, and this item supports
+            // versioning, track the latest.
+            None => match item.latest_version() {
+                Some(v) => RelationVersionSelector::Specific(v),
+                None => RelationVersionSelector::Latest,
+            },
+            Some(v) => RelationVersionSelector::Specific(v.into()),
+        };
 
         self.ids.insert(gid.clone());
         let full_name = match normalize::full_name(raw_name) {
@@ -1472,8 +1484,7 @@ impl<'a> NameResolver<'a> {
             qualifiers: item.name().qualifiers.clone(),
             full_name,
             print_id: true,
-            // TODO(alter_table): Specify an actual version here.
-            version: RelationVersionSelector::Latest,
+            version,
         }
     }
 }
@@ -1633,11 +1644,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             ResolvedItemName::Item {
                 id,
                 full_name,
-                version: _,
+                version,
                 qualifiers: _,
                 print_id: _,
             } => {
-                let item = self.catalog.get_item(id);
+                let item = self.catalog.get_item(id).at_version(*version);
                 let desc = match item.desc(full_name) {
                     Ok(desc) => desc,
                     Err(e) => {

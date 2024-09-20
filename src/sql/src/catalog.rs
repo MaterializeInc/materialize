@@ -29,7 +29,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, GlobalId, RelationDesc};
+use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
@@ -569,12 +569,6 @@ pub trait CatalogItem {
     /// Returns the catalog item's OID.
     fn oid(&self) -> u32;
 
-    /// Returns a description of the result set produced by the catalog item.
-    ///
-    /// If the catalog item is not of a type that produces data (i.e., a sink or
-    /// an index), it returns an error.
-    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
-
     /// Returns the resolved function.
     ///
     /// If the catalog item is not of a type that produces functions (i.e.,
@@ -585,6 +579,8 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that contains a `SourceDesc`
     /// (i.e., anything other than sources), it returns an error.
+    ///
+    /// TODO(alter_table): Move this to `VersionedCatalogItem`.
     fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, CatalogError>;
 
     /// Returns the resolved connection.
@@ -649,6 +645,27 @@ pub trait CatalogItem {
 
     /// Returns the cluster the item belongs to.
     fn cluster_id(&self) -> Option<ClusterId>;
+
+    /// Returns the [`CatalogItem`] at a specific [`RelationVersion`].
+    fn at_version(&self, version: RelationVersionSelector) -> Box<dyn VersionedCatalogItem>;
+
+    /// The latest version of the item, if it's version-able.
+    fn latest_version(&self) -> Option<RelationVersion>;
+}
+
+/// An item in a [`SessionCatalog`] that is possibly versioned.
+pub trait VersionedCatalogItem: CatalogItem + Send + Sync {
+    /// Returns a description of the result set produced by the catalog item.
+    ///
+    /// If the catalog item is not of a type that produces data (i.e., a sink or
+    /// an index), it returns an error.
+    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
+
+    /// The current version of the item we're referring to.
+    fn current_version(&self) -> RelationVersionSelector;
+
+    /// Does this item refer to the latest version.
+    fn is_latest(&self) -> bool;
 }
 
 /// The type of a [`CatalogItem`].

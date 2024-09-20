@@ -131,7 +131,7 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, RelationVersionSelector, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
@@ -2449,15 +2449,14 @@ impl Coordinator {
                         Some((id, source_desc(&source.data_source, &source.desc)))
                     }
                     CatalogItem::Table(table) => {
+                        // Always bootstrap at the latest version.
+                        let desc = table.desc.at_version(RelationVersionSelector::Latest);
                         let collection_desc = match &table.data_source {
                             TableDataSource::TableWrites { defaults: _ } => {
-                                CollectionDescription::from_desc(
-                                    table.desc.clone(),
-                                    DataSourceOther::TableWrites,
-                                )
+                                CollectionDescription::from_desc(desc, DataSourceOther::TableWrites)
                             }
                             TableDataSource::DataSource(data_source_desc) => {
-                                source_desc(data_source_desc, &table.desc)
+                                source_desc(data_source_desc, &desc)
                             }
                         };
                         Some((id, collection_desc))
@@ -2555,6 +2554,7 @@ impl Coordinator {
                         let index_plan = optimize::index::Index::new(
                             entry.name().clone(),
                             idx.on,
+                            idx.on_version,
                             idx.keys.to_vec(),
                         );
                         let global_mir_plan = optimizer.optimize(index_plan)?;
