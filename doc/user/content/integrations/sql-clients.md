@@ -73,7 +73,7 @@ psql \
 
 {{< note >}}
 As we work on extending the coverage of `pg_catalog` in Materialize,
-some DataGrip features might not work as expected {{% gh 9720 %}}.
+some DataGrip features might not work as expected.
 {{< /note >}}
 
 To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html),
@@ -140,7 +140,7 @@ To show system objects in the database explorer:
 
 {{< note >}}
 As we work on extending the coverage of `pg_catalog` in Materialize,
-some TablePlus features might not work as expected {{% gh 19891 %}}.
+some TablePlus features might not work as expected.
 {{< /note >}}
 
 To connect to Materialize using [TablePlus](https://tableplus.com/),
@@ -153,7 +153,7 @@ Materialize console.
 ### `psql`
 
 {{< warning >}}
-Not all features of `psql` are supported by Materialize yet, including some backslash meta-commands {{% gh 9721 %}}.
+Not all features of `psql` are supported by Materialize yet, including some backslash meta-commands.
 {{< /warning >}}
 
 {{< tabs >}}

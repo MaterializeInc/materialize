@@ -19,7 +19,7 @@ the following additional services:
 
 {{< note >}}
 In the future, we plan to support a native Datadog integration that
-continually reports metrics via the Datadog API {{% gh 17601 %}}.
+continually reports metrics via the Datadog API.
 {{< /note >}}
 
 ## Step 1. Set up a Prometheus SQL Exporter

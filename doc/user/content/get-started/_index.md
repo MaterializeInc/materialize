@@ -102,7 +102,7 @@ tools in the data ecosystem that support PostgreSQL — like [dbt](/integrations
 
 Don't see the a tool that you’d like to use with Materialize listed under
 [Tools and integrations](/integrations/)? Let us know by submitting a
-[feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)!
+[feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)!
 
 ### Strong consistency guarantees
 

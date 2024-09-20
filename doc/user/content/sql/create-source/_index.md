@@ -58,7 +58,7 @@ Materialize can decode Avro messages by integrating with a schema registry to re
 
 ##### Schema versioning
 
-The _latest_ schema is retrieved using the [`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html) strategy at the time the `CREATE SOURCE` statement is issued. In the future, we expect to support specifying a different subject name strategy {{% gh 6170 %}}.
+The _latest_ schema is retrieved using the [`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html) strategy at the time the `CREATE SOURCE` statement is issued. In the future, we expect to support specifying a different subject name strategy.
 
 ##### Schema evolution
 
@@ -70,7 +70,7 @@ To avoid [case-sensitivity](/sql/identifiers/#case-sensitivity) conflicts with M
 
 ##### Supported types
 
-Materialize supports all [Avro types](https://avro.apache.org/docs/current/spec.html), _except for_ recursive types {{% gh 5803 %}} and union types in arrays {{% gh 8917 %}}.
+Materialize supports all [Avro types](https://avro.apache.org/docs/current/spec.html), _except for_ recursive types and union types in arrays.
 
 ### JSON
 
@@ -98,7 +98,7 @@ To avoid doing this tedious task manually, you can use [this **JSON parsing widg
 
 ##### Schema registry integration
 
-Retrieving schemas from a schema registry is not supported yet for JSON-formatted sources {{% gh 7186 %}}. This means that Materialize cannot decode messages serialized using the [JSON Schema](https://docs.confluent.io/platform/current/schema-registry/serdes-develop/serdes-json.html#json-schema-serializer-and-deserializer) serialization format (`JSON_SR`).
+Retrieving schemas from a schema registry is not supported yet for JSON-formatted sources. This means that Materialize cannot decode messages serialized using the [JSON Schema](https://docs.confluent.io/platform/current/schema-registry/serdes-develop/serdes-json.html#json-schema-serializer-and-deserializer) serialization format (`JSON_SR`).
 
 ### Protobuf
 
@@ -124,7 +124,7 @@ Materialize can decode Protobuf messages by integrating with a schema registry o
 
 ##### Schema versioning
 
-The _latest_ schema is retrieved using the [`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html) strategy at the time the `CREATE SOURCE` statement is issued. In the future, we expect to support specifying a different subject name strategy {{% gh 6170 %}}.
+The _latest_ schema is retrieved using the [`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html) strategy at the time the `CREATE SOURCE` statement is issued. In the future, we expect to support specifying a different subject name strategy.
 
 ##### Schema evolution
 
@@ -132,11 +132,11 @@ As long as the `.proto` schema definition changes in a [compatible way](https://
 
 ##### Supported types
 
-Materialize supports all [well-known](https://developers.google.com/protocol-buffers/docs/reference/google.protobuf) Protobuf types from the `proto2` and `proto3` specs, _except for_ recursive `Struct` values {{% gh 5803 %}} and map types.
+Materialize supports all [well-known](https://developers.google.com/protocol-buffers/docs/reference/google.protobuf) Protobuf types from the `proto2` and `proto3` specs, _except for_ recursive `Struct` values and map types.
 
 ##### Multiple message schemas
 
-When using a schema registry with Protobuf sources, the registered schemas must contain exactly one `Message` definition. In the future, we expect to support schemas with multiple messages {{% gh 9598 %}}.
+When using a schema registry with Protobuf sources, the registered schemas must contain exactly one `Message` definition. In the future, we expect to support schemas with multiple messages {{% gh-discussion 29603 %}}.
 
 ### Text/bytes
 
@@ -215,11 +215,11 @@ Materialize expects a specific message structure that includes the row data befo
 
 ##### Truncation
 
-The Debezium envelope does not support upstream [`truncate` events](https://debezium.io/documentation/reference/stable/connectors/postgresql.html#postgresql-truncate-events) {{% gh 6596 %}}.
+The Debezium envelope does not support upstream [`truncate` events](https://debezium.io/documentation/reference/stable/connectors/postgresql.html#postgresql-truncate-events).
 
 ##### Debezium metadata
 
-The envelope exposes the `before` and `after` value fields from change events. In the future, we expect to support additional metadata with information about the original context of the events, like `source.ts_ms`, `source.database` and `source.table` {{% gh 12077 %}}.
+The envelope exposes the `before` and `after` value fields from change events. In the future, we expect to support additional metadata with information about the original context of the events, like `source.ts_ms`, `source.database` and `source.table`.
 
 ##### Duplicate handling
 

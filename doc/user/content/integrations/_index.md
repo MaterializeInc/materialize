@@ -19,7 +19,7 @@ PostgreSQL. This page describes the status, level of support, and usage notes
 for commonly used and requested Materialize integrations and tools.
 
 {{< note >}}
-If there's a tool that you'd like to use with Materialize but is not listed, let us know by submitting a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)!
+If there's a tool that you'd like to use with Materialize but is not listed, let us know by submitting a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)!
 
 For listed tools that are not yet production-ready, you can register your interest by clicking the **Notify Me** button. This helps us prioritize integration work, and follow up with you once the support level for the tool has evolved.
 {{</ note >}}
@@ -27,7 +27,7 @@ For listed tools that are not yet production-ready, you can register your intere
 | Support level                                               | Description                                                                                                                                                                                                                                                       |
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | {{< supportLevel production >}} <a name="production"></a>   | We are committed to prioritizing bugs in the interaction between these tools and Materialize.                                                                                                                                                                     |
-| {{< supportLevel beta >}} <a name="beta"></a>               | There may be small performance issues and minor missing features, but Materialize supports the major use cases for this tool. We can't guarantee [bug reports or feature requests](https://github.com/MaterializeInc/materialize/issues/new) will be prioritized. |
+| {{< supportLevel beta >}} <a name="beta"></a>               | There may be small performance issues and minor missing features, but Materialize supports the major use cases for this tool. We can't guarantee [bug reports or feature requests](https://github.com/MaterializeInc/materialize/discussions) will be prioritized. |
 | {{< supportLevel alpha >}} <a name="alpha"></a>             | Some of our community members have made this integration work, but we haven’t tested it internally and can’t vouch for its stability.                                                                                                                             |
 | {{< supportLevel in-progress >}} <a name="in-progress"></a> | **There are known issues** preventing the integration from working, but we are actively developing features that unblock the integration.                                                                                                                         |
 | {{< supportLevel researching >}} <a name="researching"></a> | **There are known issues** preventing the integration from working, and we are gathering user feedback and gauging interest in supporting these integrations.                                                                                                     |
@@ -66,11 +66,11 @@ Being Kafka API-compatible, Redpanda is supported as a [**source**](/concepts/so
 
 | Service          | Support level                    | Notes                                                                                                                                                                                                                                                                                                           |             |
 | ---------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| GCP Pub/Sub      | {{< supportLevel researching >}} | Integration requires implementing a new connector {{% gh 2678 %}}.                                                                                                                                                                                                                                              | [](#notify) |
-| Azure Event Hubs | {{< supportLevel researching >}} | Integration requires implementing a new connector {{% gh 2851 %}}. <br> Event Hubs provides a [Kafka-compatible endpoint](https://docs.microsoft.com/en-us/azure/event-hubs/event-hubs-for-kafka-ecosystem-overview) that may enable interoperability with Materialize, but this hasn't been officially tested. | [](#notify) |
-| Apache Pulsar    | {{< supportLevel researching >}} | Integration requires implementing a new connector {{% gh 3517 %}}. <br> Pulsar provides a [Kafka-compatible wrapper](https://pulsar.apache.org/docs/en/adaptors-kafka/) that may enable interoperability with Materialize, but this hasn't been officially tested.                                              | [](#notify) |
+| GCP Pub/Sub      | {{< supportLevel researching >}} | Integration requires implementing a new connector.                                                                                                                                                                                                                                              | [](#notify) |
+| Azure Event Hubs | {{< supportLevel researching >}} | Integration requires implementing a new connector. <br> Event Hubs provides a [Kafka-compatible endpoint](https://docs.microsoft.com/en-us/azure/event-hubs/event-hubs-for-kafka-ecosystem-overview) that may enable interoperability with Materialize, but this hasn't been officially tested. | [](#notify) |
+| Apache Pulsar    | {{< supportLevel researching >}} | Integration requires implementing a new connector. <br> Pulsar provides a [Kafka-compatible wrapper](https://pulsar.apache.org/docs/en/adaptors-kafka/) that may enable interoperability with Materialize, but this hasn't been officially tested.                                              | [](#notify) |
 
-👋 _Is there another message broker you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
+👋 _Is there another message broker you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)._
 
 ## Databases
 
@@ -107,10 +107,10 @@ Debezium has an extensive ecosystem of connectors, but each database has its own
 
 | Service                     | Support level                    | Notes                                                                                                                                                                                                                                                                                                                                                                                                                        |             |
 | --------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| MongoDB _(via Debezium)_    | {{< supportLevel researching >}} | Not supported yet {{% gh 7289 %}}. Subscribe via "Notify Me" to register interest.                                                                                                                                                                                                                                                                                                                                           | [](#notify) |
-| SQL Server _(via Debezium)_ | {{< supportLevel alpha >}}       | Supported with known limitations {{% gh 8054 %}}. See the [SQL Server CDC guide](/integrations/cdc-sql-server/) for a step-by-step breakdown of the integration.                                                                                                                                                                                                                                                             | [](#notify) |
+| MongoDB _(via Debezium)_    | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                                                                                                                                                                                                                                                                                                                                           | [](#notify) |
+| SQL Server _(via Debezium)_ | {{< supportLevel alpha >}}       | Supported with known limitations. See the [SQL Server CDC guide](/integrations/cdc-sql-server/) for a step-by-step breakdown of the integration.                                                                                                                                                                                                                                                             | [](#notify) |
 
-👋 _Is there another database you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
+👋 _Is there another database you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration._
 
 ## Object storage services
 
@@ -124,10 +124,10 @@ Debezium has an extensive ecosystem of connectors, but each database has its own
 
 | Service            | Support level                    | Notes                                                                                                               |             |
 | ------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----------- |
-| GCP Cloud Storage  | {{< supportLevel researching >}} | Integration requires implementing a new connector {{% gh 10349 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
+| GCP Cloud Storage  | {{< supportLevel researching >}} | Integration requires implementing a new connector. Subscribe via "Notify Me" to register interest. | [](#notify) |
 | Azure Blob Storage | {{< supportLevel researching >}} | Integration requires implementing a new connector. Subscribe via "Notify Me" to register interest.                  | [](#notify) |
 
-👋 _Is there another object storage tool you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
+👋 _Is there another object storage tool you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)._
 
 ## Database and infrastructure management tools
 
@@ -159,14 +159,14 @@ support for these modules.
 
 | Service      | Support level                    | Notes                                                                                                                                                                                                                                                                             |             |
 | ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| psql         | {{< supportLevel production >}}  | See [SQL Clients](/integrations/sql-clients/#psql) for more details. Some backslash meta-commands are not yet supported {{% gh 9721 %}}.
+| psql         | {{< supportLevel production >}}  | See [SQL Clients](/integrations/sql-clients/#psql) for more details. Some backslash meta-commands are not yet supported.
 | DBeaver      | {{< supportLevel production >}}  | Connect using the [Materialize database driver](/integrations/sql-clients/#dbeaver). See [SQL Clients](/integrations/sql-clients/#dbeaver) for more details.                   |
 | DataGrip IDE | {{< supportLevel beta >}}        | Connect using the [PostgreSQL database driver](https://www.jetbrains.com/datagrip/features/postgresql/). See [SQL Clients](/integrations/sql-clients/#datagrip) for more details.
-| pgAdmin      | {{< supportLevel in-progress >}} | Not supported yet {{% gh 5874 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
+| pgAdmin      | {{< supportLevel in-progress >}} | Not supported yet. Subscribe via "Notify Me" to register interest. | [](#notify) |
 | TablePlus    | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://tableplus.com/blog/2019/09/jdbc-connection-strings.html). See [SQL Clients](/integrations/sql-clients/#tableplus) for more details.
 | VSCode       | {{< supportLevel production >}}  | Connect using the [Materialize extension for VS Code](https://github.com/MaterializeInc/vscode-extension).
 
-👋 _Is there another SQL client you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
+👋 _Is there another SQL client you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)._
 
 ### Monitoring
 
@@ -175,7 +175,7 @@ support for these modules.
 | Datadog      | {{< supportLevel production >}}  | See the [Datadog guide](/manage/monitor/datadog/) for a step-by-step breakdown of the integration.
 | Grafana      | {{< supportLevel production >}}  | See the [Grafana guide](/manage/monitor/grafana/) for a step-by-step breakdown of the integration.                                                                                                                                                                                              |             |
 
-👋 _Is there another SQL client you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
+👋 _Is there another SQL client you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)._
 
 ## Client libraries and ORMs
 
@@ -204,13 +204,13 @@ Client libraries and ORM frameworks tend to run complex introspection queries th
 | Rails ActiveRecord | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest. | [](#notify) |
 | Prisma             | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest. | [](#notify) |
 
-👋 _Is there another client library or ORM framework you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
+👋 _Is there another client library or ORM framework you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)._
 
 ## Other tools
 
 As a rule of thumb: if a tool has support for PostgreSQL, it _might_ work out-of-the-box with Materialize using the native **PostgreSQL connector**. This will depend on the complexity of the queries each tool runs under the hood, and the configuration settings, system tables and features involved.
 
-The level of support for these tools will improve as we extend the coverage of `pg_catalog` in Materialize {{% gh 2157 %}} and join efforts with each community to make the integrations Just Work™️.
+The level of support for these tools will improve as we extend the coverage of `pg_catalog` in Materialize and join efforts with each community to make the integrations Just Work™️.
 
 ### Data integration
 
@@ -255,7 +255,7 @@ The level of support for these tools will improve as we extend the coverage of `
 | Hex     | {{< supportLevel beta >}}  | Connect using the [Materialize connection](https://learn.hex.tech/docs/connect-to-data/data-connections/overview). |                 |
 | Retool  | {{< supportLevel alpha >}} | Connect using the [PostgreSQL integration](https://retool.com/integrations/postgresql).                                              | [](#notify) |
 
-👋 _Is there another tool you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
+👋 _Is there another tool you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)._
 
 <div id="subscribe_dialog">
   <form name="notify">

@@ -113,7 +113,7 @@ page.
 
 CTEs have the following limitations, which we are working to improve:
 
-- `INSERT`/`UPDATE`/`DELETE` (with `RETURNING`) is not supported inside a CTE. {{% gh 19486 %}}
+- `INSERT`/`UPDATE`/`DELETE` (with `RETURNING`) is not supported inside a CTE.
 - SQL99-compliant `WITH RECURSIVE` CTEs are not supported (use the [non-standard flavor](/sql/select/recursive-ctes) instead).
 
 ### Query hints

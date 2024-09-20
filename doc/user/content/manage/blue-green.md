@@ -129,11 +129,12 @@ Schemas and clusters are the most common units for swapping out. But you can
 also use `ALTER...RENAME` operations on:
 
 - Schemas
-- Coming soon: [Databases](https://github.com/MaterializeInc/materialize/issues/3680)
 - Tables
 - Views
 - Materialized Views
 - Indexes
+
+Note that renaming databases is not supported {{% gh-discussion 29635 %}}.
 
   ```mzsql
   BEGIN;

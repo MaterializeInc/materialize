@@ -32,21 +32,6 @@ following cases:
 - The _encoding&lowbar;name_ provided is not available in our encoding package.
 - Some byte sequence in _str_ was not compatible with the selected encoding.
 
-### Fixed-width strings
-
-Materialize returns the length of fixed-width strings as the maximum width of
-the string. For example `length` on a `CHAR(15)` column returns `15` as each
-string's length.
-
-Materialize receives strings from your database in the same format they are
-emitted. In the case of fixed-width strings, e.g. `CHAR` columns in PostgreSQL,
-we receive the value padded by empty spaces. Because we cannot determine whether
-those spaces were intentional or an artifact of a fixed-width string, we provide
-the length of the string as we received it.
-
-You can find any updates on this behavior in [this GitHub
-issue](https://github.com/MaterializeInc/materialize/issues/589).
-
 ### Encoding details
 
 - Materialize uses the [`encoding`](https://crates.io/crates/encoding) crate.

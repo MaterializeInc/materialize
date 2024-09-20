@@ -201,7 +201,7 @@ headers and other source metadata fields to SQL.
 #### Key
 
 The message key is exposed via the `INCLUDE KEY` option. Composite keys are also
-supported {{% gh 7645 %}}.
+supported.
 
 ```mzsql
 CREATE SOURCE kafka_metadata
