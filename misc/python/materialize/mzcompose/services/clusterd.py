@@ -27,6 +27,7 @@ class Clusterd(Service):
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
+            f"CLUSTERD_GRPC_HOST={name}",
             "MZ_SOFT_ASSERTIONS=1",
             *environment_extra,
         ]
