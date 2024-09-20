@@ -9,7 +9,7 @@
 
 mode cockroach
 
-query error db error: ERROR: cannot manually specify 'VERSION'
+query error db error: ERROR: CREATE TABLE with column constraint: VERSION ADDED 1 not yet supported
 CREATE TABLE t1 (a int, b text VERSION ADDED 1);
 
 statement ok
@@ -23,12 +23,3 @@ query TT
 SHOW CREATE VIEW v1
 ----
 materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t2"
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET adapter_skip_statement_validation TO true;
-----
-COMPLETE 0
-
-# TODO(alter_table): Add support for versioning columns.
-query error db error: ERROR: CREATE TABLE with column constraint: VERSION ADDED 1 not yet supported
-CREATE TABLE t1 (a int, b text VERSION ADDED 1);
