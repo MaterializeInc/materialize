@@ -61,3 +61,18 @@ CREATE VIEW "materialize"."public"."v3" AS SELECT * FROM [u1 AS "materialize"."p
 CREATE VIEW materialize.public.v3 AS SELECT * FROM [u1 AS materialize.public.t1 VERSION 3]
 =>
 CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("v3")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Id("u1", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("t1")]), Some(Version(3))), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } })
+
+parse-statement
+CREATE VIEW "materialize"."public"."v3" AS SELECT * FROM [u1 AS "materialize"."public"."t1" VERSION foobar]
+----
+error: Expected literal unsigned integer, found identifier "foobar"
+CREATE VIEW "materialize"."public"."v3" AS SELECT * FROM [u1 AS "materialize"."public"."t1" VERSION foobar]
+                                                                                                    ^
+
+
+parse-statement
+CREATE VIEW "materialize"."public"."v3" AS SELECT * FROM [u1 AS "materialize"."public"."t1" VERSION -101]
+----
+error: Expected literal unsigned integer, found operator "-"
+CREATE VIEW "materialize"."public"."v3" AS SELECT * FROM [u1 AS "materialize"."public"."t1" VERSION -101]
+                                                                                                    ^
