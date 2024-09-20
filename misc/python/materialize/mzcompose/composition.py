@@ -219,6 +219,11 @@ class Composition:
                         image.rd.arch = Arch.AARCH64
                     else:
                         raise ValueError(f"Unknown platform {config['platform']}")
+                if config.get("publish") is not None:
+                    # Override whether an image is expected to be published, so
+                    # that we will build it in CI instead of failing.
+                    image.publish = config["publish"]
+                    del config["publish"]
                 images.append(image)
 
             if "propagate_uid_gid" in config:

@@ -835,6 +835,7 @@ class ResolvedImage:
             command.append("--quiet")
         command.append(self.spec())
         if not self.acquired:
+            sleep_time = 1
             for retry in range(1, max_retries + 1):
                 try:
                     spawn.runv(
@@ -848,8 +849,9 @@ class ResolvedImage:
                         # happened based on error code
                         # (https://github.com/docker/cli/issues/538) and we
                         # want to print output directly to terminal.
-                        print("Retrying ...")
-                        time.sleep(1)
+                        print(f"Retrying in {sleep_time}s ...")
+                        time.sleep(sleep_time)
+                        sleep_time *= 2
                         continue
                     else:
                         break
@@ -1009,10 +1011,22 @@ class DependencySet:
 
         # Only retry in CI runs since we struggle with flaky docker pulls there
         if not max_retries:
-            max_retries = 3 if ui.env_is_truthy("CI") else 1
+            max_retries = 5 if ui.env_is_truthy("CI") else 1
         assert max_retries > 0
 
-        deps_to_build = [dep for dep in self if not dep.try_pull(max_retries)]
+        deps_to_build = [
+            dep for dep in self if not dep.publish or not dep.try_pull(max_retries)
+        ]
+
+        # Don't attempt to build in CI, as our timeouts and small machines won't allow it anyway
+        if ui.env_is_truthy("CI"):
+            expected_deps = [dep for dep in deps_to_build if dep.publish]
+            if expected_deps:
+                print(
+                    f"+++ Expected builds to be available, the build probably failed, so not proceeding: {expected_deps}"
+                )
+                sys.exit(5)
+
         prep = self._prepare_batch(deps_to_build)
         for dep in deps_to_build:
             dep.build(prep)

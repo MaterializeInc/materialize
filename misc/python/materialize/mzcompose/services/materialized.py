@@ -58,6 +58,7 @@ class Materialized(Service):
         healthcheck: list[str] | None = None,
         deploy_generation: int | None = None,
         force_migrations: str | None = None,
+        publish: bool | None = None,
     ) -> None:
         if name is None:
             name = "materialized"
@@ -199,6 +200,9 @@ class Materialized(Service):
             # change when the container is recreated.
             "hostname": name,
         }
+
+        if publish is not None:
+            config["publish"] = publish
 
         if image:
             config["image"] = image
