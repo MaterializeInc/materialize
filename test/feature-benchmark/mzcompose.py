@@ -26,7 +26,7 @@ from materialize.feature_benchmark.benchmark_result_evaluator import (
     BenchmarkResultEvaluator,
 )
 from materialize.feature_benchmark.benchmark_result_selection import (
-    choose_representative_report_per_scenario,
+    MedianBenchmarkResultSelector,
     get_discarded_reports_per_scenario,
 )
 from materialize.feature_benchmark.benchmark_versioning import (
@@ -524,8 +524,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         print(f"+++ Benchmark Report for run {run_number}:")
         print(report)
 
-    selected_report_by_scenario_name = choose_representative_report_per_scenario(
-        reports
+    benchmark_result_selector = MedianBenchmarkResultSelector()
+    selected_report_by_scenario_name = (
+        benchmark_result_selector.choose_report_per_scenario(reports)
     )
     discarded_reports_by_scenario_name = get_discarded_reports_per_scenario(
         reports, selected_report_by_scenario_name

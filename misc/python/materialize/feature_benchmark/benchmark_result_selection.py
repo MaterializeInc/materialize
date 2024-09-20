@@ -15,60 +15,94 @@ from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.report import Report
 
 
-def choose_representative_report_per_scenario(
-    reports: list[Report],
-) -> dict[str, Report]:
-    assert len(reports) > 0, "No reports"
-    all_scenario_names = reports[0].get_scenario_names()
+class BenchmarkResultSelectorBase:
 
-    result = dict()
-    for scenario_name in all_scenario_names:
-        result[scenario_name] = choose_representative_report_of_single_scenario(
-            reports, scenario_name
+    def choose_report_per_scenario(
+        self,
+        reports: list[Report],
+    ) -> dict[str, Report]:
+        assert len(reports) > 0, "No reports"
+        all_scenario_names = reports[0].get_scenario_names()
+
+        result = dict()
+        for scenario_name in all_scenario_names:
+            result[scenario_name] = self.choose_report_of_single_scenario(
+                reports, scenario_name
+            )
+
+        return result
+
+    def choose_report_of_single_scenario(
+        self, reports: list[Report], scenario_name: str
+    ) -> Report:
+        selectable_reports_by_wallclock_value: dict[float, list[Report]] = dict()
+        available_wallclock_values = []
+
+        for report in reports:
+            scenario_result = report.get_scenario_result_by_name(scenario_name)
+
+            metric_value = scenario_result.get_metric_by_measurement_type(
+                MeasurementType.WALLCLOCK
+            )
+            if metric_value is None:
+                continue
+
+            wallclock_value = metric_value.this()
+            if wallclock_value is None:
+                continue
+
+            reports_of_wallclock_value = selectable_reports_by_wallclock_value.get(
+                wallclock_value, []
+            )
+            selectable_reports_by_wallclock_value[wallclock_value] = (
+                reports_of_wallclock_value
+            )
+            reports_of_wallclock_value.append(report)
+
+            # store wallclock values separately not to lose identical values
+            available_wallclock_values.append(wallclock_value)
+
+        if len(selectable_reports_by_wallclock_value) == 0:
+            # pick the first report in this case
+            return reports[0]
+
+        return self._select_report_of_single_scenario(
+            scenario_name,
+            selectable_reports_by_wallclock_value,
+            available_wallclock_values,
         )
 
-    return result
+    def _select_report_of_single_scenario(
+        self,
+        scenario_name: str,
+        selectable_reports_by_wallclock_value: dict[float, list[Report]],
+        available_wallclock_values: list[float],
+    ) -> Report:
+        raise NotImplementedError
 
 
-def choose_representative_report_of_single_scenario(
-    reports: list[Report], scenario_name: str
-) -> Report:
-    selectable_report_by_wallclock_value: dict[float, Report] = dict()
-    available_wallclock_values = []
+class MedianBenchmarkResultSelector(BenchmarkResultSelectorBase):
+    """Chooses the report with the median wallclock value for each scenario"""
 
-    for report in reports:
-        scenario_result = report.get_scenario_result_by_name(scenario_name)
+    def _select_report_of_single_scenario(
+        self,
+        scenario_name: str,
+        selectable_reports_by_wallclock_value: dict[float, list[Report]],
+        available_wallclock_values: list[float],
+    ) -> Report:
+        if len(available_wallclock_values) % 2 == 0:
+            # in case of an even number of selectable reports, add zero to the values to get an existing value when computing the median
+            available_wallclock_values.append(0)
 
-        metric_value = scenario_result.get_metric_by_measurement_type(
-            MeasurementType.WALLCLOCK
-        )
-        if metric_value is None:
-            continue
+        median_wallclock_value = median(available_wallclock_values)
+        assert (
+            median_wallclock_value in selectable_reports_by_wallclock_value.keys()
+        ), f"Chosen median is {median_wallclock_value} but available values are {available_wallclock_values}"
+        selected_report = selectable_reports_by_wallclock_value[median_wallclock_value][
+            0
+        ]
 
-        wallclock_value = metric_value.this()
-        if wallclock_value is None:
-            continue
-
-        # this might overwrite a previous report with the same wallclock value but this does not matter
-        selectable_report_by_wallclock_value[wallclock_value] = report
-        # store wallclock values separately not to loose identical values
-        available_wallclock_values.append(wallclock_value)
-
-    if len(selectable_report_by_wallclock_value) == 0:
-        # pick the first report in this case
-        return reports[0]
-
-    if len(available_wallclock_values) % 2 == 0:
-        # in case of an even number of selectable reports, add zero to the values to get an existing value when computing the median
-        available_wallclock_values.append(0)
-
-    median_wallclock_value = median(available_wallclock_values)
-    selected_report = selectable_report_by_wallclock_value[median_wallclock_value]
-    assert (
-        selected_report is not None
-    ), f"Chosen median is {median_wallclock_value} but available values are {available_wallclock_values}"
-
-    return selected_report
+        return selected_report
 
 
 def get_discarded_reports_per_scenario(
