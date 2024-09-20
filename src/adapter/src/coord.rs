@@ -3336,7 +3336,7 @@ impl Coordinator {
     /// Group commit, which this method uses to write the retractions, has builtin fencing, and we
     /// never commit retractions to [`MZ_STORAGE_USAGE_BY_SHARD`] outside of this method, which is
     /// only called once during startup. So we don't have to worry about double/invalid retractions.
-    async fn prune_storage_usage_events_on_startup(&mut self, retention_period: Duration) {
+    async fn prune_storage_usage_events_on_startup(&self, retention_period: Duration) {
         let id = self
             .catalog()
             .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD);

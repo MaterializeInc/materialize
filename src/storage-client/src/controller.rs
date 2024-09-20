@@ -596,7 +596,7 @@ pub trait StorageController: Debug {
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     fn snapshot(
-        &mut self,
+        &self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> BoxFuture<Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>>;
@@ -604,7 +604,7 @@ pub trait StorageController: Debug {
     /// Returns the snapshot of the contents of the local input named `id` at
     /// the largest readable `as_of`.
     async fn snapshot_latest(
-        &mut self,
+        &self,
         id: GlobalId,
     ) -> Result<Vec<Row>, StorageError<Self::Timestamp>>;
 
