@@ -18,7 +18,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
@@ -30,7 +29,6 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
-use mz_dyncfg::ConfigSet;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -67,9 +65,6 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
-use mz_storage_types::dyncfgs::{
-    REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
-};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
@@ -92,7 +87,7 @@ use tokio::time::error::Elapsed;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
-use crate::collection_mgmt::CollectionManagerKind;
+use crate::collection_mgmt::{partially_truncate_metrics_history, CollectionManagerKind};
 use crate::instance::{Instance, ReplicaConfig};
 use crate::statistics::StatsState;
 
@@ -2775,7 +2770,7 @@ where
             }
             IntrospectionType::ReplicaMetricsHistory | IntrospectionType::WallclockLagHistory => {
                 let write_handle = write_handle.expect("filled in by caller");
-                let result = Self::partially_truncate_metrics_history(
+                let result = partially_truncate_metrics_history(
                     id,
                     introspection_type,
                     write_handle,
@@ -3124,93 +3119,6 @@ where
             .into_iter()
             .map(|(key, (_, row))| (key, row))
             .collect()
-    }
-
-    /// Truncates the given metrics history by removing all entries older than that history's
-    /// configured retention interval.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `collection` is not a metrics history.
-    async fn partially_truncate_metrics_history(
-        id: GlobalId,
-        collection: IntrospectionType,
-        write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
-        config_set: &Arc<ConfigSet>,
-        now: NowFn,
-        storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-        txns_read: &TxnsRead<T>,
-        persist: &Arc<PersistClientCache>,
-    ) -> Result<(), anyhow::Error> {
-        let (keep_duration, occurred_at_col) = match collection {
-            IntrospectionType::ReplicaMetricsHistory => (
-                REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(config_set),
-                collection_status::REPLICA_METRICS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from("occurred_at"))
-                    .expect("schema has not changed")
-                    .0,
-            ),
-            IntrospectionType::WallclockLagHistory => (
-                WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(config_set),
-                collection_status::WALLCLOCK_LAG_HISTORY_DESC
-                    .get_by_name(&ColumnName::from("occurred_at"))
-                    .expect("schema has not changed")
-                    .0,
-            ),
-            _ => panic!("not a metrics history: {collection:?}"),
-        };
-
-        let upper = write_handle.fetch_recent_upper().await;
-        let Some(upper_ts) = upper.as_option() else {
-            bail!("collection is sealed");
-        };
-        let Some(as_of_ts) = upper_ts.step_back() else {
-            return Ok(()); // nothing to truncate
-        };
-
-        let mut rows = snapshot(id, as_of_ts, storage_collections, txns_read, persist)
-            .await
-            .map_err(|e| anyhow!("reading snapshot: {e:?}"))?;
-
-        let now = mz_ore::now::to_datetime(now());
-        let keep_since = now - keep_duration;
-
-        // Produce retractions by inverting diffs of rows we want to delete and setting the diffs
-        // of all other rows to 0.
-        for (row, diff) in &mut rows {
-            let datums = row.unpack();
-            let occurred_at = datums[occurred_at_col].unwrap_timestamptz();
-            *diff = if *occurred_at < keep_since { -*diff } else { 0 };
-        }
-
-        // Consolidate to avoid superfluous writes.
-        differential_dataflow::consolidation::consolidate(&mut rows);
-
-        if rows.is_empty() {
-            return Ok(());
-        }
-
-        // It is very important that we append our retractions at the timestamp
-        // right after the timestamp at which we got our snapshot. Otherwise,
-        // it's possible for someone else to sneak in retractions or other
-        // unexpected changes.
-        let old_upper_ts = upper_ts.clone();
-        let write_ts = old_upper_ts.clone();
-        let new_upper_ts = TimestampManipulation::step_forward(&old_upper_ts);
-
-        let updates = rows
-            .into_iter()
-            .map(|(row, diff)| ((SourceData(Ok(row)), ()), write_ts.clone(), diff));
-
-        write_handle
-            .compare_and_append(
-                updates,
-                Antichain::from_elem(old_upper_ts),
-                Antichain::from_elem(new_upper_ts),
-            )
-            .await
-            .expect("valid usage")
-            .map_err(|e| anyhow!("appending retractions: {e:?}"))
     }
 
     /// Appends a new global ID, shard ID pair to the appropriate collection.

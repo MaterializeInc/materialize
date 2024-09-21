@@ -63,30 +63,38 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use anyhow::{anyhow, bail};
 use differential_dataflow::consolidation;
 use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 use futures::{Future, FutureExt};
+use mz_dyncfg::ConfigSet;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::vec::VecExt;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
+use mz_repr::{ColumnName, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::client::TimestamplessUpdate;
-use mz_storage_client::controller::{MonotonicAppender, StorageWriteOp};
+use mz_storage_client::controller::{IntrospectionType, MonotonicAppender, StorageWriteOp};
+use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::controller::InvalidUpper;
+use mz_storage_types::dyncfgs::{
+    REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
+};
 use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
 use mz_storage_types::sources::SourceData;
+use mz_txn_wal::txn_read::TxnsRead;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
-use crate::StorageError;
+use crate::{collection_status, snapshot, StorageError};
 
 // Default rate at which we advance the uppers of managed collections.
 const DEFAULT_TICK_MS: u64 = 1_000;
@@ -1000,6 +1008,96 @@ where
     );
 
     (tx, handle.abort_on_drop(), shutdown_tx)
+}
+
+/// Truncates the given metrics history by removing all entries older than that history's
+/// configured retention interval.
+///
+/// # Panics
+///
+/// Panics if `collection` is not a metrics history.
+pub(super) async fn partially_truncate_metrics_history<T>(
+    id: GlobalId,
+    collection: IntrospectionType,
+    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    config_set: &Arc<ConfigSet>,
+    now: NowFn,
+    storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    txns_read: &TxnsRead<T>,
+    persist: &Arc<PersistClientCache>,
+) -> Result<(), anyhow::Error>
+where
+    T: Codec64 + From<EpochMillis> + TimestampManipulation,
+{
+    let (keep_duration, occurred_at_col) = match collection {
+        IntrospectionType::ReplicaMetricsHistory => (
+            REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(config_set),
+            collection_status::REPLICA_METRICS_HISTORY_DESC
+                .get_by_name(&ColumnName::from("occurred_at"))
+                .expect("schema has not changed")
+                .0,
+        ),
+        IntrospectionType::WallclockLagHistory => (
+            WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(config_set),
+            collection_status::WALLCLOCK_LAG_HISTORY_DESC
+                .get_by_name(&ColumnName::from("occurred_at"))
+                .expect("schema has not changed")
+                .0,
+        ),
+        _ => panic!("not a metrics history: {collection:?}"),
+    };
+
+    let upper = write_handle.fetch_recent_upper().await;
+    let Some(upper_ts) = upper.as_option() else {
+        bail!("collection is sealed");
+    };
+    let Some(as_of_ts) = upper_ts.step_back() else {
+        return Ok(()); // nothing to truncate
+    };
+
+    let mut rows = snapshot(id, as_of_ts, storage_collections, txns_read, persist)
+        .await
+        .map_err(|e| anyhow!("reading snapshot: {e:?}"))?;
+
+    let now = mz_ore::now::to_datetime(now());
+    let keep_since = now - keep_duration;
+
+    // Produce retractions by inverting diffs of rows we want to delete and setting the diffs
+    // of all other rows to 0.
+    for (row, diff) in &mut rows {
+        let datums = row.unpack();
+        let occurred_at = datums[occurred_at_col].unwrap_timestamptz();
+        *diff = if *occurred_at < keep_since { -*diff } else { 0 };
+    }
+
+    // Consolidate to avoid superfluous writes.
+    consolidation::consolidate(&mut rows);
+
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    // It is very important that we append our retractions at the timestamp
+    // right after the timestamp at which we got our snapshot. Otherwise,
+    // it's possible for someone else to sneak in retractions or other
+    // unexpected changes.
+    let old_upper_ts = upper_ts.clone();
+    let write_ts = old_upper_ts.clone();
+    let new_upper_ts = TimestampManipulation::step_forward(&old_upper_ts);
+
+    let updates = rows
+        .into_iter()
+        .map(|(row, diff)| ((SourceData(Ok(row)), ()), write_ts.clone(), diff));
+
+    write_handle
+        .compare_and_append(
+            updates,
+            Antichain::from_elem(old_upper_ts),
+            Antichain::from_elem(new_upper_ts),
+        )
+        .await
+        .expect("valid usage")
+        .map_err(|e| anyhow!("appending retractions: {e:?}"))
 }
 
 async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulation>(
