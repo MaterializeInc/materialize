@@ -72,6 +72,7 @@ use futures::{Future, FutureExt};
 use mz_dyncfg::ConfigSet;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
+use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
@@ -257,6 +258,7 @@ where
         id: GlobalId,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
         force_writable: bool,
+        introspection_config: Option<AppendOnlyIntrospectionConfig<T>>,
     ) {
         let mut guard = self
             .append_only_collections
@@ -282,6 +284,7 @@ where
             Arc::clone(&self.user_batch_duration_ms),
             self.now.clone(),
             read_only,
+            introspection_config,
         );
         let prev = guard.insert(id, writer_and_handle);
 
@@ -863,6 +866,17 @@ where
     }
 }
 
+pub(crate) struct AppendOnlyIntrospectionConfig<T>
+where
+    T: Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+{
+    pub(crate) introspection_type: IntrospectionType,
+    pub(crate) config_set: Arc<ConfigSet>,
+    pub(crate) storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    pub(crate) txns_read: TxnsRead<T>,
+    pub(crate) persist: Arc<PersistClientCache>,
+}
+
 /// Spawns an [`mz_ore::task`] that will continuously bump the upper for the specified collection,
 /// and append data that is sent via the provided [`mpsc::UnboundedSender`].
 ///
@@ -875,9 +889,10 @@ fn append_only_write_task<T>(
     user_batch_duration_ms: Arc<AtomicU64>,
     now: NowFn,
     read_only: bool,
+    introspection_config: Option<AppendOnlyIntrospectionConfig<T>>,
 ) -> (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender)
 where
-    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+    T: Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
@@ -885,6 +900,29 @@ where
     let handle = mz_ore::task::spawn(
         || format!("CollectionManager-append_only_write_task-{id}"),
         async move {
+            if !read_only {
+                if let Some(AppendOnlyIntrospectionConfig {
+                    introspection_type,
+                    config_set,
+                    storage_collections,
+                    txns_read,
+                    persist,
+                }) = introspection_config
+                {
+                    prepare_append_only_introspection_collection(
+                        id,
+                        introspection_type,
+                        &mut write_handle,
+                        config_set,
+                        now.clone(),
+                        storage_collections,
+                        txns_read,
+                        persist,
+                    )
+                    .await;
+                }
+            }
+
             let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_TICK_MS));
 
             const BATCH_SIZE: usize = 4096;
@@ -1010,41 +1048,113 @@ where
     (tx, handle.abort_on_drop(), shutdown_tx)
 }
 
+/// Does any work that is required before a background task starts
+/// writing to the given append only introspection collection.
+///
+/// This might include consolidation or deleting older entries.
+async fn prepare_append_only_introspection_collection<T>(
+    id: GlobalId,
+    introspection_type: IntrospectionType,
+    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    config_set: Arc<ConfigSet>,
+    now: NowFn,
+    storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    txns_read: TxnsRead<T>,
+    persist: Arc<PersistClientCache>,
+) where
+    T: Codec64 + From<EpochMillis> + TimestampManipulation,
+{
+    tracing::info!(%id, ?introspection_type, "preparing append only introspection collection for writes");
+
+    match introspection_type {
+        IntrospectionType::ReplicaMetricsHistory | IntrospectionType::WallclockLagHistory => {
+            let result = partially_truncate_metrics_history(
+                id,
+                introspection_type,
+                write_handle,
+                config_set,
+                now.clone(),
+                storage_collections,
+                txns_read,
+                persist,
+            )
+            .await;
+            if let Err(error) = result {
+                soft_panic_or_log!(
+                    "error truncating metrics history: {error} (type={introspection_type:?})"
+                );
+            }
+        }
+
+        // Note [btv] - we don't truncate these, because that uses
+        // a huge amount of memory on environmentd startup.
+        IntrospectionType::PreparedStatementHistory
+        | IntrospectionType::StatementExecutionHistory
+        | IntrospectionType::SessionHistory
+        | IntrospectionType::StatementLifecycleHistory
+        | IntrospectionType::SqlText => {
+            // NOTE(aljoscha): We never remove from these
+            // collections. Someone, at some point needs to
+            // think about that! Issue:
+            // https://github.com/MaterializeInc/materialize/issues/25696
+        }
+
+        // TODO(jkosh44) Handle these here instead of in the controller.
+        IntrospectionType::SourceStatusHistory
+        | IntrospectionType::SinkStatusHistory
+        | IntrospectionType::PrivatelinkConnectionStatusHistory
+        | IntrospectionType::ReplicaStatusHistory => {}
+
+        introspection_type @ IntrospectionType::ShardMapping
+        | introspection_type @ IntrospectionType::Frontiers
+        | introspection_type @ IntrospectionType::ReplicaFrontiers
+        | introspection_type @ IntrospectionType::StorageSourceStatistics
+        | introspection_type @ IntrospectionType::StorageSinkStatistics
+        | introspection_type @ IntrospectionType::ComputeDependencies
+        | introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus
+        | introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes
+        | introspection_type @ IntrospectionType::ComputeErrorCounts
+        | introspection_type @ IntrospectionType::ComputeHydrationTimes => {
+            unreachable!("not append-only collection: {introspection_type:?}")
+        }
+    }
+}
+
 /// Truncates the given metrics history by removing all entries older than that history's
 /// configured retention interval.
 ///
 /// # Panics
 ///
 /// Panics if `collection` is not a metrics history.
-pub(super) async fn partially_truncate_metrics_history<T>(
+async fn partially_truncate_metrics_history<T>(
     id: GlobalId,
-    collection: IntrospectionType,
+    introspection_type: IntrospectionType,
     write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
-    config_set: &Arc<ConfigSet>,
+    config_set: Arc<ConfigSet>,
     now: NowFn,
-    storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    txns_read: &TxnsRead<T>,
-    persist: &Arc<PersistClientCache>,
+    storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    txns_read: TxnsRead<T>,
+    persist: Arc<PersistClientCache>,
 ) -> Result<(), anyhow::Error>
 where
     T: Codec64 + From<EpochMillis> + TimestampManipulation,
 {
-    let (keep_duration, occurred_at_col) = match collection {
+    let (keep_duration, occurred_at_col) = match introspection_type {
         IntrospectionType::ReplicaMetricsHistory => (
-            REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(config_set),
+            REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(&config_set),
             collection_status::REPLICA_METRICS_HISTORY_DESC
                 .get_by_name(&ColumnName::from("occurred_at"))
                 .expect("schema has not changed")
                 .0,
         ),
         IntrospectionType::WallclockLagHistory => (
-            WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(config_set),
+            WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(&config_set),
             collection_status::WALLCLOCK_LAG_HISTORY_DESC
                 .get_by_name(&ColumnName::from("occurred_at"))
                 .expect("schema has not changed")
                 .0,
         ),
-        _ => panic!("not a metrics history: {collection:?}"),
+        _ => panic!("not a metrics history: {introspection_type:?}"),
     };
 
     let upper = write_handle.fetch_recent_upper().await;
@@ -1055,7 +1165,7 @@ where
         return Ok(()); // nothing to truncate
     };
 
-    let mut rows = snapshot(id, as_of_ts, storage_collections, txns_read, persist)
+    let mut rows = snapshot(id, as_of_ts, &storage_collections, &txns_read, &persist)
         .await
         .map_err(|e| anyhow!("reading snapshot: {e:?}"))?;
 

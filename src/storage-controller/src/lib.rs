@@ -87,7 +87,7 @@ use tokio::time::error::Elapsed;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
-use crate::collection_mgmt::{partially_truncate_metrics_history, CollectionManagerKind};
+use crate::collection_mgmt::{AppendOnlyIntrospectionConfig, CollectionManagerKind};
 use crate::instance::{Instance, ReplicaConfig};
 use crate::statistics::StatsState;
 
@@ -660,7 +660,7 @@ where
                     // and collection manager should only be responsible for
                     // built-in introspection collections?
                     self.collection_manager
-                        .register_append_only_collection(id, write, false);
+                        .register_append_only_collection(id, write, false, None);
                 }
                 DataSource::IngestionExport {
                     ingestion_id,
@@ -2725,6 +2725,7 @@ where
             // happens when we take over instead be a periodic thing, and make
             // it resilient to the upper moving concurrently.
             CollectionManagerKind::AppendOnly => {
+                // TODO(jkosh44) Handle this inside of the append only task.
                 if !self.read_only {
                     self.prepare_introspection_collection(
                         id,
@@ -2735,10 +2736,18 @@ where
                     .await?;
                 }
 
+                let introspection_config = AppendOnlyIntrospectionConfig {
+                    introspection_type,
+                    config_set: Arc::clone(self.config.config_set()),
+                    storage_collections: Arc::clone(&self.storage_collections),
+                    txns_read: self.txns_read.clone(),
+                    persist: Arc::clone(&self.persist),
+                };
                 self.collection_manager.register_append_only_collection(
                     id,
                     write_handle,
                     force_writable,
+                    Some(introspection_config),
                 );
             }
         }
@@ -2767,25 +2776,6 @@ where
             IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
                 // Differential collections start with an empty
                 // desired state. No need to manually reset.
-            }
-            IntrospectionType::ReplicaMetricsHistory | IntrospectionType::WallclockLagHistory => {
-                let write_handle = write_handle.expect("filled in by caller");
-                let result = partially_truncate_metrics_history(
-                    id,
-                    introspection_type,
-                    write_handle,
-                    self.config.config_set(),
-                    self.now.clone(),
-                    &self.storage_collections,
-                    &self.txns_read,
-                    &self.persist,
-                )
-                .await;
-                if let Err(error) = result {
-                    soft_panic_or_log!(
-                        "error truncating metrics history: {error} (type={introspection_type:?})"
-                    );
-                }
             }
             IntrospectionType::StorageSourceStatistics => {
                 let prev = self.snapshot_statistics(id, recent_upper).await;
@@ -2923,17 +2913,14 @@ where
                 // desired state. No need to manually reset.
             }
 
-            // Note [btv] - we don't truncate these, because that uses
-            // a huge amount of memory on environmentd startup.
-            IntrospectionType::PreparedStatementHistory
+            IntrospectionType::ReplicaMetricsHistory
+            | IntrospectionType::WallclockLagHistory
+            | IntrospectionType::PreparedStatementHistory
             | IntrospectionType::StatementExecutionHistory
             | IntrospectionType::SessionHistory
             | IntrospectionType::StatementLifecycleHistory
             | IntrospectionType::SqlText => {
-                // NOTE(aljoscha): We never remove from these
-                // collections. Someone, at some point needs to
-                // think about that! Issue:
-                // https://github.com/MaterializeInc/materialize/issues/25696
+                // Handled by append only task.
             }
         }
 
