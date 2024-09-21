@@ -2826,13 +2826,16 @@ where
             }
             IntrospectionType::SourceStatusHistory => {
                 let write_handle = write_handle.expect("filled in by caller");
-                let last_status_per_id = self
-                    .partially_truncate_status_history(
-                        IntrospectionType::SourceStatusHistory,
-                        write_handle,
-                        source_status_history_desc(&self.config.parameters),
-                    )
-                    .await;
+                let last_status_per_id = Self::partially_truncate_status_history(
+                    id,
+                    IntrospectionType::SourceStatusHistory,
+                    write_handle,
+                    source_status_history_desc(&self.config.parameters),
+                    &self.storage_collections,
+                    &self.txns_read,
+                    &self.persist,
+                )
+                .await;
 
                 let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("status"))
@@ -2856,13 +2859,16 @@ where
             }
             IntrospectionType::SinkStatusHistory => {
                 let write_handle = write_handle.expect("filled in by caller");
-                let last_status_per_id = self
-                    .partially_truncate_status_history(
-                        IntrospectionType::SinkStatusHistory,
-                        write_handle,
-                        sink_status_history_desc(&self.config.parameters),
-                    )
-                    .await;
+                let last_status_per_id = Self::partially_truncate_status_history(
+                    id,
+                    IntrospectionType::SinkStatusHistory,
+                    write_handle,
+                    sink_status_history_desc(&self.config.parameters),
+                    &self.storage_collections,
+                    &self.txns_read,
+                    &self.persist,
+                )
+                .await;
 
                 let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("status"))
@@ -2886,19 +2892,27 @@ where
             }
             IntrospectionType::PrivatelinkConnectionStatusHistory => {
                 let write_handle = write_handle.expect("filled in by caller");
-                self.partially_truncate_status_history(
+                Self::partially_truncate_status_history(
+                    id,
                     IntrospectionType::PrivatelinkConnectionStatusHistory,
                     write_handle,
                     privatelink_status_history_desc(&self.config.parameters),
+                    &self.storage_collections,
+                    &self.txns_read,
+                    &self.persist,
                 )
                 .await;
             }
             IntrospectionType::ReplicaStatusHistory => {
                 let write_handle = write_handle.expect("filled in by caller");
-                self.partially_truncate_status_history(
+                Self::partially_truncate_status_history(
+                    id,
                     IntrospectionType::ReplicaStatusHistory,
                     write_handle,
                     replica_status_history_desc(&self.config.parameters),
+                    &self.storage_collections,
+                    &self.txns_read,
+                    &self.persist,
                 )
                 .await;
             }
@@ -2978,23 +2992,26 @@ where
     ///
     /// Returns a map with latest unpacked row per key.
     async fn partially_truncate_status_history<K>(
-        &self,
+        id: GlobalId,
         collection: IntrospectionType,
         write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
         status_history_desc: StatusHistoryDesc<K>,
+        storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+        txns_read: &TxnsRead<T>,
+        persist: &Arc<PersistClientCache>,
     ) -> BTreeMap<K, Row>
     where
         K: Clone + Debug + Ord,
     {
-        let id = self.introspection_ids.lock().expect("poisoned")[&collection];
-
         let upper = write_handle.fetch_recent_upper().await.clone();
 
         let mut rows = match upper.as_option() {
             Some(f) if f > &T::minimum() => {
                 let as_of = f.step_back().unwrap();
 
-                self.snapshot(id, as_of).await.expect("snapshot succeeds")
+                snapshot(id, as_of, storage_collections, txns_read, persist)
+                    .await
+                    .expect("snapshot succeeds")
             }
             // If collection is closed or the frontier is the minimum, we cannot
             // or don't need to truncate (respectively).
