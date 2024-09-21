@@ -32,14 +32,14 @@ COPY (select 1) TO STDOUT
 ----
 COPY (SELECT 1) TO STDOUT
 =>
-Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), direction: To, target: Stdout, options: [] })
+Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), direction: To, target: Stdout, options: [] })
 
 parse-statement
 COPY (subscribe (SELECT 1)) TO STDOUT
 ----
 COPY (SUBSCRIBE (SELECT 1)) TO STDOUT
 =>
-Copy(CopyStatement { relation: Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None, output: Diffs }), direction: To, target: Stdout, options: [] })
+Copy(CopyStatement { relation: Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None, output: Diffs }), direction: To, target: Stdout, options: [] })
 
 parse-statement
 COPY t(a, b) TO STDOUT
@@ -140,14 +140,14 @@ COPY (select * from t) TO 's3://path/' || repeat('1', 2)
 ----
 COPY (SELECT * FROM t) TO 's3://path/' || repeat('1', 2)
 =>
-Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("repeat")])), args: Args { args: [Value(String("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [] })
+Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("repeat")])), args: Args { args: [Value(String("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [] })
 
 parse-statement
 COPY (select *, mz_now() from t) TO 's3://path/'
 ----
 COPY (SELECT *, mz_now() FROM t) TO 's3://path/'
 =>
-Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard, Expr { expr: Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), direction: To, target: Expr(Value(String("s3://path/"))), options: [] })
+Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard, Expr { expr: Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), direction: To, target: Expr(Value(String("s3://path/"))), options: [] })
 
 
 parse-statement
@@ -169,7 +169,7 @@ COPY (select * from t order by 1) TO 's3://path/' || repeat('1', 2)
 ----
 COPY (SELECT * FROM t ORDER BY 1) TO 's3://path/' || repeat('1', 2)
 =>
-Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Value(Number("1")), asc: None, nulls_last: None }], limit: None, offset: None }, as_of: None }), direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("repeat")])), args: Args { args: [Value(String("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [] })
+Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [OrderByExpr { expr: Value(Number("1")), asc: None, nulls_last: None }], limit: None, offset: None }, as_of: None }), direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("repeat")])), args: Args { args: [Value(String("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [] })
 
 parse-statement
 COPY INTO t1 FROM STDIN

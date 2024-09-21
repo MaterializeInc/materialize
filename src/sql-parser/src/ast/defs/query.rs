@@ -244,6 +244,8 @@ pub struct Select<T: AstInfo> {
     pub group_by: Vec<Expr<T>>,
     /// HAVING
     pub having: Option<Expr<T>>,
+    /// QUALIFY
+    pub qualify: Option<Expr<T>>,
     /// OPTION
     pub options: Vec<SelectOption<T>>,
 }
@@ -274,6 +276,10 @@ impl<T: AstInfo> AstDisplay for Select<T> {
         if let Some(ref having) = self.having {
             f.write_str(" HAVING ");
             f.write_node(having);
+        }
+        if let Some(ref qualify) = self.qualify {
+            f.write_str(" QUALIFY ");
+            f.write_node(qualify);
         }
         if !self.options.is_empty() {
             f.write_str(" OPTIONS (");

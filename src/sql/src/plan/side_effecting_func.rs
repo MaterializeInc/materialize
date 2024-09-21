@@ -148,6 +148,7 @@ fn extract_sef_call(
         selection: None,
         group_by,
         having: None,
+        qualify: None,
         options,
     } = &**body
     else {
