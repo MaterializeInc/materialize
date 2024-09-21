@@ -55,6 +55,12 @@ COMPLETE 0
 statement ok
 CREATE TABLE t1 (a int NOT NULL)
 
+statement error column "a" of relation "t1" already exists
+ALTER TABLE t1 ADD COLUMN a int;
+
+statement ok
+ALTER TABLE t1 ADD COLUMN IF NOT EXISTS a int;
+
 query error db error: ERROR: invalid version "1000" for "t2"
 CREATE VIEW v1 AS SELECT * FROM [u1 AS "materialize"."public"."t2" VERSION 1000];
 

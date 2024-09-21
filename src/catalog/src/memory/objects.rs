@@ -1387,7 +1387,7 @@ impl CatalogItem {
                 stmt.columns.push(column);
                 Ok(())
             }
-            _ => return Err(()),
+            _ => Err(()),
         };
 
         self.update_sql(update)
