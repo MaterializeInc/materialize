@@ -30,6 +30,7 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
+use mz_dyncfg::ConfigSet;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -2774,9 +2775,17 @@ where
             }
             IntrospectionType::ReplicaMetricsHistory | IntrospectionType::WallclockLagHistory => {
                 let write_handle = write_handle.expect("filled in by caller");
-                let result = self
-                    .partially_truncate_metrics_history(introspection_type, write_handle)
-                    .await;
+                let result = Self::partially_truncate_metrics_history(
+                    id,
+                    introspection_type,
+                    write_handle,
+                    self.config.config_set(),
+                    self.now.clone(),
+                    &self.storage_collections,
+                    &self.txns_read,
+                    &self.persist,
+                )
+                .await;
                 if let Err(error) = result {
                     soft_panic_or_log!(
                         "error truncating metrics history: {error} (type={introspection_type:?})"
@@ -3124,20 +3133,25 @@ where
     ///
     /// Panics if `collection` is not a metrics history.
     async fn partially_truncate_metrics_history(
-        &mut self,
+        id: GlobalId,
         collection: IntrospectionType,
         write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+        config_set: &Arc<ConfigSet>,
+        now: NowFn,
+        storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+        txns_read: &TxnsRead<T>,
+        persist: &Arc<PersistClientCache>,
     ) -> Result<(), anyhow::Error> {
         let (keep_duration, occurred_at_col) = match collection {
             IntrospectionType::ReplicaMetricsHistory => (
-                REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(self.config.config_set()),
+                REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(config_set),
                 collection_status::REPLICA_METRICS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
                     .0,
             ),
             IntrospectionType::WallclockLagHistory => (
-                WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(self.config.config_set()),
+                WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(config_set),
                 collection_status::WALLCLOCK_LAG_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
@@ -3145,8 +3159,6 @@ where
             ),
             _ => panic!("not a metrics history: {collection:?}"),
         };
-
-        let id = self.introspection_ids.lock().expect("poisoned")[&collection];
 
         let upper = write_handle.fetch_recent_upper().await;
         let Some(upper_ts) = upper.as_option() else {
@@ -3156,12 +3168,11 @@ where
             return Ok(()); // nothing to truncate
         };
 
-        let mut rows = self
-            .snapshot(id, as_of_ts)
+        let mut rows = snapshot(id, as_of_ts, storage_collections, txns_read, persist)
             .await
             .map_err(|e| anyhow!("reading snapshot: {e:?}"))?;
 
-        let now = mz_ore::now::to_datetime((self.now)());
+        let now = mz_ore::now::to_datetime(now());
         let keep_since = now - keep_duration;
 
         // Produce retractions by inverting diffs of rows we want to delete and setting the diffs
