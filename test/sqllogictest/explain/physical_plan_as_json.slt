@@ -138,9 +138,9 @@ EXPLAIN PHYSICAL PLAN WITH(no fast path) AS JSON FOR
               [
                 {
                   "data": [
-                    42,
+                    45,
                     1,
-                    42,
+                    45,
                     2
                   ]
                 },
@@ -150,9 +150,9 @@ EXPLAIN PHYSICAL PLAN WITH(no fast path) AS JSON FOR
               [
                 {
                   "data": [
-                    42,
+                    45,
                     3,
-                    42,
+                    45,
                     4
                   ]
                 },
@@ -337,7 +337,7 @@ SELECT a + b, 1 FROM t
                       {
                         "Ok": {
                           "data": [
-                            42,
+                            45,
                             1
                           ]
                         }
@@ -427,7 +427,7 @@ SELECT c + d, 1 FROM u
               {
                 "Ok": {
                   "data": [
-                    42,
+                    45,
                     1
                   ]
                 }
@@ -546,7 +546,7 @@ SELECT * FROM ov
                   {
                     "Ok": {
                       "data": [
-                        47,
+                        50,
                         5
                       ]
                     }
@@ -844,7 +844,7 @@ SELECT * FROM ov
                   {
                     "Ok": {
                       "data": [
-                        47,
+                        50,
                         5
                       ]
                     }
@@ -1083,7 +1083,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     {
                                       "Ok": {
                                         "data": [
-                                          42,
+                                          45,
                                           1
                                         ]
                                       }
@@ -1156,7 +1156,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     {
                                       "Ok": {
                                         "data": [
-                                          42,
+                                          45,
                                           1
                                         ]
                                       }
@@ -1280,7 +1280,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                           [
                                             {
                                               "data": [
-                                                42,
+                                                45,
                                                 5
                                               ]
                                             },
@@ -1465,7 +1465,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                   {
                     "Ok": {
                       "data": [
-                        42,
+                        45,
                         25
                       ]
                     }
@@ -1517,7 +1517,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                     {
                       "Ok": {
                         "data": [
-                          42,
+                          45,
                           5
                         ]
                       }
@@ -1606,7 +1606,7 @@ SELECT generate_series(a, b) from t
                 {
                   "Ok": {
                     "data": [
-                      42,
+                      45,
                       1
                     ]
                   }
@@ -2178,7 +2178,7 @@ FROM t
                             {
                               "Ok": {
                                 "data": [
-                                  46
+                                  49
                                 ]
                               }
                             },
@@ -5642,7 +5642,7 @@ MATERIALIZED VIEW collated_global_mv
                             {
                               "Ok": {
                                 "data": [
-                                  46
+                                  49
                                 ]
                               }
                             },
@@ -6410,7 +6410,7 @@ SELECT * FROM collated_global
                             {
                               "Ok": {
                                 "data": [
-                                  46
+                                  49
                                 ]
                               }
                             },
@@ -6807,7 +6807,7 @@ WHERE a = c AND d = e AND b + d > 42
                                         {
                                           "Ok": {
                                             "data": [
-                                              42,
+                                              45,
                                               42
                                             ]
                                           }
@@ -6959,7 +6959,7 @@ WHERE a = c AND d = e AND b + d > 42
                                         {
                                           "Ok": {
                                             "data": [
-                                              42,
+                                              45,
                                               42
                                             ]
                                           }
@@ -7138,7 +7138,7 @@ WHERE a = c AND d = e AND b + d > 42
                                         {
                                           "Ok": {
                                             "data": [
-                                              42,
+                                              45,
                                               42
                                             ]
                                           }

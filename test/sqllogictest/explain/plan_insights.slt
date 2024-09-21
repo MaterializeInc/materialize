@@ -1004,7 +1004,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
                                   {
                                     "Ok": {
                                       "data": [
-                                        46
+                                        49
                                       ]
                                     }
                                   },
@@ -1099,7 +1099,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR CREATE VIEW V AS SELECT 1
               "Literal": [
                 {
                   "data": [
-                    42,
+                    45,
                     1
                   ]
                 },
