@@ -189,6 +189,7 @@ class ZeroDowntimeBumpedVersion(Scenario):
                 deploy_generation=2,
                 mz_service="mz_3",
                 system_parameter_defaults=system_parameter_defaults,
+                publish=False,  # Allows us to build the image during the test in CI
             ),
             Validate(self, mz_service="mz_2"),
             *wait_ready_and_promote("mz_3"),

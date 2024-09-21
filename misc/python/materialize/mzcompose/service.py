@@ -165,6 +165,9 @@ class ServiceConfig(TypedDict, total=False):
     platform: str
     """Target platform for service to run on. Syntax: os[/arch[/variant]]"""
 
+    publish: bool | None
+    """Override whether an image is publishable. Unpublishable images can be built during normal test runs in CI."""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.
