@@ -2721,6 +2721,7 @@ impl std::ops::Deref for SharedRow {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate};
+    use mz_ore::assert_none;
 
     use crate::ScalarType;
 
@@ -3152,5 +3153,57 @@ mod tests {
 
         let e = test_range_errors_inner(vec![vec![Datum::Int32(2)], vec![Datum::Int32(1)]]);
         assert_eq!(e, Err(InvalidRangeError::MisorderedRangeBounds));
+    }
+
+    /// Lists have a variable-length encoding for their lengths. We test each case here.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow
+    fn test_list_encoding() {
+        fn test_list_encoding_inner(len: usize) {
+            let list_elem = |i: usize| {
+                if i % 2 == 0 {
+                    Datum::False
+                } else {
+                    Datum::True
+                }
+            };
+            let mut row = Row::default();
+            {
+                // Push some stuff.
+                let mut packer = row.packer();
+                packer.push(Datum::String("start"));
+                packer.push_list_with(|packer| {
+                    for i in 0..len {
+                        packer.push(list_elem(i));
+                    }
+                });
+                packer.push(Datum::String("end"));
+            }
+            // Check that we read back exactly what we pushed.
+            let mut row_it = row.iter();
+            assert_eq!(row_it.next().unwrap(), Datum::String("start"));
+            match row_it.next().unwrap() {
+                Datum::List(list) => {
+                    let mut list_it = list.iter();
+                    for i in 0..len {
+                        assert_eq!(list_it.next().unwrap(), list_elem(i));
+                    }
+                    assert_none!(list_it.next());
+                }
+                _ => panic!("expected Datum::List"),
+            }
+            assert_eq!(row_it.next().unwrap(), Datum::String("end"));
+            assert_none!(row_it.next());
+        }
+
+        test_list_encoding_inner(0);
+        test_list_encoding_inner(1);
+        test_list_encoding_inner(10);
+        test_list_encoding_inner(TINY - 1); // tiny
+        test_list_encoding_inner(TINY + 1); // short
+        test_list_encoding_inner(SHORT + 1); // long
+
+        // The biggest one takes 40 s on my laptop, probably not worth it.
+        //test_list_encoding_inner(LONG + 1); // huge
     }
 }
