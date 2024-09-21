@@ -15,6 +15,7 @@ use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_txn_wal::operator::TxnsContext;
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::{mpsc, oneshot};
 
 /// A trait for letting specific server implementations hook
 /// into handling of `CreateTimely` commands. Usually implemented by
@@ -33,11 +34,11 @@ pub trait AsRunnableWorker<C, R> {
     fn build_and_run<A: timely::communication::Allocate + 'static>(
         config: Self,
         timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        channels: (
             crossbeam_channel::Receiver<C>,
-            tokio::sync::mpsc::UnboundedSender<R>,
-            tokio::sync::mpsc::UnboundedSender<Self::Activatable>,
-        )>,
+            mpsc::UnboundedSender<R>,
+            oneshot::Sender<Self::Activatable>,
+        ),
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,

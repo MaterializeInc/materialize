@@ -16,6 +16,7 @@ bytesize = "1.1.0"
 clap = { version = "3.2.24", features = ["derive", "env"] }
 crossbeam-channel = "0.5.8"
 dec = { version = "0.4.8", features = ["serde"] }
+derivative = "2.2.0"
 differential-dataflow = "0.12.0"
 futures = "0.3.25"
 mz-build-info = { path = "../build-info" }
