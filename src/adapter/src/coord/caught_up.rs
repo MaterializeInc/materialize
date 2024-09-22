@@ -228,19 +228,36 @@ impl Coordinator {
 
         let mut all_caught_up = true;
 
-        for id in self.controller.compute.collection_ids(cluster.id)? {
-            if id.is_transient() || exclude_collections.contains(&id) {
-                // These have no relation to dataflows running on previous
-                // deployments.
-                continue;
-            }
+        let storage_frontiers = self
+            .controller
+            .storage
+            .active_ingestions(cluster.id)
+            .iter()
+            .copied()
+            .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
+            .map(|id| {
+                let (_read_frontier, write_frontier) =
+                    self.controller.storage.collection_frontiers(id)?;
+                Ok::<_, anyhow::Error>((id, write_frontier))
+            });
 
-            let write_frontier = self
-                .controller
-                .compute
-                .collection_frontiers(id, Some(cluster.id))?
-                .write_frontier;
+        let compute_frontiers = self
+            .controller
+            .compute
+            .collection_ids(cluster.id)?
+            .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
+            .map(|id| {
+                let write_frontier = self
+                    .controller
+                    .compute
+                    .collection_frontiers(id, Some(cluster.id))?
+                    .write_frontier
+                    .to_owned();
+                Ok((id, write_frontier))
+            });
 
+        for res in itertools::chain(storage_frontiers, compute_frontiers) {
+            let (id, write_frontier) = res?;
             let live_write_frontier = match live_frontiers.get(&id) {
                 Some(frontier) => frontier,
                 None => {

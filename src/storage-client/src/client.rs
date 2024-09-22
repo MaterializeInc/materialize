@@ -108,6 +108,13 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Indicates that the controller has sent all commands reflecting its
     /// initial state.
     InitializationComplete,
+    /// `AllowWrites` informs the replica that it can transition out of the
+    /// read-only stage and into the read-write computation stage.
+    /// It is now allowed to affect changes to external systems (writes).
+    ///
+    /// See `ComputeCommand::AllowWrites` for details. This command works
+    /// analogously to the compute version.
+    AllowWrites,
     /// Update storage instance configuration.
     UpdateConfiguration(StorageParameters),
     /// Run the enumerated sources, each associated with its identifier.
@@ -127,6 +134,7 @@ impl<T> StorageCommand<T> {
         match self {
             CreateTimely { .. }
             | InitializationComplete
+            | AllowWrites
             | UpdateConfiguration(_)
             | AllowCompaction(_) => false,
             RunIngestions(_) | RunSinks(_) => true,
@@ -226,6 +234,7 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                     epoch: Some(epoch.into_proto()),
                 }),
                 StorageCommand::InitializationComplete => InitializationComplete(()),
+                StorageCommand::AllowWrites => AllowWrites(()),
                 StorageCommand::UpdateConfiguration(params) => {
                     UpdateConfiguration(params.into_proto())
                 }
@@ -255,6 +264,7 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 })
             }
             Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
+            Some(AllowWrites(())) => Ok(StorageCommand::AllowWrites),
             Some(UpdateConfiguration(params)) => {
                 Ok(StorageCommand::UpdateConfiguration(params.into_rust()?))
             }
@@ -625,7 +635,7 @@ where
     fn observe_command(&mut self, command: &StorageCommand<T>) {
         // Note that `observe_command` is quite different in `mz_compute_client`.
         // Compute (currently) only sends the command to 1 process,
-        // but storage fan's out to all workers, allowing the storage processes
+        // but storage fans out to all workers, allowing the storage processes
         // to self-coordinate how commands and internal commands are ordered.
         //
         // TODO(guswynn): cluster-unification: consolidate this with compute.
@@ -642,6 +652,7 @@ where
                 exports.iter().for_each(|e| self.insert_new_uppers([e.id]))
             }
             StorageCommand::InitializationComplete
+            | StorageCommand::AllowWrites
             | StorageCommand::UpdateConfiguration(_)
             | StorageCommand::AllowCompaction(_) => {}
         };

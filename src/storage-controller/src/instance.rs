@@ -21,6 +21,7 @@ use mz_cluster_client::ReplicaId;
 use mz_ore::now::NowFn;
 use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
+use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::{
@@ -47,6 +48,12 @@ use crate::history::CommandHistory;
 pub(crate) struct Instance<T> {
     /// The replicas connected to this storage instance.
     replicas: BTreeMap<ReplicaId, Replica<T>>,
+    /// The ingestions currently running on this instance.
+    ///
+    /// While this is derivable from `history` on demand, keeping a denormalized
+    /// list of running ingestions is quite a bit more convenient in the
+    /// implementation of `StorageController::active_ingestions`.
+    active_ingestions: BTreeSet<GlobalId>,
     /// The command history, used to replay past commands when introducing new replicas or
     /// reconnecting to existing replicas.
     history: CommandHistory<T>,
@@ -80,6 +87,7 @@ where
 
         let mut instance = Self {
             replicas: Default::default(),
+            active_ingestions: BTreeSet::new(),
             history,
             epoch,
             metrics,
@@ -151,6 +159,11 @@ where
         }
     }
 
+    /// Returns the ingestions running on this instance.
+    pub fn active_ingestions(&self) -> &BTreeSet<GlobalId> {
+        &self.active_ingestions
+    }
+
     /// Sets the status to paused for all sources/sinks in the history.
     fn update_paused_statuses(&mut self) {
         let now = mz_ore::now::to_datetime((self.now)());
@@ -199,6 +212,22 @@ where
             !command.installs_objects() || self.replicas.len() <= 1,
             "replication not supported for storage objects"
         );
+
+        match &command {
+            StorageCommand::RunIngestions(ingestions) => {
+                for ingestion in ingestions {
+                    self.active_ingestions.insert(ingestion.id);
+                }
+            }
+            StorageCommand::AllowCompaction(policies) => {
+                for (id, frontier) in policies {
+                    if frontier.is_empty() {
+                        self.active_ingestions.remove(id);
+                    }
+                }
+            }
+            _ => (),
+        }
 
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(command.clone());

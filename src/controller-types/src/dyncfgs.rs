@@ -20,6 +20,12 @@ pub const CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL: Config<Dura
     "The interval at which to attempt to retry cleaning up replicas from past generations.",
 );
 
+pub const ENABLE_0DT_DEPLOYMENT_SOURCES: Config<bool> = Config::new(
+    "enable_0dt_deployment_sources",
+    false,
+    "Whether to enable zero-downtime deployments for sources that support it (experimental).",
+);
+
 /// The interval at which to refresh wallclock lag introspection.
 pub const WALLCLOCK_LAG_REFRESH_INTERVAL: Config<Duration> = Config::new(
     "wallclock_lag_refresh_interval",
@@ -31,5 +37,6 @@ pub const WALLCLOCK_LAG_REFRESH_INTERVAL: Config<Duration> = Config::new(
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL)
+        .add(&ENABLE_0DT_DEPLOYMENT_SOURCES)
         .add(&WALLCLOCK_LAG_REFRESH_INTERVAL)
 }
