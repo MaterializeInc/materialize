@@ -122,16 +122,6 @@ pub const COPY_TO_S3_MULTIPART_PART_SIZE_BYTES: Config<usize> = Config::new(
     "The size of each part in a multipart upload to S3.",
 );
 
-/// Whether the compute `persist_sink` obeys read-only mode. When false, it
-/// writes regardless of that mode.
-///
-/// As an escape hatch for de-risking rollout of read-only computation mode.
-pub const PERSIST_SINK_OBEY_READ_ONLY: Config<bool> = Config::new(
-    "compute_persist_sink_obey_read_only",
-    true,
-    "Whether the compute persist_sink obeys read-only mode.",
-);
-
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -149,5 +139,4 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO)
         .add(&COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO)
         .add(&COPY_TO_S3_MULTIPART_PART_SIZE_BYTES)
-        .add(&PERSIST_SINK_OBEY_READ_ONLY)
 }
