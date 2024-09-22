@@ -307,31 +307,6 @@ where
         self.read_only
     }
 
-    /// Allow this controller and instances controlled by it to write to
-    /// external systems.
-    ///
-    /// If the controller has previously been told about tables (via
-    /// [StorageController::create_collections]), the caller must provide a
-    /// `register_ts`, the timestamp at which any tables that are known to the
-    /// controller should be registered in the txn system.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the controller knows about tables but not `register_ts` is
-    /// provided.
-    pub async fn allow_writes(&mut self, register_ts: Option<T>) {
-        if !self.read_only {
-            // Already transitioned out of read-only mode!
-            return;
-        }
-
-        self.read_only = false;
-
-        self.compute.allow_writes();
-        self.storage.allow_writes(register_ts).await;
-        self.remove_past_generation_replicas_in_background();
-    }
-
     /// Returns `Some` if there is an immediately available
     /// internally-generated response that we need to return to the
     /// client (as opposed to waiting for a response from compute or storage).
@@ -717,17 +692,14 @@ where
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
-        let mut this = Self {
+        let this = Self {
             storage: Box::new(storage_controller),
             storage_collections: collections_ctl,
             compute: compute_controller,
             clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,
             deploy_generation: config.deploy_generation,
-            // We initialize to true, but then call `allow_writes()` below,
-            // based on our input. This way we avoid having the same logic in
-            // two places.
-            read_only: true,
+            read_only,
             orchestrator: config.orchestrator.namespace("cluster"),
             readiness: Readiness::NotReady,
             metrics_tasks: BTreeMap::new(),
@@ -742,15 +714,8 @@ where
             immediate_watch_sets: Vec::new(),
         };
 
-        // We have some logic that we want to run both when initialized with
-        // `read_only = false` _and_ when later transitioning out of read-only
-        // mode. This way we keep that logic in one place.
-        if !read_only {
-            // We did not yet tell the controller about any collections, so
-            // there are no tables to initialize yet. Hence we don't need a
-            // register_ts.
-            let register_ts = None;
-            this.allow_writes(register_ts).await;
+        if !this.read_only {
+            this.remove_past_generation_replicas_in_background();
         }
 
         this
