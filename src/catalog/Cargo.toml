@@ -47,7 +47,7 @@ paste = "1.0.11"
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
-prost = "0.13.1"
+prost = "0.13.2"
 postgres-openssl = { version = "0.5.0" }
 rand = "0.8.5"
 semver = { version = "1.0.16" }
@@ -75,7 +75,7 @@ tokio-postgres = { version = "0.7.8" }
 anyhow = "1.0.66"
 md-5 = "0.10.5"
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.1"
+prost-build = "0.13.2"
 serde = "1.0.152"
 serde_json = "1.0.125"
 

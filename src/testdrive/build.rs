@@ -7,15 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
+use std::path::PathBuf;
 
 fn main() {
-    // Build protobufs.
-    env::set_var("PROTOC", mz_build_tools::protoc());
-    env::set_var("PROTOC_INCLUDE", mz_build_tools::protoc_include());
-
     let mut config = prost_build::Config::new();
     config
+        .protoc_executable(mz_build_tools::protoc())
         .btree_map(["."])
         .message_attribute(".", ATTR)
         .enum_attribute(".", ATTR)
@@ -26,9 +23,15 @@ fn main() {
 
     // Bazel places the `fivetran-sdk` submodule in a slightly different place.
     let includes_directories = if mz_build_tools::is_bazel_build() {
-        &["../../../fivetran_sdk"]
+        &[
+            PathBuf::from("../../../fivetran_sdk"),
+            mz_build_tools::protoc_include(),
+        ]
     } else {
-        &["../../misc/fivetran-sdk"]
+        &[
+            PathBuf::from("../../misc/fivetran-sdk"),
+            mz_build_tools::protoc_include(),
+        ]
     };
 
     const ATTR: &str = "#[derive(::serde::Serialize, ::serde::Deserialize)]";
