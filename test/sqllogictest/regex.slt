@@ -155,8 +155,7 @@ SELECT replace(s, E'\n', '<newline>') FROM t WHERE s~'a.*';
 Explained Query:
   Project (#3)
     Filter is_regexp_match["a.*", case_insensitive=false](#0)
-      Map (replace(#0, "
-", "<newline>"))
+      Map (replace(#0, "\n", "<newline>"))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -178,8 +177,7 @@ SELECT replace(s, E'\n', '<newline>') FROM t WHERE s~*'a.*';
 Explained Query:
   Project (#3)
     Filter is_regexp_match["a.*", case_insensitive=true](#0)
-      Map (replace(#0, "
-", "<newline>"))
+      Map (replace(#0, "\n", "<newline>"))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -201,8 +199,7 @@ SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*') FROM t;
 ----
 Explained Query:
   Project (#3, #4)
-    Map (replace(#0, "
-", "<newline>"), regexp_match["a.*", case_insensitive=false](#0))
+    Map (replace(#0, "\n", "<newline>"), regexp_match["a.*", case_insensitive=false](#0))
       ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -229,8 +226,7 @@ SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*', 'i') FROM t;
 ----
 Explained Query:
   Project (#3, #4)
-    Map (replace(#0, "
-", "<newline>"), regexp_match["a.*", case_insensitive=true](#0))
+    Map (replace(#0, "\n", "<newline>"), regexp_match["a.*", case_insensitive=true](#0))
       ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -287,8 +283,7 @@ SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~ regex_pat;
 Explained Query:
   Project (#3)
     Filter (#0 ~ #2)
-      Map (replace(#0, "
-", "<newline>"))
+      Map (replace(#0, "\n", "<newline>"))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -311,8 +306,7 @@ SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~* regex_pat;
 Explained Query:
   Project (#3)
     Filter (#0 ~* #2)
-      Map (replace(#0, "
-", "<newline>"))
+      Map (replace(#0, "\n", "<newline>"))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -335,8 +329,7 @@ SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat) FRO
 ----
 Explained Query:
   Project (#3, #2, #4)
-    Map (replace(#0, "
-", "<newline>"), regexp_match(#0, #2))
+    Map (replace(#0, "\n", "<newline>"), regexp_match(#0, #2))
       ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -368,8 +361,7 @@ SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat, 'i'
 ----
 Explained Query:
   Project (#3, #2, #4)
-    Map (replace(#0, "
-", "<newline>"), regexp_match(#0, #2, "i"))
+    Map (replace(#0, "\n", "<newline>"), regexp_match(#0, #2, "i"))
       ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -440,10 +432,7 @@ EXPLAIN
 SELECT *, s~'\' FROM t;
 ----
 Explained Query:
-  Map (error("invalid regular expression: regex parse error:
-    \
-    ^
-error: incomplete escape sequence, reached end of pattern prematurely"))
+  Map (error("invalid regular expression: regex parse error:\n    \\n    ^\nerror: incomplete escape sequence, reached end of pattern prematurely"))
     ReadStorage materialize.public.t
 
 Source materialize.public.t
@@ -714,10 +703,7 @@ EXPLAIN
 SELECT regexp_replace('foobarbaz', 'b(..', 'X', 'ig');
 ----
 Explained Query (fast path):
-  Error "invalid regular expression: regex parse error:
-    b(..
-     ^
-error: unclosed group"
+  Error "invalid regular expression: regex parse error:\n    b(..\n     ^\nerror: unclosed group"
 
 Target cluster: quickstart
 

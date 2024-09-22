@@ -313,7 +313,7 @@ impl MirRelationExpr {
                     if mode.redacted() {
                         writeln!(f, "{}Error █", ctx.indent)?;
                     } else {
-                        writeln!(f, "{}Error {}", ctx.indent, err.to_string().quoted())?;
+                        writeln!(f, "{}Error {}", ctx.indent, err.to_string().escaped())?;
                     }
                 }
             },
@@ -1327,7 +1327,7 @@ where
                 if self.mode.redacted() {
                     write!(f, "error(█)")
                 } else {
-                    write!(f, "error({})", err.to_string().quoted())
+                    write!(f, "error({})", err.to_string().escaped())
                 }
             }
         }

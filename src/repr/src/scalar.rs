@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::fmt::{self, Debug, Write};
+use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::iter;
 use std::ops::Add;
@@ -20,6 +20,7 @@ use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
+use mz_ore::str::StrExt;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
@@ -1350,15 +1351,7 @@ impl fmt::Display for Datum<'_> {
                 Ok(())
             }
             Datum::String(s) => {
-                f.write_str("\"")?;
-                for c in s.chars() {
-                    if c == '"' {
-                        f.write_str("\\\"")?;
-                    } else {
-                        f.write_char(c)?;
-                    }
-                }
-                f.write_str("\"")
+                write!(f, "{}", s.escaped())
             }
             Datum::Uuid(u) => write!(f, "{}", u),
             Datum::Array(array) => {
