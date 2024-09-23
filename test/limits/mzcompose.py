@@ -91,7 +91,7 @@ class Connections(Generator):
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
         # three extra connections for mz_system, default connection, and one
-        # since sqlparse 0.4.4. 3 reserved superuser connections since #25666
+        # since sqlparse 0.4.4. 3 reserved superuser connections since materialize#25666
         print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+4};")
 
         for i in cls.all():
@@ -1150,8 +1150,8 @@ class UnionsNested(Generator):
 class CaseWhen(Generator):
     # Originally this was working with 1000, but after moving lowering and
     # decorrelation from the `plan_~` to the `sequence_~` method we had to
-    # reduce it a bit in order to avoid overflowing the stack. See #24076
-    # and #24820 for the latest occurrences of this.
+    # reduce it a bit in order to avoid overflowing the stack. See materialize#24076
+    # and materialize#24820 for the latest occurrences of this.
     COUNT = 600
 
     @classmethod
@@ -1244,9 +1244,9 @@ class ArrayAgg(Generator):
 
 class FilterSubqueries(Generator):
     """
-    Regression test for #20557.
+    Regression test for materialize#20557.
 
-    Without the #20557 fix in #20702 this will cause `environmend` to OOM
+    Without the materialize#20557 fix in materialize#20702 this will cause `environmend` to OOM
     because of excessive memory allocations in the `RedundantJoin` transform.
     """
 

@@ -48,7 +48,7 @@ class ErrorMessageNormalizer:
             # tracked with https://github.com/MaterializeInc/materialize/issues/28129
             normalized_message = normalized_message.replace("?", "")
 
-        # strip error message details (see #29661, #19822, #23497)
+        # strip error message details (see materialize#29661, materialize#19822, materialize#23497)
         normalized_message = re.sub(r" \(.*?\.\)", "", normalized_message)
 
         return normalized_message

@@ -132,11 +132,11 @@ struct CteDesc {
 
 #[derive(Debug)]
 pub struct Config {
-    /// Enable outer join lowering implemented in #22343.
+    /// Enable outer join lowering implemented in materialize#22343.
     pub enable_new_outer_join_lowering: bool,
-    /// Enable outer join lowering implemented in #25340.
+    /// Enable outer join lowering implemented in materialize#25340.
     pub enable_variadic_left_join_lowering: bool,
-    /// Enable the extra null filter implemented in #28018.
+    /// Enable the extra null filter implemented in materialize#28018.
     pub enable_outer_join_null_filter: bool,
     pub enable_value_window_function_fusion: bool,
 }

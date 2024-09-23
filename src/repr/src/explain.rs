@@ -243,7 +243,7 @@ pub enum Explainee {
     Index(GlobalId),
     /// An object that will be served using a dataflow.
     ///
-    /// This variant is deprecated and will be removed in #18089.
+    /// This variant is deprecated and will be removed in materialize#18089.
     Dataflow(GlobalId),
     /// The object to be explained is a one-off query and may or may not be
     /// served using a dataflow.

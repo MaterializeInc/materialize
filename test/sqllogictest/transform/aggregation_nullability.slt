@@ -18,7 +18,7 @@ CREATE TABLE t2(f1 int, f2 int)
 statement ok
 INSERT INTO t1 VALUES (1, 2)
 
-# regression test for #7049: a filter on COUNT aggregation must not trigger the outer to inner join conversion
+# regression test for materialize#7049: a filter on COUNT aggregation must not trigger the outer to inner join conversion
 query T multiline
 EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having count(t2.f1) >= 0;
 ----
@@ -782,7 +782,7 @@ Target cluster: quickstart
 
 EOF
 
-# regression test for #7047
+# regression test for materialize#7047
 statement ok
 drop table t1
 

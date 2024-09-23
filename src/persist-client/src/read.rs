@@ -605,7 +605,7 @@ where
             .downgrade_since(&self.reader_id, outstanding_seqno, new_since, heartbeat_ts)
             .await;
 
-        // Debugging for #15937.
+        // Debugging for materialize#15937.
         if let Some(outstanding_seqno) = outstanding_seqno {
             let seqnos_held = _seqno.0.saturating_sub(outstanding_seqno.0);
             // We get just over 1 seqno-per-second on average for a shard in

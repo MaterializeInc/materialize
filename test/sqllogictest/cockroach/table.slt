@@ -473,14 +473,14 @@ ALTER TABLE smtng.something ADD COLUMN IF NOT EXISTS MODEL_ID INT
 statement ok
 ALTER TABLE smtng.something ADD COLUMN IF NOT EXISTS NAME STRING
 
-# Regression test for #13725
+# Regression test for materialize#13725
 statement ok
 CREATE TABLE test.empty ()
 
 statement ok
 SELECT * FROM test.empty
 
-# Issue #14308: support tables with DEFAULT NULL columns.
+# Issue materialize#14308: support tables with DEFAULT NULL columns.
 statement ok
 CREATE TABLE test.null_default (
   ts timestamp NULL DEFAULT NULL
@@ -494,7 +494,7 @@ test.public.null_default  CREATE TABLE null_default (
                           FAMILY "primary" (ts, rowid)
 )
 
-# Issue #13873: don't permit invalid default columns
+# Issue materialize#13873: don't permit invalid default columns
 statement error could not parse "blah" as type decimal
 CREATE TABLE test.t1 (a DECIMAL DEFAULT (DECIMAL 'blah'));
 

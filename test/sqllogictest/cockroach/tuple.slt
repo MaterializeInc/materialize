@@ -246,7 +246,7 @@ true
 query error invalid input syntax for type integer
 SELECT ((1, 2), 'equal') = ((1, 'huh'), 'equal') FROM tb
 
-# Issue #3568
+# Issue materialize#3568
 
 statement ok
 CREATE TABLE kv (
@@ -270,7 +270,7 @@ k  v
 statement ok
 DROP TABLE kv
 
-# Issue #12295
+# Issue materialize#12295
 
 query B colnames
 SELECT 'foo' IN (x, 'aaa') AS r FROM (SELECT 'foo' AS x FROM tb)
@@ -313,7 +313,7 @@ true
 statement ok
 DROP TABLE t
 
-# Issue #12302
+# Issue materialize#12302
 
 query B colnames
 SELECT 1 IN (2, NULL) AS r

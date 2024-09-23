@@ -373,7 +373,7 @@ CREATE TABLE y (
   r INT AS (1) STORED REFERENCES x
 )
 
-# Regression test for #36036.
+# Regression test for materialize#36036.
 statement ok
 CREATE TABLE tt (i INT8 AS (1) STORED)
 
@@ -722,7 +722,7 @@ ALTER TABLE x ADD COLUMN d INT AS (a // 0) STORED
 statement ok
 DROP TABLE x
 
-# Regression test for #23109
+# Regression test for materialize#23109
 statement ok
 CREATE TABLE x (
   a INT DEFAULT 1,
@@ -779,7 +779,7 @@ CREATE TABLE x (
 query error value type decimal doesn't match type int of column "a"
 INSERT INTO x VALUES(1.4)
 
-# Regression test for #34901: verify that builtins can be used in computed
+# Regression test for materialize#34901: verify that builtins can be used in computed
 # column expressions without a "memory budget exceeded" error while backfilling
 statement ok
 CREATE TABLE t34901 (x STRING)

@@ -186,7 +186,7 @@ Target cluster: quickstart
 
 EOF
 
-# #7684 avoidable cross joins
+# materialize#7684 avoidable cross joins
 query T multiline
 EXPLAIN WITH(arity, join implementations)
 select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and t2.f1 is null);
@@ -450,7 +450,7 @@ Target cluster: mz_catalog_server
 
 EOF
 
-# Regression tests for #17515
+# Regression tests for materialize#17515
 # Push predicates through Threshold and TopK
 
 # Test Threshold.

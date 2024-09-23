@@ -199,7 +199,7 @@ SELECT relname from pg_class where oid='a'::regclass
 ----
 a
 
-## Regression for #16767 - ensure regclass casts use normalized table names
+## Regression for materialize#16767 - ensure regclass casts use normalized table names
 
 statement ok
 CREATE TABLE hasCase (id INT PRIMARY KEY)
@@ -309,7 +309,7 @@ SELECT * FROM o WHERE a <= 4
 1
 4
 
-# Regression test for #23652.
+# Regression test for materialize#23652.
 
 query B
 SELECT NOT (prorettype::regtype::text = 'foo') AND proretset FROM pg_proc WHERE proretset=false LIMIT 1
@@ -326,7 +326,7 @@ SELECT crdb_internal.create_regtype(10, 'foo')::oid, crdb_internal.create_regcla
 ----
 10 10 10 10 10
 
-# Regression test for #32422: ensure that VALUES nodes properly retain special
+# Regression test for materialize#32422: ensure that VALUES nodes properly retain special
 # OID properties.
 
 query OO

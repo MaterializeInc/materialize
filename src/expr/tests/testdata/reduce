@@ -615,7 +615,7 @@ reduce
 ----
 #0
 
-### Regression test for #9995.
+### Regression test for materialize#9995.
 ### The inner if statement can be replaced by its `condition`, but we must
 ### ensure that we keep the type of the `then` and `els` clauses.
 ### The type of the error should be int32 instead of bool.

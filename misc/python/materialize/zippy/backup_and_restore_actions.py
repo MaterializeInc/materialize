@@ -21,7 +21,7 @@ class BackupAndRestore(Action):
         return {MzIsRunning, CockroachIsRunning}
 
     def run(self, c: Composition, state: State) -> None:
-        # Required because of #22762
+        # Required because of materialize#22762
         c.kill("storaged")
 
         c.backup_crdb()

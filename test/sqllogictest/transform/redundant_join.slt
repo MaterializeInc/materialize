@@ -86,7 +86,7 @@ EOF
 # Same query, but selecting from t1 instead of t2. The added `- IS NOT NULL`
 # filters prevent redundant join elimination at first. To be able to eliminate
 # the join we need to factor out the filter on top of t1 behind a common
-# binding (fixed by #18173).
+# binding (fixed by materialize#18173).
 query T multiline
 EXPLAIN WITH(arity, join implementations)
 WITH MUTUALLY RECURSIVE

@@ -1294,7 +1294,7 @@ Target cluster: quickstart
 
 EOF
 
-# Test #17348.
+# Test materialize#17348.
 
 statement ok
 CREATE TABLE r(f0 INT, f1 INT, f2 INT, f3 INT, f4 INT, f5 INT, f6 INT, f7 INT, f8 INT, f9 INT, f10 INT, f11 INT, f12 INT, f13 INT, f14 INT, f15 INT, f16 INT);
@@ -1336,7 +1336,7 @@ Target cluster: quickstart
 EOF
 
 # Test `LetRec` printing, with and without RECURSION LIMIT
-# With #27389 this stopped testing a thing; see issue #28308.
+# With materialize#27389 this stopped testing a thing; see issue materialize#28308.
 query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT * FROM (

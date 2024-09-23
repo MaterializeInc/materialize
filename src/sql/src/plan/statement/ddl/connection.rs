@@ -719,7 +719,7 @@ fn plan_kafka_security(
                         // Materialize previously rejected with an error of "SASL
                         // mechanism must be uppercase." This was deeply frustarting for
                         // users who were not familiar with identifier case folding
-                        // rules. See #22205.
+                        // rules. See materialize#22205.
                         mechanism: mechanism.to_uppercase(),
                         username: username.clone(),
                         password: Some((*password).into()),

@@ -657,11 +657,11 @@ impl Optimizer {
             //   run in the logical optimizer).
             // - Not running ColumnKnowledge in the same fixpoint loop with JoinImplementation
             //   is slightly hurting our plans. However, I'd say we should fix these problems by
-            //   making ColumnKnowledge (and/or JoinImplementation) smarter (#18051), rather than
+            //   making ColumnKnowledge (and/or JoinImplementation) smarter (materialize#18051), rather than
             //   having them in the same fixpoint loop. If they would be in the same fixpoint loop,
-            //   then we either run the risk of ColumnKnowledge invalidating a join plan (#17993),
+            //   then we either run the risk of ColumnKnowledge invalidating a join plan (materialize#17993),
             //   or we would have to run JoinImplementation an unbounded number of times, which is
-            //   also not good #16076.
+            //   also not good materialize#16076.
             //   (The same is true for FoldConstants, Demand, and LiteralLifting to a lesser
             //   extent.)
             //

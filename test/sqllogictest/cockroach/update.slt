@@ -522,7 +522,7 @@ SELECT * FROM mutation
 m  n  o   p
 2  1  10  11
 
-#regression test for #32477
+#regression test for materialize#32477
 subtest reject_special_funcs_inset
 
 statement ok
@@ -537,7 +537,7 @@ UPDATE t32477 SET x = rank() OVER ()
 statement error generator functions are not allowed in UPDATE SET
 UPDATE t32477 SET x = generate_series(1,2)
 
-#regression test for #32054
+#regression test for materialize#32054
 subtest empty_update_subquery
 
 statement ok
@@ -555,7 +555,7 @@ SELECT * FROM t32054
 NULL  NULL
 
 # ------------------------------------------------------------------------------
-# Regression for #35364.
+# Regression for materialize#35364.
 # ------------------------------------------------------------------------------
 subtest regression_35364
 
@@ -574,7 +574,7 @@ SELECT x FROM t35364
 1
 
 # ------------------------------------------------------------------------------
-# Regression for #35970.
+# Regression for materialize#35970.
 # ------------------------------------------------------------------------------
 statement ok
 CREATE TABLE table35970 (

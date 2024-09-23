@@ -26,7 +26,7 @@ class MaterializedViews(Check):
                 """
                 + (
                     """
-                # Regression test for #27167.
+                # Regression test for materialize#27167.
                 > CREATE MATERIALIZED VIEW zero_arity AS SELECT;
                 """
                     if self.base_version >= MzVersion.parse_mz("v0.101.0")

@@ -185,7 +185,7 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     ///
     /// The entry for a peek is only removed once all replicas have responded to the peek. This is
     /// currently required to ensure all replicas have stopped reading from the peeked collection's
-    /// inputs before we allow them to compact. #16641 tracks changing this so we only have to wait
+    /// inputs before we allow them to compact. materialize#16641 tracks changing this so we only have to wait
     /// for the first peek response.
     peeks: BTreeMap<Uuid, PendingPeek<T>>,
     /// Currently in-progress subscribes.
@@ -1753,7 +1753,7 @@ where
         };
 
         // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
-        // (by dropping it), to avoid the edge case that caused #16615.
+        // (by dropping it), to avoid the edge case that caused materialize#16615.
         self.send(ComputeCommand::CancelPeek { uuid });
 
         drop(peek);

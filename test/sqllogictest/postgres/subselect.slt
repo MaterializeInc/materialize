@@ -519,7 +519,7 @@ min
 0
 
 # --
-# -- Test case for bug #4290: bogus calculation of subplan param sets
+# -- Test case for bug materialize#4290: bogus calculation of subplan param sets
 # --
 # create temp table ta (id int primary key, val int);
 # insert into ta values(1,1);
@@ -555,7 +555,7 @@ group by f1,f2,fs
 ----
 f1  f2  fs
 
-# Test case for bug #5514 (mishandling of whole-row Vars in subselects)
+# Test case for bug materialize#5514 (mishandling of whole-row Vars in subselects)
 statement ok
 create table table_a (id integer)
 
@@ -623,7 +623,7 @@ from
 ----
 qq1
 
-# Test case for cross-type partial matching in hashed subplan (bug #7597)
+# Test case for cross-type partial matching in hashed subplan (bug materialize#7597)
 statement ok
 create table outer_7597 (f1 int4, f2 int4)
 
@@ -714,7 +714,7 @@ a
 NULL
 1
 
-# Check we behave sanely in corner case of empty SELECT list (bug #8648)
+# Check we behave sanely in corner case of empty SELECT list (bug materialize#8648)
 statement ok
 create table nocolumns()
 
@@ -724,7 +724,7 @@ select exists(select * from nocolumns)
 exists
 false
 
-# Check behavior with a SubPlan in VALUES (bug #14924)
+# Check behavior with a SubPlan in VALUES (bug materialize#14924)
 query I rowsort
 select val.x
   from generate_series(1,10) as s(i),
@@ -751,7 +751,7 @@ where s.i < 10 and (select val.x) < 110
 109
 10
 
-# another variant of that (bug #16213)
+# another variant of that (bug materialize#16213)
 query T colnames,rowsort
 select * from
 (values

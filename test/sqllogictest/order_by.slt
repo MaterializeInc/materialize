@@ -868,7 +868,7 @@ SELECT * FROM fizzlimitoffsetview2
 21758 fourteen
 12345 three
 
-# NULL should sort last by default. See #5982.
+# NULL should sort last by default. See materialize#5982.
 # NULL (default, default)
 query I
 SELECT * FROM (VALUES (NULL), (1)) ORDER BY column1

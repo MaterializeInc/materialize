@@ -33,7 +33,7 @@ contains:Invalid data in source, saw retractions (1) for row that does not exist
 ! SELECT * FROM data
 contains:Invalid data in source, saw retractions (2) for row that does not exist: [Int64(1), UInt32(1)]
 
-# regression scenario per #17963, with non-monotonic rendering
+# regression scenario per materialize#17963, with non-monotonic rendering
 > CREATE VIEW topk AS
   SELECT grp.id, count(t.data) AS top_2_count,
            (SELECT COUNT(d.data) FROM data d WHERE d.data % 2 = grp.id) AS total_count
@@ -46,19 +46,19 @@ contains:Invalid data in source, saw retractions (2) for row that does not exist
 ! SELECT * from topk;
 contains:Negative multiplicities in TopK
 
-# regression scenario per #17908
+# regression scenario per materialize#17908
 ! SELECT DISTINCT data FROM data;
 contains:Non-positive multiplicity in DistinctBy
 
-# regression scenario per #18211
+# regression scenario per materialize#18211
 ! SELECT list_agg(DISTINCT data)[1] FROM data;
 contains:Non-positive accumulation in ReduceInaccumulable DISTINCT
 
-# regression scenario per #18212
+# regression scenario per materialize#18212
 ! SELECT list_agg(data)[1] FROM data;
 contains:Non-positive accumulation in ReduceInaccumulable
 
-# regression scenario per #17509, with non-monotonic rendering
+# regression scenario per materialize#17509, with non-monotonic rendering
 > CREATE VIEW max_data AS
   SELECT MAX(data) FROM data;
 

@@ -28,7 +28,7 @@ from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 
 # Those defaults have been carefully chosen to avoid known OOMs
-# such as #15093 and #15044 while hopefully catching any further
+# such as materialize#15093 and materialize#15044 while hopefully catching any further
 # regressions in memory usage
 PAD_LEN = 1024
 STRING_PAD = "x" * PAD_LEN

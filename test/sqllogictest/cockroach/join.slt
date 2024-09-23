@@ -92,7 +92,7 @@ NULL
   44
 
 # Check that ORDER BY chokes on ambiguity if no table less columns
-# were introduced by USING. (#12239)
+# were introduced by USING. (materialize#12239)
 query error Column reference x is ambiguous
 SELECT * FROM onecolumn AS a, onecolumn AS b ORDER BY x
 
@@ -172,7 +172,7 @@ NULL
 44
 
 # Check that the source columns can be selected separately from the
-# USING column (#12033).
+# USING column (materialize#12033).
 query III colnames
 SELECT x AS s, a.x, b.x FROM onecolumn AS a FULL OUTER JOIN othercolumn AS b USING (x) ORDER BY s
 ----
@@ -538,7 +538,7 @@ CREATE TABLE s(x INT)
 statement ok
 INSERT INTO s(x) VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10)
 
-# Ensure that large cross-joins are optimized somehow (#10633)
+# Ensure that large cross-joins are optimized somehow (materialize#10633)
 statement ok
 CREATE TABLE customers(id INT PRIMARY KEY NOT NULL)
 
@@ -795,7 +795,7 @@ NULL    NULL    NULL    NULL     400       1     401       4
 #  201    NULL    201
 #  401    NULL    401
 
-# Test for #19536.
+# Test for materialize#19536.
 query I
 SELECT x FROM t1 NATURAL JOIN (SELECT * FROM t2)
 ----
@@ -976,7 +976,7 @@ NULL  NULL  NULL  5  5  55
 NULL  NULL  NULL  2  2  2
 
 
-# Regression test for #20858.
+# Regression test for materialize#20858.
 
 statement ok
 CREATE TABLE l (a INT PRIMARY KEY)
@@ -1011,7 +1011,7 @@ SELECT * FROM l RIGHT OUTER JOIN r USING (a) WHERE a = 4
 4
 
 
-# Regression tests for mixed-type equality columns (#22514).
+# Regression tests for mixed-type equality columns (materialize#22514).
 statement ok
 CREATE TABLE foo (
   a INT,
@@ -1114,7 +1114,7 @@ INSERT INTO bar VALUES
 # NULL  42    53
 # NULL  45    45
 
-# # Regression test for #23609: make sure that the type of the merged column
+# # Regression test for materialize#23609: make sure that the type of the merged column
 # # is int (not unknown).
 # query II rowsort
 # SELECT column1, column1+1
@@ -1127,7 +1127,7 @@ INSERT INTO bar VALUES
 # 1     2
 # NULL  NULL
 
-# Regression test for #28817. Do not allow special functions in ON clause.
+# Regression test for materialize#28817. Do not allow special functions in ON clause.
 query error table function \(generate_series\) in scalar position not yet supported
 SELECT * FROM foo JOIN bar ON generate_series(0, 1) < 2
 

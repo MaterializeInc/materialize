@@ -699,7 +699,7 @@ impl Catalog {
                 CatalogItem::Sink(_) => {
                     // Sinks don't have any external objects to drop--however,
                     // this would change if we add a collections for sinks
-                    // #17672.
+                    // materialize#17672.
                 }
                 CatalogItem::View(_) => {
                     // Views don't have any external objects to drop.

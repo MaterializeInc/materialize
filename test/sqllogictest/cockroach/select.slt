@@ -172,7 +172,7 @@ SELECT kv.* FROM kv
 ----
 a NULL
 
-# Regression tests for #24169
+# Regression tests for materialize#24169
 query TT
 SELECT test.kv.* FROM kv
 ----
@@ -205,7 +205,7 @@ SELECT kv.* AS foo FROM kv
 query error no data source matches pattern: bar.kv.\*
 SELECT bar.kv.* FROM kv
 
-# Don't panic with invalid names (#8024)
+# Don't panic with invalid names (materialize#8024)
 query error cannot subscript type tuple\{char AS k, char AS v\} because it is not an array
 SELECT kv.*[1] FROM kv
 
@@ -394,7 +394,7 @@ SELECT a FROM MaxIntTest WHERE a = 9223372036854775807
 query error no value provided for placeholder
 SELECT $1::int
 
-# Regression tests for #22670.
+# Regression tests for materialize#22670.
 query B
 SELECT 1 IN (1, 2)
 ----

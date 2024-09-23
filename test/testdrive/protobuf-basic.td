@@ -66,7 +66,7 @@ $ kafka-ingest topic=basic format=protobuf descriptor-file=basic.pb message=Basi
 {"bool": true, "int32": 1, "int64": 2, "sint32": -1, "sint64": -2, "sfixed32": -3, "sfixed64": -4, "uint32": 3, "uint64": 4, "fixed32": 5, "fixed64": 6, "float": 1.2, "double": 3.2, "bytes": "YWFh", "string": "bbb", "enum": "ENUM1", "message": {"bool": true, "int32": 1, "int64": 2, "sint32": -1, "sint64": -2, "sfixed32": -3, "sfixed64": -4, "uint32": 3, "uint64": 4, "fixed32": 5, "fixed64": 6, "float": 1.2, "double": 3.2, "bytes": "YWFh", "string": "bbb", "enum": "ENUM1"}}
 {}
 # Test the case where the nested message is explicitly set to all default
-# values. This previously crashed Materialize (see #8930).
+# values. This previously crashed Materialize (see materialize#8930).
 {"message": {}}
 
 > CREATE CONNECTION kafka_conn

@@ -212,7 +212,7 @@ impl RowPacker<'_> {
                 Ok(ProtoDatumOther::True) => self.push(Datum::True),
                 Ok(ProtoDatumOther::JsonNull) => self.push(Datum::JsonNull),
                 Ok(ProtoDatumOther::Dummy) => {
-                    // We plan to remove the `Dummy` variant soon (#17099). To prepare for that, we
+                    // We plan to remove the `Dummy` variant soon (materialize#17099). To prepare for that, we
                     // emit a log to Sentry here, to notify us of any instances that might have
                     // been made durable.
                     #[cfg(feature = "tracing_")]

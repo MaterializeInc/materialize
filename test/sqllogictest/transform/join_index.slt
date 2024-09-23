@@ -245,7 +245,7 @@ statement ok
 CREATE INDEX bar_idx2 on bar(-a);
 
 # Test that when join planning uses indexes on expressions.
-# Protects against regression of #4170.
+# Protects against regression of materialize#4170.
 query T multiline
 EXPLAIN WITH(arity, join implementations)
 select foo.b, bar.b

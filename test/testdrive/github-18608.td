@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test from #18608, where earlier errors were erroneously
+# Regression test from materialize#18608, where earlier errors were erroneously
 # discarded by TopK's error handling.
 
 > CREATE TABLE t0(c0 FLOAT);
@@ -59,7 +59,7 @@
 # Different results in Postgres and Materialize; returns an error in
 # v0.48.0, swallows an error in v0.49.0 and erroneously returns 1248.
 #
-# This test was fixed by #22560, indicating that the issue is not
+# This test was fixed by materialize#22560, indicating that the issue is not
 # affecting the equijoin-based outer join lowering strategy.
 # ! SELECT
 #     SUM(count)

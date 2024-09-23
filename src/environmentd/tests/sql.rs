@@ -599,7 +599,7 @@ fn test_subscribe_basic() {
 
     // Aggressively compact the data in the index, then subscribe an unmaterialized
     // view derived from the index. This previously selected an invalid
-    // `AS OF` timestamp (#5391).
+    // `AS OF` timestamp (materialize#5391).
     client_writes
         .batch_execute("ALTER TABLE t SET (RETAIN HISTORY = FOR '1s')")
         .unwrap();
@@ -756,7 +756,7 @@ fn test_subscribe_progress() {
 }
 
 // Verifies that subscribing to non-nullable columns with progress information
-// turns them into nullable columns. See #6304.
+// turns them into nullable columns. See materialize#6304.
 #[mz_ore::test]
 fn test_subscribe_progress_non_nullable_columns() {
     let server = test_util::TestHarness::default().start_blocking();
@@ -966,7 +966,7 @@ fn test_subscribe_fetch_timeout() {
     // Make a third cursor. Fetch should return immediately if there are enough
     // rows, even with a really long timeout.
     //
-    // Regression test for #6307
+    // Regression test for materialize#6307
     client
         .batch_execute(
             "COMMIT; BEGIN;
@@ -1624,7 +1624,7 @@ fn test_github_12951() {
 }
 
 #[mz_ore::test]
-// Tests github issue #13100
+// Tests github issue materialize#13100
 fn test_subscribe_outlive_cluster() {
     let server = test_util::TestHarness::default().start_blocking();
 

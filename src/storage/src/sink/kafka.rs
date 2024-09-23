@@ -434,7 +434,7 @@ impl TransactionalProducer {
             // internal use, so we silently drop any such user-specified
             // headers. While this behavior is documented, it'd be a nicer UX to
             // send a warning or error somewhere. Unfortunately sinks don't have
-            // anywhere user-visible to send errors. See #17672.
+            // anywhere user-visible to send errors. See materialize#17672.
             if header.key.starts_with("materialize-") {
                 continue;
             }
@@ -1453,7 +1453,7 @@ fn evaluate_partition_by(partition_by: &MirScalarExpr, row: &[Datum]) -> u64 {
     // to 0 is somewhat surpising. Ideally, we would put the sink in a
     // permanently errored state if the partition by expression produces an
     // error or invalid value. But we don't presently have a way for sinks to
-    // report errors (see #17688), so the current behavior was determined to be
+    // report errors (see materialize#17688), so the current behavior was determined to be
     // the best available option. The behavior is clearly documented in the
     // user-facing `CREATE SINK` docs.
     let temp_storage = RowArena::new();

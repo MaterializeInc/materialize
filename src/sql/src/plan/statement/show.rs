@@ -1049,7 +1049,7 @@ fn humanize_sql_for_show_create(
                 }
                 CreateSourceConnection::LoadGenerator { .. } if !curr_references.is_empty() => {
                     // Load generator sources with any references only support
-                    // `FOR ALL TABLES`. However, this would change if #26765
+                    // `FOR ALL TABLES`. However, this would change if materialize#26765
                     // landed.
                     curr_references.clear();
                     stmt.external_references = Some(ExternalReferences::All);

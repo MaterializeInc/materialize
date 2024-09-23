@@ -362,7 +362,7 @@ pub struct CatalogConfig {
     /// A random integer associated with this instance of the catalog.
     ///
     /// NOTE(benesch): this is only necessary for producing unique Kafka sink
-    /// topics. Perhaps we can remove this when #2915 is complete.
+    /// topics. Perhaps we can remove this when materialize#2915 is complete.
     pub nonce: u64,
     /// A persistent ID associated with the environment.
     pub environment_id: EnvironmentId,

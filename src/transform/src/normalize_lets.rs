@@ -726,7 +726,7 @@ mod inlining {
     ///    there was no recursion in it.
     ///
     /// The case of `Constant` binding is handled here (as opposed to
-    /// `FoldConstants`) in a somewhat limited manner (see #18180). Although a
+    /// `FoldConstants`) in a somewhat limited manner (see materialize#18180). Although a
     /// bit weird, constants should also not be inlined into prior bindings as
     /// this does change the behavior from one where the collection is initially
     /// empty to one where it is always the constant.

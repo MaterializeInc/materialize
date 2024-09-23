@@ -310,7 +310,7 @@ where
     /// to be _not possible_ for partially ordered times. It is believed that we
     /// could fix this by collecting different metadata in batch creation (e.g.
     /// the join of or an antichain of the original contained timestamps), but
-    /// the experience of #26384 has shaken our confidence in our own abilities
+    /// the experience of materialize#26384 has shaken our confidence in our own abilities
     /// to reason about partially ordered times and anyway all the initial uses
     /// have totally ordered times.
     pub fn rewrite_ts(

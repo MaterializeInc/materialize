@@ -17,7 +17,7 @@ from materialize.feature_benchmark.scenario import Scenario
 class SubscribeParallel(Scenario):
     """Feature benchmarks related to SUBSCRIBE"""
 
-    SCALE = 2  # So 100 concurrent SUBSCRIBEs by default, limited by #18261
+    SCALE = 2  # So 100 concurrent SUBSCRIBEs by default, limited by materialize#18261
     FIXED_SCALE = True
 
     def benchmark(self) -> MeasurementSource:
@@ -29,7 +29,7 @@ class SubscribeParallel(Scenario):
                         f"""
                         $ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}
                         $ postgres-execute connection=conn{i}
-                        # STRICT SERIALIZABLE is affected by #18353
+                        # STRICT SERIALIZABLE is affected by materialize#18353
                         START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
                         DECLARE c{i} CURSOR FOR SUBSCRIBE s1
                         """

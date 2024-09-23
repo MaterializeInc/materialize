@@ -100,7 +100,7 @@ build format=types
 Filter (#0 = #2) // { types: "(Int32, Int32?, Int32, Int32?)", keys: "([0, 1], [0, 3], [1, 2], [2, 3])" }
   Get with_keys2 // { types: "(Int32?, Int32?, Int32?, Int32?)", keys: "([0, 1], [2, 3])" }
 
-# Regression test for #14146. The keys at the end should be [#0]
+# Regression test for materialize#14146. The keys at the end should be [#0]
 
 build format=types
 (filter (reduce (get x) [#0] [(count true false)])[(call_binary eq #0 #0)])

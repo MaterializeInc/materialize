@@ -1920,7 +1920,7 @@ DELETE FROM kv WHERE k = 12
 query error FILTER specified, but rank is not an aggregate function
 SELECT k, rank() FILTER (WHERE k=1) OVER () FROM kv
 
-# Issue #14606: correctly handle aggregation functions above the windowing level
+# Issue materialize#14606: correctly handle aggregation functions above the windowing level
 query I
 SELECT max(i) * (row_number() OVER (ORDER BY max(i))) FROM (SELECT 1 AS i, 2 AS j) GROUP BY j
 ----
@@ -1936,7 +1936,7 @@ SELECT max(i) * (1/j) * (row_number() OVER (ORDER BY max(i))) FROM (SELECT 1 AS 
 ----
 0.5
 
-# regression test for #23798 until #10495 is fixed.
+# regression test for materialize#23798 until materialize#10495 is fixed.
 statement error function reserved for internal use
 SELECT final_variance(1.2, 1.2, 123) OVER (PARTITION BY k) FROM kv
 
@@ -2996,7 +2996,7 @@ Tablet      iPad             700.00   NULL  700.00
 Tablet      Kindle Fire      150.00   NULL  150.00
 Tablet      Samsung          200.00   NULL  200.00
 
-# Test for #32702
+# Test for materialize#32702
 
 statement ok
 CREATE TABLE x (a INT)
@@ -3011,7 +3011,7 @@ SELECT a, json_agg(a) OVER (ORDER BY a) FROM x ORDER BY a
 2 [1, 2]
 3 [1, 2, 3]
 
-# Test for #35267
+# Test for materialize#35267
 query I
 SELECT
     row_number() OVER (PARTITION BY s)
@@ -3022,7 +3022,7 @@ FROM
 1
 1
 
-# Tests for #32050
+# Tests for materialize#32050
 
 statement error window function calls cannot be nested
 SELECT sum(a) OVER (PARTITION BY count(a) OVER ()) FROM x
@@ -3047,7 +3047,7 @@ SELECT sum(a) OVER (PARTITION BY (SELECT count(*) FROM x GROUP BY a LIMIT 1))::I
 6
 6
 
-# Regression test for #27293 - make sure comparing two tuple types when
+# Regression test for materialize#27293 - make sure comparing two tuple types when
 # generating window functions expressions doesn't panic.
 
 query II
@@ -3073,7 +3073,7 @@ SELECT string_agg('foo', s) OVER () FROM (SELECT * FROM kv LIMIT 1)
 ----
 foo
 
-# Regression test for #37201.
+# Regression test for materialize#37201.
 query I
 SELECT jsonb_agg(a) OVER (ORDER BY a GROUPS BETWEEN 5 FOLLOWING AND UNBOUNDED FOLLOWING) FROM x
 ----

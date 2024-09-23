@@ -514,7 +514,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 
     /// The same as [Self::push_batch] but without the `FueledMergeReq`s, which
-    /// account for a surprising amount of cpu in prod. #18368
+    /// account for a surprising amount of cpu in prod. materialize#18368
     pub(crate) fn push_batch_no_merge_reqs(&mut self, batch: HollowBatch<T>) {
         self.spine.insert(batch, &mut SpineLog::Disabled);
     }

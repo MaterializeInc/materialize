@@ -353,7 +353,7 @@ ws-text
 {"type":"ReadyForQuery","payload":"I"}
 
 # This test ensures that notices are emitted as they are produced (i.e., before
-# the CommandComplete message). See #22739.
+# the CommandComplete message). See materialize#22739.
 
 ws-text
 {"query":"SELECT 1 FROM mz_sources LIMIT 1"}

@@ -121,11 +121,11 @@ class PgCdcBase:
                 """
                 + (
                     f"""
-                # Wait until Pg snapshot is complete in order to avoid #18940
+                # Wait until Pg snapshot is complete in order to avoid materialize#18940
                 > SELECT COUNT(*) > 0 FROM postgres_source_tableA{self.suffix}
                 true
 
-                # Wait until Pg snapshot is complete in order to avoid #18940
+                # Wait until Pg snapshot is complete in order to avoid materialize#18940
                 > SELECT COUNT(*) > 0 FROM postgres_source_tableB{self.suffix}
                 true
                 """
@@ -171,7 +171,7 @@ class PgCdcBase:
                 """
                 + (
                     f"""
-                # Wait until Pg snapshot is complete in order to avoid #18940
+                # Wait until Pg snapshot is complete in order to avoid materialize#18940
                 > SELECT COUNT(*) > 0 FROM postgres_source_tableB{self.suffix}
                 true
                 > SELECT COUNT(*) > 0 FROM postgres_source_tableC{self.suffix}

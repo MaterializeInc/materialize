@@ -176,7 +176,7 @@ true
 
 
 class FastPathLimit(FastPath):
-    """Benchmark the case SELECT * FROM source LIMIT <i> , optimized by #21615"""
+    """Benchmark the case SELECT * FROM source LIMIT <i> , optimized by materialize#21615"""
 
     def init(self) -> list[Action]:
         return [
@@ -385,7 +385,7 @@ class ManySmallUpdates(DML):
 
 
 class UpdateMultiNoIndex(DML):
-    """Measure the time it takes to perform multiple updates over the same records in a non-indexed table. GitHub Issue #11071"""
+    """Measure the time it takes to perform multiple updates over the same records in a non-indexed table. GitHub Issue materialize#11071"""
 
     def before(self) -> Action:
         # Due to exterme variability in the results, we have no option but to drop and re-create

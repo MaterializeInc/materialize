@@ -465,7 +465,7 @@ static IGNORED_LOGICAL_TYPES: LazyLock<Vec<(&'static str, Value)>> = LazyLock::n
             r#"{"type": "int", "logicalType": "timestamp-micros"}"#,
             Value::Int(1010),
         ),
-        // UUID logical type - #3577
+        // UUID logical type - materialize#3577
         // (r#"{"type": "string", "logicalType": "uuid"}"#, Value::String("string".into())),
     ]
 });

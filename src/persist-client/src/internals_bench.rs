@@ -32,7 +32,7 @@ pub fn trace_push_batch_one_iter(num_batches: usize) {
         // A single non-empty batch followed by a large number of empty batches
         // and no compaction. This is a particularly problematic workload for
         // our fork of Spine which came up during deserialization of State in
-        // #17214.
+        // materialize#17214.
         //
         // Other, much better handled, workloads include all empty or all
         // non-empty.

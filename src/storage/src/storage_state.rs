@@ -1127,7 +1127,7 @@ impl StorageState {
                     //
                     // n.b. the ingestion on each worker uses the description from worker 0––not the
                     // ingestion in the local storage state. This is something we might have
-                    // interest in fixing in the future, e.g. #19907
+                    // interest in fixing in the future, e.g. materialize#19907
                     if self.timely_worker_index == 0 {
                         self.async_worker.update_frontiers(id, description);
                     }

@@ -374,7 +374,7 @@ SELECT k FROM (SELECT @1, @1 FROM generate_series(1,10)) AS kv(k,v) ORDER BY PRI
 statement error no data source matches prefix: test.public.kv
 CREATE TABLE unrelated(x INT); SELECT * FROM unrelated ORDER BY PRIMARY KEY kv
 
-# Check that prepare doesn't crash on ORDER BY PK clauses #17312
+# Check that prepare doesn't crash on ORDER BY PK clauses materialize#17312
 statement ok
 PREPARE a AS (TABLE kv) ORDER BY PRIMARY KEY kv
 

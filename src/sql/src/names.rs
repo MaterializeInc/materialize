@@ -1201,7 +1201,7 @@ pub enum CommentObjectId {
 /// relations.
 // NOTE(benesch,sploiselle): The fact that some names are looked up in multiple
 // namespaces is a bit dubious, and stems from the fact that we don't
-// automatically create types for relations (see #23789). It's possible that we
+// automatically create types for relations (see materialize#23789). It's possible that we
 // don't allow names to be looked up in multiple namespaces (i.e., this becomes
 // `enum ItemResolutionNamespace`), but it's also possible that the design of
 // the `DOC ON TYPE` option means we're forever stuck with this complexity.
@@ -2056,7 +2056,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 // In `DOC ON TYPE ...`, the type can refer to either a type or
                 // a relation.
                 //
-                // It's possible this will get simpler once #23789 is fixed. See
+                // It's possible this will get simpler once materialize#23789 is fixed. See
                 // the comment on `ItemResolutionConfig` for details.
                 ItemResolutionConfig {
                     functions: false,

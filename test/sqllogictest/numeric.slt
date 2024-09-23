@@ -857,7 +857,7 @@ SELECT (999999999999999999999999999999999999.123 + 1::numeric)::numeric(39,3);
 
 # Successive operations
 
-## regression test for #6858
+## regression test for materialize#6858
 query R
 SELECT -0.0 - 1::numeric  * '-0.0 '::numeric;
 ----
@@ -2178,7 +2178,7 @@ select min(a) from (select a from unnest(ARRAY[]::numeric[]) a);
 NULL
 
 # Distinct, except
-# regression tests for #6877 #6912
+# regression tests for materialize#6877 materialize#6912
 
 query R
 SELECT DISTINCT column1 FROM (

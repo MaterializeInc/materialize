@@ -12,7 +12,7 @@ $ set-max-tries max-tries=20
 
 
 #
-# Test for issue #10981
+# Test for issue materialize#10981
 #
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'

@@ -397,14 +397,14 @@ upsert INTO upsert_returning VALUES (1, 5, 4, 3), (6, 5, 4, 3) RETURNING *
 statement ok
 COMMIT
 
-# For #22300. Test UPSERT ... RETURNING with UNION.
+# For materialize#22300. Test UPSERT ... RETURNING with UNION.
 query I rowsort
 SELECT a FROM [UPSERT INTO upsert_returning VALUES (7) RETURNING a] UNION VALUES (8)
 ----
 7
 8
 
-# For #6710. Add an unused column to disable the fast path which doesn't have this bug.
+# For materialize#6710. Add an unused column to disable the fast path which doesn't have this bug.
 statement ok
 CREATE TABLE issue_6710 (a INT PRIMARY KEY, b STRING, c INT)
 
@@ -486,7 +486,7 @@ SELECT * FROM issue_14052_2;
 1  BAR  5  5
 
 # Make sure the column types are propagated when type checking the ON CONFLICT
-# expressions. See #16873.
+# expressions. See materialize#16873.
 statement ok
 CREATE TABLE issue_16873 (col int PRIMARY KEY, date TIMESTAMP);
 
@@ -500,7 +500,7 @@ statement count 1
 INSERT INTO issue_16873 VALUES (1,clock_timestamp())
 ON CONFLICT (col) DO UPDATE SET date = clock_timestamp() WHERE issue_16873.col = 1;
 
-# For #17339.  Support WHERE clause in ON CONFLICT handling.
+# For materialize#17339.  Support WHERE clause in ON CONFLICT handling.
 statement ok
 CREATE TABLE issue_17339 (a int primary key, b int);
 
@@ -527,7 +527,7 @@ SELECT * FROM issue_17339 ORDER BY a;
 1 0
 2 1
 
-# Regression test for #25726.
+# Regression test for materialize#25726.
 # UPSERT over tables with column families, on the fast path, use the
 # INSERT logic. This has special casing for column families of 1
 # column, and another special casing for column families of 2+
@@ -892,7 +892,7 @@ statement ok
 DROP TABLE test35040
 
 # ------------------------------------------------------------------------------
-# Regression for #35364.
+# Regression for materialize#35364.
 # ------------------------------------------------------------------------------
 subtest regression_35364
 
@@ -958,7 +958,7 @@ SELECT * FROM t35364
 3   4
 
 # ------------------------------------------------------------------------------
-# Regression for #35970.
+# Regression for materialize#35970.
 # ------------------------------------------------------------------------------
 statement ok
 CREATE TABLE table35970 (
