@@ -39,6 +39,7 @@ rust_library(
         "tracing-capture",
     ],
     data = [],
+    disable_pipelining = True,
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],

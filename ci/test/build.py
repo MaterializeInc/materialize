@@ -93,7 +93,7 @@ def maybe_upload_debuginfo(
 
     for bin in bins:
         if repo.rd.bazel:
-            options = ["--config=release"] if repo.rd.release_mode else []
+            options = repo.rd.bazel_config()
             paths = bazel.output_paths(bazel_bins[bin], options)
             assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
             bin_path = paths[0]

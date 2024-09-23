@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::{BufReader, Write};
-use std::{env, fs};
 
 use anyhow::Context;
 use md5::{Digest, Md5};
@@ -30,8 +30,6 @@ const PROTO_HASHES: &str = "protos/hashes.json";
 
 fn main() -> anyhow::Result<()> {
     println!("cargo:rerun-if-changed={PROTO_DIRECTORY}");
-
-    env::set_var("PROTOC", mz_build_tools::protoc());
 
     // Read in the persisted hashes from disk.
     let hashes = fs::File::open(PROTO_HASHES).context("opening proto hashes")?;
@@ -140,6 +138,7 @@ fn main() -> anyhow::Result<()> {
     // Once we delete all the `.proto` that use the old JSON serialization, then we can delete
     // the compile block for them as well.
     prost_build::Config::new()
+        .protoc_executable(mz_build_tools::protoc())
         .btree_map(["."])
         .bytes(["."])
         .message_attribute(".", ATTR)

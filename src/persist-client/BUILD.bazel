@@ -22,7 +22,7 @@ rust_library(
         normal = True,
         proc_macro = True,
     ),
-    compile_data = ["README.md"],
+    compile_data = [],
     crate_features = ["default"],
     data = [],
     proc_macro_deps = ["//src/persist-proc:mz_persist_proc"] + all_crate_deps(proc_macro = True),

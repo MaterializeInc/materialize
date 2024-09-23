@@ -60,6 +60,7 @@ pub struct RustLibrary {
     proc_macro_deps: Field<List<QuotedString>>,
     data: Field<List<QuotedString>>,
     compile_data: Field<List<QuotedString>>,
+    disable_pipelining: Option<Field<bool>>,
     rustc_flags: Field<List<QuotedString>>,
     rustc_env: Field<Dict<QuotedString, QuotedString>>,
     unit_test: Option<RustTest>,
@@ -158,13 +159,27 @@ impl RustLibrary {
         proc_macro_deps.extend(crate_config.lib().extra_proc_macro_deps());
 
         let (paths, globs) = lib_common.data();
-        let data = List::new(paths).concat_other(globs.map(Glob::new));
+        let mut data = List::new(paths);
+        if let Some(globs) = globs {
+            data = data.concat_other(Glob::new(globs));
+        }
 
         let (paths, globs) = lib_common.compile_data();
-        let compile_data = List::new(paths).concat_other(globs.map(Glob::new));
+        let mut compile_data = List::new(paths);
+        if let Some(globs) = globs {
+            compile_data = compile_data.concat_other(Glob::new(globs));
+        }
 
         let rustc_flags = List::new(lib_common.rustc_flags());
         let rustc_env = Dict::new(lib_common.rustc_env());
+
+        let disable_pipelining = if let Some(flag) = crate_config.lib().disable_pipelining() {
+            Some(flag)
+        } else {
+            // If a library target contains compile data then we disable pipelining because it
+            // messes with the crate hash and leads to hard to debug build errors.
+            (!compile_data.is_empty()).then_some(true)
+        };
 
         Ok(Some(RustLibrary {
             name: Field::new("name", name),
@@ -176,6 +191,7 @@ impl RustLibrary {
             proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
             data: Field::new("data", data),
             compile_data: Field::new("compile_data", compile_data),
+            disable_pipelining: disable_pipelining.map(|v| Field::new("disable_pipelining", v)),
             rustc_flags: Field::new("rustc_flags", rustc_flags),
             rustc_env: Field::new("rustc_env", rustc_env),
             unit_test,
@@ -207,8 +223,9 @@ impl ToBazelDefinition for RustLibrary {
             self.aliases.format(&mut w)?;
             self.deps.format(&mut w)?;
             self.proc_macro_deps.format(&mut w)?;
-            self.compile_data.format(&mut w)?;
             self.data.format(&mut w)?;
+            self.compile_data.format(&mut w)?;
+            self.disable_pipelining.format(&mut w)?;
             self.rustc_flags.format(&mut w)?;
             self.rustc_env.format(&mut w)?;
         }

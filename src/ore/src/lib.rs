@@ -107,3 +107,7 @@ pub mod __private {
     #[cfg(feature = "tracing_")]
     pub use tracing;
 }
+
+pub fn foobar(x: usize) -> String {
+    format!("hello world {x}")
+}

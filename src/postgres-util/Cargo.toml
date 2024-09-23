@@ -27,7 +27,7 @@ proptest = { version = "1.0.0", default-features = false, features = [
     "std",
 ], optional = true }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
-prost = { version = "0.13.1", features = [
+prost = { version = "0.13.2", features = [
     "no-recursion-limit",
 ], optional = true }
 serde = { version = "1.0.152", features = ["derive"], optional = true }
@@ -52,7 +52,7 @@ tunnel = [
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.1"
+prost-build = "0.13.2"
 tonic-build = "0.12.1"
 
 [package.metadata.cargo-udeps.ignore]

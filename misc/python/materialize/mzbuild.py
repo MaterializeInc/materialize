@@ -39,7 +39,8 @@ from typing import IO, Any, cast
 
 import yaml
 
-from materialize import bazel, cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize import bazel as bazel_utils
+from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
@@ -105,7 +106,6 @@ class RepositoryDetails:
         rustflags: list[str],
         channel: str | None = None,
         extra_env: dict[str, str] = {},
-        is_tagged_build: bool = False,
     ) -> list[str]:
         """Start a build invocation for the configured architecture."""
         if self.bazel:
@@ -115,7 +115,6 @@ class RepositoryDetails:
                 subcommand=subcommand,
                 rustflags=rustflags,
                 extra_env=extra_env,
-                is_tagged_build=is_tagged_build,
             )
         else:
             return xcompile.cargo(
@@ -140,6 +139,28 @@ class RepositoryDetails:
     def bazel_workspace_dir(self) -> Path:
         """Determine the path to the root of the Bazel workspace."""
         return self.root
+
+    def bazel_config(self) -> list[str]:
+        """Returns a set of Bazel config flags to set for the build."""
+        flags = []
+
+        if self.release_mode:
+            # If we're a tagged build, then we'll use stamping to update our
+            # build info, otherwise we'll use our side channel/best-effort
+            # approach to update it.
+            if ui.env_is_truthy("BUILDKITE_TAG"):
+                flags.extend(["--config=release-tagged"])
+            else:
+                flags.extend(["--config=release-dev"])
+                bazel_utils.write_git_hash()
+
+        if self.bazel_remote_cache:
+            flags.append(f"--remote_cache={self.bazel_remote_cache}")
+
+        if ui.env_is_truthy("CI"):
+            flags.append("--config=ci")
+
+        return flags
 
     def rewrite_builder_path_for_host(self, path: Path) -> Path:
         """Rewrite a path that is relative to the target directory inside the
@@ -352,12 +373,10 @@ class CargoBuild(CargoPreImage):
         extra_env = {
             "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
         }
-        is_tagged_build = ui.env_is_truthy("BUILDKITE_TAG")
 
         bazel_build = rd.build(
             "build",
             channel=None,
-            is_tagged_build=is_tagged_build,
             rustflags=rustflags,
             extra_env=extra_env,
         )
@@ -369,10 +388,8 @@ class CargoBuild(CargoPreImage):
         # TODO(parkmycar): Make sure cargo-gazelle generates rust_binary targets for examples.
         assert len(examples) == 0, "Bazel doesn't support building examples."
 
-        if rd.release_mode:
-            bazel_build.extend(["--config=release"])
-        if rd.bazel_remote_cache:
-            bazel_build.append(f"--remote_cache={rd.bazel_remote_cache}")
+        # Add extra Bazel config flags.
+        bazel_build.extend(rd.bazel_config())
 
         return bazel_build
 
@@ -498,14 +515,14 @@ class CargoBuild(CargoPreImage):
             # TODO(parkmycar): Having to assign the same compilation flags as the build process
             # is a bit brittle. It would be better if the Bazel build process itself could
             # output the file to a known location.
-            options = ["--config=release"] if rd.release_mode else []
+            options = rd.bazel_config()
             paths_to_binaries = {}
             for bin in bins:
-                paths = bazel.output_paths(bazel_bins[bin], options)
+                paths = bazel_utils.output_paths(bazel_bins[bin], options)
                 assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
                 paths_to_binaries[bin] = paths[0]
             for tar in bazel_tars:
-                paths = bazel.output_paths(tar, options)
+                paths = bazel_utils.output_paths(tar, options)
                 assert len(paths) == 1, f"more than one output path found for '{tar}'"
                 paths_to_binaries[tar] = paths[0]
             prep = {"bazel": paths_to_binaries}

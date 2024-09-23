@@ -7,13 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
-
 fn main() {
-    env::set_var("PROTOC", mz_build_tools::protoc());
-
     let mut config = prost_build::Config::new();
-    config.btree_map(["."]);
+    config
+        .protoc_executable(mz_build_tools::protoc())
+        .btree_map(["."]);
 
     tonic_build::configure()
         // Enabling `emit_rerun_if_changed` will rerun the build script when
