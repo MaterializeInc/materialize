@@ -158,7 +158,7 @@ build:release-tagged --config=release --config=release-stamp --config=debuginfo-
 # Local builds and from PRs in CI.
 #
 # Not doing a full stamp nor omitting full debug info, greatly speeds up compile times.
-build:release-dev --config=release --config=debuginfo-limited --config=ramdisk
+build:release-dev --config=release --config=debuginfo-limited
 
 # Build with the Rust Nightly Toolchain
 build:rust-nightly --@rules_rust//rust/toolchain/channel=nightly
