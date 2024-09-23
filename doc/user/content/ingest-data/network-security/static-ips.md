@@ -10,39 +10,34 @@ aliases:
   - /connect-sources/static-ips/
 ---
 
-Your Materialize region initiates connections from a static set of IP addresses.
-When connecting Materialize to services in your private networks (e.g., Kafka
-clusters or PostgreSQL databases), you must configure any firewalls to allow
-connections from these IP addresses.
-
-## Details
-
-Your Materialize region is associated with a static set of egress IP addresses.
-Most regions have four egress IP addresses, but this is not guaranteed. All
-connections to the public internet initiated by a source or sink in your region
-will originate from one of these egress IP addresses.
-
-We do not allocate unique IP addresses for each Materialize region. Multiple
-regions may share the same egress IP addresses.
+Each materialize region is associated with a unique set of static egress [Classless Inter-Domain Routing (CIDR)](https://aws.amazon.com/what-is/cidr/) blocks.
+All connections to the public internet initiated by your Materialize region will
+originate from an address in the provided blocks.
 
 When connecting Materialize to services in your private networks (e.g., Kafka
 clusters or PostgreSQL databases), you must configure any firewalls to allow
-connections from your region's egress IP addresses. You must allow connections
-from all egress IP addresses associated with your region. Connections may
-originate from any one of the egress IP addresses.
+connections from all CIDR blocks associated with your region. **Connections may
+originate from any address in the region**.
 
-To find the egress IP addresses associated with your region, you can query the
-[`mz_egress_ips`](/sql/system-catalog/mz_catalog/#mz_egress_ips) system table.
+Region          | CIDR
+----------------|------------
+`aws/us-east-1` | 98.80.4.128/27
+`aws/us-east-1` | 3.215.237.176/32
+`aws/us-west-2` | 44.242.185.160/27
+`aws/us-west-2` | 52.37.108.9/32
+`aws/eu-west-1` | 108.128.128.96/27
+`aws/eu-west-1` | 54.229.252.215/32
 
 {{< note >}}
-On rare occasion, we may need to change the egress IP addresses associated with
+On rare occasion, we may need to change the static egress CIDR blocks associated with
 a region. We make every effort to provide advance notice of such changes.
 {{< /note >}}
 
 
-## Example
-
-Show the static egress IPs associated with a region:
+## Fetch static egress IPs
+You can fetch the static egress address blocks associated with your region by querying
+the [`mz_egress_ips`](/sql/system-catalog/mz_catalog/#mz_egress_ips) system catalog
+table.
 
 ```mzsql
 SELECT * FROM mz_egress_ips;
@@ -51,8 +46,22 @@ SELECT * FROM mz_egress_ips;
 <p></p>
 
 ```nofmt
-   egress_ip
-----------------
- 1.2.3.4
- 5.6.7.8
+  egress_ip    | prefix_length |      cidr
+---------------+---------------+-----------------
+ 3.215.237.176 |            32 | 3.215.237.176/32
+ 98.80.4.128   |            27 | 98.80.4.128/27
+```
+
+As an alternative, you can also submit an HTTP request to Materialize's
+[SQL API](/integrations/http-api/) querying the [`mz_egress_ips`](/sql/system-catalog/mz_catalog/#mz_egress_ips)
+system catalog table. In the request, specify the username, app password, and
+host address of your Materialize region:
+
+
+```
+curl -s 'https://<host-address>/api/sql' \
+    --header 'Content-Type: application/json' \
+    --user '<username:app-password>' \
+    --data '{ "query": "SELECT cidr from mz_egress_ips;" }' |\
+    jq -r '.results[].rows[][]'
 ```
