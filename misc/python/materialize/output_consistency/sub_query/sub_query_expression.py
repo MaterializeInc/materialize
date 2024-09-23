@@ -59,14 +59,14 @@ class SubQuery(Expression):
         )
         alias_spec = f" {self.alias}" if self.alias is not None else ""
         where_spec = (
-            f"\nWHERE {self.where_filter.to_sql(True)}"
+            f"\nWHERE {self.where_filter.to_sql(sql_adjuster=sql_adjuster, is_root_level=True, include_alias=include_alias)}"
             if self.where_filter is not None
             else ""
         )
         limit_spec = f"\nLIMIT {self.limit}" if self.limit is not None else ""
 
         sql = f"""
-(SELECT{space_separator}{self.subquery_expression.to_sql(is_root_level=True, include_alias=include_alias)}
+(SELECT{space_separator}{self.subquery_expression.to_sql(sql_adjuster=sql_adjuster, is_root_level=True, include_alias=include_alias)}
 FROM {db_object_name}{alias_spec}{where_spec}{limit_spec})
 """.strip()
         return sql
@@ -88,17 +88,13 @@ FROM {db_object_name}{alias_spec}{where_spec}{limit_spec})
         )
 
     def collect_leaves(self) -> list[LeafExpression]:
-        # TODO
-        pass
+        return self.subquery_expression.collect_leaves()
 
     def __str__(self) -> str:
-        # TODO
-        pass
+        return f"SubQuery (expression={self.subquery_expression})"
 
     def is_leaf(self) -> bool:
-        # TODO
-        pass
+        return False
 
     def contains_leaf_not_directly_consumed_by_aggregation(self) -> bool:
-        # TODO
-        pass
+        return self.subquery_expression.contains_leaf_not_directly_consumed_by_aggregation()
