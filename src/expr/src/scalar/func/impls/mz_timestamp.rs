@@ -10,7 +10,6 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use mz_ore::result::ResultExt;
 use mz_repr::adt::date::Date;
-use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{strconv, Timestamp};
@@ -101,18 +100,6 @@ sqlfunc!(
         a.timestamp_millis()
             .try_into()
             .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "interval_to_mz_timestamp"]
-    #[is_monotone = true]
-    fn cast_interval_to_mz_timestamp(a: Interval) -> Result<Timestamp, EvalError> {
-        let ms: u64 = a
-            .as_milliseconds()
-            .try_into()
-            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string()))?;
-        Ok(ms.into())
     }
 );
 
