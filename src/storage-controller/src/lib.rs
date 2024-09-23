@@ -45,7 +45,7 @@ use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand, Status,
     StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
@@ -87,7 +87,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
 use crate::collection_mgmt::{
-    partially_truncate_status_history, AppendOnlyIntrospectionConfig, CollectionManagerKind,
+    AppendOnlyIntrospectionConfig, CollectionManagerKind,
     DifferentialIntrospectionConfig,
 };
 use crate::instance::{Instance, ReplicaConfig};
@@ -1960,6 +1960,7 @@ where
         updates: Vec<(Row, Diff)>,
     ) {
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
+        let updates = updates.into_iter().map(|update| update.into()).collect();
         self.collection_manager.blind_write(id, updates);
     }
 
@@ -2641,7 +2642,7 @@ where
         &mut self,
         id: GlobalId,
         introspection_type: IntrospectionType,
-        mut write_handle: WriteHandle<SourceData, (), T, Diff>,
+        write_handle: WriteHandle<SourceData, (), T, Diff>,
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
 
@@ -2734,16 +2735,6 @@ where
             // happens when we take over instead be a periodic thing, and make
             // it resilient to the upper moving concurrently.
             CollectionManagerKind::AppendOnly => {
-                // TODO(jkosh44) Handle this inside of the append only task.
-                if !self.read_only {
-                    self.prepare_introspection_collection(
-                        id,
-                        introspection_type,
-                        Some(&mut write_handle),
-                    )
-                    .await?;
-                }
-
                 let introspection_config = AppendOnlyIntrospectionConfig {
                     introspection_type,
                     config_set: Arc::clone(self.config.config_set()),
@@ -2758,116 +2749,6 @@ where
                     force_writable,
                     Some(introspection_config),
                 );
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Does any work that is required before this controller instance starts
-    /// writing to the given introspection collection.
-    ///
-    /// This might include consolidation, deleting older entries or seeding
-    /// in-memory state of, say, scrapers, with current collection contents.
-    async fn prepare_introspection_collection(
-        &mut self,
-        id: GlobalId,
-        introspection_type: IntrospectionType,
-        write_handle: Option<&mut WriteHandle<SourceData, (), T, Diff>>,
-    ) -> Result<(), StorageError<T>> {
-        tracing::info!(%id, ?introspection_type, "preparing introspection collection for writes");
-
-        match introspection_type {
-            IntrospectionType::SourceStatusHistory => {
-                let write_handle = write_handle.expect("filled in by caller");
-                let last_status_per_id = partially_truncate_status_history(
-                    id,
-                    IntrospectionType::SourceStatusHistory,
-                    write_handle,
-                    source_status_history_desc(&self.config.parameters),
-                    &self.storage_collections,
-                    &self.txns_read,
-                    &self.persist,
-                )
-                .await;
-
-                let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from("status"))
-                    .expect("schema has not changed")
-                    .0;
-
-                self.collection_status_manager.extend_previous_statuses(
-                    last_status_per_id.into_iter().map(|(id, row)| {
-                        (
-                            id,
-                            Status::from_str(
-                                row.iter()
-                                    .nth(status_col)
-                                    .expect("schema has not changed")
-                                    .unwrap_str(),
-                            )
-                            .expect("statuses must be uncorrupted"),
-                        )
-                    }),
-                )
-            }
-            IntrospectionType::SinkStatusHistory => {
-                let write_handle = write_handle.expect("filled in by caller");
-                let last_status_per_id = partially_truncate_status_history(
-                    id,
-                    IntrospectionType::SinkStatusHistory,
-                    write_handle,
-                    sink_status_history_desc(&self.config.parameters),
-                    &self.storage_collections,
-                    &self.txns_read,
-                    &self.persist,
-                )
-                .await;
-
-                let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from("status"))
-                    .expect("schema has not changed")
-                    .0;
-
-                self.collection_status_manager.extend_previous_statuses(
-                    last_status_per_id.into_iter().map(|(id, row)| {
-                        (
-                            id,
-                            Status::from_str(
-                                row.iter()
-                                    .nth(status_col)
-                                    .expect("schema has not changed")
-                                    .unwrap_str(),
-                            )
-                            .expect("statuses must be uncorrupted"),
-                        )
-                    }),
-                )
-            }
-
-            IntrospectionType::ShardMapping
-            | IntrospectionType::Frontiers
-            | IntrospectionType::ReplicaFrontiers
-            | IntrospectionType::StorageSourceStatistics
-            | IntrospectionType::StorageSinkStatistics
-            | IntrospectionType::ComputeDependencies
-            | IntrospectionType::ComputeOperatorHydrationStatus
-            | IntrospectionType::ComputeMaterializedViewRefreshes
-            | IntrospectionType::ComputeErrorCounts
-            | IntrospectionType::ComputeHydrationTimes => {
-                // Handled by differential task.
-            }
-
-            IntrospectionType::ReplicaMetricsHistory
-            | IntrospectionType::WallclockLagHistory
-            | IntrospectionType::PrivatelinkConnectionStatusHistory
-            | IntrospectionType::ReplicaStatusHistory
-            | IntrospectionType::PreparedStatementHistory
-            | IntrospectionType::StatementExecutionHistory
-            | IntrospectionType::SessionHistory
-            | IntrospectionType::StatementLifecycleHistory
-            | IntrospectionType::SqlText => {
-                // Handled by append only task.
             }
         }
 

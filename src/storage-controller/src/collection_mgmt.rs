@@ -63,6 +63,7 @@ use std::collections::{BTreeMap, BinaryHeap};
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -85,7 +86,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Diff, GlobalId, Row, TimestampManipulation};
-use mz_storage_client::client::TimestamplessUpdate;
+use mz_storage_client::client::{AppendOnlyUpdate, Status, TimestamplessUpdate};
 use mz_storage_client::controller::{IntrospectionType, MonotonicAppender, StorageWriteOp};
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
@@ -106,7 +107,7 @@ use tracing::{debug, error, info};
 
 use crate::{
     collection_mgmt, collection_status, privatelink_status_history_desc,
-    replica_status_history_desc, snapshot, snapshot_statistics, statistics, StatusHistoryDesc,
+    replica_status_history_desc,sink_status_history_desc, snapshot, snapshot_statistics, source_status_history_desc,statistics, StatusHistoryDesc,
     StorageError,
 };
 
@@ -119,7 +120,7 @@ type DifferentialWriteChannel<T> =
 
 /// A channel for sending writes to an append-only collection.
 type AppendOnlyWriteChannel<T> = mpsc::UnboundedSender<(
-    Vec<(Row, Diff)>,
+    Vec<AppendOnlyUpdate>,
     oneshot::Sender<Result<(), StorageError<T>>>,
 )>;
 
@@ -359,7 +360,7 @@ where
     /// - If `id` does not belong to an append-only collections.
     /// - If this [`CollectionManager`] is in read-only mode.
     /// - If the collection closed.
-    pub(super) fn blind_write(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    pub(super) fn blind_write(&self, id: GlobalId, updates: Vec<AppendOnlyUpdate>) {
         if self.read_only {
             panic!("attempting blind write to {} while in read-only mode", id);
         }
@@ -1051,6 +1052,68 @@ where
     let handle = mz_ore::task::spawn(
         || format!("CollectionManager-append_only_write_task-{id}"),
         async move {
+            let mut previous_statuses: Option<BTreeMap<GlobalId, Status>> =
+                match introspection_config
+                    .as_ref()
+                    .map(|config| config.introspection_type)
+                {
+                    Some(IntrospectionType::SourceStatusHistory)
+                    | Some(IntrospectionType::SinkStatusHistory) => Some(BTreeMap::new()),
+
+                    Some(IntrospectionType::ReplicaMetricsHistory)
+                    | Some(IntrospectionType::WallclockLagHistory)
+                    | Some(IntrospectionType::PrivatelinkConnectionStatusHistory)
+                    | Some(IntrospectionType::ReplicaStatusHistory)
+                    | Some(IntrospectionType::PreparedStatementHistory)
+                    | Some(IntrospectionType::StatementExecutionHistory)
+                    | Some(IntrospectionType::SessionHistory)
+                    | Some(IntrospectionType::StatementLifecycleHistory)
+                    | Some(IntrospectionType::SqlText)
+                    | None => None,
+
+                    Some(introspection_type @ IntrospectionType::ShardMapping)
+                    | Some(introspection_type @ IntrospectionType::Frontiers)
+                    | Some(introspection_type @ IntrospectionType::ReplicaFrontiers)
+                    | Some(introspection_type @ IntrospectionType::StorageSourceStatistics)
+                    | Some(introspection_type @ IntrospectionType::StorageSinkStatistics)
+                    | Some(introspection_type @ IntrospectionType::ComputeDependencies)
+                    | Some(
+                        introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus,
+                    )
+                    | Some(
+                        introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes,
+                    )
+                    | Some(introspection_type @ IntrospectionType::ComputeErrorCounts)
+                    | Some(introspection_type @ IntrospectionType::ComputeHydrationTimes) => {
+                        unreachable!("not append-only collection: {introspection_type:?}")
+                    }
+                };
+
+            let mut filter_statuses = |updates: Vec<AppendOnlyUpdate>| {
+                if let Some(previous_statuses) = &mut previous_statuses {
+                    let new: Vec<_> = updates
+                        .into_iter()
+                        .filter(|r| match r {
+                            AppendOnlyUpdate::Row(_) => true,
+                            AppendOnlyUpdate::Status(update) => {
+                                match (previous_statuses.get(&update.id).as_deref(), &update.status)
+                                {
+                                    (None, _) => true,
+                                    (Some(old), new) => old.superseded_by(*new),
+                                }
+                            }
+                        })
+                        .collect();
+                    previous_statuses.extend(new.iter().filter_map(|update| match update {
+                        AppendOnlyUpdate::Row(_) => None,
+                        AppendOnlyUpdate::Status(update) => Some((update.id, update.status)),
+                    }));
+                    new
+                } else {
+                    updates
+                }
+            };
+
             if !read_only {
                 if let Some(AppendOnlyIntrospectionConfig {
                     introspection_type,
@@ -1061,7 +1124,7 @@ where
                     persist,
                 }) = introspection_config
                 {
-                    prepare_append_only_introspection_collection(
+                    let initial_statuses = prepare_append_only_introspection_collection(
                         id,
                         introspection_type,
                         &mut write_handle,
@@ -1073,6 +1136,9 @@ where
                         persist,
                     )
                     .await;
+                    if let Some(previous_statuses) = &mut previous_statuses {
+                        previous_statuses.extend(initial_statuses);
+                    }
                 }
             }
 
@@ -1136,14 +1202,18 @@ where
                             // For example, let's say our `DEFAULT_TICK` interval is 10, so at
                             // `t + 10`, `t + 20`, ... we'll bump the uppers. If we receive an
                             // update at `t + 3` we want to shift this window so we bump the uppers
-                            // at `t + 13`, `t + 23`, ... which reseting the interval accomplishes.
+                            // at `t + 13`, `t + 23`, ... which resetting the interval accomplishes.
                             interval.reset();
+
 
                             let mut all_rows = Vec::with_capacity(batch.iter().map(|(rows, _)| rows.len()).sum());
                             let mut responders = Vec::with_capacity(batch.len());
 
-                            for (rows, reponders) in batch.drain(..) {
-                                all_rows.extend(rows.into_iter().map(|(row, diff)| TimestamplessUpdate { row, diff}));
+                            for (updates, reponders) in batch.drain(..) {
+                                let new_updates = filter_statuses(updates);
+                                let rows = new_updates.into_iter().map(|update| update.into_row());
+
+                                all_rows.extend(rows.map(|(row, diff)| TimestamplessUpdate { row, diff}));
                                 responders.push(reponders);
                             }
 
@@ -1156,7 +1226,9 @@ where
                             // Append updates to persist!
                             let at_least = T::from(now());
 
-                            monotonic_append(&mut write_handle, all_rows, at_least).await;
+                            if !all_rows.is_empty() {
+                                monotonic_append(&mut write_handle, all_rows, at_least).await;
+                            }
                             // Notify all of our listeners.
                             notify_listeners(responders, || Ok(()));
 
@@ -1215,7 +1287,8 @@ async fn prepare_append_only_introspection_collection<T>(
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     txns_read: TxnsRead<T>,
     persist: Arc<PersistClientCache>,
-) where
+) -> Vec<(GlobalId, Status)>
+where
     T: Codec64 + From<EpochMillis> + TimestampManipulation,
 {
     tracing::info!(%id, ?introspection_type, "preparing append only introspection collection for writes");
@@ -1238,6 +1311,7 @@ async fn prepare_append_only_introspection_collection<T>(
                     "error truncating metrics history: {error} (type={introspection_type:?})"
                 );
             }
+            Vec::new()
         }
 
         IntrospectionType::PrivatelinkConnectionStatusHistory => {
@@ -1251,6 +1325,7 @@ async fn prepare_append_only_introspection_collection<T>(
                 &persist,
             )
             .await;
+            Vec::new()
         }
         IntrospectionType::ReplicaStatusHistory => {
             partially_truncate_status_history(
@@ -1263,6 +1338,7 @@ async fn prepare_append_only_introspection_collection<T>(
                 &persist,
             )
             .await;
+            Vec::new()
         }
 
         // Note [btv] - we don't truncate these, because that uses
@@ -1276,10 +1352,75 @@ async fn prepare_append_only_introspection_collection<T>(
             // collections. Someone, at some point needs to
             // think about that! Issue:
             // https://github.com/MaterializeInc/materialize/issues/25696
+            Vec::new()
         }
 
-        // TODO(jkosh44) Handle these here instead of in the controller.
-        IntrospectionType::SourceStatusHistory | IntrospectionType::SinkStatusHistory => {}
+        IntrospectionType::SourceStatusHistory => {
+            let last_status_per_id = partially_truncate_status_history(
+                id,
+                IntrospectionType::SourceStatusHistory,
+                write_handle,
+                source_status_history_desc(&parameters),
+                &storage_collections,
+                &txns_read,
+                &persist,
+            )
+            .await;
+
+            let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
+                .get_by_name(&ColumnName::from("status"))
+                .expect("schema has not changed")
+                .0;
+
+            last_status_per_id
+                .into_iter()
+                .map(|(id, row)| {
+                    (
+                        id,
+                        Status::from_str(
+                            row.iter()
+                                .nth(status_col)
+                                .expect("schema has not changed")
+                                .unwrap_str(),
+                        )
+                        .expect("statuses must be uncorrupted"),
+                    )
+                })
+                .collect()
+        }
+        IntrospectionType::SinkStatusHistory => {
+            let last_status_per_id = partially_truncate_status_history(
+                id,
+                IntrospectionType::SinkStatusHistory,
+                write_handle,
+                sink_status_history_desc(&parameters),
+                &storage_collections,
+                &txns_read,
+                &persist,
+            )
+            .await;
+
+            let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
+                .get_by_name(&ColumnName::from("status"))
+                .expect("schema has not changed")
+                .0;
+
+            last_status_per_id
+                .into_iter()
+                .map(|(id, row)| {
+                    (
+                        id,
+                        Status::from_str(
+                            row.iter()
+                                .nth(status_col)
+                                .expect("schema has not changed")
+                                .unwrap_str(),
+                        )
+                        .expect("statuses must be uncorrupted"),
+                    )
+                })
+                .collect()
+        }
 
         introspection_type @ IntrospectionType::ShardMapping
         | introspection_type @ IntrospectionType::Frontiers

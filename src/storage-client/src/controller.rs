@@ -53,7 +53,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::TimestamplessUpdate;
+use crate::client::{AppendOnlyUpdate, TimestamplessUpdate};
 use crate::statistics::WebhookStatistics;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -827,7 +827,7 @@ impl<T: Timestamp> ExportState<T> {
 pub struct MonotonicAppender<T> {
     /// Channel that sends to a [`tokio::task`] which pushes updates to Persist.
     tx: mpsc::UnboundedSender<(
-        Vec<(Row, Diff)>,
+        Vec<AppendOnlyUpdate>,
         oneshot::Sender<Result<(), StorageError<T>>>,
     )>,
 }
@@ -835,14 +835,14 @@ pub struct MonotonicAppender<T> {
 impl<T> MonotonicAppender<T> {
     pub fn new(
         tx: mpsc::UnboundedSender<(
-            Vec<(Row, Diff)>,
+            Vec<AppendOnlyUpdate>,
             oneshot::Sender<Result<(), StorageError<T>>>,
         )>,
     ) -> Self {
         MonotonicAppender { tx }
     }
 
-    pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError<T>> {
+    pub async fn append(&self, updates: Vec<AppendOnlyUpdate>) -> Result<(), StorageError<T>> {
         let (tx, rx) = oneshot::channel();
 
         // Send our update to the CollectionManager.

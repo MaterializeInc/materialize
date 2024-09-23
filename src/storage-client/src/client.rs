@@ -499,6 +499,33 @@ impl RustType<proto_storage_response::ProtoStatusUpdate> for StatusUpdate {
     }
 }
 
+/// TODO(jkosh44)
+pub enum AppendOnlyUpdate {
+    Row((Row, Diff)),
+    Status(StatusUpdate),
+}
+
+impl AppendOnlyUpdate {
+    pub fn into_row(self) -> (Row, Diff) {
+        match self {
+            AppendOnlyUpdate::Row((row, diff)) => (row, diff),
+            AppendOnlyUpdate::Status(status) => (Row::from(status), 1),
+        }
+    }
+}
+
+impl From<(Row, Diff)> for AppendOnlyUpdate {
+    fn from((row, diff): (Row, Diff)) -> Self {
+        Self::Row((row, diff))
+    }
+}
+
+impl From<StatusUpdate> for AppendOnlyUpdate {
+    fn from(update: StatusUpdate) -> Self {
+        Self::Status(update)
+    }
+}
+
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageResponse<T = mz_repr::Timestamp> {

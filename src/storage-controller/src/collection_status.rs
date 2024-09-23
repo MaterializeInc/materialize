@@ -13,8 +13,8 @@ use std::sync::Arc;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
-use mz_repr::{GlobalId, Row, TimestampManipulation};
-use mz_storage_client::client::{Status, StatusUpdate};
+use mz_repr::{GlobalId, TimestampManipulation};
+use mz_storage_client::client::StatusUpdate;
 use timely::progress::Timestamp;
 
 use crate::collection_mgmt::CollectionManager;
@@ -23,7 +23,7 @@ use crate::IntrospectionType;
 pub use mz_storage_client::healthcheck::*;
 
 /// A lightweight wrapper around [`CollectionManager`] that assists with
-/// appending status updates to to `mz_internal.mz_{source|status}_history`
+/// appending status updates to `mz_internal.mz_{source|status}_history`
 #[derive(Debug, Clone)]
 pub struct CollectionStatusManager<T>
 where
@@ -33,7 +33,6 @@ where
     collection_manager: CollectionManager<T>,
     /// A list of introspection IDs for managed collections
     introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
-    previous_statuses: BTreeMap<GlobalId, Status>,
 }
 
 impl<T> CollectionStatusManager<T>
@@ -47,15 +46,7 @@ where
         Self {
             collection_manager,
             introspection_ids,
-            previous_statuses: Default::default(),
         }
-    }
-
-    pub fn extend_previous_statuses<I>(&mut self, previous_statuses: I)
-    where
-        I: IntoIterator<Item = (GlobalId, Status)>,
-    {
-        self.previous_statuses.extend(previous_statuses)
     }
 
     pub(super) fn append_updates(&mut self, updates: Vec<StatusUpdate>, type_: IntrospectionType) {
@@ -66,26 +57,10 @@ where
             .get(&type_)
             .unwrap_or_else(|| panic!("{:?} status history collection to be registered", type_));
 
-        let new: Vec<_> = updates
-            .into_iter()
-            .filter(
-                |r| match (self.previous_statuses.get(&r.id).as_deref(), &r.status) {
-                    (None, _) => true,
-                    (Some(old), new) => old.superseded_by(*new),
-                },
-            )
-            .collect();
-
-        self.previous_statuses
-            .extend(new.iter().map(|r| (r.id, r.status)));
-
-        if !new.is_empty() {
-            self.collection_manager.blind_write(
-                source_status_history_id,
-                new.into_iter()
-                    .map(|update| (Row::from(update), 1))
-                    .collect(),
-            );
+        let updates: Vec<_> = updates.into_iter().map(|update| update.into()).collect();
+        if !updates.is_empty() {
+            self.collection_manager
+                .blind_write(source_status_history_id, updates);
         }
     }
 }
@@ -94,7 +69,7 @@ where
 mod tests {
     use std::collections::BTreeSet;
 
-    use mz_repr::Datum;
+    use mz_repr::{Datum, Row};
 
     use super::*;
 
