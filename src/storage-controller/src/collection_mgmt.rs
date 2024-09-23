@@ -91,7 +91,9 @@ use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::dyncfgs::{
     REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
 };
-use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
+use mz_storage_types::parameters::{
+    StorageParameters, STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
+};
 use mz_storage_types::sources::SourceData;
 use mz_txn_wal::txn_read::TxnsRead;
 use timely::progress::{Antichain, Timestamp};
@@ -99,7 +101,10 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
-use crate::{collection_status, snapshot, StatusHistoryDesc, StorageError};
+use crate::{
+    collection_status, privatelink_status_history_desc, replica_status_history_desc, snapshot,
+    StatusHistoryDesc, StorageError,
+};
 
 // Default rate at which we advance the uppers of managed collections.
 const DEFAULT_TICK_MS: u64 = 1_000;
@@ -876,6 +881,7 @@ where
 {
     pub(crate) introspection_type: IntrospectionType,
     pub(crate) config_set: Arc<ConfigSet>,
+    pub(crate) parameters: StorageParameters,
     pub(crate) storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     pub(crate) txns_read: TxnsRead<T>,
     pub(crate) persist: Arc<PersistClientCache>,
@@ -908,6 +914,7 @@ where
                 if let Some(AppendOnlyIntrospectionConfig {
                     introspection_type,
                     config_set,
+                    parameters,
                     storage_collections,
                     txns_read,
                     persist,
@@ -918,6 +925,7 @@ where
                         introspection_type,
                         &mut write_handle,
                         config_set,
+                        parameters,
                         now.clone(),
                         storage_collections,
                         txns_read,
@@ -1061,6 +1069,7 @@ async fn prepare_append_only_introspection_collection<T>(
     introspection_type: IntrospectionType,
     write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
     config_set: Arc<ConfigSet>,
+    parameters: StorageParameters,
     now: NowFn,
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     txns_read: TxnsRead<T>,
@@ -1090,6 +1099,31 @@ async fn prepare_append_only_introspection_collection<T>(
             }
         }
 
+        IntrospectionType::PrivatelinkConnectionStatusHistory => {
+            partially_truncate_status_history(
+                id,
+                IntrospectionType::PrivatelinkConnectionStatusHistory,
+                write_handle,
+                privatelink_status_history_desc(&parameters),
+                &storage_collections,
+                &txns_read,
+                &persist,
+            )
+            .await;
+        }
+        IntrospectionType::ReplicaStatusHistory => {
+            partially_truncate_status_history(
+                id,
+                IntrospectionType::ReplicaStatusHistory,
+                write_handle,
+                replica_status_history_desc(&parameters),
+                &storage_collections,
+                &txns_read,
+                &persist,
+            )
+            .await;
+        }
+
         // Note [btv] - we don't truncate these, because that uses
         // a huge amount of memory on environmentd startup.
         IntrospectionType::PreparedStatementHistory
@@ -1104,10 +1138,7 @@ async fn prepare_append_only_introspection_collection<T>(
         }
 
         // TODO(jkosh44) Handle these here instead of in the controller.
-        IntrospectionType::SourceStatusHistory
-        | IntrospectionType::SinkStatusHistory
-        | IntrospectionType::PrivatelinkConnectionStatusHistory
-        | IntrospectionType::ReplicaStatusHistory => {}
+        IntrospectionType::SourceStatusHistory | IntrospectionType::SinkStatusHistory => {}
 
         introspection_type @ IntrospectionType::ShardMapping
         | introspection_type @ IntrospectionType::Frontiers
@@ -1226,7 +1257,7 @@ where
 /// Returns a map with latest unpacked row per key.
 pub(crate) async fn partially_truncate_status_history<T, K>(
     id: GlobalId,
-    collection: IntrospectionType,
+    introspection_type: IntrospectionType,
     write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
     status_history_desc: StatusHistoryDesc<K>,
     storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -1235,7 +1266,7 @@ pub(crate) async fn partially_truncate_status_history<T, K>(
 ) -> BTreeMap<K, Row>
 where
     T: Codec64 + From<EpochMillis> + TimestampManipulation,
-    K: Clone + Debug + Ord,
+    K: Clone + Debug + Ord + Send + Sync,
 {
     let upper = write_handle.fetch_recent_upper().await.clone();
 
@@ -1277,7 +1308,7 @@ where
         assert!(
             diff > 0,
             "only know how to operate over consolidated data with diffs > 0, \
-                found diff {diff} for object {key:?} in {collection:?}",
+                found diff {diff} for object {key:?} in {introspection_type:?}",
         );
 
         // Keep track of the timestamp of the latest row per key.

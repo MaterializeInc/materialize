@@ -2740,6 +2740,7 @@ where
                 let introspection_config = AppendOnlyIntrospectionConfig {
                     introspection_type,
                     config_set: Arc::clone(self.config.config_set()),
+                    parameters: self.config.parameters.clone(),
                     storage_collections: Arc::clone(&self.storage_collections),
                     txns_read: self.txns_read.clone(),
                     persist: Arc::clone(&self.persist),
@@ -2891,32 +2892,6 @@ where
                     }),
                 )
             }
-            IntrospectionType::PrivatelinkConnectionStatusHistory => {
-                let write_handle = write_handle.expect("filled in by caller");
-                partially_truncate_status_history(
-                    id,
-                    IntrospectionType::PrivatelinkConnectionStatusHistory,
-                    write_handle,
-                    privatelink_status_history_desc(&self.config.parameters),
-                    &self.storage_collections,
-                    &self.txns_read,
-                    &self.persist,
-                )
-                .await;
-            }
-            IntrospectionType::ReplicaStatusHistory => {
-                let write_handle = write_handle.expect("filled in by caller");
-                partially_truncate_status_history(
-                    id,
-                    IntrospectionType::ReplicaStatusHistory,
-                    write_handle,
-                    replica_status_history_desc(&self.config.parameters),
-                    &self.storage_collections,
-                    &self.txns_read,
-                    &self.persist,
-                )
-                .await;
-            }
 
             // Truncate compute-maintained collections.
             IntrospectionType::ComputeDependencies
@@ -2930,6 +2905,8 @@ where
 
             IntrospectionType::ReplicaMetricsHistory
             | IntrospectionType::WallclockLagHistory
+            | IntrospectionType::PrivatelinkConnectionStatusHistory
+            | IntrospectionType::ReplicaStatusHistory
             | IntrospectionType::PreparedStatementHistory
             | IntrospectionType::StatementExecutionHistory
             | IntrospectionType::SessionHistory
@@ -3656,8 +3633,8 @@ struct IngestionState<T: TimelyTimestamp> {
 /// Used to inform partial truncation, see [`partially_truncate_status_history`].
 struct StatusHistoryDesc<K> {
     keep_n: usize,
-    extract_key: Box<dyn Fn(&[Datum]) -> K>,
-    extract_time: Box<dyn Fn(&[Datum]) -> CheckedTimestamp<DateTime<Utc>>>,
+    extract_key: Box<dyn Fn(&[Datum]) -> K + Send>,
+    extract_time: Box<dyn Fn(&[Datum]) -> CheckedTimestamp<DateTime<Utc>> + Send>,
 }
 
 fn source_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<GlobalId> {
