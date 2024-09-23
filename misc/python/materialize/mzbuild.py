@@ -379,6 +379,8 @@ class CargoBuild(CargoPreImage):
                 bazel_utils.write_git_hash()
         if rd.bazel_remote_cache:
             bazel_build.append(f"--remote_cache={rd.bazel_remote_cache}")
+        if ui.env_is_truthy("CI"):
+            bazel_build.append("--config=ci")
 
         return bazel_build
 
