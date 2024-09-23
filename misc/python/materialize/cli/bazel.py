@@ -133,8 +133,6 @@ def fmt(path):
     cmd_args = [
         "bazel",
         "run",
-        "-c",
-        "opt",
         "//misc/bazel/tools:buildifier",
         "--",
         "-r",
