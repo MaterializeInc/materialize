@@ -868,15 +868,30 @@ who = "Jan Teske <jteske@posteo.net>"
 criteria = "maintained-and-necessary"
 version = "0.13.1"
 
+[[audits.prost]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.13.2"
+
 [[audits.prost-build]]
 who = "Jan Teske <jteske@posteo.net>"
 criteria = "maintained-and-necessary"
 version = "0.13.1"
 
+[[audits.prost-build]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.13.2"
+
 [[audits.prost-derive]]
 who = "Jan Teske <jteske@posteo.net>"
 criteria = "maintained-and-necessary"
 version = "0.13.1"
+
+[[audits.prost-derive]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.13.2"
 
 [[audits.prost-reflect]]
 who = "Dennis Felsing <dennis@felsing.org>"
@@ -887,6 +902,11 @@ version = "0.14.2"
 who = "Jan Teske <jteske@posteo.net>"
 criteria = "maintained-and-necessary"
 version = "0.13.1"
+
+[[audits.prost-types]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.13.2"
 
 [[audits.protobuf]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
