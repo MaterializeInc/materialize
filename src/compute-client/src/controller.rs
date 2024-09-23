@@ -366,48 +366,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         result
     }
 
-    /// Returns `true` if all non-transient, non-excluded collections have their write
-    /// frontier (aka. upper) within `allowed_lag` of the "live" frontier
-    /// reported in `live_frontiers`. The "live" frontiers are frontiers as
-    /// reported by a currently running `environmentd` deployment, during a 0dt
-    /// upgrade.
-    ///
-    /// Collections whose write frontier is behind `now` by more than the cutoff
-    /// are ignored.
-    ///
-    /// For this check, zero-replica clusters are always considered caught up.
-    /// Their collections would never normally be considered caught up but it's
-    /// clearly intentional that they have no replicas.
-    pub fn clusters_caught_up(
-        &self,
-        allowed_lag: T,
-        cutoff: T,
-        now: T,
-        live_frontiers: &BTreeMap<GlobalId, Antichain<T>>,
-        exclude_collections: &BTreeSet<GlobalId>,
-    ) -> bool {
-        let mut result = true;
-        for (instance_id, i) in &self.instances {
-            let instance_hydrated = i.collections_caught_up(
-                allowed_lag.clone(),
-                cutoff.clone(),
-                now.clone(),
-                live_frontiers,
-                exclude_collections,
-            );
-
-            if !instance_hydrated {
-                result = false;
-
-                // We continue with our loop instead of breaking out early, so
-                // that we log all non-hydrated clusters.
-                tracing::info!("cluster {instance_id} is not hydrated");
-            }
-        }
-
-        result
-    }
-
     /// Returns `true` if all non-transient, non-excluded collections are hydrated on any of the
     /// provided replicas.
     ///

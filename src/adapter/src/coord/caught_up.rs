@@ -19,9 +19,11 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_CAUGHT_UP_CHECK_CUTOFF,
 };
 use mz_catalog::builtin::MZ_CLUSTER_REPLICA_FRONTIERS;
+use mz_catalog::memory::objects::Cluster;
 use mz_ore::channel::trigger::Trigger;
 use mz_repr::{GlobalId, Timestamp};
 use timely::progress::{Antichain, Timestamp as _};
+use timely::PartialOrder;
 
 use crate::coord::Coordinator;
 
@@ -133,7 +135,7 @@ impl Coordinator {
 
         let now = self.now();
 
-        let compute_caught_up = self.controller.compute.clusters_caught_up(
+        let compute_caught_up = self.clusters_caught_up(
             allowed_lag.into(),
             cutoff.into(),
             now.into(),
@@ -147,6 +149,155 @@ impl Coordinator {
             let ctx = self.caught_up_check.take().expect("known to exist");
             ctx.trigger.fire();
         }
+    }
+
+    /// Returns `true` if all non-transient, non-excluded collections have their write
+    /// frontier (aka. upper) within `allowed_lag` of the "live" frontier
+    /// reported in `live_frontiers`. The "live" frontiers are frontiers as
+    /// reported by a currently running `environmentd` deployment, during a 0dt
+    /// upgrade.
+    ///
+    /// Collections whose write frontier is behind `now` by more than the cutoff
+    /// are ignored.
+    ///
+    /// For this check, zero-replica clusters are always considered caught up.
+    /// Their collections would never normally be considered caught up but it's
+    /// clearly intentional that they have no replicas.
+    fn clusters_caught_up(
+        &self,
+        allowed_lag: Timestamp,
+        cutoff: Timestamp,
+        now: Timestamp,
+        live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+        exclude_collections: &BTreeSet<GlobalId>,
+    ) -> bool {
+        let mut result = true;
+        for cluster in self.catalog().clusters() {
+            let caught_up = self.collections_caught_up(
+                cluster,
+                allowed_lag.clone(),
+                cutoff.clone(),
+                now.clone(),
+                live_frontiers,
+                exclude_collections,
+            );
+
+            let caught_up = caught_up.unwrap_or_else(|e| {
+                tracing::error!(
+                    "unexpected error while checking if cluster {} caught up: {e:#}",
+                    cluster.id
+                );
+                false
+            });
+
+            if !caught_up {
+                result = false;
+
+                // We continue with our loop instead of breaking out early, so
+                // that we log all non-caught up clusters.
+                tracing::info!("cluster {} is not caught up", cluster.id);
+            }
+        }
+
+        result
+    }
+
+    /// Returns `true` if all non-transient, non-excluded collections have their write
+    /// frontier (aka. upper) within `allowed_lag` of the "live" frontier
+    /// reported in `live_frontiers`. The "live" frontiers are frontiers as
+    /// reported by a currently running `environmentd` deployment, during a 0dt
+    /// upgrade.
+    ///
+    /// Collections whose write frontier is behind `now` by more than the cutoff
+    /// are ignored.
+    ///
+    /// This also returns `true` in case this cluster does not have any
+    /// replicas.
+    fn collections_caught_up(
+        &self,
+        cluster: &Cluster,
+        allowed_lag: Timestamp,
+        cutoff: Timestamp,
+        now: Timestamp,
+        live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+        exclude_collections: &BTreeSet<GlobalId>,
+    ) -> Result<bool, anyhow::Error> {
+        if cluster.replicas().next().is_none() {
+            return Ok(true);
+        }
+
+        let mut all_caught_up = true;
+
+        for id in self.controller.compute.collection_ids(cluster.id)? {
+            if id.is_transient() || exclude_collections.contains(&id) {
+                // These have no relation to dataflows running on previous
+                // deployments.
+                continue;
+            }
+
+            let write_frontier = self
+                .controller
+                .compute
+                .collection_frontiers(id, Some(cluster.id))?
+                .write_frontier;
+
+            let live_write_frontier = match live_frontiers.get(&id) {
+                Some(frontier) => frontier,
+                None => {
+                    // The collection didn't previously exist, so consider
+                    // ourselves hydrated as long as our write_ts is > 0.
+                    tracing::info!(?write_frontier, "collection {id} not in live frontiers");
+                    if write_frontier.less_equal(&Timestamp::minimum()) {
+                        all_caught_up = false;
+                    }
+                    continue;
+                }
+            };
+
+            // We can't do comparisons and subtractions, so we bump up the live
+            // write frontier by the cutoff, and then compare that against
+            // `now`.
+            let live_write_frontier_plus_cutoff = live_write_frontier
+                .iter()
+                .map(|t| t.step_forward_by(&cutoff));
+            let live_write_frontier_plus_cutoff =
+                Antichain::from_iter(live_write_frontier_plus_cutoff);
+
+            let beyond_all_hope = live_write_frontier_plus_cutoff.less_equal(&now);
+
+            if beyond_all_hope {
+                tracing::info!(?live_write_frontier, ?now, "live write frontier of collection {id} is too far behind 'now', ignoring for caught-up checks");
+                continue;
+            }
+
+            // We can't do easy comparisons and subtractions, so we bump up the
+            // write frontier by the allowed lag, and then compare that against
+            // the write frontier.
+            let write_frontier_plus_allowed_lag = write_frontier
+                .iter()
+                .map(|t| t.step_forward_by(&allowed_lag));
+            let bumped_write_plus_allowed_lag =
+                Antichain::from_iter(write_frontier_plus_allowed_lag);
+
+            let within_lag =
+                PartialOrder::less_equal(live_write_frontier, &bumped_write_plus_allowed_lag);
+
+            if !within_lag {
+                // We are not within the allowed lag!
+                //
+                // We continue with our loop instead of breaking out early, so
+                // that we log all non-caught-up replicas.
+                tracing::info!(
+                    ?write_frontier,
+                    ?live_write_frontier,
+                    ?allowed_lag,
+                    "collection {id} is not caught up"
+                );
+                all_caught_up = false;
+            }
+        }
+
+        Ok(all_caught_up)
     }
 
     fn maybe_check_caught_up_legacy(&mut self) {
