@@ -69,10 +69,7 @@
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
-use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_CAUGHT_UP_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
-    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF, WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL,
-};
+use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL;
 use mz_compute_client::as_of_selection;
 use mz_ore::channel::trigger;
 use mz_sql::names::{ResolvedIds, SchemaSpecifier};
@@ -100,9 +97,7 @@ use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
-use mz_catalog::builtin::{
-    BUILTINS, BUILTINS_STATIC, MZ_CLUSTER_REPLICA_FRONTIERS, MZ_STORAGE_USAGE_BY_SHARD,
-};
+use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_STORAGE_USAGE_BY_SHARD};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::memory::objects::{
@@ -176,6 +171,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{
     BuiltinTableAppendNotify, Deferred, GroupCommitPermit, PendingWriteTxn,
 };
+use crate::coord::cluster_catchup::HydrationCheckContext;
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
@@ -206,6 +202,7 @@ pub(crate) mod timestamp_selection;
 
 mod appends;
 mod catalog_serving;
+mod cluster_catchup;
 pub mod cluster_scheduling;
 mod command_handler;
 pub mod consistency;
@@ -1555,18 +1552,6 @@ impl ClusterReplicaStatuses {
     ) -> Option<&BTreeMap<ReplicaId, BTreeMap<ProcessId, ClusterReplicaProcessStatus>>> {
         self.0.get(&cluster_id)
     }
-}
-
-/// Context needed to check the hydration status of clusters.
-#[derive(Debug)]
-struct HydrationCheckContext {
-    /// A trigger that signals that all clusters have been hydrated.
-    trigger: trigger::Trigger,
-    /// Collections to exclude from the hydration check.
-    ///
-    /// When a hydration check is performed as part of a 0dt upgrade, it makes sense to exclude
-    /// collections of newly added builtin objects, as these might not hydrate in read-only mode.
-    exclude_collections: BTreeSet<GlobalId>,
 }
 
 /// Glues the external world to the Timely workers.
@@ -3207,120 +3192,6 @@ impl Coordinator {
             ("controller".to_string(), self.controller.dump()?),
         ]);
         Ok(serde_json::Value::Object(map))
-    }
-
-    /// Checks that all clusters/collections are hydrated. If so, this will
-    /// trigger `self.hydration_check.trigger`.
-    ///
-    /// This method is a no-op when the trigger has already been fired.
-    async fn maybe_check_hydration_status(&mut self) {
-        if let Some(ctx) = &self.hydration_check {
-            let enable_caught_up_check =
-                ENABLE_0DT_CAUGHT_UP_CHECK.get(self.catalog().system_config().dyncfgs());
-
-            if enable_caught_up_check {
-                let replica_frontier_collection_id = self
-                    .catalog()
-                    .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_FRONTIERS);
-
-                let live_frontiers = self
-                    .controller
-                    .storage
-                    .snapshot_latest(replica_frontier_collection_id)
-                    .await
-                    .expect("can't read mz_cluster_replica_frontiers");
-
-                let live_frontiers = live_frontiers
-                    .into_iter()
-                    .map(|row| {
-                        let mut iter = row.into_iter();
-
-                        let id: GlobalId = iter
-                            .next()
-                            .expect("missing object id")
-                            .unwrap_str()
-                            .parse()
-                            .expect("cannot parse id");
-                        let replica_id = iter
-                            .next()
-                            .expect("missing replica id")
-                            .unwrap_str()
-                            .to_string();
-                        let maybe_upper_ts = iter.next().expect("missing upper_ts");
-                        // The timestamp has a total order, so there can be at
-                        // most one entry in the upper frontier, which is this
-                        // timestamp here. And NULL encodes the empty upper
-                        // frontier.
-                        let upper_frontier = if maybe_upper_ts.is_null() {
-                            Antichain::new()
-                        } else {
-                            let upper_ts = maybe_upper_ts.unwrap_mz_timestamp();
-                            Antichain::from_elem(upper_ts)
-                        };
-
-                        (id, replica_id, upper_frontier)
-                    })
-                    .collect_vec();
-
-                // We care about each collection being hydrated on _some_
-                // replica. We don't check that at least one replica has all
-                // collections of that cluster hydrated.
-                let live_collection_frontiers: BTreeMap<_, _> = live_frontiers
-                    .into_iter()
-                    .map(|(oid, _replica_id, upper_ts)| (oid, upper_ts))
-                    .into_grouping_map()
-                    .fold(
-                        Antichain::from_elem(Timestamp::minimum()),
-                        |mut acc, _key, upper| {
-                            acc.join_assign(&upper);
-                            acc
-                        },
-                    )
-                    .into_iter()
-                    .collect();
-
-                tracing::debug!(?live_collection_frontiers, "checking re-hydration status");
-
-                let allowed_lag = WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG
-                    .get(self.catalog().system_config().dyncfgs());
-                let allowed_lag: u64 = allowed_lag
-                    .as_millis()
-                    .try_into()
-                    .expect("must fit into u64");
-
-                let cutoff =
-                    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF.get(self.catalog().system_config().dyncfgs());
-                let cutoff: u64 = cutoff.as_millis().try_into().expect("must fit into u64");
-
-                let now = self.now();
-
-                let compute_caught_up = self.controller.compute.clusters_caught_up(
-                    allowed_lag.into(),
-                    cutoff.into(),
-                    now.into(),
-                    &live_collection_frontiers,
-                    &ctx.exclude_collections,
-                );
-
-                tracing::info!(%compute_caught_up, "checked caught-up status of collections");
-
-                if compute_caught_up {
-                    let ctx = self.hydration_check.take().expect("known to exist");
-                    ctx.trigger.fire();
-                }
-            } else {
-                let compute_hydrated = self
-                    .controller
-                    .compute
-                    .clusters_hydrated(&ctx.exclude_collections);
-                tracing::info!(%compute_hydrated, "checked hydration status of clusters");
-
-                if compute_hydrated {
-                    let ctx = self.hydration_check.take().expect("known to exist");
-                    ctx.trigger.fire();
-                }
-            }
-        }
     }
 
     /// Prune all storage usage events from the [`MZ_STORAGE_USAGE_BY_SHARD`] table that are older
