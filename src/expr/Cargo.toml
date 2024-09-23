@@ -84,3 +84,8 @@ default = ["mz-build-tools/default"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[package.metadata.cargo-gazelle.lib]
+# Disable pipelining because `num_enum` emits a warning to stderr that breaks
+# `rules_rust`s parsing of the Rustc output.
+disable_pipelining = true

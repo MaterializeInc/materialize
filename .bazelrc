@@ -88,6 +88,9 @@ build --@rules_rust//:extra_rustc_flag="-Csymbol-mangling-version=v0"
 #
 # TODO(parkmycar): Investigate a "super release" build with codegen-units=1
 build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=64"
+# Enabling pipelined builds allows dependent libraries to begin compiling with
+# just `.rmeta` instead of the full `.rlib`.
+build --@rules_rust//rust/settings:pipelined_compilation=True
 
 # TODO(parkmycar): toolchains_llvm uses ld64 for macOS which doesn't support
 # compressing debug sections.

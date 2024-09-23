@@ -54,6 +54,9 @@ default = ["mz-build-tools/default", "workspace-hack"]
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
+[package.metadata.cargo-gazelle.lib]
+disable_pipelining = true
+
 [package.metadata.cargo-gazelle.build]
 # We depend on protobuf files that live in the fivetran-sdk submodule that
 # cargo-gazelle cannot find.

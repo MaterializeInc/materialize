@@ -106,6 +106,11 @@ tracing_ = ["tracing-subscriber"]
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
+[package.metadata.cargo-gazelle.lib]
+# Disable pipelining because `num_enum` emits a warning to stderr that breaks
+# `rules_rust`s parsing of the Rustc output.
+disable_pipelining = true
+
 [package.metadata.cargo-gazelle.test.lib]
 data = ["src/adt/snapshots/*"]
 env = { INSTA_WORKSPACE_ROOT = "." }
