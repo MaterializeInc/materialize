@@ -3197,6 +3197,8 @@ pub static MZ_EGRESS_IPS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     oid: oid::TABLE_MZ_EGRESS_IPS_OID,
     desc: RelationDesc::builder()
         .with_column("egress_ip", ScalarType::String.nullable(false))
+        .with_column("prefix_length", ScalarType::Int32.nullable(false))
+        .with_column("cidr", ScalarType::String.nullable(false))
         .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],

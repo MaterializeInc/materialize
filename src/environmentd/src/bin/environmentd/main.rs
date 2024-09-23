@@ -11,9 +11,8 @@
 //!
 //! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
 //! on port 6876.
-
 use std::ffi::CStr;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -25,6 +24,7 @@ use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
 use fail::FailScenario;
 use http::header::HeaderValue;
+use ipnet::IpNet;
 use itertools::Itertools;
 use mz_adapter::ResultExt;
 use mz_aws_secrets_controller::AwsSecretsController;
@@ -194,15 +194,15 @@ pub struct Args {
     /// Wildcards in other positions (e.g., "https://*.foo.com" or "https://foo.*.com") have no effect.
     #[structopt(long, env = "CORS_ALLOWED_ORIGIN")]
     cors_allowed_origin: Vec<HeaderValue>,
-    /// Public IP addresses which the cloud environment has configured for
+    /// Public CIDR which the cloud environment has configured for
     /// egress.
     #[clap(
         long,
-        env = "ANNOUNCE_EGRESS_IP",
+        env = "ANNOUNCE_EGRESS_ADDRESS",
         multiple = true,
         use_delimiter = true
     )]
-    announce_egress_ip: Vec<Ipv4Addr>,
+    announce_egress_address: Vec<IpNet>,
     /// The external host name to connect to the HTTP server of this
     /// environment.
     ///
@@ -960,7 +960,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
                 frontegg,
                 cors_allowed_origin,
-                egress_ips: args.announce_egress_ip,
+                egress_addresses: args.announce_egress_address,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
                 // Controller options.

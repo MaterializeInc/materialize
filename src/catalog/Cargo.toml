@@ -20,6 +20,7 @@ derivative = "2.2.0"
 differential-dataflow = "0.12.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
+ipnet = "2.5.0"
 itertools = "0.10.5"
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }

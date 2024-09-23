@@ -68,6 +68,7 @@
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
+use ipnet::IpNet;
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_CAUGHT_UP_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
     WITH_0DT_CAUGHT_UP_CHECK_CUTOFF, WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL,
@@ -80,7 +81,7 @@ use mz_storage_types::read_holds::ReadHold;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::num::NonZeroI64;
 use std::ops::Neg;
 use std::str::FromStr;
@@ -982,7 +983,7 @@ pub struct Config {
     pub storage_usage_collection_interval: Duration,
     pub storage_usage_retention_period: Option<Duration>,
     pub segment_client: Option<mz_segment::Client>,
-    pub egress_ips: Vec<Ipv4Addr>,
+    pub egress_addresses: Vec<IpNet>,
     pub remote_system_parameters: Option<BTreeMap<String, String>>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
@@ -3467,7 +3468,7 @@ pub fn serve(
         storage_usage_collection_interval,
         storage_usage_retention_period,
         segment_client,
-        egress_ips,
+        egress_addresses,
         aws_account_id,
         aws_privatelink_availability_zones,
         connection_context,
@@ -3611,7 +3612,7 @@ pub fn serve(
                 system_parameter_defaults,
                 remote_system_parameters,
                 availability_zones,
-                egress_ips,
+                egress_addresses,
                 aws_principal_context,
                 aws_privatelink_availability_zones,
                 connection_context,

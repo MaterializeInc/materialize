@@ -11,7 +11,9 @@ from materialize.cloudtest.app.materialize_application import MaterializeApplica
 
 
 def test_egress_ips(mz: MaterializeApplication) -> None:
-    egress_ips = mz.environmentd.sql_query(
-        "SELECT egress_ip FROM mz_catalog.mz_egress_ips"
+    egress_ips = mz.environmentd.sql_query("SELECT * FROM mz_catalog.mz_egress_ips")
+    assert egress_ips == (
+        ["1.2.3.4", 32, "1.2.3.4/32"],
+        ["2001:db8::", 60, "2001:db8::/60"],
+        ["88.77.66.0", 28, "88.77.66.0/28"],
     )
-    assert egress_ips == (["1.2.3.4"], ["88.77.66.55"])

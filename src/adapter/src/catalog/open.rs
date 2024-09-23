@@ -248,7 +248,7 @@ impl Catalog {
             },
             cluster_replica_sizes: config.cluster_replica_sizes,
             availability_zones: config.availability_zones,
-            egress_ips: config.egress_ips,
+            egress_addresses: config.egress_addresses,
             aws_principal_context: config.aws_principal_context,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             http_host_name: config.http_host_name,
@@ -478,7 +478,7 @@ impl Catalog {
                 }
             }
 
-            for ip in &catalog.state.egress_ips {
+            for ip in &catalog.state.egress_addresses {
                 builtin_table_updates.push(
                     catalog
                         .state

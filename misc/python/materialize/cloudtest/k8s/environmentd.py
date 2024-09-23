@@ -184,8 +184,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             "--availability-zone=3",
             "--aws-account-id=123456789000",
             "--aws-external-id-prefix=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
-            "--announce-egress-ip=1.2.3.4",
-            "--announce-egress-ip=88.77.66.55",
+            "--announce-egress-address=1.2.3.4/32",
+            "--announce-egress-address=88.77.66.0/28",
+            "--announce-egress-address=2001:db8::/60",
             "--environment-id=cloudtest-test-00000000-0000-0000-0000-000000000000-0",
             f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
             "--orchestrator=kubernetes",
@@ -254,7 +255,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         return args + self.extra_args
 
     def env_vars(self) -> list[V1EnvVar]:
-
         system_parameter_defaults = get_default_system_parameters()
 
         if self.log_filter:
@@ -272,7 +272,10 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(name="AWS_REGION", value="minio"),
             V1EnvVar(name="AWS_ACCESS_KEY_ID", value="minio"),
             V1EnvVar(name="AWS_SECRET_ACCESS_KEY", value="minio123"),
-            V1EnvVar(name="MZ_ANNOUNCE_EGRESS_IP", value="1.2.3.4,88.77.66.55"),
+            V1EnvVar(
+                name="MZ_ANNOUNCE_EGRESS_ADDRESS",
+                value="1.2.3.4/32,88.77.66.0/28,2001:db8::/60",
+            ),
             V1EnvVar(name="MZ_AWS_ACCOUNT_ID", value="123456789000"),
             V1EnvVar(
                 name="MZ_AWS_EXTERNAL_ID_PREFIX",
