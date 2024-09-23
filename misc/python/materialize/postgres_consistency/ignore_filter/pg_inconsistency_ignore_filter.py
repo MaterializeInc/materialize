@@ -352,9 +352,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ),
             True,
         ):
-            if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
-                # different value presentation, potentially an issue in Postgres
-                return YesIgnore("Postgres behaves differently for max_value")
             if expression.matches(
                 partial(
                     is_known_to_involve_exact_data_types,
