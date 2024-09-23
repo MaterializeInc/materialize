@@ -511,7 +511,7 @@ impl Listeners {
         //
         // Preflight checks determine whether to boot in read-only mode or not.
         let mut read_only = false;
-        let mut clusters_hydrated_trigger = None;
+        let mut caught_up_trigger = None;
         let preflight_config = PreflightInput {
             boot_ts,
             environment_id: config.environment_id.clone(),
@@ -524,14 +524,14 @@ impl Listeners {
             deployment_state: deployment_state.clone(),
             openable_adapter_storage,
             catalog_metrics: Arc::clone(&config.catalog_config.metrics),
-            hydration_max_wait: with_0dt_deployment_max_wait,
+            caught_up_max_wait: with_0dt_deployment_max_wait,
             panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
         };
         if enable_0dt_deployment {
             PreflightOutput {
                 openable_adapter_storage,
                 read_only,
-                clusters_hydrated_trigger,
+                caught_up_trigger,
             } = deployment::preflight::preflight_0dt(preflight_config).await?;
         } else {
             openable_adapter_storage =
@@ -652,7 +652,7 @@ impl Listeners {
             tracing_handle: config.tracing_handle,
             read_only_controllers: read_only,
             enable_0dt_deployment,
-            clusters_hydrated_trigger,
+            caught_up_trigger,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;

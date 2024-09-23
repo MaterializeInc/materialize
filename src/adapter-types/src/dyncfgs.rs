@@ -38,10 +38,11 @@ pub const ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT: Config<bool> = Config::new(
     "Whether to panic if the maximum wait time is reached but preflight checks have not succeeded.",
 );
 
-pub const WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL: Config<Duration> = Config::new(
+pub const WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL: Config<Duration> = Config::new(
+    // The feature flag name is historical.
     "0dt_deployment_hydration_check_interval",
     Duration::from_secs(10),
-    "Interval at which to check cluster hydration status, when doing zero-downtime deployment.",
+    "Interval at which to check whether clusters are caught up, when doing zero-downtime deployment.",
 );
 
 pub const ENABLE_0DT_CAUGHT_UP_CHECK: Config<bool> = Config::new(
@@ -103,7 +104,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_0DT_DEPLOYMENT)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)
-        .add(&WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL)
+        .add(&WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL)
         .add(&ENABLE_0DT_CAUGHT_UP_CHECK)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_CUTOFF)

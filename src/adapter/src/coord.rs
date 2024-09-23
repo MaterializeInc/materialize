@@ -69,9 +69,9 @@
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
-use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL;
+use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
 use mz_compute_client::as_of_selection;
-use mz_ore::channel::trigger;
+use mz_ore::channel::trigger::Trigger;
 use mz_sql::names::{ResolvedIds, SchemaSpecifier};
 use mz_sql::session::user::User;
 use mz_storage_types::read_holds::ReadHold;
@@ -158,7 +158,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tokio::time::MissedTickBehavior;
+use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
@@ -171,7 +171,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{
     BuiltinTableAppendNotify, Deferred, GroupCommitPermit, PendingWriteTxn,
 };
-use crate::coord::cluster_catchup::HydrationCheckContext;
+use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
@@ -202,7 +202,7 @@ pub(crate) mod timestamp_selection;
 
 mod appends;
 mod catalog_serving;
-mod cluster_catchup;
+mod caught_up;
 pub mod cluster_scheduling;
 mod command_handler;
 pub mod consistency;
@@ -996,9 +996,10 @@ pub struct Config {
     /// Whether to enable zero-downtime deployments.
     pub enable_0dt_deployment: bool,
 
-    /// A trigger that signals that all clusters have been hydrated. Only used
-    /// during 0dt deployment, while in read-only mode.
-    pub clusters_hydrated_trigger: Option<trigger::Trigger>,
+    /// A trigger that signals that the current deployment has caught up with a
+    /// previous deployment. Only used during 0dt deployment, while in read-only
+    /// mode.
+    pub caught_up_trigger: Option<Trigger>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -1626,7 +1627,7 @@ pub struct Coordinator {
     ///
     /// For non-realtime timelines, nothing pushes the timestamps forward, so we must do
     /// it manually.
-    advance_timelines_interval: tokio::time::Interval,
+    advance_timelines_interval: Interval,
 
     /// Serialized DDL. DDL must be serialized because:
     /// - Many of them do off-thread work and need to verify the catalog is in a valid state, but
@@ -1684,7 +1685,7 @@ pub struct Coordinator {
     pg_timestamp_oracle_config: Option<PostgresTimestampOracleConfig>,
 
     /// Periodically asks cluster scheduling policies to make their decisions.
-    check_cluster_scheduling_policies_interval: tokio::time::Interval,
+    check_cluster_scheduling_policies_interval: Interval,
 
     /// This keeps the last On/Off decision for each cluster and each scheduling policy.
     /// (Clusters that have been dropped or are otherwise out of scope for automatic scheduling are
@@ -1692,12 +1693,12 @@ pub struct Coordinator {
     cluster_scheduling_decisions: BTreeMap<ClusterId, BTreeMap<&'static str, SchedulingDecision>>,
 
     /// When doing 0dt upgrades/in read-only mode, periodically ask all known
-    /// clusters whether they are hydrated.
-    check_clusters_hydrated_interval: tokio::time::Interval,
+    /// clusters/collections whether they are caught up.
+    caught_up_check_interval: Interval,
 
-    /// Context needed to check whether all clusters have been hydrated. Only used
-    /// during 0dt deployment, while in read-only mode.
-    hydration_check: Option<HydrationCheckContext>,
+    /// Context needed to check whether all clusters/collections have caught up.
+    /// Only used during 0dt deployment, while in read-only mode.
+    caught_up_check: Option<CaughtUpCheckContext>,
 
     /// Tracks the state associated with the currently installed watchsets.
     installed_watch_sets: BTreeMap<WatchSetId, (ConnectionId, WatchSetResponse)>,
@@ -2869,12 +2870,12 @@ impl Coordinator {
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
-                    _ = self.check_clusters_hydrated_interval.tick() => {
+                    _ = self.caught_up_check_interval.tick() => {
                         // We do this directly on the main loop instead of
                         // firing off a message. We are still in read-only mode,
                         // so optimizing for latency, not blocking the main loop
                         // is not that important.
-                        self.maybe_check_hydration_status().await;
+                        self.maybe_check_caught_up().await;
 
                         continue;
                     },
@@ -3350,7 +3351,7 @@ pub fn serve(
         tracing_handle,
         read_only_controllers,
         enable_0dt_deployment,
-        clusters_hydrated_trigger,
+        caught_up_trigger: clusters_caught_up_trigger,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -3528,9 +3529,9 @@ pub fn serve(
         );
         check_scheduling_policies_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-        let check_clusters_hydrated_interval = if read_only_controllers {
+        let clusters_caught_up_check_interval = if read_only_controllers {
             let dyncfgs = catalog.system_config().dyncfgs();
-            let interval = WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL.get(dyncfgs);
+            let interval = WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL.get(dyncfgs);
 
             let mut interval = tokio::time::interval(interval);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -3548,10 +3549,11 @@ pub fn serve(
             interval
         };
 
-        let hydration_check = clusters_hydrated_trigger.map(|trigger| HydrationCheckContext {
-            trigger,
-            exclude_collections: new_builtins,
-        });
+        let clusters_caught_up_check =
+            clusters_caught_up_trigger.map(|trigger| CaughtUpCheckContext {
+                trigger,
+                exclude_collections: new_builtins,
+            });
 
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
             // Apply settings from system vars as early as possible because some
@@ -3621,12 +3623,12 @@ pub fn serve(
                     pg_timestamp_oracle_config,
                     check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
                     cluster_scheduling_decisions: BTreeMap::new(),
-                    check_clusters_hydrated_interval,
+                    caught_up_check_interval: clusters_caught_up_check_interval,
+                    caught_up_check: clusters_caught_up_check,
                     installed_watch_sets: BTreeMap::new(),
                     connection_watch_sets: BTreeMap::new(),
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
                     read_only_controllers,
-                    hydration_check,
                     buffered_builtin_table_updates: Some(Vec::new()),
                 };
                 let bootstrap = handle.block_on(async {
