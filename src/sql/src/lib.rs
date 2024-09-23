@@ -141,5 +141,5 @@ pub mod rbac;
 pub mod session;
 
 pub fn foobar(x: usize) -> String {
-    format!("hello world {x}")
+    format!("hello world 2 {x}")
 }
