@@ -6,8 +6,8 @@
 
 Temporal filters currently require Materialize to maintain all future retractions
 of data that is currently visible. For long windows, the retractions could be at
-timestamps beyond our next scheduled restart, for example during our weekly
-DB releases.
+timestamps beyond our next scheduled restart, which is typically our weekly
+DB release.
 
 For instance, in the example below, the temporal filter in the `last_30_sec`
 view causes two diffs to be generated for every row inserted into `events`, the
@@ -18,27 +18,29 @@ it unnecessary to generate and store that extra diff.
 ```sql
 -- Create a table of timestamped events.
 CREATE TABLE events (
-content TEXT,
-event_ts TIMESTAMP
+  content TEXT,
+  event_ts TIMESTAMP
 );
 -- Create a view of events from the last 30 seconds.
-CREATE VIEW last_30_sec AS
+CREATE VIEW last_30_days AS
 SELECT event_ts, content
 FROM events
-WHERE mz_now() <= event_ts + INTERVAL '30s';
+WHERE mz_now() <= event_ts + INTERVAL '30 days';
 
 INSERT INTO events VALUES ('hello', now());
 
-COPY (SUBSCRIBE (SELECT event_ts, content FROM last_30_sec)) TO STDOUT;
-1686868190714   1       2023-06-15 22:29:50.711 hello  -- now()
-1686868220712   -1      2023-06-15 22:29:50.711 hello  -- now() + 30s
+COPY (SUBSCRIBE (SELECT event_ts, content FROM last_30_days)) TO STDOUT;
+1727130590201   1       2023-09-23 22:29:50.201 hello  -- now()
+1729722590222   -1      2023-10-23 22:29:50.222 hello  -- now() + 30 days
 ```
 
 ## Success Criteria
 
-Diffs associated with timestamps beyond a set expiration time---mainly the
-retractions generated in temporal filters---are dropped without affecting
-correctness, resulting in lower memory utilization.
+Diffs associated with timestamps beyond a set expiration time are dropped
+without affecting correctness, resulting in lower number of diffs to process and
+consequently lower memory and CPU utilization. This change is mainly expected to
+benefit from dataflows with temporal filters that generate retraction diffs for
+future timestamps.
 
 ## Out of Scope
 
@@ -47,15 +49,18 @@ correctness, resulting in lower memory utilization.
 
 ## Solution Proposal
 
-We introduce a new LaunchDarkly feature flag that allows us to configure the
-expiration time for replicas for each environment. When the feature flag is
-enabled (non-zero offset), replicas will filter out diffs that are beyond the
-expiration time. To ensure correctness, replicas will panic if their frontier
-exceeds the expiration time before the replica is restarted.
+A new LaunchDarkly feature flag in introduced that allows replicas to be
+configured to expire. The flag specifies an expiration offset (a `Duration`),
+which is added to the start time of each replica to derive the absolute
+expiration time for that replica. When a non-zero offset is given, replicas
+filter out diffs that are beyond the expiration time. To ensure correctness,
+the replicas panic if their frontier exceeds the expiration time before the
+replica is restarted.
 
 More concretely, we make the following changes:
 
-* Introduce a new dyncfg `compute_replica_expiration` to set an offset `Duration`.
+* Introduce a new dyncfg `compute_replica_expiration` to set an offset `Duration`
+  for each environment using LaunchDarkly.
 * If the offset is configured with a non-zero value, compute the
   `replica_expiration` time as `now() + offset`. This value specifies the maximum
   time for which the replica is expected to be running. Consequently, diffs
