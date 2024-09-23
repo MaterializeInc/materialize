@@ -282,6 +282,17 @@ steps:
   - group: "Postgres: other versions"
     key: postgres-versions
     steps:
+      - id: pg-cdc-16_4
+        label: "Postgres CDC w/ 16.4"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-cdc]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc
+              args: [ "--pg-version=16.4" ]
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-15_6
         label: "Postgres CDC w/ 15.6"
         depends_on: build-aarch64
