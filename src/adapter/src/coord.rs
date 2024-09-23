@@ -69,12 +69,9 @@
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
-use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_CAUGHT_UP_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
-    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF, WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL,
-};
+use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
 use mz_compute_client::as_of_selection;
-use mz_ore::channel::trigger;
+use mz_ore::channel::trigger::Trigger;
 use mz_sql::names::{ResolvedIds, SchemaSpecifier};
 use mz_sql::session::user::User;
 use mz_storage_types::read_holds::ReadHold;
@@ -100,9 +97,7 @@ use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
-use mz_catalog::builtin::{
-    BUILTINS, BUILTINS_STATIC, MZ_CLUSTER_REPLICA_FRONTIERS, MZ_STORAGE_USAGE_BY_SHARD,
-};
+use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_STORAGE_USAGE_BY_SHARD};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::memory::objects::{
@@ -163,7 +158,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tokio::time::MissedTickBehavior;
+use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
@@ -176,6 +171,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{
     BuiltinTableAppendNotify, Deferred, GroupCommitPermit, PendingWriteTxn,
 };
+use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
@@ -206,6 +202,7 @@ pub(crate) mod timestamp_selection;
 
 mod appends;
 mod catalog_serving;
+mod caught_up;
 pub mod cluster_scheduling;
 mod command_handler;
 pub mod consistency;
@@ -999,9 +996,10 @@ pub struct Config {
     /// Whether to enable zero-downtime deployments.
     pub enable_0dt_deployment: bool,
 
-    /// A trigger that signals that all clusters have been hydrated. Only used
-    /// during 0dt deployment, while in read-only mode.
-    pub clusters_hydrated_trigger: Option<trigger::Trigger>,
+    /// A trigger that signals that the current deployment has caught up with a
+    /// previous deployment. Only used during 0dt deployment, while in read-only
+    /// mode.
+    pub caught_up_trigger: Option<Trigger>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -1557,18 +1555,6 @@ impl ClusterReplicaStatuses {
     }
 }
 
-/// Context needed to check the hydration status of clusters.
-#[derive(Debug)]
-struct HydrationCheckContext {
-    /// A trigger that signals that all clusters have been hydrated.
-    trigger: trigger::Trigger,
-    /// Collections to exclude from the hydration check.
-    ///
-    /// When a hydration check is performed as part of a 0dt upgrade, it makes sense to exclude
-    /// collections of newly added builtin objects, as these might not hydrate in read-only mode.
-    exclude_collections: BTreeSet<GlobalId>,
-}
-
 /// Glues the external world to the Timely workers.
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -1641,7 +1627,7 @@ pub struct Coordinator {
     ///
     /// For non-realtime timelines, nothing pushes the timestamps forward, so we must do
     /// it manually.
-    advance_timelines_interval: tokio::time::Interval,
+    advance_timelines_interval: Interval,
 
     /// Serialized DDL. DDL must be serialized because:
     /// - Many of them do off-thread work and need to verify the catalog is in a valid state, but
@@ -1699,7 +1685,7 @@ pub struct Coordinator {
     pg_timestamp_oracle_config: Option<PostgresTimestampOracleConfig>,
 
     /// Periodically asks cluster scheduling policies to make their decisions.
-    check_cluster_scheduling_policies_interval: tokio::time::Interval,
+    check_cluster_scheduling_policies_interval: Interval,
 
     /// This keeps the last On/Off decision for each cluster and each scheduling policy.
     /// (Clusters that have been dropped or are otherwise out of scope for automatic scheduling are
@@ -1707,12 +1693,12 @@ pub struct Coordinator {
     cluster_scheduling_decisions: BTreeMap<ClusterId, BTreeMap<&'static str, SchedulingDecision>>,
 
     /// When doing 0dt upgrades/in read-only mode, periodically ask all known
-    /// clusters whether they are hydrated.
-    check_clusters_hydrated_interval: tokio::time::Interval,
+    /// clusters/collections whether they are caught up.
+    caught_up_check_interval: Interval,
 
-    /// Context needed to check whether all clusters have been hydrated. Only used
-    /// during 0dt deployment, while in read-only mode.
-    hydration_check: Option<HydrationCheckContext>,
+    /// Context needed to check whether all clusters/collections have caught up.
+    /// Only used during 0dt deployment, while in read-only mode.
+    caught_up_check: Option<CaughtUpCheckContext>,
 
     /// Tracks the state associated with the currently installed watchsets.
     installed_watch_sets: BTreeMap<WatchSetId, (ConnectionId, WatchSetResponse)>,
@@ -2884,12 +2870,12 @@ impl Coordinator {
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
-                    _ = self.check_clusters_hydrated_interval.tick() => {
+                    _ = self.caught_up_check_interval.tick() => {
                         // We do this directly on the main loop instead of
                         // firing off a message. We are still in read-only mode,
                         // so optimizing for latency, not blocking the main loop
                         // is not that important.
-                        self.maybe_check_hydration_status().await;
+                        self.maybe_check_caught_up().await;
 
                         continue;
                     },
@@ -3209,120 +3195,6 @@ impl Coordinator {
         Ok(serde_json::Value::Object(map))
     }
 
-    /// Checks that all clusters/collections are hydrated. If so, this will
-    /// trigger `self.hydration_check.trigger`.
-    ///
-    /// This method is a no-op when the trigger has already been fired.
-    async fn maybe_check_hydration_status(&mut self) {
-        if let Some(ctx) = &self.hydration_check {
-            let enable_caught_up_check =
-                ENABLE_0DT_CAUGHT_UP_CHECK.get(self.catalog().system_config().dyncfgs());
-
-            if enable_caught_up_check {
-                let replica_frontier_collection_id = self
-                    .catalog()
-                    .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_FRONTIERS);
-
-                let live_frontiers = self
-                    .controller
-                    .storage
-                    .snapshot_latest(replica_frontier_collection_id)
-                    .await
-                    .expect("can't read mz_cluster_replica_frontiers");
-
-                let live_frontiers = live_frontiers
-                    .into_iter()
-                    .map(|row| {
-                        let mut iter = row.into_iter();
-
-                        let id: GlobalId = iter
-                            .next()
-                            .expect("missing object id")
-                            .unwrap_str()
-                            .parse()
-                            .expect("cannot parse id");
-                        let replica_id = iter
-                            .next()
-                            .expect("missing replica id")
-                            .unwrap_str()
-                            .to_string();
-                        let maybe_upper_ts = iter.next().expect("missing upper_ts");
-                        // The timestamp has a total order, so there can be at
-                        // most one entry in the upper frontier, which is this
-                        // timestamp here. And NULL encodes the empty upper
-                        // frontier.
-                        let upper_frontier = if maybe_upper_ts.is_null() {
-                            Antichain::new()
-                        } else {
-                            let upper_ts = maybe_upper_ts.unwrap_mz_timestamp();
-                            Antichain::from_elem(upper_ts)
-                        };
-
-                        (id, replica_id, upper_frontier)
-                    })
-                    .collect_vec();
-
-                // We care about each collection being hydrated on _some_
-                // replica. We don't check that at least one replica has all
-                // collections of that cluster hydrated.
-                let live_collection_frontiers: BTreeMap<_, _> = live_frontiers
-                    .into_iter()
-                    .map(|(oid, _replica_id, upper_ts)| (oid, upper_ts))
-                    .into_grouping_map()
-                    .fold(
-                        Antichain::from_elem(Timestamp::minimum()),
-                        |mut acc, _key, upper| {
-                            acc.join_assign(&upper);
-                            acc
-                        },
-                    )
-                    .into_iter()
-                    .collect();
-
-                tracing::debug!(?live_collection_frontiers, "checking re-hydration status");
-
-                let allowed_lag = WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG
-                    .get(self.catalog().system_config().dyncfgs());
-                let allowed_lag: u64 = allowed_lag
-                    .as_millis()
-                    .try_into()
-                    .expect("must fit into u64");
-
-                let cutoff =
-                    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF.get(self.catalog().system_config().dyncfgs());
-                let cutoff: u64 = cutoff.as_millis().try_into().expect("must fit into u64");
-
-                let now = self.now();
-
-                let compute_caught_up = self.controller.compute.clusters_caught_up(
-                    allowed_lag.into(),
-                    cutoff.into(),
-                    now.into(),
-                    &live_collection_frontiers,
-                    &ctx.exclude_collections,
-                );
-
-                tracing::info!(%compute_caught_up, "checked caught-up status of collections");
-
-                if compute_caught_up {
-                    let ctx = self.hydration_check.take().expect("known to exist");
-                    ctx.trigger.fire();
-                }
-            } else {
-                let compute_hydrated = self
-                    .controller
-                    .compute
-                    .clusters_hydrated(&ctx.exclude_collections);
-                tracing::info!(%compute_hydrated, "checked hydration status of clusters");
-
-                if compute_hydrated {
-                    let ctx = self.hydration_check.take().expect("known to exist");
-                    ctx.trigger.fire();
-                }
-            }
-        }
-    }
-
     /// Prune all storage usage events from the [`MZ_STORAGE_USAGE_BY_SHARD`] table that are older
     /// than `retention_period`.
     ///
@@ -3479,7 +3351,7 @@ pub fn serve(
         tracing_handle,
         read_only_controllers,
         enable_0dt_deployment,
-        clusters_hydrated_trigger,
+        caught_up_trigger: clusters_caught_up_trigger,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -3657,9 +3529,9 @@ pub fn serve(
         );
         check_scheduling_policies_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-        let check_clusters_hydrated_interval = if read_only_controllers {
+        let clusters_caught_up_check_interval = if read_only_controllers {
             let dyncfgs = catalog.system_config().dyncfgs();
-            let interval = WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL.get(dyncfgs);
+            let interval = WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL.get(dyncfgs);
 
             let mut interval = tokio::time::interval(interval);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -3677,10 +3549,11 @@ pub fn serve(
             interval
         };
 
-        let hydration_check = clusters_hydrated_trigger.map(|trigger| HydrationCheckContext {
-            trigger,
-            exclude_collections: new_builtins,
-        });
+        let clusters_caught_up_check =
+            clusters_caught_up_trigger.map(|trigger| CaughtUpCheckContext {
+                trigger,
+                exclude_collections: new_builtins,
+            });
 
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
             // Apply settings from system vars as early as possible because some
@@ -3750,12 +3623,12 @@ pub fn serve(
                     pg_timestamp_oracle_config,
                     check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
                     cluster_scheduling_decisions: BTreeMap::new(),
-                    check_clusters_hydrated_interval,
+                    caught_up_check_interval: clusters_caught_up_check_interval,
+                    caught_up_check: clusters_caught_up_check,
                     installed_watch_sets: BTreeMap::new(),
                     connection_watch_sets: BTreeMap::new(),
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
                     read_only_controllers,
-                    hydration_check,
                     buffered_builtin_table_updates: Some(Vec::new()),
                 };
                 let bootstrap = handle.block_on(async {

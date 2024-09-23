@@ -35,7 +35,7 @@ pub struct PreflightInput {
     pub deployment_state: DeploymentState,
     pub openable_adapter_storage: Box<dyn OpenableDurableCatalogState>,
     pub catalog_metrics: Arc<Metrics>,
-    pub hydration_max_wait: Duration,
+    pub caught_up_max_wait: Duration,
     pub panic_after_timeout: bool,
 }
 
@@ -43,7 +43,7 @@ pub struct PreflightInput {
 pub struct PreflightOutput {
     pub openable_adapter_storage: Box<dyn OpenableDurableCatalogState>,
     pub read_only: bool,
-    pub clusters_hydrated_trigger: Option<trigger::Trigger>,
+    pub caught_up_trigger: Option<trigger::Trigger>,
 }
 
 /// Perform a legacy (non-0dt) preflight check.
@@ -58,7 +58,7 @@ pub async fn preflight_legacy(
         deployment_state,
         mut openable_adapter_storage,
         catalog_metrics,
-        hydration_max_wait: _,
+        caught_up_max_wait: _,
         panic_after_timeout: _,
     }: PreflightInput,
 ) -> Result<Box<dyn OpenableDurableCatalogState>, CatalogError> {
@@ -142,18 +142,18 @@ pub async fn preflight_0dt(
         deployment_state,
         mut openable_adapter_storage,
         catalog_metrics,
-        hydration_max_wait,
+        caught_up_max_wait,
         panic_after_timeout,
     }: PreflightInput,
 ) -> Result<PreflightOutput, CatalogError> {
-    info!(%deploy_generation, ?hydration_max_wait, "performing 0dt preflight checks");
+    info!(%deploy_generation, ?caught_up_max_wait, "performing 0dt preflight checks");
 
     if !openable_adapter_storage.is_initialized().await? {
         info!("catalog not initialized; booting with writes allowed");
         return Ok(PreflightOutput {
             openable_adapter_storage,
             read_only: false,
-            clusters_hydrated_trigger: None,
+            caught_up_trigger: None,
         });
     }
 
@@ -162,31 +162,31 @@ pub async fn preflight_0dt(
     if catalog_generation < deploy_generation {
         info!("this deployment is a new generation; booting in read only mode");
 
-        let (clusters_hydrated_trigger, clusters_hydrated_receiver) = trigger::channel();
+        let (caught_up_trigger, caught_up_receiver) = trigger::channel();
 
         // Spawn a background task to handle promotion to leader.
         mz_ore::task::spawn(|| "preflight_0dt", async move {
-            info!("waiting for clusters to be hydrated");
+            info!("waiting for deployment to be caught up");
 
-            let hydration_max_wait_fut = async {
-                tokio::time::sleep(hydration_max_wait).await;
+            let caught_up_max_wait_fut = async {
+                tokio::time::sleep(caught_up_max_wait).await;
                 ()
             };
 
             let skip_catchup = deployment_state.set_catching_up();
 
             tokio::select! {
-                () = clusters_hydrated_receiver => {
-                    info!("all clusters hydrated");
+                () = caught_up_receiver => {
+                    info!("deployment caught up");
                 }
                 () = skip_catchup => {
-                    info!("skipping waiting for clusters to hydrate due to administrator request");
+                    info!("skipping waiting for deployment to catch up due to administrator request");
                 }
-                () = hydration_max_wait_fut => {
+                () = caught_up_max_wait_fut => {
                     if panic_after_timeout {
-                        panic!("not all clusters hydrated within {:?}", hydration_max_wait);
+                        panic!("not caught up within {:?}", caught_up_max_wait);
                     }
-                    info!("not all clusters hydrated within {:?}, proceeding now", hydration_max_wait);
+                    info!("not caught up within {:?}, proceeding now", caught_up_max_wait);
                 }
             }
 
@@ -227,14 +227,14 @@ pub async fn preflight_0dt(
         Ok(PreflightOutput {
             openable_adapter_storage,
             read_only: true,
-            clusters_hydrated_trigger: Some(clusters_hydrated_trigger),
+            caught_up_trigger: Some(caught_up_trigger),
         })
     } else if catalog_generation == deploy_generation {
         info!("this deployment is the current generation; booting with writes allowed");
         Ok(PreflightOutput {
             openable_adapter_storage,
             read_only: false,
-            clusters_hydrated_trigger: None,
+            caught_up_trigger: None,
         })
     } else {
         exit!(0, "this deployment has been fenced out");
