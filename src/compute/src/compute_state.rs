@@ -303,7 +303,6 @@ impl ComputeState {
         if self.replica_expiration.is_none() {
             let offset = COMPUTE_REPLICA_EXPIRATION.get(&self.worker_config);
             if !offset.is_zero() {
-                // TODO(sdht0): consistently send now() from environmentd.
                 let now = mz_ore::now::SYSTEM_TIME.clone()();
                 let offset: EpochMillis = offset
                     .as_millis()
