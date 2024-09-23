@@ -66,11 +66,13 @@
 
     &-logo {
         display: flex;
+        align-items: center;
         font-weight: 600;
         font-size: rem(1.8);
         color: var(--important);
 
         a {
+            display: flex;
             border-bottom: none !important;
         }
 

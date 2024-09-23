@@ -11,6 +11,14 @@
     display: flex;
     justify-content: center;
     padding-top: var(--nav-height);
+
+    @media(max-width: 800px) {
+        padding-top: calc(var(--nav-height) + var(--xx-small));
+    }
+
+    @media(max-width: 380px) {
+        padding-top: calc(var(--nav-height) + var(--medium));
+    }
 }
 
 .content {
@@ -506,9 +514,13 @@ body.dark {
 
 .banner {
     background-color: var(--tip);
-
-    padding: 5px;
+    padding: var(--pico) var(--milli);
     text-align: center;
+
+    @media(max-width: 500px) {
+        padding: var(--pico);
+    }
+
     a {
         color: var(--link);
     }
