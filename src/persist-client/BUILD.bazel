@@ -25,6 +25,7 @@ rust_library(
     compile_data = ["README.md"],
     crate_features = ["default"],
     data = [],
+    disable_pipelining = True,
     proc_macro_deps = ["//src/persist-proc:mz_persist_proc"] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],

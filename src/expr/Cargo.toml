@@ -50,7 +50,7 @@ num = "0.4.0"
 num_enum = "0.5.7"
 ordered-float = { version = "4.2.0", features = ["serde"] }
 paste = "1.0.11"
-prost = { version = "0.13.1", features = ["no-recursion-limit"] }
+prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 regex = "1.7.0"
 regex-syntax = "0.8.3"
 seahash = "4.1.0"
@@ -77,10 +77,15 @@ rand = "0.8.5"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.1"
+prost-build = "0.13.2"
 
 [features]
 default = ["mz-build-tools/default"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[package.metadata.cargo-gazelle.lib]
+# Disable pipelining because `num_enum` emits a warning to stderr that breaks
+# `rules_rust`s parsing of the Rustc output.
+disable_pipelining = true

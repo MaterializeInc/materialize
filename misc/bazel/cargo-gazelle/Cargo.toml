@@ -35,5 +35,8 @@ default = ["workspace-hack"]
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
+[package.metadata.cargo-gazelle.binary.main]
+rustc_flags = ["-Copt-level=3"]
+
 [[example]]
 name = "gen"

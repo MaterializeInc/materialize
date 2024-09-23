@@ -62,6 +62,13 @@ impl<T: ToBazelDefinition> ToBazelDefinition for Option<T> {
     }
 }
 
+impl ToBazelDefinition for bool {
+    fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
+        let bazel_str = if *self { "True" } else { "False" };
+        writer.write_str(bazel_str)
+    }
+}
+
 /// Wrapper around a [`std::fmt::Write`] that helps write at the correct level of indentation.
 struct AutoIndentingWriter<'w> {
     level: usize,
@@ -236,6 +243,11 @@ impl<T> List<T> {
     /// Returns an iterator over all of the `items`.
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.items.iter()
+    }
+
+    /// Returns if this [`List`] is empty.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty() && self.objects.is_empty()
     }
 }
 

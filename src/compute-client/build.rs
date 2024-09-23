@@ -7,14 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
+use std::path::PathBuf;
 
 fn main() {
-    env::set_var("PROTOC", mz_build_tools::protoc());
-    env::set_var("PROTOC_INCLUDE", mz_build_tools::protoc_include());
-
     let mut config = prost_build::Config::new();
     config
+        .protoc_executable(mz_build_tools::protoc())
         .btree_map(["."])
         .type_attribute(".", "#[allow(missing_docs)]");
 
@@ -56,7 +54,7 @@ fn main() {
                 "compute-client/src/protocol/response.proto",
                 "compute-client/src/service.proto",
             ],
-            &[".."],
+            &[PathBuf::from(".."), mz_build_tools::protoc_include()],
         )
         .unwrap_or_else(|e| panic!("{e}"));
 }
