@@ -213,6 +213,10 @@ p+p {
             background: var(--card-light);
             padding: var(--x-small);
             border-radius: inherit;
+
+            @media(max-width: 400px) {
+                padding: var(--milli);
+            }
         }
 
         div> :first-child {
