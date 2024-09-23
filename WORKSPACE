@@ -650,6 +650,18 @@ crates_repository(
         "//:misc/bazel/cargo-gazelle/Cargo.toml",
     ],
     rust_version = RUST_VERSION,
+    # Restricting the set of platform triples we support _greatly_ reduces the
+    # time it takes to "Splice Cargo Workspace" because it reduces the amount
+    # of metadata that needs to be collected.
+    #
+    # Feel free to add more targets if need be but try to keep this list small.
+    supported_platform_triples = [
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "wasm32-unknown-unknown",
+    ],
     # Only used if developing rules_rust.
     # generator = "@cargo_bazel_bootstrap//:cargo-bazel",
 )
