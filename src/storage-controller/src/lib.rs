@@ -87,7 +87,9 @@ use tokio::time::error::Elapsed;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
-use crate::collection_mgmt::{AppendOnlyIntrospectionConfig, CollectionManagerKind};
+use crate::collection_mgmt::{
+    AppendOnlyIntrospectionConfig, CollectionManagerKind, DifferentialIntrospectionConfig,
+};
 use crate::instance::{Instance, ReplicaConfig};
 use crate::statistics::StatsState;
 
@@ -164,7 +166,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// this will make sure that any tasks (or other resources) will stop when
     /// needed.
     // TODO(aljoscha): Should these live somewhere else?
-    introspection_tokens: BTreeMap<GlobalId, Box<dyn Any + Send + Sync>>,
+    introspection_tokens: Arc<Mutex<BTreeMap<GlobalId, Box<dyn Any + Send + Sync>>>>,
 
     // The following two fields must always be locked in order.
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
@@ -2194,6 +2196,7 @@ where
         let collection_manager = collection_mgmt::CollectionManager::new(read_only, now.clone());
 
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
+        let introspection_tokens = Arc::new(Mutex::new(BTreeMap::new()));
 
         let collection_status_manager = crate::collection_status::CollectionStatusManager::new(
             collection_manager.clone(),
@@ -2225,7 +2228,7 @@ where
             collection_manager,
             collection_status_manager,
             introspection_ids,
-            introspection_tokens: BTreeMap::new(),
+            introspection_tokens,
             now,
             envd_epoch,
             read_only,
@@ -2700,22 +2703,28 @@ where
             // be able to update desired state via the collection manager
             // already.
             CollectionManagerKind::Differential => {
+                // These do a shallow copy.
+                let introspection_config = DifferentialIntrospectionConfig {
+                    recent_upper,
+                    introspection_type,
+                    storage_collections: Arc::clone(&self.storage_collections),
+                    txns_read: self.txns_read.clone(),
+                    persist: Arc::clone(&self.persist),
+                    collection_manager: self.collection_manager.clone(),
+                    source_statistics: Arc::clone(&self.source_statistics),
+                    sink_statistics: Arc::clone(&self.sink_statistics),
+                    statistics_interval: self.config.parameters.statistics_interval.clone(),
+                    statistics_interval_receiver: self.statistics_interval_sender.subscribe(),
+                    metrics: self.metrics.clone(),
+                    introspection_tokens: Arc::clone(&self.introspection_tokens),
+                };
                 self.collection_manager.register_differential_collection(
                     id,
                     write_handle,
                     read_handle_fn,
                     force_writable,
+                    introspection_config,
                 );
-
-                if !self.read_only {
-                    self.prepare_introspection_collection(
-                        id,
-                        introspection_type,
-                        recent_upper,
-                        None,
-                    )
-                    .await?;
-                }
             }
             // For these, we first have to prepare and then register with
             // collection manager, because the preparation logic wants to read
@@ -2730,7 +2739,6 @@ where
                     self.prepare_introspection_collection(
                         id,
                         introspection_type,
-                        recent_upper,
                         Some(&mut write_handle),
                     )
                     .await?;
@@ -2764,80 +2772,11 @@ where
         &mut self,
         id: GlobalId,
         introspection_type: IntrospectionType,
-        recent_upper: Antichain<T>,
         write_handle: Option<&mut WriteHandle<SourceData, (), T, Diff>>,
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "preparing introspection collection for writes");
 
         match introspection_type {
-            IntrospectionType::ShardMapping => {
-                // Done by the `self.append_shard_mappings` call.
-            }
-            IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
-                // Differential collections start with an empty
-                // desired state. No need to manually reset.
-            }
-            IntrospectionType::StorageSourceStatistics => {
-                let prev = snapshot_statistics(
-                    id,
-                    recent_upper,
-                    &self.storage_collections,
-                    &self.txns_read,
-                    &self.persist,
-                )
-                .await;
-
-                let scraper_token = statistics::spawn_statistics_scraper::<
-                    statistics::SourceStatistics,
-                    SourceStatisticsUpdate,
-                    _,
-                >(
-                    id.clone(),
-                    // These do a shallow copy.
-                    self.collection_manager.clone(),
-                    Arc::clone(&self.source_statistics),
-                    prev,
-                    self.config.parameters.statistics_interval,
-                    self.statistics_interval_sender.subscribe(),
-                    self.metrics.clone(),
-                );
-                let web_token = statistics::spawn_webhook_statistics_scraper(
-                    Arc::clone(&self.source_statistics),
-                    self.config.parameters.statistics_interval,
-                    self.statistics_interval_sender.subscribe(),
-                );
-
-                // Make sure these are dropped when the controller is
-                // dropped, so that the internal task will stop.
-                self.introspection_tokens
-                    .insert(id, Box::new((scraper_token, web_token)));
-            }
-            IntrospectionType::StorageSinkStatistics => {
-                let prev = snapshot_statistics(
-                    id,
-                    recent_upper,
-                    &self.storage_collections,
-                    &self.txns_read,
-                    &self.persist,
-                )
-                .await;
-
-                let scraper_token =
-                    statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
-                        id.clone(),
-                        // These do a shallow copy.
-                        self.collection_manager.clone(),
-                        Arc::clone(&self.sink_statistics),
-                        prev,
-                        self.config.parameters.statistics_interval,
-                        self.statistics_interval_sender.subscribe(),
-                        self.metrics.clone(),
-                    );
-
-                // Make sure this is dropped when the controller is
-                // dropped, so that the internal task will stop.
-                self.introspection_tokens.insert(id, scraper_token);
-            }
             IntrospectionType::SourceStatusHistory => {
                 let write_handle = write_handle.expect("filled in by caller");
                 let last_status_per_id = self
@@ -2917,14 +2856,17 @@ where
                 .await;
             }
 
-            // Truncate compute-maintained collections.
-            IntrospectionType::ComputeDependencies
+            IntrospectionType::ShardMapping
+            | IntrospectionType::Frontiers
+            | IntrospectionType::ReplicaFrontiers
+            | IntrospectionType::StorageSourceStatistics
+            | IntrospectionType::StorageSinkStatistics
+            | IntrospectionType::ComputeDependencies
             | IntrospectionType::ComputeOperatorHydrationStatus
             | IntrospectionType::ComputeMaterializedViewRefreshes
             | IntrospectionType::ComputeErrorCounts
             | IntrospectionType::ComputeHydrationTimes => {
-                // Differential collections start with an empty
-                // desired state. No need to manually reset.
+                // Handled by differential task.
             }
 
             IntrospectionType::ReplicaMetricsHistory
