@@ -140,6 +140,28 @@ class RepositoryDetails:
         """Determine the path to the root of the Bazel workspace."""
         return self.root
 
+    def bazel_config(self) -> list[str]:
+        """Returns a set of Bazel config flags to set for the build."""
+        flags = []
+
+        if self.release_mode:
+            # If we're a tagged build, then we'll use stamping to update our
+            # build info, otherwise we'll use our side channel/best-effort
+            # approach to update it.
+            if ui.env_is_truthy("BUILDKITE_TAG"):
+                flags.extend(["--config=release-tagged"])
+            else:
+                flags.extend(["--config=release-dev"])
+                bazel_utils.write_git_hash()
+
+        if self.bazel_remote_cache:
+            flags.append(f"--remote_cache={self.bazel_remote_cache}")
+
+        if ui.env_is_truthy("CI"):
+            flags.append("--config=ci")
+
+        return flags
+
     def rewrite_builder_path_for_host(self, path: Path) -> Path:
         """Rewrite a path that is relative to the target directory inside the
         builder to a path that is relative to the target directory on the host.
@@ -366,21 +388,8 @@ class CargoBuild(CargoPreImage):
         # TODO(parkmycar): Make sure cargo-gazelle generates rust_binary targets for examples.
         assert len(examples) == 0, "Bazel doesn't support building examples."
 
-        is_tagged_build = ui.env_is_truthy("BUILDKITE_TAG")
-
-        if rd.release_mode:
-            # If we're a tagged build, then we'll use stamping to update our
-            # build info, otherwise we'll use our side channel/best-effort
-            # approach to update it.
-            if is_tagged_build:
-                bazel_build.extend(["--config=release-tagged"])
-            else:
-                bazel_build.extend(["--config=release-dev"])
-                bazel_utils.write_git_hash()
-        if rd.bazel_remote_cache:
-            bazel_build.append(f"--remote_cache={rd.bazel_remote_cache}")
-        if ui.env_is_truthy("CI"):
-            bazel_build.append("--config=ci")
+        # Add extra Bazel config flags.
+        bazel_build.extend(rd.bazel_config())
 
         return bazel_build
 
@@ -506,7 +515,7 @@ class CargoBuild(CargoPreImage):
             # TODO(parkmycar): Having to assign the same compilation flags as the build process
             # is a bit brittle. It would be better if the Bazel build process itself could
             # output the file to a known location.
-            options = ["--config=release"] if rd.release_mode else []
+            options = rd.bazel_config()
             paths_to_binaries = {}
             for bin in bins:
                 paths = bazel_utils.output_paths(bazel_bins[bin], options)
