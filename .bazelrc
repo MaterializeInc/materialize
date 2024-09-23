@@ -46,11 +46,7 @@ build:macos --experimental_inprocess_symlink_creation
 # Tracks stashed sandboxes in-memory so it uses less I/O on reuse.
 #
 # Bazel's sandbox performance on macOS doesn't scale very well, see: <https://github.com/bazelbuild/bazel/issues/8230>
-build:macos --experimental_inmemory_sandbox_stashes
-# `/dev/shm` is a RAM backed temporary filesystem, it should speedup sandbox creation.
-#
-# TODO(parkmycar): This would be great to enable but leads to out-of-disk errors.
-#build:ci --sandbox_base=/dev/shm
+build --experimental_inmemory_sandbox_stashes
 
 # Always have Bazel output why it rebuilt something, should make debugging builds easier.
 #
@@ -114,6 +110,17 @@ build:linux-amd64 --copt="-march=x86-64-v3"
 build:linux-amd64 --@rules_rust//:extra_rustc_flag="-Ctarget-cpu=x86-64-v3"
 build:linux-arm64 --copt="-mcpu=neoverse-n1"
 build:linux-arm64 --@rules_rust//:extra_rustc_flag="-Ctarget-cpu=neoverse-n1"
+
+# CI Build Configuration
+#
+# Note: This shouldn't change any config of the built binary, just the way it
+# gets built.
+#
+# `/dev/shm` is a RAM backed temporary filesystem, it should speedup sandbox creation.
+build:ci --sandbox_base=/dev/shm
+# Only downloads the "necessary" output files from the remote cache, recommended for CI
+# builds.
+build:ci --remote_download_minimal
 
 # Release Build Configuration
 build:release --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST

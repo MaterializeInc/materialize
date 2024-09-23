@@ -335,6 +335,11 @@ case "$cmd" in
                 --env SCCACHE_BUCKET
             )
         fi
+        if [[ "${CI_BAZEL_BUILD:-}" ]]; then
+            args+=(
+                --tmpfs "/dev/shm:exec,dev,suid,size=128g"
+            )
+        fi
         # For git-worktrees add the original repository at its original path
         if [[ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]]; then
             GIT_ROOT_DIR="$(git rev-parse --git-dir | sed -e "s#/.git/worktrees/.*#/#")"
