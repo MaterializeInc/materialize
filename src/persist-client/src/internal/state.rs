@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::ensure;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -15,7 +16,7 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
-use arrow::array::Array;
+use arrow::array::{make_array, Array, ArrayData};
 use arrow::datatypes::DataType;
 use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
@@ -25,10 +26,11 @@ use differential_dataflow::Hashable;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_ore::soft_panic_or_log;
 use mz_ore::vec::PartialOrdVecExt;
 use mz_persist::indexed::encoding::BatchColumnarFormat;
 use mz_persist::location::SeqNo;
-use mz_persist_types::arrow::ProtoArrayData;
+use mz_persist_types::arrow::{ArrayBound, ProtoArrayData};
 use mz_persist_types::columnar::{ColumnEncoder, Schema2};
 use mz_persist_types::schema::{backward_compatible, SchemaId};
 use mz_persist_types::{Codec, Codec64, Opaque};
@@ -261,6 +263,30 @@ impl<T> BatchPart<T> {
             // lower bound. If a caller is interested in a tighter lower bound,
             // the data is inline.
             BatchPart::Inline { .. } => &[],
+        }
+    }
+
+    pub fn structured_key_lower(&self) -> Option<ArrayBound> {
+        let part = match self {
+            BatchPart::Hollow(part) => part,
+            BatchPart::Inline { .. } => return None,
+        };
+
+        let try_decode = |lower: &LazyProto<ProtoArrayData>| {
+            let proto = lower.decode()?;
+            let data = ArrayData::from_proto(proto)?;
+            ensure!(data.len() == 1);
+            Ok(ArrayBound::new(make_array(data), 0))
+        };
+
+        let decoded: anyhow::Result<ArrayBound> = try_decode(part.structured_key_lower.as_ref()?);
+
+        match decoded {
+            Ok(bound) => Some(bound),
+            Err(e) => {
+                soft_panic_or_log!("failed to decode bound: {e:#?}");
+                None
+            }
         }
     }
 
