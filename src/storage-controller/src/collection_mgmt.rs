@@ -82,7 +82,7 @@ use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
@@ -128,18 +128,7 @@ where
 {
     /// When a [`CollectionManager`] is in read-only mode it must not affect any
     /// changes to external state.
-    ///
-    /// This is a watch to making sharing this bit with write tasks easier and
-    /// to allow write tasks to await changes.
-    pub read_only_rx: watch::Receiver<bool>,
-
-    /// Send-side for read-only bit.
-    pub read_only_tx: Arc<watch::Sender<bool>>,
-
-    /// A watch that is always false. This is a hacky workaround for migrating
-    /// builtin sources in 0dt.
-    /// TODO(jkosh44) Remove me when persist schema migrations are in.
-    hacky_always_false_watch: (watch::Sender<bool>, watch::Receiver<bool>),
+    read_only: bool,
 
     // WIP: Name TBD! I thought about `managed_collections`, `ivm_collections`,
     // `self_correcting_collections`.
@@ -181,26 +170,13 @@ where
             .try_into()
             .expect("known to fit");
 
-        let (read_only_tx, read_only_rx) = watch::channel(read_only);
-        let (always_false_tx, always_false_rx) = watch::channel(false);
-
         CollectionManager {
-            read_only_tx: Arc::new(read_only_tx),
-            read_only_rx,
-            hacky_always_false_watch: (always_false_tx, always_false_rx),
+            read_only,
             differential_collections: Arc::new(Mutex::new(BTreeMap::new())),
             append_only_collections: Arc::new(Mutex::new(BTreeMap::new())),
             user_batch_duration_ms: Arc::new(AtomicU64::new(batch_duration_ms)),
             now,
         }
-    }
-
-    /// Allow this [`CollectionManager`] to write to external systems, from now
-    /// on. That is allow it to actually write to collections from now on.
-    pub fn allow_writes(&mut self) {
-        self.read_only_tx
-            .send(false)
-            .expect("we are holding on to at least one receiver");
     }
 
     /// Updates the duration we'll wait to batch events for user owned collections.
@@ -243,14 +219,14 @@ where
             }
         }
 
-        let read_only_rx = self.get_read_only_rx(id, force_writable);
+        let read_only = self.get_read_only(id, force_writable);
 
         // Spawns a new task so we can write to this collection.
         let writer_and_handle = DifferentialWriteTask::spawn(
             id,
             write_handle,
             read_handle_fn,
-            read_only_rx,
+            read_only,
             self.now.clone(),
         );
         let prev = guard.insert(id, writer_and_handle);
@@ -289,7 +265,7 @@ where
             }
         }
 
-        let read_only_rx = self.get_read_only_rx(id, force_writable);
+        let read_only = self.get_read_only(id, force_writable);
 
         // Spawns a new task so we can write to this collection.
         let writer_and_handle = append_only_write_task(
@@ -297,7 +273,7 @@ where
             write_handle,
             Arc::clone(&self.user_batch_duration_ms),
             self.now.clone(),
-            read_only_rx,
+            read_only,
         );
         let prev = guard.insert(id, writer_and_handle);
 
@@ -357,7 +333,7 @@ where
     /// - If this [`CollectionManager`] is in read-only mode.
     /// - If the collection closed.
     pub(super) fn blind_write(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        if *self.read_only_rx.borrow() {
+        if self.read_only {
             panic!("attempting blind write to {} while in read-only mode", id);
         }
 
@@ -428,12 +404,12 @@ where
         Ok(MonotonicAppender::new(tx))
     }
 
-    fn get_read_only_rx(&self, id: GlobalId, force_writable: bool) -> watch::Receiver<bool> {
+    fn get_read_only(&self, id: GlobalId, force_writable: bool) -> bool {
         if force_writable {
             assert!(id.is_system(), "unexpected non-system global id: {id:?}");
-            self.hacky_always_false_watch.1.clone()
+            false
         } else {
-            self.read_only_rx.clone()
+            self.read_only
         }
     }
 }
@@ -459,10 +435,6 @@ where
     /// For getting a [`ReadHandle`] to sync our state to persist contents.
     read_handle_fn: R,
 
-    read_only_watch: watch::Receiver<bool>,
-
-    // Keep track of the read-only bit in our own state. Also so that we can
-    // assert that we don't flip back from read-write to read-only.
     read_only: bool,
 
     now: NowFn,
@@ -515,7 +487,7 @@ where
         id: GlobalId,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
         read_handle_fn: R,
-        read_only_watch: watch::Receiver<bool>,
+        read_only: bool,
         now: NowFn,
     ) -> (DifferentialWriteChannel<T>, WriteTask, ShutdownSender) {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -525,12 +497,10 @@ where
 
         let current_upper = T::minimum();
 
-        let read_only = *read_only_watch.borrow();
         let task = Self {
             id,
             write_handle,
             read_handle_fn,
-            read_only_watch,
             read_only,
             now,
             upper_tick_interval,
@@ -589,16 +559,6 @@ where
                         // loop if we weren't already aborted.
                         return ControlFlow::Break("sender has been dropped".to_string());
                     }
-                }
-
-                _it_changed = self.read_only_watch.changed() => {
-                    assert!(!*self.read_only_watch.borrow(), "can only switch from read-only to read-write");
-                    self.read_only = false;
-
-                    // We can now write, attempt to do that right away, even if
-                    // our `to_write` is empty. This way, we might learn that
-                    // there is something in persist that we have to retract.
-                    let  _ = self.write_to_persist(vec![]).await?;
                 }
 
                 // If we haven't received any updates, then we'll move the upper forward.
@@ -906,7 +866,7 @@ fn append_only_write_task<T>(
     mut write_handle: WriteHandle<SourceData, (), T, Diff>,
     user_batch_duration_ms: Arc<AtomicU64>,
     now: NowFn,
-    read_only: watch::Receiver<bool>,
+    read_only: bool,
 ) -> (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender)
 where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
@@ -988,7 +948,7 @@ where
                                 responders.push(reponders);
                             }
 
-                            if *read_only.borrow() {
+                            if read_only {
                                 tracing::warn!(%id, ?all_rows, "append while in read-only mode");
                                 notify_listeners(responders, || Err(StorageError::ReadOnly));
                                 continue;
@@ -1016,7 +976,7 @@ where
 
                     // If we haven't received any updates, then we'll move the upper forward.
                     _ = interval.tick() => {
-                        if *read_only.borrow() {
+                        if read_only {
                             // Not bumping uppers while in read-only mode.
                             continue;
                         }

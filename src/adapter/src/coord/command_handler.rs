@@ -237,38 +237,10 @@ impl Coordinator {
                 Command::Dump { tx } => {
                     let _ = tx.send(self.dump());
                 }
-
-                Command::AllowWrites { tx } => {
-                    self.handle_allow_writes(tx).await;
-                }
             }
         }
         .instrument(debug_span!("handle_command"))
         .boxed_local()
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn handle_allow_writes(&mut self, tx: oneshot::Sender<Result<bool, anyhow::Error>>) {
-        if !self.controller.read_only() {
-            let _ = tx.send(Ok(false));
-            return;
-        }
-
-        let init_ts = self.get_local_write_ts().await.timestamp;
-        self.controller.allow_writes(Some(init_ts)).await;
-
-        let builtin_table_updates = self
-            .buffered_builtin_table_updates
-            .take()
-            .expect("in read-only mode");
-
-        let entries: Vec<_> = self.catalog().entries().cloned().collect();
-
-        self.bootstrap_tables(&entries, builtin_table_updates)
-            .await
-            .await;
-
-        let _ = tx.send(Ok(true));
     }
 
     #[mz_ore::instrument(level = "debug")]

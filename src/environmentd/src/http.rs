@@ -72,7 +72,6 @@ use crate::BUILD_INFO;
 
 mod catalog;
 mod console;
-mod control;
 mod memory;
 mod metrics;
 mod probe;
@@ -386,13 +385,6 @@ impl InternalHttpServer {
             .route(
                 "/api/coordinator/dump",
                 routing::get(catalog::handle_coordinator_dump),
-            )
-            // This is called /api/control, because it's mean as a control endpoint.
-            // Not controller, as in the thing that a Coordinator holds and which is
-            // currently the only thing that this _can_ control.
-            .route(
-                "/api/control/allow-writes",
-                routing::post(control::handle_controller_allow_writes),
             )
             .route(
                 "/internal-console",

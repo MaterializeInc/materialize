@@ -626,15 +626,6 @@ where
         }
     }
 
-    /// Allow this controller and instances controller by it to write to
-    /// external systems.
-    pub fn allow_writes(&mut self) {
-        self.read_only = false;
-        for instance in self.instances.values_mut() {
-            instance.allow_writes();
-        }
-    }
-
     /// Wait until the controller is ready to do some processing.
     ///
     /// This method may block for an arbitrarily long time.
