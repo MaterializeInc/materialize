@@ -2778,7 +2778,14 @@ where
                 // desired state. No need to manually reset.
             }
             IntrospectionType::StorageSourceStatistics => {
-                let prev = self.snapshot_statistics(id, recent_upper).await;
+                let prev = snapshot_statistics(
+                    id,
+                    recent_upper,
+                    &self.storage_collections,
+                    &self.txns_read,
+                    &self.persist,
+                )
+                .await;
 
                 let scraper_token = statistics::spawn_statistics_scraper::<
                     statistics::SourceStatistics,
@@ -2806,7 +2813,14 @@ where
                     .insert(id, Box::new((scraper_token, web_token)));
             }
             IntrospectionType::StorageSinkStatistics => {
-                let prev = self.snapshot_statistics(id, recent_upper).await;
+                let prev = snapshot_statistics(
+                    id,
+                    recent_upper,
+                    &self.storage_collections,
+                    &self.txns_read,
+                    &self.persist,
+                )
+                .await;
 
                 let scraper_token =
                     statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
@@ -2925,31 +2939,6 @@ where
         }
 
         Ok(())
-    }
-
-    /// Get the current rows in the given statistics table. This is used to bootstrap
-    /// the statistics tasks.
-    ///
-    // TODO(guswynn): we need to be more careful about the update time we get here:
-    // <https://github.com/MaterializeInc/materialize/issues/25349>
-    async fn snapshot_statistics(&self, id: GlobalId, upper: Antichain<T>) -> Vec<Row> {
-        match upper.as_option() {
-            Some(f) if f > &T::minimum() => {
-                let as_of = f.step_back().unwrap();
-
-                let snapshot = self.snapshot(id, as_of).await.unwrap();
-                snapshot
-                    .into_iter()
-                    .map(|(row, diff)| {
-                        assert_eq!(diff, 1);
-                        row
-                    })
-                    .collect()
-            }
-            // If collection is closed or the frontier is the minimum, we cannot
-            // or don't need to truncate (respectively).
-            _ => Vec::new(),
-        }
     }
 
     /// Remove statistics for sources/sinks that were dropped but still have statistics rows
@@ -3621,6 +3610,42 @@ impl From<&IntrospectionType> for CollectionManagerKind {
             | IntrospectionType::StatementLifecycleHistory
             | IntrospectionType::SqlText => CollectionManagerKind::AppendOnly,
         }
+    }
+}
+
+/// Get the current rows in the given statistics table. This is used to bootstrap
+/// the statistics tasks.
+///
+// TODO(guswynn): we need to be more careful about the update time we get here:
+// <https://github.com/MaterializeInc/materialize/issues/25349>
+async fn snapshot_statistics<T>(
+    id: GlobalId,
+    upper: Antichain<T>,
+    storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    txns_read: &TxnsRead<T>,
+    persist: &Arc<PersistClientCache>,
+) -> Vec<Row>
+where
+    T: Codec64 + From<EpochMillis> + TimestampManipulation,
+{
+    match upper.as_option() {
+        Some(f) if f > &T::minimum() => {
+            let as_of = f.step_back().unwrap();
+
+            let snapshot = snapshot(id, as_of, storage_collections, txns_read, persist)
+                .await
+                .unwrap();
+            snapshot
+                .into_iter()
+                .map(|(row, diff)| {
+                    assert_eq!(diff, 1);
+                    row
+                })
+                .collect()
+        }
+        // If collection is closed or the frontier is the minimum, we cannot
+        // or don't need to truncate (respectively).
+        _ => Vec::new(),
     }
 }
 
