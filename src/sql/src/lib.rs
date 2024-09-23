@@ -139,3 +139,7 @@ pub mod plan;
 pub mod pure;
 pub mod rbac;
 pub mod session;
+
+pub fn foobar(x: usize) -> String {
+    format!("hello world {x}")
+}
