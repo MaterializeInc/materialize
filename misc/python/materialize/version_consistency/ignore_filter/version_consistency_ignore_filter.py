@@ -221,6 +221,11 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             ):
                 return YesIgnore("Changes to byte array presentation in PR 29591")
 
+            if is_any_date_time_expression(expression):
+                return YesIgnore(
+                    "Implicit cast from interval to mz_timestamp removed in PR 29579"
+                )
+
         return super().shall_ignore_expression(expression, row_selection)
 
 
