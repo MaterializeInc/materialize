@@ -284,6 +284,10 @@ contains:unknown catalog item 'mysql_table_3'
 # TODO(def-) Remove when materialize#29397 and database-issues#8526 are fixed
 $ skip-end
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_table_from_source = true
+ALTER SYSTEM SET enable_load_generator_key_value = true
+
 #
 # Kafka source using source-fed tables
 #
