@@ -23,7 +23,7 @@ steps:
     depends_on: []
     timeout_in_minutes: 60
     agents:
-      queue: builder-linux-aarch64
+      queue: builder-linux-aarch64-mem
 
   - wait: ~
 

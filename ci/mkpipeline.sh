@@ -27,7 +27,7 @@ for arch in x86_64 aarch64; do
         if ! MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder exists $toolchain; then
             queue=builder-linux-x86_64
             if [[ $arch = aarch64 ]]; then
-                queue=builder-linux-aarch64
+                queue=builder-linux-aarch64-mem
             fi
             bootstrap_steps+="
   - label: bootstrap $toolchain $arch

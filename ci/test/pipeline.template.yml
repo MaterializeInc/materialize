@@ -54,7 +54,7 @@ steps:
         priority: 50
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-aarch64
+          queue: builder-linux-aarch64-mem
 
       - id: build-x86_64
         label: ":bazel: Build x86_64"
@@ -273,7 +273,7 @@ steps:
           composition: cargo-test
     agents:
       # Because of scratch-aws-access
-      queue: builder-linux-aarch64
+      queue: builder-linux-aarch64-mem
 
   - id: testdrive
     label: "Testdrive %N"

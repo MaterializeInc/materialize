@@ -38,7 +38,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-aarch64
+          queue: builder-linux-aarch64-mem
 
   - group: Linters
     key: linters
@@ -74,7 +74,7 @@ steps:
           args: [--miri-full]
     agents:
       # TODO(def-) Switch back to Hetzner
-      queue: builder-linux-aarch64
+      queue: builder-linux-aarch64-mem
     sanitizer: skip
 
   - group: Benchmarks
@@ -848,7 +848,7 @@ steps:
         timeout_in_minutes: 240
         agents:
           # TODO(def-): Switch back to hetzner
-          queue: builder-linux-aarch64
+          queue: builder-linux-aarch64-mem
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
