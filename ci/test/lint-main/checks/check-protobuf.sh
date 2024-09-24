@@ -44,10 +44,18 @@ fi
 echo $IN_BUILDKITE_PR
 echo $IN_LOCAL_NON_MAIN_BRANCH
 
+if [[ "${1:-}" = --offline ]]; then
+  fetch_from_git=false
+else
+  fetch_from_git=true
+fi
+
 if [[ $IN_BUILDKITE_PR || $IN_LOCAL_NON_MAIN_BRANCH ]]; then
   # see ./ci/test/lint-buf/README.md
 
-  fetch_pr_target_branch
+  if $fetch_from_git; then
+    fetch_pr_target_branch
+  fi
 
   ci_collapsed_heading "Verify that protobuf config is up-to-date"
   try bin/pyactivate ./ci/test/lint-buf/generate-buf-config.py
