@@ -18,7 +18,7 @@ FEATURE_BENCHMARK_SCENARIOS_DIR = FEATURE_BENCHMARK_FRAMEWORK_DIR / "scenarios"
 
 # Consider increasing the #FEATURE_BENCHMARK_FRAMEWORK_VERSION if changes are expected to impact results!
 SHA256_OF_FRAMEWORK: dict[str, str] = {
-    "*": "a23bdd87546cc0308bf92efc1d7f3841201bb33d56c26edd788c1cc42fd05ffb"
+    "*": "d999cf93ce56bf54b8cf3c1e425410303b6fb1f511aa646b2fc6998f50e179bd"
 }
 
 # Consider increasing the scenario's class #version() if changes are expected to impact results!
@@ -26,7 +26,7 @@ SHA256_BY_SCENARIO_FILE: dict[str, str] = {
     "benchmark_main.py": "79c067f9a234a002f3264b38d983130fa93b15911dc559ce8690133e790416bc",
     "concurrency.py": "2e9c149c136b83b3853abc923a1adbdaf55a998ab4557712f8424c8b16f2adb1",
     "customer.py": "d1e72837a342c3ebf1f4a32ec583b1b78a78644cdba495030a6df45ebbffe703",
-    "optbench.py": "f1e63f31d3ec6bf55093a467046b8d2f12e4b8b419420bad53e14a4f23b72989",
+    "optbench.py": "314c7578fc84d8aaaeb838e2df90acd917b5f2c09fe07559ff1ace1af9964def",
     "scale.py": "c4c8749d166e4df34e0b0e92220434fdb508c5c2ac56eb80c07043be0048dded",
     "skew.py": "bf60802205fc51ebf94fb008bbdb6b2ccce3c9ed88a6188fa7f090f2c84b120f",
     "subscribe.py": "951cf7f702b511f12a8f506c831c7bdeae5c5735d1b70cb478f12bde72b23197",
