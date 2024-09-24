@@ -45,6 +45,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::controller::error::{
@@ -1698,21 +1699,21 @@ where
         replica_id: ReplicaId,
     ) {
         if !self.collections.contains_key(&id) {
-            soft_panic_or_log!(
+            warn!(
                 "frontiers update for an unknown collection \
                  (id={id}, replica_id={replica_id}, frontiers={frontiers:?})"
             );
             return;
         }
         let Some(replica) = self.replicas.get_mut(&replica_id) else {
-            soft_panic_or_log!(
+            warn!(
                 "frontiers update for an unknown replica \
                  (replica_id={replica_id}, frontiers={frontiers:?})"
             );
             return;
         };
         let Some(replica_collection) = replica.collections.get_mut(&id) else {
-            soft_panic_or_log!(
+            warn!(
                 "frontiers update for an unknown replica collection \
                  (id={id}, replica_id={replica_id}, frontiers={frontiers:?})"
             );
