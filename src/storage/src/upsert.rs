@@ -686,7 +686,7 @@ where
         );
         // Read and consolidate the snapshot from the 'previous' input until it
         // reaches the `resume_upper`.
-        'outer: while !PartialOrder::less_equal(&resume_upper, &snapshot_upper) {
+        while !PartialOrder::less_equal(&resume_upper, &snapshot_upper) {
             previous.ready().await;
             while let Some(event) = previous.next_sync() {
                 match event {
@@ -701,7 +701,6 @@ where
                     }
                     AsyncEvent::Progress(upper) => {
                         snapshot_upper = upper;
-                        continue 'outer;
                     }
                 };
             }
