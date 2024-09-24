@@ -499,7 +499,7 @@ impl RustType<proto_storage_response::ProtoStatusUpdate> for StatusUpdate {
     }
 }
 
-/// TODO(jkosh44)
+/// An update to an append only collection.
 pub enum AppendOnlyUpdate {
     Row((Row, Diff)),
     Status(StatusUpdate),
