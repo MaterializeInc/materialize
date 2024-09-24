@@ -61,7 +61,7 @@ pub(crate) type OutputIndex = usize;
 pub fn render_source<'g, G, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     dataflow_debug_name: &String,
-    id: GlobalId,
+    _primary_source_id: GlobalId,
     connection: C,
     description: IngestionDescription<CollectionMetadata>,
     resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
@@ -96,7 +96,7 @@ where
     needed_tokens.extend(source_tokens);
 
     let mut outputs = vec![];
-    for (ok_source, err_source, data_config) in streams {
+    for (export_id, ok_source, err_source, data_config) in streams {
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
@@ -105,7 +105,7 @@ where
         let (ok, err, extra_tokens, health_stream) = render_source_stream(
             scope,
             dataflow_debug_name,
-            id,
+            export_id,
             ok_source,
             data_config,
             description.clone(),
@@ -126,7 +126,7 @@ where
 fn render_source_stream<G, FromTime>(
     scope: &mut G,
     dataflow_debug_name: &String,
-    id: GlobalId,
+    export_id: GlobalId,
     ok_source: Collection<G, SourceOutput<FromTime>, Diff>,
     data_config: SourceExportDataConfig,
     description: IngestionDescription<CollectionMetadata>,
@@ -188,14 +188,14 @@ where
 
             let persist_clients = Arc::clone(&storage_state.persist_clients);
             // TODO: Get this to work with the as_of.
-            let resume_upper = base_source_config.resume_uppers[&id].clone();
+            let resume_upper = base_source_config.resume_uppers[&export_id].clone();
 
             let upper_ts = resume_upper
                 .as_option()
                 .expect("resuming an already finished ingestion")
                 .clone();
             let (upsert, health_update) = scope.scoped(
-                &format!("upsert_rehydration_backpressure({})", id),
+                &format!("upsert_rehydration_backpressure({})", export_id),
                 |scope| {
                     let (previous, previous_token, feedback_handle, backpressure_metrics) =
                         if mz_repr::Timestamp::minimum() < upper_ts {
@@ -218,7 +218,7 @@ where
                                         ?backpressure_max_inflight_bytes,
                                         "timely-{} using backpressure in upsert for source {}",
                                         base_source_config.worker_id,
-                                        id
+                                        export_id
                                     );
                                     if !storage_state
                                         .storage_configuration
@@ -237,7 +237,7 @@ where
                                         let backpressure_metrics = Some(
                                             base_source_config
                                                 .metrics
-                                                .get_backpressure_metrics(id, scope.index()),
+                                                .get_backpressure_metrics(export_id, scope.index()),
                                         );
 
                                         (
@@ -265,7 +265,7 @@ where
                                 .get(storage_state.storage_configuration.config_set());
                             let (stream, tok) = persist_source::persist_source_core(
                                 scope,
-                                id,
+                                export_id,
                                 persist_clients,
                                 description.ingestion_metadata,
                                 Some(as_of),
