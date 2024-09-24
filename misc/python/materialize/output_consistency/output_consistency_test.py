@@ -82,6 +82,7 @@ class OutputConsistencyTest:
             args.max_cols_per_query,
             override_max_runtime_in_sec or args.max_runtime_in_sec,
             args.max_iterations,
+            args.max_failures_until_abort,
             args.avoid_expressions_expecting_db_error,
             args.disable_predefined_queries,
             query_output_mode=query_output_mode,
@@ -110,6 +111,7 @@ class OutputConsistencyTest:
         parser.add_argument("--max-cols-per-query", default=20, type=int)
         parser.add_argument("--max-runtime-in-sec", default=600, type=int)
         parser.add_argument("--max-iterations", default=100000, type=int)
+        parser.add_argument("--max-failures-until-abort", default=15, type=int)
         parser.add_argument(
             "--avoid-expressions-expecting-db-error",
             default=False,
@@ -136,6 +138,7 @@ class OutputConsistencyTest:
         max_cols_per_query: int,
         max_runtime_in_sec: int,
         max_iterations: int,
+        max_failures_until_abort: int,
         avoid_expressions_expecting_db_error: bool,
         disable_predefined_queries: bool,
         query_output_mode: QueryOutputMode,
@@ -144,15 +147,18 @@ class OutputConsistencyTest:
 
         scenario = self.get_scenario()
 
+        if fail_fast:
+            max_failures_until_abort = 1
+
         config = ConsistencyTestConfiguration(
             random_seed=random_seed,
             scenario=scenario,
             dry_run=dry_run,
-            fail_fast=fail_fast,
             verbose_output=verbose_output,
             max_cols_per_query=max_cols_per_query,
             max_runtime_in_sec=max_runtime_in_sec,
             max_iterations=max_iterations,
+            max_failures_until_abort=max_failures_until_abort,
             avoid_expressions_expecting_db_error=avoid_expressions_expecting_db_error,
             queries_per_tx=20,
             max_pending_expressions=100,

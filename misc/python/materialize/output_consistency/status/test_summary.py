@@ -119,6 +119,9 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
     def __post_init__(self):
         self.mode = "LIVE_DATABASE" if not self.dry_run else "DRY_RUN"
 
+    def count_failures(self) -> int:
+        return len(self.failures)
+
     def merge(self, other: ConsistencyTestSummary) -> None:
         assert self.dry_run == other.dry_run
         assert self.mode == other.mode

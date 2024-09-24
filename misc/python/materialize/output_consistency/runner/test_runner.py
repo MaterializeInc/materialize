@@ -98,9 +98,11 @@ class ConsistencyTestRunner:
             self.output_printer.start_section("Running predefined queries")
             success = self._run_predefined_queries(test_summary)
 
-            if not success and self.config.fail_fast:
+            if not success and (
+                test_summary.count_failures() >= self.config.max_failures_until_abort
+            ):
                 self.output_printer.print_info(
-                    "Ending test run because the of a comparison mismatch in predefined queries (fail_fast mode)"
+                    f"Ending test run because {test_summary.count_failures()} failures occurred"
                 )
                 return test_summary
         else:
@@ -169,7 +171,7 @@ class ConsistencyTestRunner:
         self, test_summary: ConsistencyTestSummary, time_guard: TimeGuard
     ) -> bool:
         """
-        :return: if a mismatch occurred
+        :return: if the test run should be aborted
         """
         queries = self.query_generator.consume_queries(test_summary)
 
@@ -178,9 +180,11 @@ class ConsistencyTestRunner:
                 self.query_generator.add_random_where_condition_to_query(query)
             success = self.execution_manager.execute_query(query, test_summary)
 
-            if not success and self.config.fail_fast:
+            if not success and (
+                test_summary.count_failures() >= self.config.max_failures_until_abort
+            ):
                 self.output_printer.print_info(
-                    "Ending test run because the first comparison mismatch has occurred (fail_fast mode)"
+                    f"Ending test run because {test_summary.count_failures()} failures occurred"
                 )
                 return True
             if time_guard.shall_abort():
@@ -222,7 +226,11 @@ class ConsistencyTestRunner:
             )
             all_passed = all_passed and query_succeeded
 
-            if not query_succeeded and self.config.fail_fast:
+            if (
+                not query_succeeded
+                and test_summary.count_failures()
+                >= self.config.max_failures_until_abort
+            ):
                 return False
 
         self.output_printer.print_status(
