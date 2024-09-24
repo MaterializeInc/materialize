@@ -224,7 +224,6 @@ case "$cmd" in
             --env POLAR_SIGNALS_API_TOKEN
             --env PRODUCTION_ANALYTICS_USERNAME
             --env PRODUCTION_ANALYTICS_APP_PASSWORD
-            --env PRODUCTION_ANALYTICS_MZ_CLI_APP_PASSWORD
             --env PYPI_TOKEN
             --env MZ_DEV_BUILD_SHA
             # For Miri with nightly Rust
