@@ -56,4 +56,4 @@ jobs:
           custom-notsigned-prcomment: Thank you for your submission! We really appreciate it. Like many source-available projects, we require that you sign our [Contributor License Agreement](https://github.com/MaterializeInc/cla/blob/main/cla.md) (CLA) before we can accept your contribution.<br><br>You can sign the CLA by posting a comment with the message below.
           custom-pr-sign-comment: I have read the Contributor License Agreement (CLA) and I hereby sign the CLA.
           custom-allsigned-prcomment: All contributors have signed the CLA.
-          lock-pullrequest-aftermerge: true
+          lock-pullrequest-aftermerge: false
