@@ -3122,7 +3122,7 @@ impl Coordinator {
     /// Returns the state of the [`Coordinator`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
-    pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+    pub async fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Note: We purposefully use the `Debug` formatting for the value of all fields in the
         // returned object as a tradeoff between usability and stability. `serde_json` will fail
         // to serialize an object if the keys aren't strings, so `Debug` formatting the values
@@ -3190,7 +3190,7 @@ impl Coordinator {
                 "pending_linearize_read_txns".to_string(),
                 serde_json::to_value(pending_linearize_read_txns)?,
             ),
-            ("controller".to_string(), self.controller.dump()?),
+            ("controller".to_string(), self.controller.dump().await?),
         ]);
         Ok(serde_json::Value::Object(map))
     }

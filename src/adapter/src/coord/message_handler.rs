@@ -417,7 +417,8 @@ impl Coordinator {
                     self.handle_introspection_subscribe_batch(sink_id, response)
                         .await;
                 } else {
-                    tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
+                    // Cancellation may cause us to receive responses for subscribes no longer
+                    // tracked, so we quietly ignore them.
                 }
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {
@@ -426,7 +427,8 @@ impl Coordinator {
                         active_copy_to.retire_with_response(response);
                     }
                     _ => {
-                        tracing::error!(%sink_id, "received CopyToResponse for nonexistent copy to");
+                        // Cancellation may cause us to receive responses for subscribes no longer
+                        // tracked, so we quietly ignore them.
                     }
                 }
             }

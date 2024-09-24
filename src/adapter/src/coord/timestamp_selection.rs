@@ -25,7 +25,6 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{event, Level};
 
@@ -138,11 +137,11 @@ impl<T: TimestampManipulation> TimestampContext<T> {
 #[async_trait(?Send)]
 impl TimestampProvider for Coordinator {
     /// Reports a collection's current read frontier.
-    fn compute_read_frontier<'a>(
-        &'a self,
+    fn compute_read_frontier(
+        &self,
         instance: ComputeInstanceId,
         id: GlobalId,
-    ) -> AntichainRef<'a, Timestamp> {
+    ) -> Antichain<Timestamp> {
         self.controller
             .compute
             .collection_frontiers(id, Some(instance))
@@ -151,11 +150,11 @@ impl TimestampProvider for Coordinator {
     }
 
     /// Reports a collection's current write frontier.
-    fn compute_write_frontier<'a>(
-        &'a self,
+    fn compute_write_frontier(
+        &self,
         instance: ComputeInstanceId,
         id: GlobalId,
-    ) -> AntichainRef<'a, Timestamp> {
+    ) -> Antichain<Timestamp> {
         self.controller
             .compute
             .collection_frontiers(id, Some(instance))
@@ -184,16 +183,16 @@ impl TimestampProvider for Coordinator {
 
 #[async_trait(?Send)]
 pub trait TimestampProvider {
-    fn compute_read_frontier<'a>(
-        &'a self,
+    fn compute_read_frontier(
+        &self,
         instance: ComputeInstanceId,
         id: GlobalId,
-    ) -> AntichainRef<'a, Timestamp>;
-    fn compute_write_frontier<'a>(
-        &'a self,
+    ) -> Antichain<Timestamp>;
+    fn compute_write_frontier(
+        &self,
         instance: ComputeInstanceId,
         id: GlobalId,
-    ) -> AntichainRef<'a, Timestamp>;
+    ) -> Antichain<Timestamp>;
 
     /// Returns the implied capability (since) and write frontier (upper) for
     /// the specified storage collections.
@@ -452,7 +451,7 @@ pub trait TimestampProvider {
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
                 for id in compute_ids.iter() {
-                    upper.extend(self.compute_write_frontier(*instance, *id).iter().cloned());
+                    upper.extend(self.compute_write_frontier(*instance, *id).into_iter());
                 }
             }
         }

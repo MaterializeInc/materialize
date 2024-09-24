@@ -83,20 +83,20 @@ impl From<SetFrontier> for Frontier {
 
 #[async_trait(?Send)]
 impl TimestampProvider for Frontiers {
-    fn compute_read_frontier<'a>(
-        &'a self,
+    fn compute_read_frontier(
+        &self,
         instance: ComputeInstanceId,
         id: GlobalId,
-    ) -> timely::progress::frontier::AntichainRef<'a, Timestamp> {
-        self.compute.get(&(instance, id)).unwrap().read.borrow()
+    ) -> Antichain<Timestamp> {
+        self.compute.get(&(instance, id)).unwrap().read.clone()
     }
 
-    fn compute_write_frontier<'a>(
-        &'a self,
+    fn compute_write_frontier(
+        &self,
         instance: ComputeInstanceId,
         id: GlobalId,
-    ) -> timely::progress::frontier::AntichainRef<'a, Timestamp> {
-        self.compute.get(&(instance, id)).unwrap().write.borrow()
+    ) -> Antichain<Timestamp> {
+        self.compute.get(&(instance, id)).unwrap().write.clone()
     }
 
     fn storage_frontiers(

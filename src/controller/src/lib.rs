@@ -223,7 +223,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
     /// Returns the state of the [`Controller`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
-    pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+    pub async fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Note: We purposefully use the `Debug` formatting for the value of all fields in the
         // returned object as a tradeoff between usability and stability. `serde_json` will fail
         // to serialize an object if the keys aren't strings, so `Debug` formatting the values
@@ -252,6 +252,8 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             immediate_watch_sets,
         } = self;
 
+        let compute = compute.dump().await?;
+
         let unfulfilled_watch_sets: BTreeMap<_, _> = unfulfilled_watch_sets
             .iter()
             .map(|(ws_id, watches)| (format!("{ws_id:?}"), format!("{watches:?}")))
@@ -270,7 +272,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
         }
 
         let map = serde_json::Map::from_iter([
-            field("compute", compute.dump()?)?,
+            field("compute", compute)?,
             field("deploy_generation", deploy_generation)?,
             field("read_only", read_only)?,
             field("readiness", format!("{readiness:?}"))?,

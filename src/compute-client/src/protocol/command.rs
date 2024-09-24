@@ -508,6 +508,16 @@ pub enum PeekTarget {
     },
 }
 
+impl PeekTarget {
+    /// Returns the ID of the peeked collection.
+    pub fn id(&self) -> GlobalId {
+        match self {
+            Self::Index { id } => *id,
+            Self::Persist { id, .. } => *id,
+        }
+    }
+}
+
 /// Peek a collection, either in an arrangement or Persist.
 ///
 /// This request elicits data from the worker, by naming the
