@@ -104,7 +104,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner6-aarch64-8cpu-16gb
         if: "build.pull_request.id != null"
         coverage: skip
         sanitizer: skip
@@ -139,7 +139,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 10
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 
@@ -188,7 +188,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 
@@ -201,7 +201,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 20
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 
@@ -222,7 +222,7 @@ steps:
           # hugo: command not found
           # TODO(def-) Switch back to Hetzner when we have increased server limit
           queue: linux-x86_64-small
-          # queue: hetzner-x86-64-4cpu-8gb
+          # queue: hetzner6-x86-64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 
@@ -247,7 +247,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 15
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 
@@ -285,7 +285,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner6-aarch64-8cpu-16gb
 
   - id: cluster-tests
     label: "Cluster tests %N"
@@ -298,7 +298,7 @@ steps:
           composition: cluster
     agents:
       # TODO(def-): Investigate timeout in `SELECT * from remote1`
-      # queue: hetzner-aarch64-8cpu-16gb
+      # queue: hetzner6-aarch64-8cpu-16gb
       queue: linux-aarch64
 
   - id: sqllogictest-fast
@@ -312,7 +312,7 @@ steps:
           composition: sqllogictest
           run: fast-tests
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
 
   - id: restarts
     label: "Restart test"
@@ -322,7 +322,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: restart
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
 
   - id: legacy-upgrade
     label: "Legacy upgrade tests (last version from docs)"
@@ -333,7 +333,7 @@ steps:
           composition: legacy-upgrade
           args: ["--versions-source=docs"]
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
 
   - group: "Debezium tests"
     key: debezium-tests
@@ -348,7 +348,7 @@ steps:
               composition: debezium
               run: postgres
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
 
       - id: debezium-sql-server
         label: "Debezium SQL Server tests"
@@ -363,7 +363,7 @@ steps:
           # too slow to run emulated on aarch64, SQL Server's docker image is not yet available for aarch64 natively yet: https://github.com/microsoft/mssql-docker/issues/802
           # TODO(def-) Switch back to Hetzner when we have increased server limit
           queue: linux-x86_64-small
-          # queue: hetzner-x86-64-4cpu-8gb
+          # queue: hetzner6-x86-64-4cpu-8gb
 
       - id: debezium-mysql
         label: "Debezium MySQL tests"
@@ -375,7 +375,7 @@ steps:
               composition: debezium
               run: mysql
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
 
   - group: "MySQL tests"
     key: mysql-tests
@@ -391,7 +391,7 @@ steps:
               composition: mysql-cdc
               args: ["--mysql-version=8.4.0"]
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
 
       - id: mysql-cdc-resumption
         label: "MySQL CDC resumption tests %N"
@@ -403,7 +403,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
 
       - id: mysql-rtr
         label: "MySQL RTR tests"
@@ -414,7 +414,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-rtr
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
 
   - group: "Postgres tests"
     key: postgres-tests
@@ -428,7 +428,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-cdc-resumption
@@ -441,7 +441,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-resumption
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
 
       - id: pg-rtr
         label: "Postgres RTR tests"
@@ -452,7 +452,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-rtr
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
 
   - id: yugabyte-cdc
     label: "Yugabyte CDC tests"
@@ -463,7 +463,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: yugabyte-cdc
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
 
   - group: "Connection tests"
     key: connection-tests
@@ -477,7 +477,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: ssh-connection
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner6-aarch64-8cpu-16gb
 
       - id: fivetran-destination-tests
         label: Fivetran Destination tests
@@ -488,7 +488,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: fivetran-destination
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
 
   - group: "Copy to S3 tests"
     key: copy-to-s3-tests
@@ -503,7 +503,7 @@ steps:
               composition: copy-to-s3
               run: ci
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
 
   - group: "Kafka tests"
     key: kafka-tests
@@ -516,7 +516,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-resumption
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner6-aarch64-8cpu-16gb
 
       - id: kafka-auth
         label: Kafka auth test
@@ -527,7 +527,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-auth
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
 
       - id: kafka-exactly-once
         label: Kafka exactly-once tests
@@ -537,7 +537,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-exactly-once
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
 
       - id: kafka-rtr
         label: Kafka RTR tests
@@ -549,7 +549,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-rtr
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner6-aarch64-4cpu-8gb
 
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
@@ -557,7 +557,7 @@ steps:
     inputs: [misc/python/materialize/zippy]
     timeout_in_minutes: 30
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
@@ -573,7 +573,7 @@ steps:
         timeout_in_minutes: 45
         parallelism: 6
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner6-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -590,7 +590,7 @@ steps:
         timeout_in_minutes: 45
         parallelism: 6
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner6-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -619,7 +619,7 @@ steps:
             ]
     agents:
       # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
-      # queue: hetzner-aarch64-8cpu-16gb
+      # queue: hetzner6-aarch64-8cpu-16gb
       queue: linux-aarch64
     sanitizer: skip
 
@@ -629,7 +629,7 @@ steps:
     parallelism: 2
     timeout_in_minutes: 30
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
@@ -639,7 +639,7 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: backup-restore
@@ -660,7 +660,7 @@ steps:
     agents:
       # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
       queue: linux-aarch64-small
-      # queue: hetzner-aarch64-4cpu-8gb
+      # queue: hetzner6-aarch64-4cpu-8gb
 
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
@@ -673,7 +673,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: replica-isolation
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
 
   - id: persistence
     label: Persistence tests
@@ -683,7 +683,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: persistence
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
 
   - id: cluster-isolation
     label: Cluster isolation test
@@ -694,7 +694,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster-isolation
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
 
   - id: chbench-demo
     label: chbench smoke test
@@ -706,7 +706,7 @@ steps:
           args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
 
   - id: metabase-demo
     label: Metabase smoke test
@@ -719,7 +719,7 @@ steps:
       # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
       # TODO(def-) Switch back to Hetzner when we have increased server limit
       queue: linux-x86_64-small
-      # queue: hetzner-x86-64-4cpu-8gb
+      # queue: hetzner6-x86-64-4cpu-8gb
 
   - id: dbt-materialize
     label: dbt-materialize tests
@@ -729,14 +729,14 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
 
   - id: storage-usage
     label: "Storage Usage Table Test"
     depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: storage-usage
@@ -761,7 +761,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: 0dt
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner6-aarch64-8cpu-16gb
 
   - id: rtr-combined
     label: RTR with all sources
@@ -772,7 +772,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: rtr-combined
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner6-aarch64-8cpu-16gb
     skip: "Flakes because of materialize#29289"
 
   - id: skip-version-upgrade
@@ -784,7 +784,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: skip-version-upgrade
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner6-aarch64-4cpu-8gb
 
   - id: deploy-website
     label: Deploy website
@@ -885,7 +885,7 @@ steps:
     inputs: ["*"]
     priority: 1
     agents:
-      queue: hetzner-aarch64-16cpu-32gb
+      queue: hetzner6-aarch64-16cpu-32gb
     coverage: only
 
   - wait: ~
