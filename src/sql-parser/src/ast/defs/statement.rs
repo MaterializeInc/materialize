@@ -2104,6 +2104,7 @@ pub enum ClusterFeatureName {
     EnableOuterJoinNullFilter,
     EnableValueWindowFunctionFusion,
     EnableReduceUnnestListFusion,
+    EnableJoinToFlatMap,
 }
 
 impl WithOptionName for ClusterFeatureName {
@@ -2121,7 +2122,8 @@ impl WithOptionName for ClusterFeatureName {
             | Self::EnableLetrecFixpointAnalysis
             | Self::EnableOuterJoinNullFilter
             | Self::EnableValueWindowFunctionFusion
-            | Self::EnableReduceUnnestListFusion => false,
+            | Self::EnableReduceUnnestListFusion
+            | Self::EnableJoinToFlatMap => false,
         }
     }
 }
@@ -3650,6 +3652,7 @@ pub enum ExplainPlanOptionName {
     EnableOuterJoinNullFilter,
     EnableValueWindowFunctionFusion,
     EnableReduceUnnestListFusion,
+    EnableJoinToFlatMap,
 }
 
 impl WithOptionName for ExplainPlanOptionName {
@@ -3686,7 +3689,8 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::EnableLetrecFixpointAnalysis
             | Self::EnableOuterJoinNullFilter
             | Self::EnableValueWindowFunctionFusion
-            | Self::EnableReduceUnnestListFusion => false,
+            | Self::EnableReduceUnnestListFusion
+            | Self::EnableJoinToFlatMap => false,
         }
     }
 }

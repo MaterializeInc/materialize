@@ -82,26 +82,19 @@ impl Join {
     /// Return Ok(true) iff the action manipulated the tree after detecting the
     /// most general pattern.
     pub fn action(relation: &mut MirRelationExpr) -> Result<bool, TransformError> {
+        if eliminate_trivial_join(relation) {
+            return Ok(false);
+        }
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
-            ..
+            implementation,
         } = relation
         {
-            // Local non-fusion tidying.
-            inputs.retain(|e| !e.is_constant_singleton());
-            if inputs.len() == 0 {
-                *relation = MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty())
-                    .filter(unpack_equivalences(equivalences));
-                return Ok(false);
-            }
-            if inputs.len() == 1 {
-                *relation = inputs
-                    .pop()
-                    .unwrap()
-                    .filter(unpack_equivalences(equivalences));
-                return Ok(false);
-            }
+            assert!(
+                !implementation.is_implemented(),
+                "fusion::Join is meant to be used on Unimplemented joins"
+            );
 
             // Bail early if no children are MFPs around a Join
             if inputs.iter().any(|mut expr| {
@@ -245,12 +238,38 @@ impl Join {
     }
 }
 
+/// Remove those inputs that are constant singletons with no columns. If there are 0 or 1 inputs
+/// left, substitute the join with a simpler operation.
+pub fn eliminate_trivial_join(relation: &mut MirRelationExpr) -> bool {
+    if let MirRelationExpr::Join {
+        inputs,
+        equivalences,
+        implementation: _,
+    } = relation
+    {
+        inputs.retain(|e| !e.is_constant_singleton());
+        if inputs.len() == 0 {
+            *relation = MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty())
+                .filter(unpack_equivalences(equivalences));
+            return true;
+        }
+        if inputs.len() == 1 {
+            *relation = inputs
+                .pop()
+                .unwrap()
+                .filter(unpack_equivalences(equivalences));
+            return true;
+        }
+    }
+    false
+}
+
 /// Unpacks multiple equivalence classes into conjuncts that should all be true, essentially
 /// turning join equivalences into a Filter.
 ///
 /// Note that a join equivalence treats null equal to null, while an `=` in a Filter does not.
 /// This function is mindful of this.
-fn unpack_equivalences(equivalences: &Vec<Vec<MirScalarExpr>>) -> Vec<MirScalarExpr> {
+pub fn unpack_equivalences(equivalences: &Vec<Vec<MirScalarExpr>>) -> Vec<MirScalarExpr> {
     let mut result = Vec::new();
     for mut class in equivalences.iter().cloned() {
         // Let's put the simplest expression at the beginning of `class`, because all the

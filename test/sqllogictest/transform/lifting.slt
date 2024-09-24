@@ -224,6 +224,12 @@ Target cluster: quickstart
 
 EOF
 
+# The following tests stop testing what they are intended to test if JoinToFlatMap is enabled.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_join_to_flat_map = false
+----
+COMPLETE 0
+
 # Extract common values in all rows in Constant operator
 query T multiline
 explain with(arity, join implementations)
@@ -313,6 +319,11 @@ Source materialize.public.t
 Target cluster: quickstart
 
 EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_join_to_flat_map = true
+----
+COMPLETE 0
 
 # Permute the literals around the columns added by FlatMap
 query T multiline

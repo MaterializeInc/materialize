@@ -40,7 +40,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::proto_aggregate_func::{self, ProtoColumnOrders, ProtoFusedValueWindowFunc};
-use crate::relation::proto_table_func::ProtoTabletizedScalar;
+use crate::relation::proto_table_func::{
+    ProtoJoinWithConstant, ProtoRowAndDiff, ProtoTabletizedScalar,
+};
 use crate::relation::{
     compare_columns, proto_table_func, ColumnOrder, ProtoAggregateFunc, ProtoTableFunc,
     WindowFrame, WindowFrameBound, WindowFrameUnits,
@@ -3437,6 +3439,12 @@ pub enum TableFunc {
         name: String,
         relation: RelationType,
     },
+    /// Emit the given constants for each input row.
+    JoinWithConstant {
+        #[mzreflect(ignore)]
+        rows: Vec<(Row, Diff)>,
+        typ: RelationType,
+    },
 }
 
 impl RustType<ProtoTableFunc> for TableFunc {
@@ -3469,6 +3477,12 @@ impl RustType<ProtoTableFunc> for TableFunc {
                     Kind::TabletizedScalar(ProtoTabletizedScalar {
                         name: name.into_proto(),
                         relation: Some(relation.into_proto()),
+                    })
+                }
+                TableFunc::JoinWithConstant { rows, typ } => {
+                    Kind::JoinWithConstant(ProtoJoinWithConstant {
+                        rows: rows.iter().map(|r| r.into_proto()).collect(),
+                        typ: Some(typ.into_proto()),
                     })
                 }
             }),
@@ -3515,7 +3529,31 @@ impl RustType<ProtoTableFunc> for TableFunc {
                     .relation
                     .into_rust_if_some("ProtoTabletizedScalar::relation")?,
             },
+            Kind::JoinWithConstant(v) => TableFunc::JoinWithConstant {
+                rows: v
+                    .rows
+                    .into_iter()
+                    .map(|r| r.into_rust())
+                    .collect::<Result<Vec<_>, _>>()?,
+                typ: v.typ.into_rust_if_some("ProtoJoinWithConstant::typ")?,
+            },
         })
+    }
+}
+
+impl RustType<ProtoRowAndDiff> for (Row, Diff) {
+    fn into_proto(&self) -> ProtoRowAndDiff {
+        ProtoRowAndDiff {
+            row: Some(self.0.into_proto()),
+            diff: self.1,
+        }
+    }
+
+    fn from_proto(proto: ProtoRowAndDiff) -> Result<Self, TryFromProtoError> {
+        Ok((
+            proto.row.into_rust_if_some("ProtoRowAndDiff::row")?,
+            proto.diff,
+        ))
     }
 }
 
@@ -3594,6 +3632,7 @@ impl TableFunc {
                 let r = Row::pack_slice(datums);
                 Ok(Box::new(std::iter::once((r, 1))))
             }
+            TableFunc::JoinWithConstant { rows, typ: _ } => Ok(Box::new(rows.clone().into_iter())),
         }
     }
 
@@ -3722,6 +3761,9 @@ impl TableFunc {
             TableFunc::TabletizedScalar { relation, .. } => {
                 return relation.clone();
             }
+            TableFunc::JoinWithConstant { rows: _, typ } => {
+                return typ.clone();
+            }
         };
 
         if !keys.is_empty() {
@@ -3751,6 +3793,7 @@ impl TableFunc {
             TableFunc::UnnestMap { .. } => 2,
             TableFunc::Wrap { width, .. } => *width,
             TableFunc::TabletizedScalar { relation, .. } => relation.column_types.len(),
+            TableFunc::JoinWithConstant { rows: _, typ } => typ.column_types.len(),
         }
     }
 
@@ -3774,6 +3817,7 @@ impl TableFunc {
             | TableFunc::UnnestMap { .. } => true,
             TableFunc::Wrap { .. } => false,
             TableFunc::TabletizedScalar { .. } => false,
+            TableFunc::JoinWithConstant { .. } => false,
         }
     }
 
@@ -3800,6 +3844,7 @@ impl TableFunc {
             TableFunc::UnnestMap { .. } => true,
             TableFunc::Wrap { .. } => true,
             TableFunc::TabletizedScalar { .. } => true,
+            TableFunc::JoinWithConstant { .. } => true,
         }
     }
 }
@@ -3825,6 +3870,28 @@ impl fmt::Display for TableFunc {
             TableFunc::UnnestMap { .. } => f.write_str("unnest_map"),
             TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
             TableFunc::TabletizedScalar { name, .. } => f.write_str(name),
+            TableFunc::JoinWithConstant { rows, typ: _ } => {
+                let rows = if rows.iter().any(|(_, diff)| *diff < 0) {
+                    // This would be very surprising.
+                    format!("<some diffs are negative> {:?}", rows)
+                } else {
+                    let mut rows = rows
+                        .iter()
+                        .flat_map(|(row, diff)| {
+                            iter::repeat(row).take(usize::try_from(*diff).unwrap())
+                        })
+                        .collect_vec();
+                    const MAX_TO_SHOW: usize = 3;
+                    let truncation = if rows.len() > MAX_TO_SHOW {
+                        ", ..."
+                    } else {
+                        ""
+                    };
+                    rows.truncate(MAX_TO_SHOW);
+                    format!("{}{}", separated(", ", rows), truncation)
+                };
+                write!(f, "join_with_constant[{}]", rows)
+            }
         }
     }
 }

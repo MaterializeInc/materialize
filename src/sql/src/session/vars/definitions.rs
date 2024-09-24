@@ -2128,6 +2128,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_join_to_flat_map,
+        desc: "Enables the JoinToFlatMap optimization",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2143,6 +2149,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
             enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
             enable_reduce_unnest_list_fusion: vars.enable_reduce_unnest_list_fusion(),
+            enable_join_to_flat_map: vars.enable_join_to_flat_map(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
         }

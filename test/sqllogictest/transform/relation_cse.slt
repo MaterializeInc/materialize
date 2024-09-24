@@ -1623,6 +1623,8 @@ Target cluster: quickstart
 EOF
 
 # Correlated WMR block.
+# Might not be testing what it originally intended to test after
+# https://github.com/MaterializeInc/materialize/pull/29683
 query T multiline
 EXPLAIN WITH(arity, join implementations)
 SELECT bound, (
@@ -1649,9 +1651,9 @@ Explained Query:
       Project (#0, #3) // { arity: 2 }
         Join on=(#0 = #1 = #2) type=delta // { arity: 4 }
           implementation
-            %0 » %1:l3[#0]UK » %2[#0]K
-            %1:l3 » %0[#0]UK » %2[#0]K
-            %2 » %0[#0]UK » %1:l3[#0]UK
+            %0 » %1[#0]UK » %2[#0]K
+            %1 » %0[#0]UK » %2[#0]K
+            %2 » %0[#0]UK » %1[#0]UK
           ArrangeBy keys=[[#0]] // { arity: 1 }
             Constant // { arity: 1 }
               - (1)
@@ -1664,21 +1666,30 @@ Explained Query:
               - (8)
               - (9)
               - (10)
-          Get l3 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Constant // { arity: 1 }
+              - (1)
+              - (2)
+              - (3)
+              - (4)
+              - (5)
+              - (6)
+              - (7)
+              - (8)
+              - (9)
+              - (10)
           ArrangeBy keys=[[#0]] // { arity: 2 }
             Union // { arity: 2 }
-              Get l5 // { arity: 2 }
+              Get l4 // { arity: 2 }
               Project (#0, #2) // { arity: 2 }
-                Map (null) // { arity: 3 }
-                  Join on=(#0 = #1) type=differential // { arity: 2 }
-                    implementation
-                      %1:l3[#0]UK » %0[#0]K
-                    ArrangeBy keys=[[#0]] // { arity: 1 }
+                Filter (#0 = #1) // { arity: 3 }
+                  Map (null) // { arity: 3 }
+                    FlatMap join_with_constant[(1), (2), (3), ...]() // { arity: 2 }
                       Union // { arity: 1 }
                         Negate // { arity: 1 }
                           Distinct project=[#0] // { arity: 1 }
                             Project (#0) // { arity: 1 }
-                              Get l5 // { arity: 2 }
+                              Get l4 // { arity: 2 }
                         Constant // { arity: 1 }
                           - (1)
                           - (2)
@@ -1690,26 +1701,23 @@ Explained Query:
                           - (8)
                           - (9)
                           - (10)
-                    Get l3 // { arity: 1 }
     With
-      cte l5 =
+      cte l4 =
         Union // { arity: 2 }
-          Get l4 // { arity: 2 }
+          Get l3 // { arity: 2 }
           Map (error("more than one record produced in subquery")) // { arity: 2 }
             Project (#0) // { arity: 1 }
               Filter (#1 > 1) // { arity: 2 }
                 Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
                   Project (#0) // { arity: 1 }
-                    Get l4 // { arity: 2 }
-      cte l4 =
+                    Get l3 // { arity: 2 }
+      cte l3 =
         Union // { arity: 2 }
           Get l2 // { arity: 2 }
           Project (#0, #2) // { arity: 2 }
-            Map (0) // { arity: 3 }
-              Join on=(#0 = #1) type=differential // { arity: 2 }
-                implementation
-                  %1:l3[#0]UK » %0[#0]K
-                ArrangeBy keys=[[#0]] // { arity: 1 }
+            Filter (#0 = #1) // { arity: 3 }
+              Map (0) // { arity: 3 }
+                FlatMap join_with_constant[(1), (2), (3), ...]() // { arity: 2 }
                   Union // { arity: 1 }
                     Negate // { arity: 1 }
                       Project (#0) // { arity: 1 }
@@ -1725,20 +1733,6 @@ Explained Query:
                       - (8)
                       - (9)
                       - (10)
-                Get l3 // { arity: 1 }
-      cte l3 =
-        ArrangeBy keys=[[#0]] // { arity: 1 }
-          Constant // { arity: 1 }
-            - (1)
-            - (2)
-            - (3)
-            - (4)
-            - (5)
-            - (6)
-            - (7)
-            - (8)
-            - (9)
-            - (10)
       cte l2 =
         Reduce group_by=[#0] aggregates=[count(*)] monotonic // { arity: 2 }
           Project (#0) // { arity: 1 }
