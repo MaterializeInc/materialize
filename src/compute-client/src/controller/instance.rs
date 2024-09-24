@@ -186,6 +186,9 @@ where
     }
 }
 
+/// An identifier of a specific replica generation.
+pub(super) type Generation = u64;
+
 /// The state we keep for a compute instance.
 pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// Build info for spawning replicas
@@ -277,9 +280,9 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// Received updates are applied by [`Instance::apply_read_hold_changes`].
     read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
     /// A sender for responses from replicas.
-    replica_tx: mpsc::UnboundedSender<(ReplicaId, ComputeResponse<T>)>,
+    replica_tx: mpsc::UnboundedSender<(ReplicaId, Generation, ComputeResponse<T>)>,
     /// A receiver for responses from replicas.
-    replica_rx: mpsc::UnboundedReceiver<(ReplicaId, ComputeResponse<T>)>,
+    replica_rx: mpsc::UnboundedReceiver<(ReplicaId, Generation, ComputeResponse<T>)>,
 }
 
 impl<T: ComputeControllerTimestamp> Instance<T> {
@@ -392,12 +395,19 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         id: ReplicaId,
         client: ReplicaClient<T>,
         config: ReplicaConfig,
+        epoch: ClusterStartupEpoch,
     ) {
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
 
         let metrics = self.metrics.for_replica(id);
-        let mut replica =
-            ReplicaState::new(id, client, config, metrics, self.introspection_tx.clone());
+        let mut replica = ReplicaState::new(
+            id,
+            client,
+            config,
+            metrics,
+            self.introspection_tx.clone(),
+            epoch,
+        );
 
         // Add per-replica collection state.
         for (collection_id, collection) in &self.collections {
@@ -887,7 +897,7 @@ where
                     None => break,
                 },
                 response = self.replica_rx.recv() => match response {
-                    Some((replica_id, response)) => self.handle_response(response, replica_id),
+                    Some((replica_id, generation, response)) => self.handle_response(response, replica_id, generation),
                     None => break,
                 }
             }
@@ -986,11 +996,12 @@ where
         let replica_epoch = self.replica_epochs.entry(id).or_default();
         *replica_epoch += 1;
         let metrics = self.metrics.for_replica(id);
+        let epoch = ClusterStartupEpoch::new(self.envd_epoch, *replica_epoch);
         let client = ReplicaClient::spawn(
             id,
             self.build_info,
             config.clone(),
-            ClusterStartupEpoch::new(self.envd_epoch, *replica_epoch),
+            epoch,
             metrics.clone(),
             Arc::clone(&self.dyncfg),
             self.replica_tx.clone(),
@@ -1010,7 +1021,7 @@ where
         }
 
         // Add replica to tracked state.
-        self.add_replica_state(id, client, config);
+        self.add_replica_state(id, client, config, epoch);
 
         Ok(())
     }
@@ -1667,10 +1678,22 @@ where
         drop(peek);
     }
 
-    fn handle_response(&mut self, response: ComputeResponse<T>, replica_id: ReplicaId) {
+    /// Handles a response from a replica. Replica IDs are re-used across replica restarts, so we
+    /// use the generation to drop stale responses.
+    fn handle_response(
+        &mut self,
+        response: ComputeResponse<T>,
+        replica_id: ReplicaId,
+        generation: Generation,
+    ) {
         if let Some(replica) = self.replicas.get(&replica_id) {
-            replica.metrics.inner.response_queue_size.dec();
+            if replica.epoch.replica() != generation {
+                return;
+            }
+        } else {
+            return;
         }
+
         match response {
             ComputeResponse::Frontiers(id, frontiers) => {
                 self.handle_frontiers_response(id, frontiers, replica_id);
@@ -2525,6 +2548,8 @@ struct ReplicaState<T: ComputeControllerTimestamp> {
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     /// Per-replica collection state.
     collections: BTreeMap<GlobalId, ReplicaCollectionState<T>>,
+    /// The epoch of the replica.
+    epoch: ClusterStartupEpoch,
 }
 
 impl<T: ComputeControllerTimestamp> ReplicaState<T> {
@@ -2534,6 +2559,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         config: ReplicaConfig,
         metrics: ReplicaMetrics,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        epoch: ClusterStartupEpoch,
     ) -> Self {
         Self {
             id,
@@ -2541,6 +2567,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             config,
             metrics,
             introspection_tx,
+            epoch,
             collections: Default::default(),
         }
     }
@@ -2614,10 +2641,11 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         // Destructure `self` here so we don't forget to consider dumping newly added fields.
         let Self {
             id,
-            client,
+            client: _,
             config: _,
             metrics: _,
             introspection_tx: _,
+            epoch,
             collections,
         } = self;
 
@@ -2637,7 +2665,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         let map = serde_json::Map::from_iter([
             field("id", id.to_string())?,
             field("collections", collections)?,
-            field("failed", client.is_failed())?,
+            field("epoch", epoch)?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
