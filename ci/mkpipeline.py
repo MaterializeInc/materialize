@@ -162,7 +162,7 @@ so it is executed.""",
                 elif agent == "linux-aarch64-medium":
                     agent = "linux-aarch64-large"
                 elif agent == "linux-aarch64-large":
-                    agent = "builder-linux-aarch64"
+                    agent = "builder-linux-aarch64-mem"
                 elif agent == "linux-x86_64-small":
                     agent = "linux-x86_64"
                 elif agent == "linux-x86_64":
