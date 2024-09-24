@@ -176,6 +176,7 @@ def is_known_to_involve_exact_data_types(
     if isinstance(expression, EnumConstant) and expression.is_tagged(
         TAG_DATA_TYPE_ENUM
     ):
+        # this matches castings to a certain type
         type_names = internal_type_identifiers_to_data_type_names(
             internal_data_type_identifiers
         )
