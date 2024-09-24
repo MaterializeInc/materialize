@@ -76,6 +76,9 @@ from materialize.output_consistency.input_data.operations.string_operations_prov
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
+from materialize.output_consistency.input_data.types.date_time_types_provider import (
+    TIME_TYPE_IDENTIFIER,
+)
 from materialize.output_consistency.input_data.types.number_types_provider import (
     DECIMAL_TYPE_IDENTIFIERS,
     DOUBLE_TYPE_IDENTIFIER,
@@ -1162,6 +1165,16 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             col_index, partial(is_operation_tagged, tag=TAG_BASIC_ARITHMETIC_OP), True
         ):
             return YesIgnore("materialize#28852: numeric return type inconsistency")
+
+        if query_template.matches_specific_select_or_filter_expression(
+            col_index,
+            partial(
+                is_known_to_involve_exact_data_types,
+                internal_data_type_identifiers={TIME_TYPE_IDENTIFIER},
+            ),
+            True,
+        ):
+            return YesIgnore("database-issues#8588: different type name for time")
 
         return NoIgnore()
 
