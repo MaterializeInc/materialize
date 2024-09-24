@@ -147,11 +147,13 @@ class OutputConsistencyTest:
 
         scenario = self.get_scenario()
 
+        if fail_fast:
+            max_failures_until_abort = 1
+
         config = ConsistencyTestConfiguration(
             random_seed=random_seed,
             scenario=scenario,
             dry_run=dry_run,
-            fail_fast=fail_fast,
             verbose_output=verbose_output,
             max_cols_per_query=max_cols_per_query,
             max_runtime_in_sec=max_runtime_in_sec,

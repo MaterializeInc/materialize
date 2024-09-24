@@ -25,7 +25,6 @@ class ConsistencyTestConfiguration:
         random_seed: str,
         split_and_retry_on_db_error: bool,
         dry_run: bool,
-        fail_fast: bool,
         verbose_output: bool,
         print_reproduction_code: bool,
         max_runtime_in_sec: int,
@@ -44,7 +43,6 @@ class ConsistencyTestConfiguration:
         self.random_seed = random_seed
         self.split_and_retry_on_db_error = split_and_retry_on_db_error
         self.dry_run = dry_run
-        self.fail_fast = fail_fast
         self.verbose_output = verbose_output
         self.print_reproduction_code = print_reproduction_code
         self.max_runtime_in_sec = max_runtime_in_sec
