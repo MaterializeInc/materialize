@@ -86,8 +86,12 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Diff, GlobalId, Row, TimestampManipulation};
-use mz_storage_client::client::{AppendOnlyUpdate, Status, StatusUpdate, TimestamplessUpdate};
+use mz_storage_client::client::{AppendOnlyUpdate, Status, TimestamplessUpdate};
 use mz_storage_client::controller::{IntrospectionType, MonotonicAppender, StorageWriteOp};
+use mz_storage_client::healthcheck::{
+    MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_METRICS_HISTORY_DESC,
+    WALLCLOCK_LAG_HISTORY_DESC,
+};
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_client::storage_collections::StorageCollections;
@@ -106,7 +110,7 @@ use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
 use crate::{
-    collection_mgmt, collection_status, privatelink_status_history_desc,
+    collection_mgmt, privatelink_status_history_desc,
     replica_status_history_desc,sink_status_history_desc, snapshot, snapshot_statistics, source_status_history_desc,statistics, StatusHistoryDesc,
     StorageError,
 };
@@ -1223,7 +1227,7 @@ where
                 )
                 .await;
 
-                let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
+                let status_col = MZ_SOURCE_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("status"))
                     .expect("schema has not changed")
                     .0;
@@ -1256,7 +1260,7 @@ where
                 )
                 .await;
 
-                let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
+                let status_col = MZ_SINK_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("status"))
                     .expect("schema has not changed")
                     .0;
@@ -1476,14 +1480,14 @@ where
     let (keep_duration, occurred_at_col) = match introspection_type {
         IntrospectionType::ReplicaMetricsHistory => (
             REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(&config_set),
-            collection_status::REPLICA_METRICS_HISTORY_DESC
+            REPLICA_METRICS_HISTORY_DESC
                 .get_by_name(&ColumnName::from("occurred_at"))
                 .expect("schema has not changed")
                 .0,
         ),
         IntrospectionType::WallclockLagHistory => (
             WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(&config_set),
-            collection_status::WALLCLOCK_LAG_HISTORY_DESC
+            WALLCLOCK_LAG_HISTORY_DESC
                 .get_by_name(&ColumnName::from("occurred_at"))
                 .expect("schema has not changed")
                 .0,
@@ -1746,5 +1750,231 @@ fn notify_listeners<T>(
     for r in responders {
         // We don't care if the listener disappeared.
         let _ = r.send(result());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use mz_repr::{Datum, Row};
+    use mz_storage_client::client::StatusUpdate;
+    use mz_storage_client::healthcheck::{
+        MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
+    };
+
+    #[mz_ore::test]
+    fn test_row() {
+        let error_message = "error message";
+        let hint = "hint message";
+        let id = GlobalId::User(1);
+        let status = Status::Dropped;
+        let row = Row::from(StatusUpdate {
+            id,
+            timestamp: chrono::offset::Utc::now(),
+            status,
+            error: Some(error_message.to_string()),
+            hints: BTreeSet::from([hint.to_string()]),
+            namespaced_errors: Default::default(),
+        });
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+
+        let details = row
+            .iter()
+            .nth(4)
+            .unwrap()
+            .unwrap_map()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(details.len(), 1);
+        let hint_datum = &details[0];
+
+        assert_eq!(hint_datum.0, "hints");
+        assert_eq!(
+            hint_datum.1.unwrap_list().iter().next().unwrap(),
+            Datum::String(hint)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_row_without_hint() {
+        let error_message = "error message";
+        let id = GlobalId::User(1);
+        let status = Status::Dropped;
+        let row = Row::from(StatusUpdate {
+            id,
+            timestamp: chrono::offset::Utc::now(),
+            status,
+            error: Some(error_message.to_string()),
+            hints: Default::default(),
+            namespaced_errors: Default::default(),
+        });
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+        assert_eq!(row.iter().nth(4).unwrap(), Datum::Null);
+    }
+
+    #[mz_ore::test]
+    fn test_row_without_error() {
+        let id = GlobalId::User(1);
+        let status = Status::Dropped;
+        let hint = "hint message";
+        let row = Row::from(StatusUpdate {
+            id,
+            timestamp: chrono::offset::Utc::now(),
+            status,
+            error: None,
+            hints: BTreeSet::from([hint.to_string()]),
+            namespaced_errors: Default::default(),
+        });
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::Null);
+
+        let details = row
+            .iter()
+            .nth(4)
+            .unwrap()
+            .unwrap_map()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(details.len(), 1);
+        let hint_datum = &details[0];
+
+        assert_eq!(hint_datum.0, "hints");
+        assert_eq!(
+            hint_datum.1.unwrap_list().iter().next().unwrap(),
+            Datum::String(hint)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_row_with_namespaced() {
+        let error_message = "error message";
+        let id = GlobalId::User(1);
+        let status = Status::Dropped;
+        let row = Row::from(StatusUpdate {
+            id,
+            timestamp: chrono::offset::Utc::now(),
+            status,
+            error: Some(error_message.to_string()),
+            hints: Default::default(),
+            namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
+        });
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+
+        let details = row
+            .iter()
+            .nth(4)
+            .unwrap()
+            .unwrap_map()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(details.len(), 1);
+        let ns_datum = &details[0];
+
+        assert_eq!(ns_datum.0, "namespaced");
+        assert_eq!(
+            ns_datum.1.unwrap_map().iter().next().unwrap(),
+            ("thing", Datum::String("error"))
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_row_with_everything() {
+        let error_message = "error message";
+        let hint = "hint message";
+        let id = GlobalId::User(1);
+        let status = Status::Dropped;
+        let row = Row::from(StatusUpdate {
+            id,
+            timestamp: chrono::offset::Utc::now(),
+            status,
+            error: Some(error_message.to_string()),
+            hints: BTreeSet::from([hint.to_string()]),
+            namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
+        });
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+
+        let details = row
+            .iter()
+            .nth(4)
+            .unwrap()
+            .unwrap_map()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(details.len(), 2);
+        // These are always sorted
+        let hint_datum = &details[0];
+        let ns_datum = &details[1];
+
+        assert_eq!(hint_datum.0, "hints");
+        assert_eq!(
+            hint_datum.1.unwrap_list().iter().next().unwrap(),
+            Datum::String(hint)
+        );
+
+        assert_eq!(ns_datum.0, "namespaced");
+        assert_eq!(
+            ns_datum.1.unwrap_map().iter().next().unwrap(),
+            ("thing", Datum::String("error"))
+        );
     }
 }

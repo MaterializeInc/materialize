@@ -53,7 +53,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::{AppendOnlyUpdate, TimestamplessUpdate};
+use crate::client::{AppendOnlyUpdate, StatusUpdate, TimestamplessUpdate};
 use crate::statistics::WebhookStatistics;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -689,6 +689,13 @@ pub trait StorageController: Debug {
     /// Rows passed in `updates` MUST have the correct schema for the given
     /// introspection type, as readers rely on this and might panic otherwise.
     fn append_introspection_updates(&mut self, type_: IntrospectionType, updates: Vec<(Row, Diff)>);
+
+    /// Records append-only status updates for the given introspection type.
+    fn append_status_introspection_updates(
+        &mut self,
+        type_: IntrospectionType,
+        updates: Vec<StatusUpdate>,
+    );
 
     /// Updates the desired state of the given introspection type.
     ///

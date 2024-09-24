@@ -55,6 +55,10 @@ use mz_storage_client::controller::{
     IntrospectionType, MonotonicAppender, PersistEpoch, Response, SnapshotCursor,
     StorageController, StorageMetadata, StorageTxn, StorageWriteOp,
 };
+use mz_storage_client::healthcheck::{
+    MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
+    MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_STATUS_HISTORY_DESC,
+};
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
     SinkStatisticsUpdate, SourceStatisticsUpdate, WebhookStatistics,
@@ -94,7 +98,6 @@ use crate::instance::{Instance, ReplicaConfig};
 use crate::statistics::StatsState;
 
 mod collection_mgmt;
-mod collection_status;
 mod history;
 mod instance;
 mod persist_handles;
@@ -158,10 +161,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
 
-    /// Facility for appending status updates for sources/sinks
-    pub(crate) collection_status_manager: collection_status::CollectionStatusManager<T>,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
-    pub(crate) introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
+    pub(crate) introspection_ids: BTreeMap<IntrospectionType, GlobalId>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
     /// this will make sure that any tasks (or other resources) will stop when
     /// needed.
@@ -1908,8 +1909,10 @@ where
         }
 
         if !self.read_only {
-            self.collection_status_manager
-                .append_updates(dropped_sources, IntrospectionType::SourceStatusHistory);
+            self.append_status_introspection_updates(
+                IntrospectionType::SourceStatusHistory,
+                dropped_sources,
+            );
         }
 
         {
@@ -1931,8 +1934,10 @@ where
         }
 
         if !self.read_only {
-            self.collection_status_manager
-                .append_updates(dropped_sinks, IntrospectionType::SinkStatusHistory);
+            self.append_status_introspection_updates(
+                IntrospectionType::SinkStatusHistory,
+                dropped_sinks,
+            );
         }
 
         Ok(updated_frontiers)
@@ -1959,13 +1964,25 @@ where
         type_: IntrospectionType,
         updates: Vec<(Row, Diff)>,
     ) {
-        let id = self.introspection_ids.lock().expect("poisoned")[&type_];
+        let id = self.introspection_ids[&type_];
         let updates = updates.into_iter().map(|update| update.into()).collect();
         self.collection_manager.blind_write(id, updates);
     }
 
+    fn append_status_introspection_updates(
+        &mut self,
+        type_: IntrospectionType,
+        updates: Vec<StatusUpdate>,
+    ) {
+        let id = self.introspection_ids[&type_];
+        let updates: Vec<_> = updates.into_iter().map(|update| update.into()).collect();
+        if !updates.is_empty() {
+            self.collection_manager.blind_write(id, updates);
+        }
+    }
+
     fn update_introspection_collection(&mut self, type_: IntrospectionType, op: StorageWriteOp) {
-        let id = self.introspection_ids.lock().expect("poisoned")[&type_];
+        let id = self.introspection_ids[&type_];
         self.collection_manager.differential_write(id, op);
     }
 
@@ -2196,13 +2213,8 @@ where
 
         let collection_manager = collection_mgmt::CollectionManager::new(read_only, now.clone());
 
-        let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
+        let introspection_ids = BTreeMap::new();
         let introspection_tokens = Arc::new(Mutex::new(BTreeMap::new()));
-
-        let collection_status_manager = crate::collection_status::CollectionStatusManager::new(
-            collection_manager.clone(),
-            Arc::clone(&introspection_ids),
-        );
 
         let (statistics_interval_sender, _) =
             channel(mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT);
@@ -2227,7 +2239,6 @@ where
             pending_table_handle_drops_tx,
             pending_table_handle_drops_rx,
             collection_manager,
-            collection_status_manager,
             introspection_ids,
             introspection_tokens,
             now,
@@ -2655,11 +2666,7 @@ where
             info!("writing to migrated storage collection {id} in read-only mode");
         }
 
-        let prev = self
-            .introspection_ids
-            .lock()
-            .expect("poisoned lock")
-            .insert(introspection_type, id);
+        let prev = self.introspection_ids.insert(introspection_type, id);
         assert!(
             prev.is_none(),
             "cannot have multiple IDs for introspection type"
@@ -2788,8 +2795,6 @@ where
 
         let id = *self
             .introspection_ids
-            .lock()
-            .expect("poisoned")
             .get(&IntrospectionType::ShardMapping)
             .expect("should be registered before this call");
 
@@ -2935,12 +2940,14 @@ where
             }
         }
 
-        self.collection_status_manager.append_updates(
-            source_status_updates,
+        self.append_status_introspection_updates(
             IntrospectionType::SourceStatusHistory,
+            source_status_updates,
         );
-        self.collection_status_manager
-            .append_updates(sink_status_updates, IntrospectionType::SinkStatusHistory);
+        self.append_status_introspection_updates(
+            IntrospectionType::SinkStatusHistory,
+            sink_status_updates,
+        );
     }
 
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, StorageError<T>> {
@@ -3173,12 +3180,11 @@ where
             push_replica_update(key, old, -1);
         }
 
-        let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
+        let id = self.introspection_ids[&IntrospectionType::Frontiers];
         self.collection_manager
             .differential_append(id, global_updates);
 
-        let id =
-            self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
+        let id = self.introspection_ids[&IntrospectionType::ReplicaFrontiers];
         self.collection_manager
             .differential_append(id, replica_updates);
     }
@@ -3485,7 +3491,7 @@ struct StatusHistoryDesc<K> {
 }
 
 fn source_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<GlobalId> {
-    let desc = &collection_status::MZ_SOURCE_STATUS_HISTORY_DESC;
+    let desc = &MZ_SOURCE_STATUS_HISTORY_DESC;
     let (key_idx, _) = desc.get_by_name(&"source_id".into()).expect("exists");
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
 
@@ -3499,7 +3505,7 @@ fn source_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<G
 }
 
 fn sink_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<GlobalId> {
-    let desc = &collection_status::MZ_SINK_STATUS_HISTORY_DESC;
+    let desc = &MZ_SINK_STATUS_HISTORY_DESC;
     let (key_idx, _) = desc.get_by_name(&"sink_id".into()).expect("exists");
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
 
@@ -3513,7 +3519,7 @@ fn sink_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<Glo
 }
 
 fn privatelink_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<GlobalId> {
-    let desc = &collection_status::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC;
+    let desc = &MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC;
     let (key_idx, _) = desc.get_by_name(&"connection_id".into()).expect("exists");
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
 
@@ -3527,7 +3533,7 @@ fn privatelink_status_history_desc(params: &StorageParameters) -> StatusHistoryD
 }
 
 fn replica_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<(GlobalId, u64)> {
-    let desc = &collection_status::REPLICA_STATUS_HISTORY_DESC;
+    let desc = &REPLICA_STATUS_HISTORY_DESC;
     let (replica_idx, _) = desc.get_by_name(&"replica_id".into()).expect("exists");
     let (process_idx, _) = desc.get_by_name(&"process_id".into()).expect("exists");
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
