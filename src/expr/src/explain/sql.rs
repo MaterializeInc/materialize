@@ -846,6 +846,11 @@ impl MirToSql {
                     )
                 }
                 Union { base, inputs } => {
+                    // detect left join
+                    if let Some(res) = sc.detect_left_join(base, inputs, bindings, ctx) {
+                        return Ok(res);
+                    }
+
                     // detect aggregates
                     if let Some(res) = sc.detect_aggregate_union(base, inputs, bindings, ctx) {
                         return Ok(res);
@@ -866,6 +871,194 @@ impl MirToSql {
                 } => Err(SqlConversionError::UnexpectedWMR),
             }
         })
+    }
+
+    fn detect_left_join(
+        &mut self,
+        base: &MirRelationExpr,
+        inputs: &Vec<MirRelationExpr>,
+        bindings: &mut BTreeMap<LocalId, (Ident, Vec<Ident>)>,
+        _ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+    ) -> Option<(Ident, Vec<Ident>)> {
+        // detect the following idiom:
+        //
+        //  Union                                        +
+        //    Map (null, null)                           + base
+        //      Union                                    +
+        //        Negate                                 +
+        //          Project (l0 COLS)                    +
+        //            Join on=(EXPR) type=differential   +
+        //              Get l0                           +
+        //              ArrangeBy keys=[[KEYS]]          +
+        //                Distinct project=[KEYS]        +
+        //                  Project (KEYS)               +
+        //                    Get l1                     +
+        //        ReadStorage l0_underlying              +
+        //    Project (l0 COLS, l1 COLS)                 + inputs[0]
+        //      Get l1                                   +
+        //
+        // the names are:
+        //   - l0_underlying: the true left-hand side of the left join
+        //   - l0: support for the left-hand side of the left join
+        //   - l1: the result of the inner part of the left join
+
+        use MirRelationExpr::*;
+
+        //    Project (l0 COLS, l1 COLS)                 +
+        //      Get l1                                   +
+        // check outer projection, store in `id_joined`
+        if inputs.len() != 1 {
+            return None;
+        }
+        let Project { input, .. } = &inputs[0] else {
+            return None;
+        };
+        let Get { id: id_joined, .. } = &**input else {
+            return None;
+        };
+
+        //    Map (null, null)                           + base
+        let Map { input, scalars } = base else {
+            return None;
+        };
+        assert!(scalars.iter().all(|e| match e {
+            MirScalarExpr::Literal(Ok(row), _ty) => {
+                let datums = row.unpack();
+                datums.len() == 1 && datums[0].is_null()
+            }
+            _ => false,
+        }));
+
+        //      Union                                    +
+        //        Negate                                 + base
+        //          Project (l0 COLS)                    +
+        //            Join on=(EXPR) type=differential   +
+        //              Get l0                           +
+        //              ArrangeBy keys=[[KEYS]]          +
+        //                Distinct project=[KEYS]        +
+        //                  Project (KEYS)               +
+        //                    Get l1                     +
+        //        ReadStorage l0_underlying              + inputs[0]
+        let Union { base, inputs } = &**input else {
+            return None;
+        };
+
+        //        ReadStorage l0_underlying              +
+        if inputs.len() != 1 {
+            return None;
+        }
+        let Get {
+            id: _id_underlying, ..
+        } = &inputs[0]
+        else {
+            return None;
+        };
+
+        //        Negate                                 +
+        let Negate { input } = &**base else {
+            return None;
+        };
+
+        //          Project (l0 COLS)                    +
+        let Project { input, .. } = &**input else {
+            return None;
+        };
+
+        //            Join on=(EXPR) type=differential   +
+        //              Get l0                           + inputs[0]
+        //              ArrangeBy keys=[[KEYS]]          + inputs[1]
+        //                Distinct project=[KEYS]        +
+        //                  Project (KEYS)               +
+        //                    Get l1                     +
+        let Join { inputs, .. } = &**input else {
+            return None;
+        };
+
+        if inputs.len() != 2 {
+            return None;
+        }
+
+        //              Get l0                           + inputs[0]
+        let Get { id: _id_lhs, .. } = &inputs[0] else {
+            return None;
+        };
+
+        //              ArrangeBy keys=[[KEYS]]          + inputs[1]
+        let ArrangeBy { input, .. } = &inputs[1] else {
+            return None;
+        };
+
+        //                Distinct project=[KEYS]        +
+        // TODO(mgree) check that it's the reduce we're looking for, confirm KEYS and projection
+        eprintln!("looking for distinct in {input:?}");
+        let Reduce { input, .. } = &**input else {
+            return None;
+        };
+
+        //                  Project (KEYS)               +
+        let Project { input, .. } = &**input else {
+            return None;
+        };
+
+        //                    Get l1                     +
+        let Get { id: id_joined2, .. } = &**input else {
+            return None;
+        };
+
+        if id_joined != id_joined2 {
+            return None;
+        }
+
+        let Id::Local(local) = id_joined else {
+            return None;
+        };
+
+        // it matched! to render the left join, we'll render the inner join (l1) and update it
+        let Some((ident, columns)) = bindings.get(local) else {
+            return None;
+        };
+
+        let Some((_, _, inner_join_query)) = self.query.iter().find(|(i, _, _)| i == ident) else {
+            return None;
+        };
+
+        // we'll try to find the inner join to update in a fresh query (in case someone else uses it)
+        let mut query = inner_join_query.clone();
+
+        let SetExpr::Select(select) = &mut query.body else {
+            return None;
+        };
+        let Select { from, .. } = &mut **select;
+
+        if from.len() != 1 {
+            return None;
+        }
+
+        let TableWithJoins { joins, .. } = &mut from[0];
+
+        if joins.len() != 1 {
+            return None;
+        }
+
+        let join = &mut joins[0];
+
+        let JoinOperator::Inner(constraint) = join.join_operator.to_owned() else {
+            return None;
+        };
+
+        join.join_operator = JoinOperator::LeftOuter(constraint);
+
+        let ident = self.fresh_ident("left_join");
+        self.push_prequery(ident, columns.clone(), query)
+            .map_or_else(
+                |err| {
+                    ::tracing::error!(
+                        "MIR-to-SQL error caused aggregate detection to fail: {err:?}",
+                    );
+                    None
+                },
+                Some,
+            )
     }
 
     fn detect_aggregate_union(
@@ -898,7 +1091,7 @@ impl MirToSql {
         if inputs.len() != 1 {
             return None;
         }
-        let Map { input, scalars: _ } = &inputs[0] else {
+        let Map { input, .. } = &inputs[0] else {
             return None;
         };
 
