@@ -128,7 +128,7 @@ use tracing::trace;
 
 use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
-use crate::sink::correction::Correction;
+use crate::sink::correction_v2::Correction;
 
 /// Type of the `desired` stream, split into `Ok` and `Err` streams.
 type DesiredStreams<S> =
