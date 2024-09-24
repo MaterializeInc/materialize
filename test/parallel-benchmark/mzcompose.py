@@ -206,6 +206,7 @@ def report(
 
     plt.xlabel("time [s]")
     plt.ylabel("latency [ms]")
+    plt.yscale("log")
     plt.title(f"{scenario_name} against {mz_string}")
     plt.legend(loc="best")
     plt.grid(True)
