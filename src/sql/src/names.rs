@@ -21,8 +21,8 @@ use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
 use mz_repr::{ColumnName, RelationVersionSelector};
+use mz_repr::{GlobalId, RelationVersion};
 use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, Version};
 use mz_sql_parser::ident;
 use proptest_derive::Arbitrary;
@@ -1390,13 +1390,21 @@ impl<'a> NameResolver<'a> {
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
                 );
+                let alter_table_enabled =
+                    self.catalog.system_vars().enable_alter_table_add_column();
+                let version = match item.latest_version() {
+                    // Only track the version of referenced object if the feature is enabled.
+                    Some(v) if item.id().is_user() && alter_table_enabled => {
+                        RelationVersionSelector::Specific(v)
+                    }
+                    _ => RelationVersionSelector::Latest,
+                };
                 ResolvedItemName::Item {
                     id: item.id(),
                     qualifiers: item.name().qualifiers.clone(),
                     full_name: self.catalog.resolve_full_name(item.name()),
                     print_id,
-                    // TODO(alter_table): Specify an actual version here.
-                    version: RelationVersionSelector::Latest,
+                    version,
                 }
             }
             Err(mut e) => {
@@ -1436,7 +1444,7 @@ impl<'a> NameResolver<'a> {
         &mut self,
         id: String,
         raw_name: UnresolvedItemName,
-        _version: Option<Version>,
+        version: Option<Version>,
     ) -> ResolvedItemName {
         let gid: GlobalId = match id.parse() {
             Ok(id) => id,
@@ -1456,6 +1464,34 @@ impl<'a> NameResolver<'a> {
                 return ResolvedItemName::Error;
             }
         };
+        let alter_table_enabled = self.catalog.system_vars().enable_alter_table_add_column();
+        let version = match version {
+            // If there isn't a version specified, and this item supports
+            // versioning, track the latest.
+            None => match item.latest_version() {
+                // Only track the version of the referenced object, if the feature is enabled.
+                Some(v) if alter_table_enabled => RelationVersionSelector::Specific(v),
+                _ => RelationVersionSelector::Latest,
+            },
+            // Note: Return the specific version if one is specified, even if the feature is off.
+            Some(v) => {
+                let specified_version = RelationVersion::from(v);
+                match item.latest_version() {
+                    Some(latest) if latest >= specified_version => {
+                        RelationVersionSelector::Specific(specified_version)
+                    }
+                    _ => {
+                        if self.status.is_ok() {
+                            self.status = Err(PlanError::InvalidVersion {
+                                name: item.name().item.clone(),
+                                version: v.to_string(),
+                            })
+                        }
+                        return ResolvedItemName::Error;
+                    }
+                }
+            }
+        };
 
         self.ids.insert(gid.clone());
         let full_name = match normalize::full_name(raw_name) {
@@ -1472,8 +1508,7 @@ impl<'a> NameResolver<'a> {
             qualifiers: item.name().qualifiers.clone(),
             full_name,
             print_id: true,
-            // TODO(alter_table): Specify an actual version here.
-            version: RelationVersionSelector::Latest,
+            version,
         }
     }
 }
@@ -1633,11 +1668,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             ResolvedItemName::Item {
                 id,
                 full_name,
-                version: _,
+                version,
                 qualifiers: _,
                 print_id: _,
             } => {
-                let item = self.catalog.get_item(id);
+                let item = self.catalog.get_item(id).at_version(*version);
                 let desc = match item.desc(full_name) {
                     Ok(desc) => desc,
                     Err(e) => {

@@ -42,7 +42,7 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, RelationVersionSelector, Timestamp, VersionedRelationDesc};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::{
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType, NameReference,
@@ -588,7 +588,7 @@ impl CatalogState {
                     name.clone(),
                     CatalogItem::Table(Table {
                         create_sql: None,
-                        desc: table.desc.clone(),
+                        desc: VersionedRelationDesc::new(table.desc.clone()),
                         conn_id: None,
                         resolved_ids: ResolvedIds(BTreeSet::new()),
                         custom_logical_compaction_window: table.is_retained_metrics_object.then(
@@ -1464,6 +1464,8 @@ impl CatalogState {
             index_name,
             CatalogItem::Index(Index {
                 on: log_id,
+                // Introspection sources do not support versioning.
+                on_version: RelationVersionSelector::Latest,
                 keys: log
                     .variant
                     .index_by()

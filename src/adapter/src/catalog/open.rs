@@ -1314,7 +1314,10 @@ mod builtin_migration_tests {
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::ClusterId;
     use mz_expr::MirRelationExpr;
-    use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
+    use mz_repr::{
+        GlobalId, RelationDesc, RelationType, RelationVersionSelector, ScalarType,
+        VersionedRelationDesc,
+    };
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names::{
         ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
@@ -1351,20 +1354,23 @@ mod builtin_migration_tests {
             id_mapping: &BTreeMap<String, GlobalId>,
         ) -> (String, ItemNamespace, CatalogItem) {
             let item = match self.item {
-                SimplifiedItem::Table => CatalogItem::Table(Table {
-                    create_sql: Some("CREATE TABLE materialize.public.t (a INT)".to_string()),
-                    desc: RelationDesc::builder()
+                SimplifiedItem::Table => {
+                    let desc = RelationDesc::builder()
                         .with_column("a", ScalarType::Int32.nullable(true))
                         .with_key(vec![0])
-                        .finish(),
-                    conn_id: None,
-                    resolved_ids: ResolvedIds(BTreeSet::new()),
-                    custom_logical_compaction_window: None,
-                    is_retained_metrics_object: false,
-                    data_source: TableDataSource::TableWrites {
-                        defaults: vec![Expr::null(); 1],
-                    },
-                }),
+                        .finish();
+                    CatalogItem::Table(Table {
+                        create_sql: Some("CREATE TABLE materialize.public.t (a INT)".to_string()),
+                        desc: VersionedRelationDesc::new(desc),
+                        conn_id: None,
+                        resolved_ids: ResolvedIds(BTreeSet::new()),
+                        custom_logical_compaction_window: None,
+                        is_retained_metrics_object: false,
+                        data_source: TableDataSource::TableWrites {
+                            defaults: vec![Expr::null(); 1],
+                        },
+                    })
+                }
                 SimplifiedItem::MaterializedView { referenced_names } => {
                     let table_list = referenced_names
                         .iter()
@@ -1411,6 +1417,8 @@ mod builtin_migration_tests {
                     CatalogItem::Index(Index {
                         create_sql: format!("CREATE INDEX idx ON materialize.public.{on} (a)"),
                         on: on_id,
+                        // TODO(parkmycar): Update the test framework to support versions.
+                        on_version: RelationVersionSelector::Latest,
                         keys: Default::default(),
                         conn_id: None,
                         resolved_ids: ResolvedIds(BTreeSet::from_iter([on_id])),

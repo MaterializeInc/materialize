@@ -833,7 +833,11 @@ pub fn plan_subscribe(
                 _ => None,
             };
             let scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
-            (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
+            let subscribe = SubscribeFrom::Id {
+                from: entry.id(),
+                from_version: entry.current_version(),
+            };
+            (subscribe, desc.into_owned(), scope)
         }
         SubscribeRelation::Query(query) => {
             #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in Subscribe

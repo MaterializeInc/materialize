@@ -192,19 +192,26 @@ impl Optimize<SubscribeFrom> for Optimizer {
         let mut df_meta = DataflowMetainfo::default();
 
         match plan {
-            SubscribeFrom::Id(from_id) => {
+            SubscribeFrom::Id {
+                from: from_id,
+                from_version,
+            } => {
                 let from = self.catalog.get_entry(&from_id);
+                let name = self
+                    .catalog
+                    .state()
+                    .resolve_full_name(from.name(), self.conn_id.as_ref());
                 let from_desc = from
-                    .desc(
-                        &self
-                            .catalog
-                            .state()
-                            .resolve_full_name(from.name(), self.conn_id.as_ref()),
-                    )
+                    .desc(&name, from_version)
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
 
-                df_builder.import_into_dataflow(&from_id, &mut df_desc, &self.config.features)?;
+                df_builder.import_into_dataflow(
+                    &from_id,
+                    &from_version,
+                    &mut df_desc,
+                    &self.config.features,
+                )?;
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
                 // Make SinkDesc

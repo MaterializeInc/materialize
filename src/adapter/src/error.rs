@@ -225,6 +225,10 @@ pub enum AdapterError {
     /// Something attempted a write (to catalog, storage, tables, etc.) while in
     /// read-only mode.
     ReadOnly,
+    /// A user tried to manually version a table.
+    ManuallyVersionedTable {
+        name: String,
+    },
     AlterClusterTimeout,
 }
 
@@ -469,6 +473,9 @@ impl AdapterError {
             AdapterError::PlanError(PlanError::ColumnAlreadyExists { .. }) => {
                 SqlState::DUPLICATE_COLUMN
             }
+            AdapterError::PlanError(PlanError::InvalidTable { .. }) => {
+                SqlState::INVALID_TABLE_DEFINITION
+            }
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
@@ -541,6 +548,7 @@ impl AdapterError {
             // In read-only mode all transactions are implicitly read-only
             // transactions.
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
+            AdapterError::ManuallyVersionedTable { .. } => SqlState::INVALID_TABLE_DEFINITION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
         }
     }
@@ -768,6 +776,9 @@ impl fmt::Display for AdapterError {
             AdapterError::ReadOnly => write!(f, "cannot write in read-only mode"),
             AdapterError::AlterClusterTimeout => {
                 write!(f, "canceling statement, provided timeout lapsed")
+            }
+            AdapterError::ManuallyVersionedTable { name } => {
+                write!(f, "invalid table definition for {}", name.quoted())
             }
         }
     }

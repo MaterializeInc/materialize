@@ -125,12 +125,20 @@ impl Row {
     ) -> Result<(), String> {
         let mut col_idx = 0;
         let mut packer = self.packer();
+        let num_columns = desc.typ().column_types.len();
+
         for d in proto.datums.iter() {
+            // HACK(parkmycar): Currently we only support adding columns, so
+            // "project" away any extras.
+            //
+            // TODO(alter_table): This assumes we don't support dropping columns.
+            if col_idx >= num_columns {
+                break;
+            }
             packer.try_push_proto(d)?;
             col_idx += 1;
         }
 
-        let num_columns = desc.typ().column_types.len();
         if col_idx < num_columns {
             let missing_columns = col_idx..num_columns;
             for _ in missing_columns {

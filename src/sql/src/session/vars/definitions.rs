@@ -2084,7 +2084,7 @@ feature_flags!(
         name: enable_alter_table_add_column,
         desc: "Enable ALTER TABLE ... ADD COLUMN ...",
         default: false,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_graceful_cluster_reconfiguration,

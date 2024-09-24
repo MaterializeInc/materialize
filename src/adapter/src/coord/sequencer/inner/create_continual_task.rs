@@ -20,6 +20,7 @@ use mz_expr::{Id, LocalId};
 use mz_ore::instrument;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::optimize::OverrideFrom;
+use mz_repr::VersionedRelationDesc;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self, HirRelationExpr};
 use mz_sql::session::metadata::SessionMetadata;
@@ -78,7 +79,7 @@ impl Coordinator {
         let fake_entry = CatalogEntry {
             item: CatalogItem::Table(Table {
                 create_sql: Some(create_sql.clone()),
-                desc: desc.clone(),
+                desc: VersionedRelationDesc::new(desc.clone()),
                 conn_id: None,
                 resolved_ids: resolved_ids.clone(),
                 custom_logical_compaction_window: None,

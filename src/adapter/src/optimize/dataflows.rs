@@ -36,7 +36,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::explain::trace_plan;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, Row};
+use mz_repr::{Datum, GlobalId, RelationVersionSelector, Row};
 use mz_sql::catalog::CatalogRole;
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -174,6 +174,7 @@ impl<'a> DataflowBuilder<'a> {
     pub fn import_into_dataflow(
         &mut self,
         id: &GlobalId,
+        version: &RelationVersionSelector,
         dataflow: &mut DataflowDesc,
         features: &OptimizerFeatures,
     ) -> Result<(), OptimizerError> {
@@ -197,12 +198,11 @@ impl<'a> DataflowBuilder<'a> {
                         key: idx.keys.to_vec(),
                     };
                     let entry = self.catalog.get_entry(id);
+                    let name = self
+                        .catalog
+                        .resolve_full_name(entry.name(), entry.conn_id());
                     let desc = entry
-                        .desc(
-                            &self
-                                .catalog
-                                .resolve_full_name(entry.name(), entry.conn_id()),
-                        )
+                        .desc(&name, idx.on_version)
                         .expect("indexes can only be built on items with descs");
                     dataflow.import_index(index_id, index_desc, desc.typ().clone(), monotonic);
                 }
@@ -211,7 +211,8 @@ impl<'a> DataflowBuilder<'a> {
                 let entry = self.catalog.get_entry(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
-                        dataflow.import_source(*id, table.desc.typ().clone(), monotonic);
+                        let table_desc = table.desc.at_version(*version);
+                        dataflow.import_source(*id, table_desc.typ().clone(), monotonic);
                     }
                     CatalogItem::Source(source) => {
                         dataflow.import_source(*id, source.desc.typ().clone(), monotonic);
@@ -249,8 +250,11 @@ impl<'a> DataflowBuilder<'a> {
         dataflow: &mut DataflowDesc,
         features: &OptimizerFeatures,
     ) -> Result<(), OptimizerError> {
+        // Because this method exists to include transient objects its always
+        // planned against the latest version of its dependencies.
+        let dependency_version = RelationVersionSelector::Latest;
         for get_id in view.depends_on() {
-            self.import_into_dataflow(&get_id, dataflow, features)?;
+            self.import_into_dataflow(&get_id, &dependency_version, dataflow, features)?;
         }
         dataflow.insert_plan(*view_id, view.clone());
         Ok(())

@@ -53,7 +53,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         Plan::Subscribe(plan) => (
             plan.from.depends_on(),
             match &plan.from {
-                SubscribeFrom::Id(_) => false,
+                SubscribeFrom::Id { .. } => false,
                 SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
             },
         ),
@@ -211,7 +211,7 @@ pub fn check_cluster_restrictions(
     let depends_on: Box<dyn Iterator<Item = GlobalId>> = match plan {
         Plan::ReadThenWrite(plan) => Box::new(plan.selection.depends_on().into_iter()),
         Plan::Subscribe(plan) => match plan.from {
-            SubscribeFrom::Id(id) => Box::new(std::iter::once(id)),
+            SubscribeFrom::Id { from, .. } => Box::new(std::iter::once(from)),
             SubscribeFrom::Query { ref expr, .. } => Box::new(expr.depends_on().into_iter()),
         },
         Plan::Select(plan) => Box::new(plan.source.depends_on().into_iter()),

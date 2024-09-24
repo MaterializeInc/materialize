@@ -332,7 +332,7 @@ impl Coordinator {
                     let _dispatch_guard = explain_ctx.dispatch_guard();
 
                     let index_plan =
-                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone());
+                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.on_version, plan.index.keys.clone());
 
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(index_plan)?;
@@ -409,6 +409,7 @@ impl Coordinator {
                         plan::Index {
                             create_sql,
                             on,
+                            on_version,
                             keys,
                             cluster_id,
                             compaction_window,
@@ -428,6 +429,7 @@ impl Coordinator {
                 create_sql,
                 keys: keys.into(),
                 on,
+                on_version,
                 conn_id: None,
                 resolved_ids,
                 cluster_id,
@@ -532,7 +534,7 @@ impl Coordinator {
             let on_entry = self.catalog.get_entry(&index.on);
             let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
             let on_desc = on_entry
-                .desc(&full_name)
+                .desc(&full_name, index.on_version)
                 .expect("can only create indexes on items with a valid description");
 
             let transient_items = btreemap! {

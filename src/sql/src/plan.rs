@@ -43,11 +43,14 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
+use mz_repr::{
+    ColumnName, ColumnType, Diff, GlobalId, RelationDesc, RelationVersionSelector, Row, ScalarType,
+    Timestamp, VersionedRelationDesc,
+};
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
-    SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value,
-    WithOptionValue,
+    RawDataType, SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName,
+    Value, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
@@ -74,8 +77,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDataType,
-    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
+    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
+    ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -825,7 +828,10 @@ pub struct SubscribePlan {
 
 #[derive(Debug, Clone)]
 pub enum SubscribeFrom {
-    Id(GlobalId),
+    Id {
+        from: GlobalId,
+        from_version: RelationVersionSelector,
+    },
     Query {
         expr: MirRelationExpr,
         desc: RelationDesc,
@@ -835,14 +841,14 @@ pub enum SubscribeFrom {
 impl SubscribeFrom {
     pub fn depends_on(&self) -> BTreeSet<GlobalId> {
         match self {
-            SubscribeFrom::Id(id) => BTreeSet::from([*id]),
+            SubscribeFrom::Id { from, .. } => BTreeSet::from([*from]),
             SubscribeFrom::Query { expr, .. } => expr.depends_on(),
         }
     }
 
     pub fn contains_temporal(&self) -> bool {
         match self {
-            SubscribeFrom::Id(_) => false,
+            SubscribeFrom::Id { .. } => false,
             SubscribeFrom::Query { expr, .. } => expr.contains_temporal(),
         }
     }
@@ -1205,7 +1211,8 @@ pub struct AlterOwnerPlan {
 pub struct AlterTablePlan {
     pub relation_id: GlobalId,
     pub column_name: ColumnName,
-    pub column_type: ResolvedDataType,
+    pub column_type: ColumnType,
+    pub raw_sql_type: RawDataType,
 }
 
 #[derive(Debug)]
@@ -1342,7 +1349,7 @@ pub enum TableDataSource {
 #[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
-    pub desc: RelationDesc,
+    pub desc: VersionedRelationDesc,
     pub temporary: bool,
     pub compaction_window: Option<CompactionWindow>,
     pub data_source: TableDataSource,
@@ -1562,6 +1569,7 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
+    pub from_version: RelationVersionSelector,
     pub connection: StorageSinkConnection<ReferencedConnection>,
     pub partition_strategy: SinkPartitionStrategy,
     // TODO(guswynn): this probably should just be in the `connection`.
@@ -1593,6 +1601,7 @@ pub struct MaterializedView {
 pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
+    pub on_version: RelationVersionSelector,
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub compaction_window: Option<CompactionWindow>,
     pub cluster_id: ClusterId,
