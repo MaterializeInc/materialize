@@ -15,8 +15,6 @@ use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use futures::stream::FuturesUnordered;
-use futures::{future, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_cluster_client::WallclockLagFn;
@@ -277,6 +275,10 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     ///
     /// Received updates are applied by [`Instance::apply_read_hold_changes`].
     read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
+    /// A sender for responses from replicas.
+    replica_tx: mpsc::UnboundedSender<(ReplicaId, ComputeResponse<T>)>,
+    /// A receiver for responses from replicas.
+    replica_rx: mpsc::UnboundedReceiver<(ReplicaId, ComputeResponse<T>)>,
 }
 
 impl<T: ComputeControllerTimestamp> Instance<T> {
@@ -750,6 +752,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             wallclock_lag_last_refresh,
             read_holds_tx: _,
             read_holds_rx: _,
+            replica_tx: _,
+            replica_rx: _,
         } = self;
 
         fn field(
@@ -833,6 +837,7 @@ where
         }
 
         let history = ComputeCommandHistory::new(metrics.for_history());
+        let (replica_tx, replica_rx) = mpsc::unbounded_channel();
 
         Self {
             build_info,
@@ -858,6 +863,8 @@ where
             wallclock_lag_last_refresh: Instant::now(),
             read_holds_tx,
             read_holds_rx,
+            replica_tx,
+            replica_rx,
         }
     }
 
@@ -878,8 +885,9 @@ where
                     Some(cmd) => cmd(&mut self),
                     None => break,
                 },
-                (replica_id, response) = Self::recv(&mut self.replicas) => {
-                    self.handle_response(response, replica_id);
+                response = self.replica_rx.recv() => match response {
+                    Some((replica_id, response)) => self.handle_response(response, replica_id),
+                    None => break,
                 }
             }
         }
@@ -956,43 +964,8 @@ where
 
         // Clone the command for each active replica.
         for replica in self.replicas.values_mut() {
-            // If sending the command fails, the replica requires rehydration.
-            if replica.client.send(cmd.clone()).is_err() {
-                replica.failed = true;
-            }
-        }
-    }
-
-    /// Receives the next response from the given replicas.
-    ///
-    /// This method is cancellation safe.
-    async fn recv(
-        replicas: &mut BTreeMap<ReplicaId, ReplicaState<T>>,
-    ) -> (ReplicaId, ComputeResponse<T>) {
-        loop {
-            let live_replicas = replicas.iter_mut().filter(|(_, r)| !r.failed);
-            let response = live_replicas
-                .map(|(id, replica)| async { (*id, replica.client.recv().await) })
-                .collect::<FuturesUnordered<_>>()
-                .next()
-                .await;
-
-            match response {
-                None => {
-                    // There are no live replicas left.
-                    // Block forever to communicate that no response is ready.
-                    future::pending().await
-                }
-                Some((replica_id, None)) => {
-                    // A replica has failed and requires rehydration.
-                    let replica = replicas.get_mut(&replica_id).unwrap();
-                    replica.failed = true;
-                }
-                Some((replica_id, Some(response))) => {
-                    // A replica has produced a response. Return it.
-                    return (replica_id, response);
-                }
-            }
+            // Swallow error, we'll notice because the replica task has stopped.
+            let _ = replica.client.send(cmd.clone());
         }
     }
 
@@ -1019,6 +992,7 @@ where
             ClusterStartupEpoch::new(self.envd_epoch, *replica_epoch),
             metrics.clone(),
             Arc::clone(&self.dyncfg),
+            self.replica_tx.clone(),
         );
 
         // Take this opportunity to clean up the history we should present.
@@ -1104,7 +1078,7 @@ where
     fn rehydrate_failed_replicas(&mut self) {
         let replicas = self.replicas.iter();
         let failed_replicas: Vec<_> = replicas
-            .filter_map(|(id, replica)| replica.failed.then_some(*id))
+            .filter_map(|(id, replica)| replica.client.is_failed().then_some(*id))
             .collect();
 
         for replica_id in failed_replicas {
@@ -1693,6 +1667,9 @@ where
     }
 
     fn handle_response(&mut self, response: ComputeResponse<T>, replica_id: ReplicaId) {
+        if let Some(replica) = self.replicas.get(&replica_id) {
+            replica.metrics.inner.response_queue_size.dec();
+        }
         match response {
             ComputeResponse::Frontiers(id, frontiers) => {
                 self.handle_frontiers_response(id, frontiers, replica_id);
@@ -2547,8 +2524,6 @@ struct ReplicaState<T: ComputeControllerTimestamp> {
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     /// Per-replica collection state.
     collections: BTreeMap<GlobalId, ReplicaCollectionState<T>>,
-    /// Whether the replica has failed and requires rehydration.
-    failed: bool,
 }
 
 impl<T: ComputeControllerTimestamp> ReplicaState<T> {
@@ -2566,7 +2541,6 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             metrics,
             introspection_tx,
             collections: Default::default(),
-            failed: false,
         }
     }
 
@@ -2639,12 +2613,11 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         // Destructure `self` here so we don't forget to consider dumping newly added fields.
         let Self {
             id,
-            client: _,
+            client,
             config: _,
             metrics: _,
             introspection_tx: _,
             collections,
-            failed,
         } = self;
 
         fn field(
@@ -2663,7 +2636,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         let map = serde_json::Map::from_iter([
             field("id", id.to_string())?,
             field("collections", collections)?,
-            field("failed", failed)?,
+            field("failed", client.is_failed())?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
