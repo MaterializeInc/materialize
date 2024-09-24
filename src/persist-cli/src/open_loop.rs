@@ -619,7 +619,7 @@ mod raw_persist_benchmark {
                         let lower = batch.lower().clone();
                         let upper = batch.upper().clone();
                         write
-                            .append_batch(batch, lower, upper)
+                            .append_batch(vec![batch], lower, upper)
                             .await
                             .expect("invalid usage")
                             .expect("unexpected upper");

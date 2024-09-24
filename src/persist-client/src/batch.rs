@@ -1522,7 +1522,11 @@ mod tests {
             .expect("invalid usage");
         assert_eq!(batch.batch.part_count(), 3);
         write
-            .append_batch(batch, Antichain::from_elem(0), Antichain::from_elem(4))
+            .append_batch(
+                vec![batch],
+                Antichain::from_elem(0),
+                Antichain::from_elem(4),
+            )
             .await
             .expect("invalid usage")
             .expect("unexpected upper");

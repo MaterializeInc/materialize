@@ -459,7 +459,7 @@ where
                 .await
                 .expect("could not open persist client");
 
-            let mut write = persist_client
+            let write = persist_client
                 .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
                     shard_id,
                     Arc::new(target_relation_desc),
@@ -475,13 +475,11 @@ where
                 .await
                 .expect("could not open persist shard");
 
-            // TODO: this sink currently cannot tolerate a stale upper... which is bad because the
-            // upper can become stale as soon as it is read. (For example, if another concurrent
-            // instance of the sink has updated it.) Fetching a recent upper helps to mitigate this,
-            // but ideally we would just skip ahead if we discover that our upper is stale.
-            let upper = write.fetch_recent_upper().await.clone();
-            // explicitly expire the once-used write handle.
+            let upper = write.upper().clone();
+
+            // Explicitly expire the used-once write handle.
             write.expire().await;
+
             upper
         };
 
@@ -1207,7 +1205,6 @@ where
                     batches.push(batch);
                     persist_client.metrics().sink.forwarded_batches.inc();
                 }
-                let mut to_append = batches.iter_mut().collect::<Vec<_>>();
 
                 // We evaluate this above to avoid checking an environment variable
                 // in a hot loop. Note that we only pause before we emit
@@ -1217,14 +1214,14 @@ where
                 // This is a fairly complex failure case we need to check
                 // see `test/cluster/pg-snapshot-partial-failure` for more
                 // information.
-                if pg_snapshot_pause && !to_append.is_empty() && !batch_metrics.is_empty() {
+                if pg_snapshot_pause && !batches.is_empty() && !batch_metrics.is_empty() {
                     futures::future::pending().await
                 }
 
                 let result = {
                     let _permit = busy_signal.acquire().await;
-                    write.compare_and_append_batch(
-                        &mut to_append[..],
+                    write.append_batch(
+                        batches,
                         batch_lower.clone(),
                         batch_upper.clone(),
                     )
@@ -1264,21 +1261,15 @@ where
                         upper_cap_set.downgrade(current_upper.borrow().iter());
                     }
                     Err(mismatch) => {
-                        // _Best effort_ Clean up in case we didn't manage to append the
-                        // batches to persist.
-                        for batch in batches {
-                            batch.delete().await;
-                        }
-
                         tracing::warn!(
                             "persist_sink({}): invalid upper! \
                                 Tried to append batch ({:?} -> {:?}) but upper \
-                                is {:?}. This is not a problem, it just means \
-                                someone else was faster than us. We will try \
-                                again with a new batch description.",
+                                is {:?}. This is extremely surprising
+                                because the persist_sink should never produce
+                                noncontiguous batches.",
                             collection_id, batch_lower, batch_upper, mismatch.current,
                         );
-                        anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
+                        anyhow::bail!("internal error: tried to append noncontiguous batch");
                     }
                 }
             }

@@ -17,7 +17,8 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::stream::FuturesUnordered;
-use futures::StreamExt;
+use futures::{future, StreamExt};
+use itertools::Itertools;
 use mz_ore::instrument;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
@@ -278,7 +279,7 @@ where
         D: Send + Sync,
     {
         let batch = self.batch(updates, lower.clone(), upper.clone()).await?;
-        self.append_batch(batch, lower, upper).await
+        self.append_batch(vec![batch], lower, upper).await
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -372,7 +373,7 @@ where
     #[instrument(level = "trace", fields(shard = %self.machine.shard_id()))]
     pub async fn append_batch(
         &mut self,
-        mut batch: Batch<K, V, T, D>,
+        mut batches: Vec<Batch<K, V, T, D>>,
         mut lower: Antichain<T>,
         upper: Antichain<T>,
     ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>
@@ -380,8 +381,9 @@ where
         D: Send + Sync,
     {
         loop {
+            let mut to_append = batches.iter_mut().collect_vec();
             let res = self
-                .compare_and_append_batch(&mut [&mut batch], lower.clone(), upper.clone())
+                .compare_and_append_batch(&mut to_append, lower.clone(), upper.clone())
                 .await?;
             match res {
                 Ok(()) => {
@@ -393,7 +395,7 @@ where
                     if PartialOrder::less_than(&mismatch.current, &lower) {
                         self.upper.clone_from(&mismatch.current);
 
-                        batch.delete().await;
+                        future::join_all(batches.into_iter().map(|b| b.delete())).await;
 
                         return Ok(Err(mismatch));
                     } else if PartialOrder::less_than(&mismatch.current, &upper) {
@@ -409,9 +411,9 @@ where
                         self.upper = mismatch.current;
 
                         // Because we return a success result, the caller will
-                        // think that the batch was consumed or otherwise used,
-                        // so we have to delete it here.
-                        batch.delete().await;
+                        // think that the batches were consumed or otherwise
+                        // used, so we have to delete it here.
+                        future::join_all(batches.into_iter().map(|b| b.delete())).await;
 
                         return Ok(Ok(()));
                     }

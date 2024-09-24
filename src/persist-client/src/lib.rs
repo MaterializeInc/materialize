@@ -1206,7 +1206,11 @@ mod tests {
                 .expect("invalid usage");
             assert_eq!(
                 write0
-                    .append_batch(batch, Antichain::from_elem(4), Antichain::from_elem(5))
+                    .append_batch(
+                        vec![batch],
+                        Antichain::from_elem(4),
+                        Antichain::from_elem(5)
+                    )
                     .await
                     .unwrap_err(),
                 InvalidUsage::InvalidBatchBounds {
@@ -1222,7 +1226,11 @@ mod tests {
                 .expect("invalid usage");
             assert_eq!(
                 write0
-                    .append_batch(batch, Antichain::from_elem(2), Antichain::from_elem(3))
+                    .append_batch(
+                        vec![batch],
+                        Antichain::from_elem(2),
+                        Antichain::from_elem(3)
+                    )
                     .await
                     .unwrap_err(),
                 InvalidUsage::InvalidBatchBounds {
@@ -1240,7 +1248,11 @@ mod tests {
             // non-deterministic (the key)
             assert!(matches!(
                 write0
-                    .append_batch(batch, Antichain::from_elem(3), Antichain::from_elem(3))
+                    .append_batch(
+                        vec![batch],
+                        Antichain::from_elem(3),
+                        Antichain::from_elem(3)
+                    )
                     .await
                     .unwrap_err(),
                 InvalidUsage::InvalidEmptyTimeInterval { .. }
@@ -1749,7 +1761,7 @@ mod tests {
                     let lower = batch.lower().clone();
                     let upper = batch.upper().clone();
                     write
-                        .append_batch(batch, lower, upper)
+                        .append_batch(vec![batch], lower, upper)
                         .await
                         .expect("invalid usage")
                         .expect("unexpected upper");
