@@ -40,20 +40,19 @@ use mz_transform::notice::{IndexAlreadyExists, IndexKeyEmpty};
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::TransformCtx;
 
-use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
     trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
-    OptimizerConfig, OptimizerError,
+    OptimizerCatalog, OptimizerConfig, OptimizerError,
 };
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
-    catalog: Arc<Catalog>,
+    catalog: Arc<dyn OptimizerCatalog>,
     /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// A durable GlobalId to be used with the exported index arrangement.
@@ -68,7 +67,7 @@ pub struct Optimizer {
 
 impl Optimizer {
     pub fn new(
-        catalog: Arc<Catalog>,
+        catalog: Arc<dyn OptimizerCatalog>,
         compute_instance: ComputeInstanceSnapshot,
         exported_index_id: GlobalId,
         config: OptimizerConfig,
@@ -140,17 +139,17 @@ impl Optimize<Index> for Optimizer {
     fn optimize(&mut self, index: Index) -> Result<Self::To, OptimizerError> {
         let time = Instant::now();
 
-        let state = self.catalog.state();
-        let on_entry = state.get_entry(&index.on);
-        let full_name = state.resolve_full_name(&index.name, on_entry.conn_id());
+        let on_entry = self.catalog.get_entry(&index.on);
+        let full_name = self
+            .catalog
+            .resolve_full_name(&index.name, on_entry.conn_id());
         let on_desc = on_entry
             .desc(&full_name)
             .expect("can only create indexes on items with a valid description");
 
         let mut df_builder = {
-            let catalog = self.catalog.state();
             let compute = self.compute_instance.clone();
-            DataflowBuilder::new(catalog, compute).with_config(&self.config)
+            DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 
