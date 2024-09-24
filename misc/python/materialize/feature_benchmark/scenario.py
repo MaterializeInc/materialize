@@ -23,9 +23,11 @@ class RootScenario:
     FIXED_SCALE: bool = False  # Will --scale=N have effect on the scenario
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
         MeasurementType.WALLCLOCK: 0.10,
-        MeasurementType.MESSAGES: 0.10,
-        MeasurementType.MEMORY_MZ: 0.10,
-        MeasurementType.MEMORY_CLUSTERD: 0.10,
+        # Increased the other measurements since they are easy to regress now
+        # that we take the run with the minimum wallclock time:
+        MeasurementType.MESSAGES: 0.20,
+        MeasurementType.MEMORY_MZ: 0.20,
+        MeasurementType.MEMORY_CLUSTERD: 0.20,
     }
 
     def __init__(
