@@ -30,6 +30,7 @@ class ConsistencyTestConfiguration:
         print_reproduction_code: bool,
         max_runtime_in_sec: int,
         max_iterations: int,
+        max_failures_until_abort: int,
         avoid_expressions_expecting_db_error: bool,
         disable_predefined_queries: bool,
         query_output_mode: QueryOutputMode,
@@ -48,6 +49,7 @@ class ConsistencyTestConfiguration:
         self.print_reproduction_code = print_reproduction_code
         self.max_runtime_in_sec = max_runtime_in_sec
         self.max_iterations = max_iterations
+        self.max_failures_until_abort = max_failures_until_abort
         self.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
         self.disable_predefined_queries = disable_predefined_queries
         self.query_output_mode = query_output_mode
