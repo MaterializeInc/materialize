@@ -337,7 +337,7 @@ class ConnectRead(Scenario):
 
 
 class FlagUpdate(Scenario):
-    """Reproduces #29235"""
+    """Reproduces materialize#29235"""
 
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(

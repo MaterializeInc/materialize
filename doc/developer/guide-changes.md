@@ -133,7 +133,7 @@ encoding we are using corresponds to the hardcoded on setting.
 If the commit message closes an issue, you can tell GitHub to automatically
 close the issue when the PR lands by including the magic phrase
 
-    Fixes #1234.
+    Fixes database-issues#1234.
 
 in a commit or PR description. There are several other [supported
 phrasings][pr-phrasings], if you prefer.

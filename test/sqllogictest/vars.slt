@@ -434,7 +434,7 @@ SELECT generate_series(1, 2)
 query error db error: ERROR: result exceeds max size of 100 B
 SELECT generate_series(1, 51)
 
-# Regression for #22724
+# Regression for materialize#22724
 # Ensure duplicate rows don't overcount bytes in the presence of LIMIT.
 query T
 SELECT x FROM (VALUES ('{"row": 1}')) AS a (x), generate_series(1, 50000) LIMIT 1

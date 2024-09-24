@@ -213,7 +213,7 @@ def workflow_audit_log(c: Composition) -> None:
         raise Exception("audit logs emtpy or not equal after restart")
 
 
-# Test for GitHub issue #13726
+# Test for GitHub issue materialize#13726
 def workflow_timelines(c: Composition) -> None:
     for _ in range(3):
         c.up("zookeeper", "kafka", "schema-registry", "materialized")

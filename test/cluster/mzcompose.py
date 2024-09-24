@@ -690,7 +690,7 @@ def workflow_test_github_15496(c: Composition) -> None:
             -- Create a materialized view to ensure non-monotonic rendering.
             -- Note that we employ below a query hint to hit the case of not yet
             -- generating a SQL-level error, given the partial fix to bucketed
-            -- aggregates introduced in PR #17918.
+            -- aggregates introduced in PR materialize#17918.
             CREATE MATERIALIZED VIEW sum_and_max AS
             SELECT SUM(data), MAX(data) FROM data OPTIONS (AGGREGATE INPUT GROUP SIZE = 1);
             """
@@ -881,7 +881,7 @@ def workflow_test_github_17510(c: Composition) -> None:
             ! SELECT * FROM constant_sums;
             contains:constant folding encountered reduce on collection with non-positive multiplicities
 
-            # The following statement verifies that the behavior introduced in PR #16852
+            # The following statement verifies that the behavior introduced in PR materialize#16852
             # is now rectified, i.e., instead of wrapping to a negative number, we produce
             # an error upon seeing invalid multiplicities.
             ! SELECT SUM(data8) FROM data;
@@ -935,7 +935,7 @@ def workflow_test_github_17510(c: Composition) -> None:
             > INSERT INTO base VALUES (1, 1, 1, 1), (1, 1, 1, 1), (1, 1, 1, 1);
 
             # Constant-folding behavior matches for now the rendered behavior
-            # wrt. wraparound; this can be revisited as part of #17758.
+            # wrt. wraparound; this can be revisited as part of materialize#17758.
             > SELECT * FROM constant_wrapped_sums;
             1 1 18446744073709551617
 
@@ -1871,7 +1871,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     )
 
     # Give the dataflows some time to make progress and get compacted.
-    # This is done to trigger the bug described in #17594.
+    # This is done to trigger the bug described in materialize#17594.
     time.sleep(10)
 
     # Restart environmentd to trigger a reconciliation.
@@ -1903,7 +1903,7 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
     Test that compute reconciliation replaces changed dataflows, as well as
     dataflows transitively depending on them.
 
-    Regression test for #28961.
+    Regression test for materialize#28961.
     """
 
     c.down(destroy_volumes=True)
@@ -2080,7 +2080,7 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
     """
     Test that dropping storage and compute objects during reconciliation works.
 
-    Regression test for #28784.
+    Regression test for materialize#28784.
     """
 
     c.down(destroy_volumes=True)
@@ -3026,7 +3026,7 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
 def workflow_test_concurrent_connections(c: Composition) -> None:
     """
     Run many concurrent connections, measure their p50 and p99 latency, make
-    sure #21782 does not regress.
+    sure materialize#21782 does not regress.
     """
     num_conns = 2000
     p50_limit = 10.0
@@ -3263,7 +3263,7 @@ def workflow_test_incident_70(c: Composition) -> None:
 
         for thread in threads:
             thread.start()
-            # this is because of #22038
+            # this is because of materialize#22038
             time.sleep(0.2)
 
         for thread in threads:
@@ -3303,7 +3303,7 @@ def workflow_test_github_cloud_7998(
 
 
 def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Regression test for #23246."""
+    """Regression test for materialize#23246."""
 
     c.down(destroy_volumes=True)
 
@@ -4128,7 +4128,7 @@ def workflow_test_refresh_mv_restart(
 
 
 def workflow_test_github_26215(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Regression test for #26215."""
+    """Regression test for materialize#26215."""
 
     c.down(destroy_volumes=True)
 

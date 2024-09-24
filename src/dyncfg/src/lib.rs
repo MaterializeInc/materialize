@@ -795,7 +795,7 @@ mod tests {
 
     #[mz_ore::test]
     fn config_updates_extend() {
-        // Regression test for #26196.
+        // Regression test for materialize#26196.
         //
         // Construct two ConfigUpdates with overlapping, but not identical, sets
         // of configs. Combine them and assert that the expected number of

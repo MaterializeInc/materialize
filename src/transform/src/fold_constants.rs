@@ -75,7 +75,7 @@ impl FoldConstants {
             MirRelationExpr::Get { .. } => {}
             MirRelationExpr::Let { .. } | MirRelationExpr::LetRec { .. } => {
                 // Constant propagation through bindings is currently handled by in NormalizeLets.
-                // Maybe we should move it / replicate it here (see #18180 for context)?
+                // Maybe we should move it / replicate it here (see materialize#18180 for context)?
             }
             MirRelationExpr::Reduce {
                 input,

@@ -855,7 +855,7 @@ impl KafkaConnection {
 
                 // Don't drop the consumer until after we've drained the errors
                 // channel. Dropping the consumer can introduce spurious errors.
-                // See #24901.
+                // See materialize#24901.
                 drop(consumer);
 
                 match main_err {

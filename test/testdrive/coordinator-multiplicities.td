@@ -9,7 +9,7 @@
 
 
 #
-# Tests for Move unrolling of peek multiplicities to coordinator. #10673
+# Tests for Move unrolling of peek multiplicities to coordinator. materialize#10673
 #
 # The important thing here is to test ORDER BY + LIMIT in the presence of
 # records where the diff will be > 1

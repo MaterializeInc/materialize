@@ -215,7 +215,7 @@ impl<'a> FuncRewriter<'a> {
         // is known to accumulate problematic amounts of error. The numerically
         // stable variants, the most well-known of which is Welford's, are
         // however difficult to implement inside of Differential Dataflow, as
-        // they do not obviously support retractions efficiently (#1240).
+        // they do not obviously support retractions efficiently (materialize#1240).
         //
         // The code below converts var_samp(x) into
         //

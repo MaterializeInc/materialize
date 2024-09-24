@@ -82,7 +82,7 @@ pub struct ShardUsageAudit {
     ///   SeqNo
     pub not_leaked_not_referenced_bytes: u64,
     /// 2b: Data that is eligible for reclamation by a (future) leaked blob
-    /// cleanup task (#17322).
+    /// cleanup task (materialize#17322).
     ///
     /// Possible causes:
     /// - A batch or rollup written by a process which crashed (or was rolled)
@@ -102,7 +102,7 @@ impl ShardUsageAudit {
     }
 
     /// 2a: Data that would not be reclaimed by a (future) leaked blob
-    /// cleanup task (#17322).
+    /// cleanup task (materialize#17322).
     pub fn not_leaked_bytes(&self) -> u64 {
         self.referenced_bytes() + self.not_leaked_not_referenced_bytes
     }
@@ -1227,7 +1227,7 @@ mod tests {
         .run("1 0/1 0/1 0/1 0/1");
     }
 
-    /// A regression test for (part of) #17752, which led to seeing the "blob
+    /// A regression test for (part of) materialize#17752, which led to seeing the "blob
     /// inputs should be cumulative" should be cumulative panic in
     /// staging/canary.
     #[mz_ore::test]
@@ -1244,7 +1244,7 @@ mod tests {
         .run("3 0/3 0/3 3/0 0/0");
     }
 
-    /// Regression test for (part of) #17752, where an interrupted
+    /// Regression test for (part of) materialize#17752, where an interrupted
     /// `bin/environmentd --reset` resulted in panic in persist usage code.
     ///
     /// This also tests a (hypothesized) race that's possible in prod where an

@@ -9,7 +9,7 @@
 
 # Regression test for issues corrected by https://github.com/MaterializeInc/materialize/issues/18522.
 
-# Regression test for #18522.
+# Regression test for materialize#18522.
 statement ok
 CREATE TABLE t0(c0 VARCHAR(203) );
 

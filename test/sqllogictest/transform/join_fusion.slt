@@ -65,7 +65,7 @@ SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 W
 2  3  2  3  2  3
 
 #
-# Additional queries that came out of the randomized testing of #6936
+# Additional queries that came out of the randomized testing of materialize#6936
 #
 
 #

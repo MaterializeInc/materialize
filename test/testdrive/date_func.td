@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 
 #
-# Argument to EXTRACT not checked for correctness, NULL returned if invalid #5521
-# expr: propagate errors when reducing date_{part,trunc} #5700
+# Argument to EXTRACT not checked for correctness, NULL returned if invalid materialize#5521
+# expr: propagate errors when reducing date_{part,trunc} materialize#5700
 #
 
 ! SELECT EXTRACT(NULL FROM CAST('2011-11-11' AS DATE));

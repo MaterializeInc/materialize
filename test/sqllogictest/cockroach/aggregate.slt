@@ -40,7 +40,7 @@ SELECT min(1), max(1), count(1), avg(1), sum(1), stddev(1), variance(1) FROM kv
 ----
 NULL NULL 0 NULL NULL NULL NULL
 
-# Regression test for #29695
+# Regression test for materialize#29695
 query T
 SELECT min(NULL)
 ----
@@ -136,7 +136,7 @@ SELECT array_agg(NULL::TEXT)
 ----
 {NULL}
 
-# Regression test for #25724 (problem with typed NULLs and distsql planning).
+# Regression test for materialize#25724 (problem with typed NULLs and distsql planning).
 # The previous query doesn't run under distsql.
 query T
 SELECT array_agg(NULL::TEXT) FROM (VALUES (1)) AS t(x)
@@ -164,7 +164,7 @@ SELECT count(*), COALESCE(max(k), 1) FROM kv
 ----
 0 1
 
-# Same, using a subquery. (#12705)
+# Same, using a subquery. (materialize#12705)
 query I
 SELECT (SELECT COALESCE(max(1), 0) FROM generate_series(1,0))
 ----
@@ -216,7 +216,7 @@ SELECT 3 FROM kv HAVING TRUE
 query error column "kv.k" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT count(*), k FROM kv
 
-# #3164
+# materialize#3164
 # query error unsupported comparison operator: <string> < <int>
 # SELECT count(*) FROM kv GROUP BY s < 5
 
@@ -391,7 +391,7 @@ SELECT k FROM kv WHERE avg(k) > 1
 query error nested aggregate functions are not allowed
 SELECT max(avg(k)) FROM kv
 
-# Test case from #2761.
+# Test case from materialize#2761.
 query II rowsort
 SELECT count(kv.k) AS count_1, kv.v + kv.w AS lx FROM kv GROUP BY kv.v + kv.w
 ----
@@ -531,7 +531,7 @@ SELECT length(s), count(DISTINCT k), count(DISTINCT v), count(DISTINCT (v)) FROM
 1    5 2 2
 NULL 1 0 0
 
-# #1195
+# materialize#1195
 # query I
 # SELECT count((k, v)) FROM kv
 # ----
@@ -772,7 +772,7 @@ SELECT max(y) FROM xyz WHERE x = 7
 ----
 NULL
 
-# #1195
+# materialize#1195
 # query I
 # SELECT min(x) FROM xyz WHERE (y, z) = (2, 3.0)
 # ----
@@ -1007,7 +1007,7 @@ CREATE TABLE xy(x TEXT, y TEXT);
 statement ok
 INSERT INTO xy(x, y) VALUES ('a', 'b'), ('c', 'd')
 
-# #1195
+# materialize#1195
 # query T rowsort
 # SELECT (b, a) FROM ab GROUP BY (b, a)
 # ----
@@ -1088,7 +1088,7 @@ SELECT z, x, max(y) FROM group_ord GROUP BY x, z ORDER BY x
 2  7  2
 2  8  4
 
-# Regression test for #25533 (crash when propagating filter through GROUP BY).
+# Regression test for materialize#25533 (crash when propagating filter through GROUP BY).
 query I
 SELECT 1 FROM kv GROUP BY v, w::DECIMAL HAVING w::DECIMAL > 1
 ----
@@ -1548,7 +1548,7 @@ ORDER BY e.company_id;
 statement OK
 DROP TABLE string_agg_test2
 
-# Regression test for #28836.
+# Regression test for materialize#28836.
 
 query error supported
 SELECT string_agg('foo', CAST ((SELECT NULL) AS BYTEA)) OVER ();
@@ -1556,7 +1556,7 @@ SELECT string_agg('foo', CAST ((SELECT NULL) AS BYTEA)) OVER ();
 query error table functions are not allowed in aggregate function calls
 SELECT array_agg(generate_series(1, 2))
 
-# Regression test for #31882.
+# Regression test for materialize#31882.
 
 statement ok
 CREATE TABLE uvw (u INT, v INT, w INT)
@@ -1570,7 +1570,7 @@ SELECT u, v, array_agg(w) AS s FROM (SELECT * FROM uvw ORDER BY w) GROUP BY u, v
 1 2 {3,3}
 3 2 {1,3}
 
-# Regression test for #36433: don't panic with count_agg if a post-render produces an error.
+# Regression test for materialize#36433: don't panic with count_agg if a post-render produces an error.
 
 query error lpad
 SELECT count(*)::TEXT||lpad('foo', 23984729388383834723984) FROM (VALUES(1));

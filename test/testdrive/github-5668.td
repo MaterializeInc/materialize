@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # For Debezium versions <1.5, Materialize had no way of determining the complete order
-# of messages coming from a Postgres source. (Details in #5668.) We fixed this upstream
+# of messages coming from a Postgres source. (Details in materialize#5668.) We fixed this upstream
 # in Debezium (details in DBZ-2911) by adding a new "sequence" field to the source
 # metadata. This test uses that new sequence field to show that we can now handle messages
 # that seem to go backwards in time (by LSN).

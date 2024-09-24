@@ -19,7 +19,7 @@ ALTER SYSTEM SET enable_rbac_checks TO false
 ----
 COMPLETE 0
 
-# Following #26434, this still goes through RBAC now
+# Following materialize#26434, this still goes through RBAC now
 statement error must be owner of VIEW mz_introspection.mz_active_peeks
 CREATE DEFAULT INDEX ON mz_introspection.mz_active_peeks
 

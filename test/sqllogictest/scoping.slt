@@ -30,7 +30,7 @@ query error column "t1.a" must appear in the GROUP BY clause or be used in an ag
 SELECT t1.a FROM t1 JOIN (t2 JOIN t3 ON t2.a = t3.a) ON t1.a = t2.a GROUP BY t3.a
 
 # Ensure that reflexive equality expressions do not cause the specified column
-# to become unnameable. See #5765.
+# to become unnameable. See materialize#5765.
 query I
 SELECT t1.a FROM t1 JOIN t2 ON t1.a = t1.a GROUP BY t1.a
 ----
@@ -45,7 +45,7 @@ query I
 SELECT t2.a FROM t1 NATURAL JOIN t2
 ----
 
-# Regression tests for #16920.
+# Regression tests for materialize#16920.
 query I
 SELECT t.a FROM (t1 NATURAL JOIN t2) t
 ----

@@ -72,7 +72,7 @@ query error step mz_timestamp overflow
 select * from valid_max AS OF 0
 
 #
-# Regression test for #6635
+# Regression test for materialize#6635
 #
 statement ok
 CREATE TABLE events (

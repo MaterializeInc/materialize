@@ -644,7 +644,7 @@ SELECT least(row(1), row(1)::custom_composite)
 query error least types integer and text cannot be matched
 SELECT least(1::int, 2::text)
 
-# Tests issue #2355, that type information for Maps are correctly constructed
+# Tests issue materialize#2355, that type information for Maps are correctly constructed
 # before being passed to expressions for optimization.
 statement ok
 CREATE VIEW bytes AS SELECT null::bytea AS data
@@ -991,7 +991,7 @@ NULL
 query error could not determine polymorphic type because input has type unknown
 SELECT array_length(NULL, 1);
 
-# Test strange collapsing behavior of nested empty arrays. See #5545.
+# Test strange collapsing behavior of nested empty arrays. See materialize#5545.
 
 query TIII
 SELECT arr, array_lower(arr, 1), array_upper(arr, 1), array_length(arr, 1) FROM

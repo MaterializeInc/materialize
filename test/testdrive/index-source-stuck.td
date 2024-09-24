@@ -15,7 +15,7 @@
 > CREATE MATERIALIZED VIEW mv IN CLUSTER cluster2 AS SELECT * FROM src;
 > SET cluster = cluster2;
 
-# Prevent us from getting stuck, see #28328
+# Prevent us from getting stuck, see materialize#28328
 > SELECT min(counter) FROM src
 1
 > SELECT min(counter) FROM mv

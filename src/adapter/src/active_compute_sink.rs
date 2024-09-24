@@ -171,7 +171,7 @@ impl ActiveSubscribe {
         // Sort results by time. We use stable sort here because it will produce
         // deterministic results since the cursor will always produce rows in
         // the same order. Compute doesn't guarantee that the results are sorted
-        // (#18936)
+        // (materialize#18936)
         let mut row_buf = Row::default();
         match &self.output {
             SubscribeOutput::WithinTimestampOrderBy { order_by } => {

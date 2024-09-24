@@ -170,7 +170,7 @@ SELECT 'quote_ident'::regproc::text;
 ----
 quote_ident
 
-# ensure that all existing functions can be cast to their respective names (#9199)
+# ensure that all existing functions can be cast to their respective names (materialize#9199)
 statement OK
 select oid, oid::regproc::text from (select oid from mz_catalog.mz_functions)
 

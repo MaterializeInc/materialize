@@ -51,7 +51,7 @@ $ kafka-verify-data format=avro sink=materialize.public.interval_data_sink sort-
 {"before": null, "after": {"row": {"interval": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]}}}
 {"before": null, "after": {"row": {"interval": [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]}}}
 
-# See #9723
+# See materialize#9723
 #> CREATE MATERIALIZED VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
 #
 #> CREATE SINK unnamed_cols_sink
@@ -65,7 +65,7 @@ $ kafka-verify-data format=avro sink=materialize.public.interval_data_sink sort-
 
 # Test that invented field names do not clash with named columns.
 
-# See #9723
+# See materialize#9723
 #> CREATE MATERIALIZED VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b2, 5 as b3;
 #
 #> CREATE SINK clashing_cols_sink

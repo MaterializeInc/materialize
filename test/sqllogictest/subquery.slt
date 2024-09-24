@@ -635,14 +635,14 @@ from ys
 1  -1
 2  0.5
 
-# Regression test for #3924, in which quantified comparision simplification was
+# Regression test for materialize#3924, in which quantified comparision simplification was
 # not correctly handling LATERAL joins.
 query II
 SELECT * FROM (VALUES (1)), LATERAL (SELECT * FROM (SELECT column1) WHERE true)
 ----
 1  1
 
-# Regression test for #3933, in which the query planner mishandled the outer
+# Regression test for materialize#3933, in which the query planner mishandled the outer
 # scope of a nested LATERAL join.
 query IIII
 SELECT * FROM
@@ -651,7 +651,7 @@ SELECT * FROM
 ----
 1  1  1  1
 
-# Regression test for #4157, in which quantified expression simplification
+# Regression test for materialize#4157, in which quantified expression simplification
 # failed to handle map expressions which depended upon a column introduced by
 # an earlier expression in the same map node.
 query I
@@ -663,7 +663,7 @@ FROM (SELECT 1 col1)
 query error aggregate functions that refer exclusively to outer columns not yet supported
 SELECT (SELECT count(likes.likee)) FROM likes
 
-# Regression test for #7121, where the multiplicity of the outer query was not
+# Regression test for materialize#7121, where the multiplicity of the outer query was not
 # preserved when an EXISTS subquery only involves constants/mpf/flatmaps.
 query I
 SELECT x FROM xs WHERE EXISTS (SELECT y FROM (SELECT 1 as y) WHERE x = y)
@@ -671,7 +671,7 @@ SELECT x FROM xs WHERE EXISTS (SELECT y FROM (SELECT 1 as y) WHERE x = y)
 1
 1
 
-# Regression test for #9921, in which the presence of a SELECT subquery inside
+# Regression test for materialize#9921, in which the presence of a SELECT subquery inside
 # of another subexpression produced a degenerate join that was not elided before
 # join implementation planning.
 query I

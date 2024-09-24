@@ -110,7 +110,7 @@ known_errors = [
     "out of valid range",
     '" does not exist',  # role does not exist
     "attempt to create relation with too many columns",
-    "target replica failed or was dropped",  # expected on replica OoMs with #21587
+    "target replica failed or was dropped",  # expected on replica OoMs with materialize#21587
     "cannot materialize call to",  # create materialized view on some internal views
     "arrays must not contain null values",  # aclexplode, mz_aclexplode
     "OVER clause not allowed on",  # window functions
@@ -132,6 +132,6 @@ known_errors = [
     "function map_build(text list) does not exist",
     "timestamp cannot be NaN",
     "exceeded recursion limit of 2048",
-    "key cannot be null",  # expected, see #25941
+    "key cannot be null",  # expected, see PR materialize#25941
     "regexp_extract must specify at least one capture group",
 ]

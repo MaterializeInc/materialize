@@ -7155,7 +7155,7 @@ sources AS (
     JOIN mz_catalog.mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
 ),
--- We don't yet report sink hydration status (#28459), so we do a best effort attempt here and
+-- We don't yet report sink hydration status (materialize#28459), so we do a best effort attempt here and
 -- define a sink as hydrated when it's both "running" and has a frontier greater than the minimum.
 -- There is likely still a possibility of FPs.
 sinks AS (

@@ -290,7 +290,7 @@
     join mz_databases d on s.database_id = d.id and d.name = '{{ schema_relation.database }}'
     where o.type in ('table', 'source', 'view', 'materialized-view', 'index', 'sink')
       -- Exclude subsources and progress subsources, which aren't relevant in this
-      -- context and can bork the adapter (see #20483)
+      -- context and can bork the adapter (see materialize#20483)
       and coalesce(so.type, '') not in ('subsource', 'progress')
   {% endcall %}
   {{ return(load_result('list_relations_without_caching').table) }}

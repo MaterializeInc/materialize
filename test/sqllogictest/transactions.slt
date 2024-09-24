@@ -170,7 +170,7 @@ COMMIT
 ----
 COMPLETE 0
 
-# Regression for #5725
+# Regression for materialize#5725
 statement ok
 CREATE TABLE t5727 (i INT)
 

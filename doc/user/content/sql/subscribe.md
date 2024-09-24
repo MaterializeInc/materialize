@@ -305,7 +305,7 @@ In the example above, `Column 1` acts as the column key that uniquely identifies
 
 [//]: # "TODO(morsapaes) This page is now complex enough that we should
 restructure it using the same feature-oriented approach as CREATE SOURCE/SINK.
-See #18829 for the design doc."
+See materialize#18829 for the design doc."
 
 ### Modifying the output format
 

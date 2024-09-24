@@ -39,7 +39,7 @@ SELECT * FROM t
 ----
 some string  short  0000-01-01 20:16:27 +0000 UTC  2018-05-23 20:16:27.658082 +0000 +0000
 
-# Not using TIMETZ until #26074 and #25224 are resolved.
+# Not using TIMETZ until materialize#26074 and materialize#25224 are resolved.
 statement ok
 ALTER TABLE t ALTER s TYPE BYTES, ALTER sl TYPE STRING(6), ALTER ts TYPE TIMESTAMPTZ
 

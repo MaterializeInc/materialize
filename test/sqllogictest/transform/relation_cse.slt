@@ -1547,7 +1547,7 @@ EOF
 # (1) a Filter (#1 > 7) over l0 appears twice.
 # (2) l2 is equivalent to l5.
 # (3) l1 is not equivalent (although structurally equal) to l4.
-# With #27389 this stopped testing what it says it tests; see issue #28308.
+# With materialize#27389 this stopped testing what it says it tests; see issue materialize#28308.
 query T multiline
 EXPLAIN WITH(arity, join implementations)
 WITH MUTUALLY RECURSIVE

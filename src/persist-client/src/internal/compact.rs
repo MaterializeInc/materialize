@@ -902,7 +902,7 @@ mod tests {
 
     use super::*;
 
-    // A regression test for a bug caught during development of #13160 (never
+    // A regression test for a bug caught during development of materialize#13160 (never
     // made it to main) where batches written by compaction would always have a
     // since of the minimum timestamp.
     #[mz_persist_proc::test(tokio::test)]

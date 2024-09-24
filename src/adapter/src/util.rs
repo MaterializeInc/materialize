@@ -472,7 +472,7 @@ pub fn verify_datum_desc(
     // Verify the first row is of the expected type. This is often good enough to
     // find problems.
     //
-    // Notably it failed to find #6304 when "FETCH 2" was used in a test, instead
+    // Notably it failed to find materialize#6304 when "FETCH 2" was used in a test, instead
     // we had to use "FETCH 1" twice.
 
     let Some(row) = rows.peek() else {

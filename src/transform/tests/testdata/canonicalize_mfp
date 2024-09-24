@@ -18,7 +18,7 @@ cat
 ----
 ok
 
-# regression test for #8235
+# regression test for materialize#8235
 build apply=CanonicalizeMfp
 (project
     (filter
@@ -87,7 +87,7 @@ Project (#0, #3)
     Map (hmac(#0, #1, #2))
       Get x
 
-# regression test for #10000.
+# regression test for materialize#10000.
 # Even though there is no map in the test, the duplicated predicates cause the creation
 # of a map via memoizing common subexpressions that then gets optimized away.
 build apply=CanonicalizeMfp
@@ -140,7 +140,7 @@ Project (#0)
         Get t1
         Get t2
 
-# consecutive levels of map-filter-project. outermost mfp is the same as the #10000 regression test.
+# consecutive levels of map-filter-project. outermost mfp is the same as the materialize#10000 regression test.
 build apply=CanonicalizeMfp
 (project
     (filter

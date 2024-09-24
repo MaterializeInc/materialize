@@ -27,10 +27,10 @@ DefSource name=y keys=[[#0]]
 Source defined as t1
 
 
-# Regression test for #25015.
+# Regression test for materialize#25015.
 #
 # The Join has a condition that is a local predicate
-# and was lost prior to #25015.
+# and was lost prior to materialize#25015.
 apply pipeline=reduction_pushdown
 Distinct project=[#1]
   Join on=((#1 + #1) = #0)

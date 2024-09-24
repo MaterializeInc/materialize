@@ -716,7 +716,7 @@ SELECT '{"b":[],"c":{"a":"b"}}'::JSONB - array['a'];
 ----
 {"b":[],"c":{"a":"b"}}
 
-# Regression test for #34756.
+# Regression test for materialize#34756.
 query T
 SELECT '{"b":[],"c":{"a":"b"}}'::JSONB - array['foo',NULL]
 ----

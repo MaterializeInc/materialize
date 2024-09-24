@@ -627,7 +627,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         for (&id, collection) in self.compute_state.collections.iter_mut() {
             // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
-            // collections (#16274).
+            // collections (materialize#16274).
             if collection.is_subscribe_or_copy {
                 continue;
             }

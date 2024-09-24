@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for #25015.
+# Regression test for materialize#25015.
 
 # The schema is a simplified version of
 # https://github.com/MaterializeInc/RQG/blob/main/conf/mz/simple.sql
@@ -24,7 +24,7 @@ CREATE TABLE t2 (f1 INT, f2 INT NOT NULL);
 statement ok
 INSERT INTO t2 VALUES (NULL, 0);
 
-# Prior to the bugfix for #25015 this query was (wrongly) returning a single
+# Prior to the bugfix for materialize#25015 this query was (wrongly) returning a single
 # row.
 query II
 SELECT DISTINCT

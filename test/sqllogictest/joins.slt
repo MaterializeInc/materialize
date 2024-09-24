@@ -34,7 +34,7 @@ SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 3  l3  3     r3
 
 # This test may look the same as the last, but listing out the columns
-# explicitly checks for regressions of #1314.
+# explicitly checks for regressions of materialize#1314.
 query ITIT rowsort
 SELECT l.la, l.lb, r.ra, r.rb FROM l LEFT JOIN r ON l.la = r.ra
 ----
@@ -50,7 +50,7 @@ NULL  NULL  4  r4
 3     l3    3  r3
 
 # This test may look the same as the last, but listing out the columns
-# explicitly checks for regressions of #1314.
+# explicitly checks for regressions of materialize#1314.
 query ITIT rowsort
 SELECT l.la, l.lb, r.ra, r.rb FROM l RIGHT JOIN r ON l.la = r.ra
 ----
@@ -59,21 +59,21 @@ NULL  NULL  4  r4
 3     l3    3  r3
 
 # Test that columns detected to be equivalent retain the names that the user
-# asks for. Protects against regression of #1217.
+# asks for. Protects against regression of materialize#1217.
 query II colnames,rowsort
 SELECT ra, r.ra FROM l JOIN r ON l.la = r.ra LIMIT 0
 ----
 ra  ra
 
 # Test that columns detected to be equivalent retain the names that the user
-# asks for. Protects against regression of #1217.
+# asks for. Protects against regression of materialize#1217.
 query ITIT colnames,rowsort
 SELECT * FROM l JOIN r ON l.la = r.ra LIMIT 0
 ----
 la  lb  ra  rb
 
 # Test that columns detected to be equivalent do not interfere with qualified
-# wildcard expansion. Protects against regression of #4477.
+# wildcard expansion. Protects against regression of materialize#4477.
 query ITIT colnames
 SELECT l.*, r.* FROM l JOIN r ON l.la = r.ra LIMIT 0
 ----
@@ -212,7 +212,7 @@ Target cluster: quickstart
 EOF
 
 # Test that multiplicities in outer joins are preserved.
-# Fixed in #2724.
+# Fixed in materialize#2724.
 statement ok
 CREATE TABLE l2 (la int, lb text)
 
@@ -242,7 +242,7 @@ NULL  NULL  4  r4
 3     l3    3  r3
 
 
-# Test that outer joins work correctly in correlated subqueries (#3047)
+# Test that outer joins work correctly in correlated subqueries (materialize#3047)
 
 query IT rowsort
 SELECT * FROM l WHERE EXISTS (SELECT * from l as l2 LEFT JOIN r ON l.la = r.ra)
@@ -265,7 +265,7 @@ SELECT * FROM r WHERE EXISTS (SELECT * from l RIGHT JOIN r as r2 ON l.la = r.ra)
 1  r1
 3  r3
 
-# Regression test for #3426.
+# Regression test for materialize#3426.
 query III colnames
 SELECT * FROM
     (SELECT 1 AS baz) t1
@@ -304,7 +304,7 @@ SELECT * FROM
 1  NULL  NULL
 1  NULL  NULL
 
-# Regression test for #3914. The gist is that we want to exercise the
+# Regression test for materialize#3914. The gist is that we want to exercise the
 # redundant join optimization on a join whose inputs contain projections. This
 # turns out to be extremely hard to accomplish because the projection lifting
 # optimization is very good at eliminating all but the top-level projection.
@@ -484,7 +484,7 @@ SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 3 l3 3 r3
 
 # Test that when both keys are expressions, the join is not planned as a cross
-# join. Protects against regression of #4170.
+# join. Protects against regression of materialize#4170.
 query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 ----
@@ -508,7 +508,7 @@ Target cluster: quickstart
 
 EOF
 
-# Regression test for #4361, in which inter-view predicate pushdown would cause
+# Regression test for materialize#4361, in which inter-view predicate pushdown would cause
 # misoptimizations. Specifically, a predicate that was applied to only one use
 # of a view could be incorrectly applied to all uses of that view.
 #

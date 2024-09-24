@@ -1345,7 +1345,7 @@ SELECT '"?!?2024-02-13 17:01:58.37848+  0 0'::timestamp with time zone;
 query error invalid input syntax for type timestamp with time zone: Cannot parse timezone offset \+ \? 00: "\\"\?!\?2024\-02\-13 17:01:58\.37848\+ \? 00"
 SELECT '"?!?2024-02-13 17:01:58.37848+ ? 00'::timestamp with time zone;
 
-# Regression for #6272. These match postgres.
+# Regression for materialize#6272. These match postgres.
 query TTT
 select '9::60'::time, '9:59:60'::time, '9::59.999999'::time
 ----

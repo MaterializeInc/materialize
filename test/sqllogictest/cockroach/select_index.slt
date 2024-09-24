@@ -69,7 +69,7 @@ SELECT i, s FROM ab@baz WHERE (i, s) < (1, 'c')
 1 a
 1 b
 
-# Issue #14426: verify we don't have an internal filter that contains "a IN ()"
+# Issue materialize#14426: verify we don't have an internal filter that contains "a IN ()"
 # (which causes an error in DistSQL due to expression serialization).
 statement ok
 CREATE TABLE tab0(
@@ -82,7 +82,7 @@ query I
 SELECT k FROM tab0 WHERE (a IN (6) AND a > 6) OR b >= 4
 ----
 
-# Regression tests for #12022
+# Regression tests for materialize#12022
 
 statement ok
 CREATE TABLE t12022 (
@@ -140,7 +140,7 @@ SELECT * FROM t12022@i WHERE (c1, c2) < (2, true) ORDER BY (c1, c2);
 2  false
 
 
-# Regression test for #20035.
+# Regression test for materialize#20035.
 statement ok
 CREATE TABLE favorites (
   id INT NOT NULL DEFAULT unique_rowid(),
@@ -190,7 +190,7 @@ CREATE TABLE abcd (
   d INT,
 )
 
-# Regression tests for #20362 (IS NULL handling).
+# Regression tests for materialize#20362 (IS NULL handling).
 statement ok
 INSERT INTO abcd VALUES
 (NULL, NULL, NULL),
@@ -268,7 +268,7 @@ SELECT * FROM abcd@abcd WHERE a = 1 AND b IS NULL AND c > 0 AND c < 10 ORDER BY 
 1  NULL  1  NULL
 1  NULL  5  NULL
 
-# Regression test for #21831.
+# Regression test for materialize#21831.
 statement ok
 CREATE TABLE str (k INT PRIMARY KEY, v STRING)
 
@@ -294,7 +294,7 @@ SELECT k, v FROM str WHERE v SIMILAR TO 'ABC_*'
 5  ABCD
 3  ABCDEZ
 
-# Regression tests for #22670.
+# Regression tests for materialize#22670.
 statement ok
 CREATE TABLE xy (x INT, y INT)
 

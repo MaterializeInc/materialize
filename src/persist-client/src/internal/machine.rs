@@ -365,7 +365,7 @@ where
             .try_into()
             .expect("reasonable duration");
         // SUBTLE: Retries of compare_and_append with Indeterminate errors are
-        // tricky (more discussion of this in #12797):
+        // tricky (more discussion of this in materialize#12797):
         //
         // - (1) We compare_and_append and get an Indeterminate error back from
         //   CRDB/Consensus. This means we don't know if it committed or not.
@@ -2519,7 +2519,7 @@ pub mod tests {
         );
     }
 
-    // A regression test for #14719, where a bug in gc led to an incremental
+    // A regression test for materialize#14719, where a bug in gc led to an incremental
     // state invariant being violated which resulted in gc being permanently
     // wedged for the shard.
     #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
@@ -2568,7 +2568,7 @@ pub mod tests {
         let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;
     }
 
-    // A regression test for #20776, where a bug meant that compare_and_append
+    // A regression test for materialize#20776, where a bug meant that compare_and_append
     // would not fetch the latest state after an upper mismatch. This meant that
     // a write that could succeed if retried on the latest state would instead
     // return an UpperMismatch.

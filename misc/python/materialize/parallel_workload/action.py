@@ -139,12 +139,12 @@ class Action:
                     "query could not complete",
                     "cached plan must not change result type",
                     "violates not-null constraint",
-                    "unknown catalog item",  # Expected, see #20381
+                    "unknown catalog item",  # Expected, see materialize#20381
                     "was concurrently dropped",  # role was dropped
                     "unknown cluster",  # cluster was dropped
                     "unknown schema",  # schema was dropped
                     "the transaction's active cluster has been dropped",  # cluster was dropped
-                    "was removed",  # dependency was removed, started with moving optimization off main thread, see #24367
+                    "was removed",  # dependency was removed, started with moving optimization off main thread, see materialize#24367
                     "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
                     "object state changed while transaction was in progress",
                 ]
@@ -186,7 +186,7 @@ class Action:
                 ]
             )
         if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            # Expected, see #20465
+            # Expected, see materialize#20465
             result.extend(["unknown catalog item", "unknown schema"])
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
@@ -767,7 +767,7 @@ class RenameSinkAction(Action):
 class AlterKafkaSinkFromAction(Action):
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            # Does not work reliably with kills, see #28870
+            # Does not work reliably with kills, see materialize#28870
             return False
         with exe.db.lock:
             if not exe.db.kafka_sinks:
@@ -791,7 +791,7 @@ class AlterKafkaSinkFromAction(Action):
                 ]
             else:
                 # multi column formats require at least as many columns as before
-                # columns also have to be of the same type, see #28726
+                # columns also have to be of the same type, see materialize#28726
                 objs = [
                     o
                     for o in exe.db.db_objects_without_views()
@@ -1182,7 +1182,7 @@ class DropRoleAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see #20465
+                # expected, see materialize#20465
                 if (
                     exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown role" not in e.msg
@@ -1234,7 +1234,7 @@ class DropClusterAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see #20465
+                # expected, see materialize#20465
                 if (
                     exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown cluster" not in e.msg
@@ -1369,7 +1369,7 @@ class DropClusterReplicaAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see #20465
+                # expected, see materialize#20465
                 if (
                     exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "has no CLUSTER REPLICA named" not in e.msg
@@ -1398,7 +1398,7 @@ class GrantPrivilegesAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see #20465
+                # expected, see materialize#20465
                 if (
                     exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown role" not in e.msg
@@ -1427,7 +1427,7 @@ class RevokePrivilegesAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see #20465
+                # expected, see materialize#20465
                 if (
                     exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown role" not in e.msg
@@ -1579,7 +1579,7 @@ class CancelAction(Action):
             extra_info=f"Canceling {worker}",
             http=Http.RANDOM,
         )
-        # Sleep less often to work around #22228 / #2392
+        # Sleep less often to work around materialize#22228 / materialize#2392
         time.sleep(self.rng.uniform(1, 10))
         return True
 
@@ -2113,7 +2113,7 @@ class HttpPostAction(Action):
                 ):
                     raise
             except QueryError as e:
-                # expected, see #20465
+                # expected, see materialize#20465
                 if exe.db.scenario not in (
                     Scenario.Kill,
                     Scenario.ZeroDowntimeDeploy,

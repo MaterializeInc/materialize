@@ -21,8 +21,8 @@ CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
 
 # Simplify non-nullable trees with multiple non-recursive bindings defined under
 # a single`WITH MUTUALLY RECURSIVE` block
-# As of #27389 this no longer tests what it used to test.
-# Issue #28308 tracks tests that may not be serving their intended
+# As of materialize#27389 this no longer tests what it used to test.
+# Issue materialize#28308 tracks tests that may not be serving their intended
 # purpose; perhaps we can remove the test if we remove the
 # non_null_requirements transform.
 query T multiline

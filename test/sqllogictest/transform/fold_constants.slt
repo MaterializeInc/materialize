@@ -239,7 +239,7 @@ FROM t
 ----
 1 a b
 
-# Regression test for #8963
+# Regression test for materialize#8963
 query II
 SELECT row_number() OVER (), row_number() OVER ()
 ----
@@ -252,7 +252,7 @@ SELECT row_number() OVER (), row_number() OVER () from t
 1 1
 2 2
 
-# Regression for #9749
+# Regression for materialize#9749
 query error window functions are not allowed in ON
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT * FROM t AS v JOIN t ON row_number() over () > 1;

@@ -941,7 +941,7 @@ impl Coordinator {
                         // may also be trying to use `register_ts` for a different
                         // purpose.
                         //
-                        // See #28216.
+                        // See materialize#28216.
                         coord
                             .catalog
                             .confirm_leadership()

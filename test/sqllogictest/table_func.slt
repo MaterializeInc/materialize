@@ -175,7 +175,7 @@ SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 2  3  2  3  2
 3  4  3  4  3
 
-# Regression test for #3877: a table function as the first FROM item inside of
+# Regression test for materialize#3877: a table function as the first FROM item inside of
 # a LATERAL subquery should not miscount outer scope depth.
 query II
 SELECT x.a, generate_series FROM x, LATERAL (SELECT * FROM generate_series(1, x.a))
@@ -187,7 +187,7 @@ SELECT x.a, generate_series FROM x, LATERAL (SELECT * FROM generate_series(1, x.
 3  2
 3  3
 
-# Regression test for #5520: crash when a filter references an output column of
+# Regression test for materialize#5520: crash when a filter references an output column of
 # a table function
 query IIIII
 SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
@@ -311,7 +311,7 @@ Target cluster: quickstart
 
 EOF
 
-# Regression test for #5520: crash when a filter references an output column of
+# Regression test for materialize#5520: crash when a filter references an output column of
 # a table function around a join
 query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
@@ -1375,7 +1375,7 @@ select generate_subscripts(ARRAY[ARRAY[1,2,3], ARRAY[4,5,6]], 2);
 query error could not determine polymorphic type because input has type unknown
 SELECT generate_subscripts(NULL, 1)
 
-# Regression test for #9653: LATERAL column references in ROWS FROM
+# Regression test for materialize#9653: LATERAL column references in ROWS FROM
 
 query III
 SELECT * FROM generate_series(1, 3) as foo(a), ROWS FROM (generate_series(foo.a, foo.a + 2), generate_series(foo.a, foo.a + 1)) order by 1, 2, 3;
@@ -1403,11 +1403,11 @@ SELECT * FROM generate_series(1, 3) as foo(a), ROWS FROM (generate_series(foo.a,
 3  4  4  NULL
 3  5  NULL  NULL
 
-# Regression test for #9657
+# Regression test for materialize#9657
 statement ok
 create view bar as select * from y, rows from (generate_series(1, 2), jsonb_array_elements(y.a));
 
-# Regression for #10363
+# Regression for materialize#10363
 query IT
 WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), * FROM a ORDER BY generate_series
 ----
@@ -1416,7 +1416,7 @@ WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), * FROM a ORDER BY genera
 
 # Test optimization for single table function in scalar position
 # Plan should be just a simple FlatMap + Project
-# Regression test for #10801
+# Regression test for materialize#10801
 query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT jsonb_object_keys(a) FROM y;
 ----

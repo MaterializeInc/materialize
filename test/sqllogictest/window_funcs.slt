@@ -119,7 +119,7 @@ FROM t
 ----
 1 a b
 
-# Regression test for #8963
+# Regression test for materialize#8963
 query II
 SELECT row_number() OVER (), row_number() OVER ()
 ----
@@ -179,7 +179,7 @@ Target cluster: quickstart
 EOF
 
 #
-# Regression test for #9077
+# Regression test for materialize#9077
 #
 
 statement ok
@@ -404,7 +404,7 @@ CREATE TABLE t(x string);
 statement ok
 INSERT INTO t VALUES ('a'), ('b'), ('c');
 
-# Regression for #9749
+# Regression for materialize#9749
 query error window functions are not allowed in ON
 SELECT * FROM t AS v JOIN t ON row_number() over () > 1;
 

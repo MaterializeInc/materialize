@@ -26,7 +26,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 //
 // Ideally we'd want to instead signal disabled logging by leaving `index_logs`
 // empty. Unfortunately, we have to always provide `index_logs`, because we must
-// install the logging dataflows even on replicas that have logging disabled. See #15799.
+// install the logging dataflows even on replicas that have logging disabled. See materialize#15799.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     /// The logging interval

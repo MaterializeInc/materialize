@@ -48,7 +48,7 @@ SERVICES = [
     TestCerts(),
     Cockroach(
         setup_materialize=True,
-        # Workaround for #19810
+        # Workaround for materialize#19810
         restart="on-failure:5",
     ),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),

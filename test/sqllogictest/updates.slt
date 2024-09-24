@@ -135,7 +135,7 @@ SELECT * FROM t1
 statement error db error: ERROR: column "t1\.x" does not exist
 UPDATE t1 AS m SET x = 5 WHERE t1.x < 10
 
-# Regression for #24612
+# Regression for materialize#24612
 simple
 BEGIN;
 SELECT 1;
@@ -178,7 +178,7 @@ statement ok
 ROLLBACK
 
 # Verify that max_query_result_size doesn't affect read part of RTW queries.
-# See #27428
+# See materialize#27428
 statement ok
 SET max_query_result_size = '8B';
 

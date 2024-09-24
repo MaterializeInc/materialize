@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for #21501.
+# Regression test for materialize#21501.
 # Note that this test employs the old syntax with the EXPECTED GROUP SIZE because the behavior
 # tested is exactly the backwards-compatible one of assigning the hinted value to all operators
 # in the same query block.

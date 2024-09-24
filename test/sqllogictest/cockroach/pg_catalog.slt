@@ -94,7 +94,7 @@ DROP DATABASE pg_catalog
 
 # the following query checks that the planDataSource instantiated from
 # a virtual table in the FROM clause is properly deallocated even when
-# query preparation causes an error. #9853
+# query preparation causes an error. materialize#9853
 query error unknown function
 SELECT * FROM pg_catalog.pg_class c WHERE nonexistent_function()
 
@@ -641,7 +641,7 @@ indexrelid  indrelid  indnatts  indisunique  indisprimary  indisexclusion  indim
 3966258450  14        1         true         true          false           true          false           true        false         false       true       false           1        3903121477             0         0          NULL      NULL
 4225994721  13        2         true         true          false           true          false           true        false         false       true       false           1 7      0 0                    0 0       0 0        NULL      NULL
 
-# From #26504
+# From materialize#26504
 query OOI colnames
 SELECT indexrelid,
        (information_schema._pg_expandarray(indclass)).x AS operator_argument_type_oid,
@@ -1771,7 +1771,7 @@ select 'system.namespace'::regclass
 statement ok
 SET DATABASE = test
 
-## #13567
+## materialize#13567
 ## regproc columns display as text but can still be joined against oid columns
 query OTO
 SELECT p.oid, p.proname, t.typinput
@@ -1781,7 +1781,7 @@ WHERE t.typname = '_int4'
 ----
 780513238  array_in  array_in
 
-## #16285
+## materialize#16285
 ## int2vectors should be 0-indexed
 query I
 SELECT count(*) FROM pg_catalog.pg_index WHERE indkey[0] IS NULL;

@@ -13,7 +13,7 @@ persist_inline_writes_single_max_bytes 0
 ----
 ok
 
-# Regression test for #14580, a bug where an over-aggressive internal
+# Regression test for materialize#14580, a bug where an over-aggressive internal
 # validation would fire if a GC request was behind the actual set of live
 # states.
 

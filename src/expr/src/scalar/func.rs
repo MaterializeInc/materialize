@@ -483,7 +483,7 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
     let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-");
 
-    // Supporting other encodings is tracked by #2282.
+    // Supporting other encodings is tracked by materialize#2282.
     if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some("utf-8") {
         return Err(EvalError::InvalidEncodingName(encoding_name));
     }

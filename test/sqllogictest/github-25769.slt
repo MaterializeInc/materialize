@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for #25769.
+# Regression test for materialize#25769.
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_cardinality_estimates = true

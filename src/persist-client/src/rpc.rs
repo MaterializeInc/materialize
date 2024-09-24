@@ -213,7 +213,7 @@ impl GrpcPubSubClient {
         // Once enabled, the PubSub server cannot be disabled or otherwise
         // reconfigured. So we wait for at least one configuration sync to
         // complete. This gives `environmentd` at least one chance to update
-        // PubSub configuration parameters. See #23869 for details.
+        // PubSub configuration parameters. See materialize#23869 for details.
         config.persist_cfg.configs_synced_once().await;
 
         let mut is_first_connection_attempt = true;

@@ -3137,7 +3137,7 @@ fn test_github_20262() {
 }
 
 // Test that the server properly handles cancellation requests of read-then-write queries.
-// See #20404.
+// See materialize#20404.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_read_then_write() {

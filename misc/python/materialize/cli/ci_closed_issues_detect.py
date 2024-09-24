@@ -80,7 +80,7 @@ IGNORE_RE = re.compile(
     | cockroach\#
     | Liquibase
     # ci/test/lint-buf/README.md
-    | Ignore\ because\ of\ #99999
+    | Ignore\ because\ of\ database-issues#99999
     # src/storage-client/src/controller.rs
     | issues/20211\>
     # src/sql/src/plan/statement.rs
