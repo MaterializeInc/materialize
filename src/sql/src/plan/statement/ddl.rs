@@ -617,6 +617,7 @@ pub fn plan_create_webhook_source(
         if_not_exists,
         timeline,
         in_cluster: Some(in_cluster),
+        available_source_references: None,
     }))
 }
 
@@ -1105,6 +1106,8 @@ pub fn plan_create_source(
         if_not_exists,
         timeline,
         in_cluster: Some(in_cluster),
+        // TODO: Populate this based on the results of purification.
+        available_source_references: None,
     }))
 }
 
@@ -1525,6 +1528,7 @@ pub fn plan_create_subsource(
         if_not_exists,
         timeline: Timeline::EpochMilliseconds,
         in_cluster: None,
+        available_source_references: None,
     }))
 }
 

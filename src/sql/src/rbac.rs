@@ -462,6 +462,7 @@ fn generate_rbac_requirements(
             if_not_exists: _,
             timeline: _,
             in_cluster,
+            available_source_references: _,
         }) => RbacRequirements {
             privileges: generate_required_source_privileges(
                 name,
@@ -485,6 +486,7 @@ fn generate_rbac_requirements(
                                  if_not_exists: _,
                                  timeline: _,
                                  in_cluster,
+                                 available_source_references: _,
                              },
                          resolved_ids: _,
                      }| {

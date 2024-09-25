@@ -951,7 +951,7 @@ impl CatalogState {
             StateDiff::Addition => {
                 let prev = self
                     .source_references
-                    .insert(source_references.source_id, source_references);
+                    .insert(source_references.source_id, source_references.into());
                 assert!(
                     prev.is_none(),
                     "values must be explicitly retracted before inserting a new value: {prev:?}"

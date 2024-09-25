@@ -233,6 +233,7 @@ impl Catalog {
             default_privileges: DefaultPrivileges::default(),
             system_privileges: PrivilegeMap::default(),
             comments: CommentsMap::default(),
+            source_references: BTreeMap::new(),
             storage_metadata: Default::default(),
             temporary_schemas: BTreeMap::new(),
             config: mz_sql::catalog::CatalogConfig {

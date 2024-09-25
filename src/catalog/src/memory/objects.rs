@@ -485,6 +485,68 @@ pub struct ClusterReplicaProcessStatus {
     pub time: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct SourceReferences {
+    pub source_id: GlobalId,
+    pub updated_at: u64,
+    pub references: Vec<SourceReference>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct SourceReference {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub columns: Vec<String>,
+}
+
+impl From<SourceReference> for durable::SourceReference {
+    fn from(source_reference: SourceReference) -> durable::SourceReference {
+        durable::SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
+impl From<SourceReferences> for durable::SourceReferences {
+    fn from(source_references: SourceReferences) -> durable::SourceReferences {
+        durable::SourceReferences {
+            source_id: source_references.source_id,
+            updated_at: source_references.updated_at,
+            references: source_references
+                .references
+                .into_iter()
+                .map(|source_reference| source_reference.into())
+                .collect(),
+        }
+    }
+}
+
+impl From<durable::SourceReference> for SourceReference {
+    fn from(source_reference: durable::SourceReference) -> SourceReference {
+        SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
+impl From<durable::SourceReferences> for SourceReferences {
+    fn from(source_references: durable::SourceReferences) -> SourceReferences {
+        SourceReferences {
+            source_id: source_references.source_id,
+            updated_at: source_references.updated_at,
+            references: source_references
+                .references
+                .into_iter()
+                .map(|source_reference| source_reference.into())
+                .collect(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct CatalogEntry {
     pub item: CatalogItem,

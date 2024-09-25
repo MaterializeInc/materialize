@@ -330,6 +330,22 @@ impl Coordinator {
                 }
             }
 
+            // If this source contained a set of available source references, update the
+            // source references catalog table.
+            if let Some(references) = &plan.available_source_references {
+                ops.push(catalog::Op::UpdateSourceReferences {
+                    source_id,
+                    references: references
+                        .iter()
+                        .map(|reference| mz_catalog::memory::objects::SourceReference {
+                            name: reference.name.clone(),
+                            namespace: reference.namespace.clone(),
+                            columns: reference.columns.clone(),
+                        })
+                        .collect(),
+                });
+            }
+
             let source = Source::new(plan, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: source_id,

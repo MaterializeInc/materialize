@@ -49,9 +49,10 @@ use crate::durable::objects::{
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
     Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
+    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
@@ -1691,6 +1692,21 @@ impl<'a> Transaction<'a> {
 
         self.comments
             .delete(|k, _v| object_ids.contains(&k.object_id), self.op_id);
+        Ok(())
+    }
+
+    pub fn update_source_references(
+        &mut self,
+        source_id: GlobalId,
+        references: Vec<SourceReference>,
+        updated_at: u64,
+    ) -> Result<(), CatalogError> {
+        let key = SourceReferencesKey { source_id };
+        let value = SourceReferencesValue {
+            references,
+            updated_at,
+        };
+        self.source_references.set(key, Some(value), self.op_id)?;
         Ok(())
     }
 

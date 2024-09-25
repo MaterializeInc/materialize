@@ -633,6 +633,18 @@ pub struct CreateSourcePlan {
     pub timeline: Timeline,
     // None for subsources, which run on the parent cluster.
     pub in_cluster: Option<ClusterId>,
+    // All the available upstream references for this source.
+    // Populated for top-level sources that can contain subsources/tables
+    pub available_source_references: Option<Vec<SourceReference>>,
+}
+
+/// An available external reference for a source and if possible to retrieve,
+/// any column names it contains.
+#[derive(Debug)]
+pub struct SourceReference {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub columns: Vec<String>,
 }
 
 /// A [`CreateSourcePlan`] and the metadata necessary to sequence it.
