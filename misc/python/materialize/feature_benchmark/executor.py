@@ -72,6 +72,14 @@ class Docker(Executor):
             self._composition.up("clusterd")
         return None
 
+    def RestartMzMaterialized(self) -> None:
+        self._composition.kill("materialized")
+        # Make sure we are restarting Materialized() with the
+        # same parameters (docker tag, SIZE) it was initially started with
+        with self._composition.override(self._materialized):
+            self._composition.up("materialized")
+        return None
+
     def Td(self, input: str) -> Any:
         return self._composition.exec(
             "testdrive",
@@ -167,6 +175,9 @@ class MzCloud(Executor):
         ]
 
     def RestartMzClusterd(self) -> None:
+        assert False, "We can't restart the cloud"
+
+    def RestartMzMaterialized(self) -> None:
         assert False, "We can't restart the cloud"
 
     def Reset(self) -> None:

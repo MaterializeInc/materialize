@@ -174,7 +174,7 @@ The feature benchmark will retry any regressed scenarios up to `--max-cycles=3` 
 
 ## Benchmark definition format
 
-Benchmark scenarios live in `test/feature-benchmark/scenarios.py` and follow the following format:
+Benchmark scenarios live in `test/feature-benchmark/scenarios/` and follow the following format:
 
 ```
 class NewBenchmark(Scenario):

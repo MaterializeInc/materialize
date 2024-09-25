@@ -30,4 +30,5 @@ SHA256_BY_SCENARIO_FILE: dict[str, str] = {
     "scale.py": "c4c8749d166e4df34e0b0e92220434fdb508c5c2ac56eb80c07043be0048dded",
     "skew.py": "bf60802205fc51ebf94fb008bbdb6b2ccce3c9ed88a6188fa7f090f2c84b120f",
     "subscribe.py": "510cf9037308936f1bb02a1c2e6345a90bcbda89f701653518d46d1fb56a2328",
+    "startup.py": "adbfecb8e79224d92f047ea0820f74de521f035d8b7b0da35f7f5acb04fec75a",
 }
