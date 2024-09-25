@@ -910,17 +910,20 @@ impl MirToSql {
         if inputs.len() != 1 {
             return None;
         }
+        eprintln!("DLJ: looking at input...");
         let Project { input, .. } = &inputs[0] else {
             return None;
         };
         let Get { id: id_joined, .. } = &**input else {
             return None;
         };
+        eprintln!("DLJ: found {id_joined} as inner part");
 
         //    Map (null, null)                           + base
         let Map { input, scalars } = base else {
             return None;
         };
+        eprintln!("DLJ: checking nulls");
         assert!(scalars.iter().all(|e| match e {
             MirScalarExpr::Literal(Ok(row), _ty) => {
                 let datums = row.unpack();
@@ -939,10 +942,12 @@ impl MirToSql {
         //                  Project (KEYS)               +
         //                    Get l1                     +
         //        ReadStorage l0_underlying              + inputs[0]
+        eprintln!("DLJ: checking inner union");
         let Union { base, inputs } = &**input else {
             return None;
         };
 
+        eprintln!("DLJ: underlying");
         //        ReadStorage l0_underlying              +
         if inputs.len() != 1 {
             return None;
@@ -954,11 +959,13 @@ impl MirToSql {
             return None;
         };
 
+        eprintln!("DLJ: negate");
         //        Negate                                 +
         let Negate { input } = &**base else {
             return None;
         };
 
+        eprintln!("DLJ: project");
         //          Project (l0 COLS)                    +
         let Project { input, .. } = &**input else {
             return None;
@@ -970,20 +977,25 @@ impl MirToSql {
         //                Distinct project=[KEYS]        +
         //                  Project (KEYS)               +
         //                    Get l1                     +
+        eprintln!("DLJ: join");
+
         let Join { inputs, .. } = &**input else {
             return None;
         };
 
+        eprintln!("DLJ: join inputs {}", inputs.len());
         if inputs.len() != 2 {
             return None;
         }
 
         //              Get l0                           + inputs[0]
+        eprintln!("DLJ: lhs");
         let Get { id: _id_lhs, .. } = &inputs[0] else {
             return None;
         };
 
         //              ArrangeBy keys=[[KEYS]]          + inputs[1]
+        eprintln!("DLJ: arrange");
         let ArrangeBy { input, .. } = &inputs[1] else {
             return None;
         };
@@ -996,57 +1008,99 @@ impl MirToSql {
         };
 
         //                  Project (KEYS)               +
+        eprintln!("DLJ: project");
         let Project { input, .. } = &**input else {
             return None;
         };
 
         //                    Get l1                     +
+        eprintln!("DLJ: final get");
         let Get { id: id_joined2, .. } = &**input else {
             return None;
         };
+        eprintln!("DLJ: got {id_joined2}");
 
         if id_joined != id_joined2 {
             return None;
         }
 
         let Id::Local(local) = id_joined else {
+            eprintln!("DLJ: not a local");
             return None;
         };
 
         // it matched! to render the left join, we'll render the inner join (l1) and update it
         let Some((ident, columns)) = bindings.get(local) else {
-            return None;
-        };
-
-        let Some((_, _, inner_join_query)) = self.query.iter().find(|(i, _, _)| i == ident) else {
+            eprintln!("DLJ: unbound");
             return None;
         };
 
         // we'll try to find the inner join to update in a fresh query (in case someone else uses it)
-        let mut query = inner_join_query.clone();
+        let mut ident = ident;
+        let inner_join;
+        let mut query;
+        loop {
+            let Some((_, _, inner_join_query)) = self.query.iter().find(|(i, _, _)| i == ident)
+            else {
+                eprintln!("DLJ: couldn't find query");
+                return None;
+            };
 
-        let SetExpr::Select(select) = &mut query.body else {
-            return None;
-        };
-        let Select { from, .. } = &mut **select;
+            query = inner_join_query.clone();
 
-        if from.len() != 1 {
-            return None;
+            let SetExpr::Select(select) = &mut query.body else {
+                eprintln!("DLJ: not a select");
+                return None;
+            };
+            let Select { from, .. } = &mut **select;
+
+            if from.len() != 1 {
+                eprintln!("DLJ: bad FROM {from:?}");
+                return None;
+            }
+
+            let TableWithJoins { relation, joins } = &mut from[0];
+
+            // found it!
+            match joins.len() {
+                1 => {
+                    // found it!
+                    inner_join = &mut joins[0];
+                    break;
+                }
+                0 => {
+                    // could just be a table reference, keep looking
+                    eprintln!("DLJ: chasing...");
+                    let TableFactor::Table {
+                        name: RawItemName::Name(UnresolvedItemName(idents)),
+                        ..
+                    } = relation
+                    else {
+                        return None;
+                    };
+                    eprintln!("DLJ: chasing {idents:?}");
+
+                    if idents.len() != 1 {
+                        return None;
+                    }
+
+                    ident = &idents[0];
+                }
+                _ => {
+                    // huh... no idea where we are
+                    eprintln!("DLJ: couldn't find inner join");
+                    return None;
+                }
+            }
         }
 
-        let TableWithJoins { joins, .. } = &mut from[0];
-
-        if joins.len() != 1 {
-            return None;
-        }
-
-        let join = &mut joins[0];
-
-        let JoinOperator::Inner(constraint) = join.join_operator.to_owned() else {
+        eprintln!("DLJ: join {inner_join:?}");
+        let JoinOperator::Inner(constraint) = &mut inner_join.join_operator else {
+            eprintln!("DLJ: not an inner join");
             return None;
         };
 
-        join.join_operator = JoinOperator::LeftOuter(constraint);
+        inner_join.join_operator = JoinOperator::LeftOuter(constraint.clone());
 
         let ident = self.fresh_ident("left_join");
         self.push_prequery(ident, columns.clone(), query)
