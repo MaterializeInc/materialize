@@ -369,15 +369,14 @@ disruptions = [
             ArrangedIntro("cluster1.replica2", "clusterd_2_1"),
         ],
     ),
-    # TODO: Reenable when materialize#28997 is fixed
-    # Disruption(
-    #     name="restart-replica",
-    #     disruption=lambda c: restart_replica(c),
-    #     compaction_checks=AllowCompactionCheck.all_checks(
-    #         "cluster1.replica1", "clusterd_1_1"
-    #     )
-    #     + AllowCompactionCheck.all_checks("cluster1.replica2", "clusterd_2_1"),
-    # ),
+    Disruption(
+        name="restart-replica",
+        disruption=lambda c: restart_replica(c),
+        compaction_checks=AllowCompactionCheck.all_checks(
+            "cluster1.replica1", "clusterd_1_1"
+        )
+        + AllowCompactionCheck.all_checks("cluster1.replica2", "clusterd_2_1"),
+    ),
     Disruption(
         name="pause-one-clusterd",
         disruption=lambda c: c.pause("clusterd_1_1"),

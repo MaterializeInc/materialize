@@ -2091,6 +2091,15 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
                 "enable_unorchestrated_cluster_replicas": "true",
             },
         ),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=[
+                # Disable GRPC host checking. We are connecting through a
+                # proxy, so the host in the request URI doesn't match
+                # clusterd's fqdn.
+                "CLUSTERD_GRPC_HOST=",
+            ],
+        ),
         Testdrive(
             no_reset=True,
             default_timeout="30s",
@@ -2348,94 +2357,106 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized", "clusterd1", "toxiproxy")
-    c.up("testdrive", persistent=True)
 
-    c.testdrive(
-        input=dedent(
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            environment_extra=[
+                # Disable GRPC host checking. We are connecting through a
+                # proxy, so the host in the request URI doesn't match
+                # clusterd's fqdn.
+                "CLUSTERD_GRPC_HOST=",
+            ],
+        ),
+    ):
+        c.up("materialized", "clusterd1", "toxiproxy")
+        c.up("testdrive", persistent=True)
+
+        c.testdrive(
+            input=dedent(
+                """
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+                {
+                  "name": "clusterd1",
+                  "listen": "0.0.0.0:2100",
+                  "upstream": "clusterd1:2100",
+                  "enabled": true
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+                {
+                  "name": "clusterd2",
+                  "listen": "0.0.0.0:2101",
+                  "upstream": "clusterd1:2101",
+                  "enabled": true
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+                {
+                  "name": "clusterd3",
+                  "listen": "0.0.0.0:2102",
+                  "upstream": "clusterd1:2102",
+                  "enabled": true
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+                {
+                  "name": "clusterd4",
+                  "listen": "0.0.0.0:2103",
+                  "upstream": "clusterd1:2103",
+                  "enabled": true
+                }
+
+                > CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                    STORAGECTL ADDRESSES ['toxiproxy:2100'],
+                    STORAGE ADDRESSES ['toxiproxy:2103'],
+                    COMPUTECTL ADDRESSES ['toxiproxy:2101'],
+                    COMPUTE ADDRESSES ['toxiproxy:2102'],
+                    WORKERS 2));
+
+                > SELECT mz_unsafe.mz_sleep(1);
+                <null>
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd1/toxics content-type=application/json
+                {
+                  "name": "clusterd1",
+                  "type": "timeout",
+                  "attributes": {"timeout": 0}
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd2/toxics content-type=application/json
+                {
+                  "name": "clusterd2",
+                  "type": "timeout",
+                  "attributes": {"timeout": 0}
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd3/toxics content-type=application/json
+                {
+                  "name": "clusterd3",
+                  "type": "timeout",
+                  "attributes": {"timeout": 0}
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd4/toxics content-type=application/json
+                {
+                  "name": "clusterd4",
+                  "type": "timeout",
+                  "attributes": {"timeout": 0}
+                }
             """
-            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
-            {
-              "name": "clusterd1",
-              "listen": "0.0.0.0:2100",
-              "upstream": "clusterd1:2100",
-              "enabled": true
-            }
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
-            {
-              "name": "clusterd2",
-              "listen": "0.0.0.0:2101",
-              "upstream": "clusterd1:2101",
-              "enabled": true
-            }
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
-            {
-              "name": "clusterd3",
-              "listen": "0.0.0.0:2102",
-              "upstream": "clusterd1:2102",
-              "enabled": true
-            }
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
-            {
-              "name": "clusterd4",
-              "listen": "0.0.0.0:2103",
-              "upstream": "clusterd1:2103",
-              "enabled": true
-            }
-
-            > CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['toxiproxy:2100'],
-                STORAGE ADDRESSES ['toxiproxy:2103'],
-                COMPUTECTL ADDRESSES ['toxiproxy:2101'],
-                COMPUTE ADDRESSES ['toxiproxy:2102'],
-                WORKERS 2));
-
-            > SELECT mz_unsafe.mz_sleep(1);
-            <null>
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd1/toxics content-type=application/json
-            {
-              "name": "clusterd1",
-              "type": "timeout",
-              "attributes": {"timeout": 0}
-            }
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd2/toxics content-type=application/json
-            {
-              "name": "clusterd2",
-              "type": "timeout",
-              "attributes": {"timeout": 0}
-            }
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd3/toxics content-type=application/json
-            {
-              "name": "clusterd3",
-              "type": "timeout",
-              "attributes": {"timeout": 0}
-            }
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd4/toxics content-type=application/json
-            {
-              "name": "clusterd4",
-              "type": "timeout",
-              "attributes": {"timeout": 0}
-            }
-        """
+            )
         )
-    )
-    # Should detect broken connection after a few seconds, works with c.kill("clusterd1")
-    time.sleep(10)
-    envd = c.invoke("logs", "materialized", capture=True)
-    assert (
-        "error reading a body from connection: stream closed because of a broken pipe"
-        in envd.stdout
-    )
+        # Should detect broken connection after a few seconds, works with c.kill("clusterd1")
+        time.sleep(10)
+        envd = c.invoke("logs", "materialized", capture=True)
+        assert (
+            "error reading a body from connection: stream closed because of a broken pipe"
+            in envd.stdout
+        )
 
 
 class Metrics:
