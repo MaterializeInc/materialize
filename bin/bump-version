@@ -40,7 +40,7 @@ sed -i.bak \
     "s/^version = .*/version = \"$version\"/" \
     src/{clusterd,environmentd,persist-client,testdrive,catalog-debug,balancerd}/Cargo.toml
 
-if ! [[ "$version" = *dev ]]; then
+if ! [[ "$version" = *-dev* ]]; then
     sed -i.bak \
         "s/^Licensed Work:.*/Licensed Work:             Materialize Version v$version/" \
         LICENSE
