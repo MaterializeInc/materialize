@@ -395,7 +395,7 @@ steps:
 
       - id: mysql-cdc-resumption
         label: "MySQL CDC resumption tests %N"
-        parallelism: 3
+        parallelism: 4
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-cdc-resumption]
@@ -433,7 +433,7 @@ steps:
 
       - id: pg-cdc-resumption
         label: "Postgres CDC resumption tests %N"
-        parallelism: 2
+        parallelism: 3
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc-resumption]
