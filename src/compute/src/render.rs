@@ -288,8 +288,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                         ok_stream = suppress_early_progress(ok_stream, as_of);
                     }
 
-                    // TODO: add panic checks here
-
                     // Attach a probe reporting the input frontier.
                     let input_probe =
                         compute_state.input_probe_for(*source_id, dataflow.export_ids());
@@ -504,8 +502,6 @@ where
 
             let ok_arranged = ok_arranged.with_start_signal(start_signal.clone());
             let err_arranged = err_arranged.with_start_signal(start_signal);
-
-            // TODO: add panic checks here
 
             self.update_id(
                 Id::Global(idx.on_id),
