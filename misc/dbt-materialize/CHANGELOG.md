@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.8.6 - 2024-09-25
 
 * Enable the `cluster` configuration for seeds, which allows specifying a target
   cluster for `dbt seed` to run against (which is required for specific seed
@@ -21,6 +21,9 @@
       config:
         cluster: dbt_seed_cluster
   ```
+
+* Add a new `source_table` materialization type, in support of an upcoming
+  feature in Materialize (source versioning).
 
 ## 1.8.5 - 2024-08-21
 
