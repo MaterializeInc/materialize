@@ -27,6 +27,7 @@ class Check:
     # we can change the value for the entire class in the decorator
     enabled: bool = True
     externally_idempotent: bool = True
+    exclude_from_parallel_execution: bool = False
 
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         self.base_version = base_version
@@ -123,6 +124,14 @@ def disabled(ignore_reason: str):
 def externally_idempotent(externally_idempotent: bool = True):
     def decorator(cls):
         cls.externally_idempotent = externally_idempotent
+        return cls
+
+    return decorator
+
+
+def exclude_from_parallel_execution(exclude_from_parallel_execution: bool = False):
+    def decorator(cls):
+        cls.exclude_from_parallel_execution = exclude_from_parallel_execution
         return cls
 
     return decorator

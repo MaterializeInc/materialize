@@ -310,8 +310,10 @@ class PreflightCheckContinue(Scenario):
     def base_version(self) -> MzVersion:
         return get_last_version()
 
-    def _include_check_class(self, check_class: type[Check]) -> bool:
-        if not super()._include_check_class(check_class):
+    def _include_check_class(
+        self, check_class: type[Check], executor: Executor
+    ) -> bool:
+        if not super()._include_check_class(check_class, executor):
             return False
 
         if (

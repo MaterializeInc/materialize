@@ -43,6 +43,9 @@ class Executor:
     def join(self, handle: Any) -> None:
         pass
 
+    def uses_parallelism(self) -> bool:
+        return False
+
 
 class MzcomposeExecutor(Executor):
     def __init__(self, composition: Composition) -> None:
@@ -82,6 +85,9 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
         handle.join()
         if self.exception:
             raise self.exception
+
+    def uses_parallelism(self) -> bool:
+        return True
 
 
 class CloudtestExecutor(Executor):

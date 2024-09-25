@@ -55,7 +55,7 @@ class Scenario:
         filtered_check_classes = []
 
         for check_class in self.checks():
-            if self._include_check_class(check_class):
+            if self._include_check_class(check_class, executor):
                 filtered_check_classes.append(check_class)
 
         # Use base_version() here instead of _base_version so that overwriting
@@ -98,8 +98,16 @@ class Scenario:
     def requires_external_idempotence(self) -> bool:
         return False
 
-    def _include_check_class(self, check_class: type[Check]) -> bool:
-        return not check_class.__name__.endswith("Base") and (
+    def _include_check_class(
+        self, check_class: type[Check], executor: Executor
+    ) -> bool:
+        if check_class.__name__.endswith("Base"):
+            return False
+
+        if check_class.exclude_from_parallel_execution and executor.uses_parallelism():
+            return False
+
+        return (
             not self.requires_external_idempotence()
             or check_class.externally_idempotent
         )
