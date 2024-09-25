@@ -30,14 +30,13 @@ use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::TransformCtx;
 use timely::progress::Antichain;
 
-use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot,
     DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
-    OptimizeMode, OptimizerConfig, OptimizerError,
+    OptimizeMode, OptimizerCatalog, OptimizerConfig, OptimizerError,
 };
 use crate::CollectionIdBundle;
 
@@ -45,7 +44,7 @@ pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
-    catalog: Arc<Catalog>,
+    catalog: Arc<dyn OptimizerCatalog>,
     /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// A transient GlobalId to be used for the exported sink.
@@ -84,7 +83,7 @@ impl std::fmt::Debug for Optimizer {
 
 impl Optimizer {
     pub fn new(
-        catalog: Arc<Catalog>,
+        catalog: Arc<dyn OptimizerCatalog>,
         compute_instance: ComputeInstanceSnapshot,
         view_id: GlobalId,
         sink_id: GlobalId,
@@ -185,9 +184,8 @@ impl Optimize<SubscribeFrom> for Optimizer {
         let time = Instant::now();
 
         let mut df_builder = {
-            let catalog = self.catalog.state();
             let compute = self.compute_instance.clone();
-            DataflowBuilder::new(catalog, compute).with_config(&self.config)
+            DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone(), false); // timeline will be set in `resolve`.
         let mut df_meta = DataflowMetainfo::default();
