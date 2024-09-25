@@ -15,6 +15,8 @@ use timely::dataflow::{Scope, StreamCore};
 use timely::progress::frontier::AntichainRef;
 use timely::Container;
 
+// TODO: impleemnt trait on streamext and
+
 /// Panics if the frontier of a [`StreamCore`] exceeds a given `expiration` time.
 pub fn expire_stream_at<G, D>(
     stream: &StreamCore<G, D>,

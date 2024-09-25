@@ -18,7 +18,6 @@ use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoE
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationType};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::sources::Timeline;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -73,8 +72,8 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub refresh_schedule: Option<RefreshSchedule>,
     /// Human readable name
     pub debug_name: String,
-    /// The timeline of the dataflow.
-    pub timeline: Option<Timeline>,
+    /// Whether the timeline of the dataflow is [`Timeline::EpochMilliseconds`].
+    pub is_timeline_epochms: bool,
 }
 
 impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
@@ -132,7 +131,7 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
 
 impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     /// Creates a new dataflow description with a human-readable name.
-    pub fn new(name: String) -> Self {
+    pub fn new(name: String, is_timeline_epochms: bool) -> Self {
         Self {
             source_imports: Default::default(),
             index_imports: Default::default(),
@@ -144,7 +143,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             initial_storage_as_of: None,
             refresh_schedule: None,
             debug_name: name,
-            timeline: None,
+            is_timeline_epochms,
         }
     }
 
@@ -547,7 +546,7 @@ where
             initial_storage_as_of: self.initial_storage_as_of.clone(),
             refresh_schedule: self.refresh_schedule.clone(),
             debug_name: self.debug_name.clone(),
-            timeline: self.timeline.clone(),
+            is_timeline_epochms: self.is_timeline_epochms.clone(),
         }
     }
 }
@@ -565,7 +564,7 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, Collec
             initial_storage_as_of: self.initial_storage_as_of.into_proto(),
             refresh_schedule: self.refresh_schedule.into_proto(),
             debug_name: self.debug_name.clone(),
-            timeline: self.timeline.into_proto(),
+            is_timeline_epochms: self.is_timeline_epochms.into_proto(),
         }
     }
 
@@ -588,7 +587,7 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, Collec
                 .transpose()?,
             refresh_schedule: proto.refresh_schedule.into_rust()?,
             debug_name: proto.debug_name,
-            timeline: proto.timeline.into_rust()?,
+            is_timeline_epochms: proto.is_timeline_epochms.into_rust()?,
         })
     }
 }
@@ -724,8 +723,7 @@ proptest::prop_compose! {
         initial_as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
         refresh_schedule_some in any::<bool>(),
         refresh_schedule in any::<RefreshSchedule>(),
-        timeline_some in any::<bool>(),
-        timeline in any::<Timeline>(),
+        is_timeline_epochms in any::<bool>(),
     ) -> DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
             source_imports: BTreeMap::from_iter(source_imports.into_iter()),
@@ -752,7 +750,7 @@ proptest::prop_compose! {
                 None
             },
             debug_name,
-            timeline: timeline_some.then_some(timeline),
+            is_timeline_epochms,
         }
     }
 }

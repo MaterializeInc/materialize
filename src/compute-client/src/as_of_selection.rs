@@ -997,7 +997,7 @@ mod tests {
             initial_storage_as_of: Default::default(),
             refresh_schedule: Default::default(),
             debug_name: Default::default(),
-            timeline: None,
+            is_timeline_epochms: false,
         }
     }
 

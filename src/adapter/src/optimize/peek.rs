@@ -251,7 +251,10 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         };
 
         let debug_name = format!("oneshot-select-{}", self.select_id);
-        let mut df_desc = MirDataflowDescription::new(debug_name.to_string());
+        let mut df_desc = MirDataflowDescription::new(
+            debug_name.to_string(),
+            timestamp_ctx.is_timeline_epochms(),
+        );
 
         df_builder.import_view_into_dataflow(
             &self.select_id,
@@ -305,9 +308,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         {
             df_desc.until = Antichain::from_elem(until);
         }
-
-        // Capture the timeline.
-        df_desc.timeline = timestamp_ctx.timeline().cloned();
 
         // Construct TransformCtx for global optimization.
         let mut transform_ctx = TransformCtx::global(

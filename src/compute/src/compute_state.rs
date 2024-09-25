@@ -309,7 +309,7 @@ impl ComputeState {
                     .try_into()
                     .expect("Duration did not fit within u64");
                 let replica_expiration = Timestamp::new(now + offset);
-                info!("Replica frontier expires at {:?}", replica_expiration);
+                info!("replica will expire at {:?}", replica_expiration);
                 self.replica_expiration = Some(replica_expiration)
             }
         }

@@ -34,7 +34,6 @@ use mz_repr::explain::trace_plan;
 use mz_repr::GlobalId;
 use mz_sql::names::QualifiedItemName;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
-use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::notice::{IndexAlreadyExists, IndexKeyEmpty};
@@ -48,6 +47,7 @@ use crate::optimize::{
     trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
     OptimizerCatalog, OptimizerConfig, OptimizerError,
 };
+use crate::TimelineContext;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
@@ -91,11 +91,22 @@ pub struct Index {
     name: QualifiedItemName,
     on: GlobalId,
     keys: Vec<mz_expr::MirScalarExpr>,
+    timeline_ctx: Option<TimelineContext>,
 }
 
 impl Index {
-    pub fn new(name: QualifiedItemName, on: GlobalId, keys: Vec<mz_expr::MirScalarExpr>) -> Self {
-        Self { name, on, keys }
+    pub fn new(
+        name: QualifiedItemName,
+        on: GlobalId,
+        keys: Vec<mz_expr::MirScalarExpr>,
+        timeline_ctx: Option<TimelineContext>,
+    ) -> Self {
+        Self {
+            name,
+            on,
+            keys,
+            timeline_ctx,
+        }
     }
 }
 
@@ -152,7 +163,10 @@ impl Optimize<Index> for Optimizer {
             let compute = self.compute_instance.clone();
             DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
-        let mut df_desc = MirDataflowDescription::new(full_name.to_string());
+        let is_timeline_epochms = index
+            .timeline_ctx
+            .map_or(false, |ctx| ctx.is_timeline_epochms());
+        let mut df_desc = MirDataflowDescription::new(full_name.to_string(), is_timeline_epochms);
 
         df_builder.import_into_dataflow(&index.on, &mut df_desc, &self.config.features)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
@@ -162,9 +176,6 @@ impl Optimize<Index> for Optimizer {
             key: index.keys.clone(),
         };
         df_desc.export_index(self.exported_index_id, index_desc, on_desc.typ().clone());
-
-        // TODO(sdht0): consider other timelines such as `TimelineContext::TimestampIndependent`.
-        df_desc.timeline = Some(Timeline::EpochMilliseconds);
 
         // Prepare expressions in the assembled dataflow.
         let style = ExprPrepStyle::Index;

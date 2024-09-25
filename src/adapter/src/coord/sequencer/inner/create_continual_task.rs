@@ -89,6 +89,7 @@ impl Coordinator {
         let full_name = bootstrap_catalog.resolve_full_name(&name, Some(session.conn_id()));
         plan.continual_task.create_sql =
             replace_full_name(&plan.continual_task.create_sql, &full_name);
+        let timeline_context = self.validate_timeline_context(resolved_ids.0.clone())?;
 
         // Construct the CatalogItem for this CT and optimize it.
         let item = crate::continual_task::ct_item_from_plan(plan, sink_id, resolved_ids)?;
@@ -185,6 +186,7 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
+            timeline_context,
         );
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)

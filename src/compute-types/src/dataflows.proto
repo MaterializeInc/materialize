@@ -20,7 +20,6 @@ import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/refresh_schedule.proto";
 import "repr/src/relation_and_scalar.proto";
-import "storage-types/src/sources.proto";
 
 package mz_compute_types.dataflows;
 
@@ -58,7 +57,7 @@ message ProtoDataflowDescription {
     mz_repr.antichain.ProtoU64Antichain until = 7;
     optional mz_repr.antichain.ProtoU64Antichain initial_storage_as_of = 9;
     optional mz_repr.refresh_schedule.ProtoRefreshSchedule refresh_schedule = 10;
-    optional mz_storage_types.sources.ProtoTimeline timeline = 11;
+    bool is_timeline_epochms = 11;
 
     string debug_name = 8;
 }
