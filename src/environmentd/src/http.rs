@@ -615,7 +615,9 @@ where
         .await
         .map_err(|e| {
             let status = match e {
-                AdapterError::UserSessionsDisallowed => StatusCode::FORBIDDEN,
+                AdapterError::UserSessionsDisallowed | AdapterError::NetworkPolicyDenied(_) => {
+                    StatusCode::FORBIDDEN
+                }
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             };
             (status, Json(SqlError::from(e))).into_response()

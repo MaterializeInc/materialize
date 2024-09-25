@@ -67,6 +67,7 @@ use std::borrow::Cow;
 use std::clone::Clone;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::net::IpAddr;
 use std::string::ToString;
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
@@ -74,6 +75,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use im::OrdMap;
+use ipnet::IpNet;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal};
 use mz_ore::cast::CastFrom;
@@ -84,6 +86,8 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::user::ExternalUserMetadata;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use serde::Serialize;
+use thiserror::Error;
+use tracing::error;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;
@@ -993,6 +997,12 @@ impl Var for SystemVar {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum NetworkPolicyError {
+    #[error("Access denied for address {0}")]
+    AddressDenied(IpAddr),
+}
+
 #[derive(Debug, Copy, Clone)]
 pub struct ConnectionCounter {
     pub current: u64,
@@ -1239,6 +1249,7 @@ impl SystemVars {
             &KAFKA_DEFAULT_METADATA_FETCH_INTERVAL,
             &ENABLE_LAUNCHDARKLY,
             &MAX_CONNECTIONS,
+            &DEFAULT_NETWORK_POLICY_ALLOW_LIST,
             &SUPERUSER_RESERVED_CONNECTIONS,
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
             &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
@@ -2019,6 +2030,11 @@ impl SystemVars {
     /// Returns the `max_connections` configuration parameter.
     pub fn max_connections(&self) -> u32 {
         *self.expect_value(&MAX_CONNECTIONS)
+    }
+
+    pub fn default_network_policy(&self) -> Vec<IpNet> {
+        self.expect_value::<Vec<IpNet>>(&DEFAULT_NETWORK_POLICY_ALLOW_LIST)
+            .clone()
     }
 
     /// Returns the `superuser_reserved_connections` configuration parameter.

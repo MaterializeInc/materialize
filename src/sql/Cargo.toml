@@ -26,6 +26,7 @@ globset = "0.4.14"
 hex = "0.4.3"
 http = "1.1.0"
 im = "15.1.0"
+ipnet = "2.5.0"
 itertools = "0.10.5"
 maplit = "1.0.2"
 mysql_async = { version = "0.34.1", default-features = false, features = [

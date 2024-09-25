@@ -34,6 +34,7 @@ use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 
+use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
 
 /// Errors that can occur in the coordinator.
@@ -222,6 +223,8 @@ pub enum AdapterError {
     UnreadableSinkCollection,
     /// User sessions have been blocked.
     UserSessionsDisallowed,
+    /// This use session has been deneid by a NetworkPolicy.
+    NetworkPolicyDenied(NetworkPolicyError),
     /// Something attempted a write (to catalog, storage, tables, etc.) while in
     /// read-only mode.
     ReadOnly,
@@ -338,6 +341,7 @@ impl AdapterError {
             AdapterError::RtrTimeout(name) => Some(format!("{name} failed to ingest data up to the real-time recency point")),
             AdapterError::RtrDropFailure(name) => Some(format!("{name} dropped before ingesting data to the real-time recency point")),
             AdapterError::UserSessionsDisallowed => Some("Your organization has been blocked. Please contact support.".to_string()),
+            AdapterError::NetworkPolicyDenied(reason)=> Some(format!("{reason}.")),
             _ => None,
         }
     }
@@ -538,6 +542,7 @@ impl AdapterError {
             AdapterError::RtrDropFailure(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnreadableSinkCollection => SqlState::from_code("MZ009"),
             AdapterError::UserSessionsDisallowed => SqlState::from_code("MZ010"),
+            AdapterError::NetworkPolicyDenied(_) => SqlState::from_code("MZ011"),
             // In read-only mode all transactions are implicitly read-only
             // transactions.
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
@@ -765,6 +770,7 @@ impl fmt::Display for AdapterError {
                 write!(f, "collection is not readable at any time")
             }
             AdapterError::UserSessionsDisallowed => write!(f, "login blocked"),
+            AdapterError::NetworkPolicyDenied(_) => write!(f, "session denied"),
             AdapterError::ReadOnly => write!(f, "cannot write in read-only mode"),
             AdapterError::AlterClusterTimeout => {
                 write!(f, "canceling statement, provided timeout lapsed")
@@ -927,6 +933,12 @@ impl From<mz_sql::session::vars::ConnectionError> for AdapterError {
                 }
             }
         }
+    }
+}
+
+impl From<NetworkPolicyError> for AdapterError {
+    fn from(value: NetworkPolicyError) -> Self {
+        AdapterError::NetworkPolicyDenied(value)
     }
 }
 

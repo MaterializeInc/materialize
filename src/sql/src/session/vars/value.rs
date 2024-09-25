@@ -14,6 +14,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use ipnet::IpNet;
 use itertools::Itertools;
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
@@ -465,6 +466,40 @@ impl Value for Vec<Ident> {
             .collect::<Result<_, _>>()
             .map_err(|e| VarParseError::InvalidParameterValue {
                 invalid_values: values.to_vec(),
+                reason: e.to_string(),
+            })?;
+        Ok(values)
+    }
+
+    fn box_clone(&self) -> Box<dyn Value> {
+        Box::new(self.clone())
+    }
+
+    fn format(&self) -> String {
+        self.iter().map(|ident| ident.to_string()).join(", ")
+    }
+}
+
+impl Value for Vec<IpNet> {
+    fn type_name() -> Cow<'static, str>
+    where
+        Self: Sized,
+    {
+        "CIDR list".into()
+    }
+
+    fn parse(input: VarInput<'_>) -> Result<Self, VarParseError>
+    where
+        Self: Sized,
+    {
+        let values = input.to_vec();
+        let values: Vec<IpNet> = values
+            .iter()
+            .flat_map(|i| i.split(','))
+            .map(|d| IpNet::from_str(d.trim()))
+            .collect::<Result<_, _>>()
+            .map_err(|e| VarParseError::InvalidParameterValue {
+                invalid_values: values,
                 reason: e.to_string(),
             })?;
         Ok(values)
