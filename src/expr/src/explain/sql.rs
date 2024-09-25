@@ -20,8 +20,8 @@ use mz_repr::{Datum, GlobalId};
 use mz_sql_parser::ast::{
     Cte, CteBlock, Distinct, Expr, Ident, IdentError, JoinConstraint, JoinOperator, Limit,
     OrderByExpr, Query, Raw, RawItemName, Select, SelectItem, SelectOption, SelectOptionName,
-    SetExpr, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName, Value, Values,
-    WithOptionValue,
+    SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName, Value,
+    Values, WithOptionValue,
 };
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
@@ -138,6 +138,7 @@ enum SqlConversionError {
     },
     UnexpectedWMR,
     UnexpectedNegation,
+    UnexpectedFullyNegatedUnion,
     UnexpectedThreshold,
     UnexpectedMixedDistinctReduce,
     /// Recursion depth exceeded
@@ -329,14 +330,19 @@ impl MirToSql {
                         .iter()
                         .map(|col_name| vec![inner.clone(), col_name.clone()])
                         .collect::<Vec<_>>();
+                    let mut fq_colexprs = fq_columns
+                        .iter()
+                        .cloned()
+                        .map(Expr::Identifier)
+                        .collect::<Vec<_>>();
 
                     let mut new_select_items = Vec::with_capacity(scalars.len());
                     for (col, expr) in scalars.iter().enumerate() {
-                        let cols_so_far = num_inner_columns + col;
-                        new_select_items.push(SelectItem::Expr {
-                            expr: sc.to_sql_expr(expr, &fq_columns[0..cols_so_far])?,
-                            alias: Some(columns[cols_so_far].clone()),
-                        });
+                        let alias = Some(columns[num_inner_columns + col].clone());
+
+                        let expr = sc.to_sql_expr(expr, &fq_colexprs)?;
+                        fq_colexprs.push(expr.clone());
+                        new_select_items.push(SelectItem::Expr { expr, alias });
                     }
 
                     // TODO(mgree) this always generates a new CTE, but we can sometimes just add to the prior one (needs QB support)
@@ -388,11 +394,16 @@ impl MirToSql {
                         .iter()
                         .map(|col_name| vec![inner.clone(), col_name.clone()])
                         .collect::<Vec<_>>();
+                    let fq_colexprs = fq_columns
+                        .iter()
+                        .cloned()
+                        .map(Expr::Identifier)
+                        .collect::<Vec<_>>();
 
                     let mut predicates = predicates.into_iter();
-                    let mut selection = sc.to_sql_expr(predicates.next().unwrap(), &fq_columns)?;
+                    let mut selection = sc.to_sql_expr(predicates.next().unwrap(), &fq_colexprs)?;
                     for expr in predicates {
-                        selection = selection.and(sc.to_sql_expr(expr, &fq_columns)?);
+                        selection = selection.and(sc.to_sql_expr(expr, &fq_colexprs)?);
                     }
 
                     // TODO(mgree) this always generates a new CTE, but we can sometimes just add to the prior one (needs QB support)
@@ -442,6 +453,35 @@ impl MirToSql {
                         return sc.build_query(&inputs[0], bindings, ctx);
                     }
 
+                    // NOTE: metadata are stored in AST order!
+
+                    // recursively generate inputs in AST order...
+                    let mut fq_columns = Vec::with_capacity(columns.len());
+                    let mut fq_colexprs: Vec<Expr<Raw>> = Vec::with_capacity(columns.len());
+                    let mut q_idents = Vec::with_capacity(num_inputs);
+                    let mut q_aliases = Vec::with_capacity(num_inputs);
+                    let mut q_columns = Vec::with_capacity(num_inputs);
+                    for input in inputs {
+                        let (inner, inner_columns) = sc.build_query(input, bindings, ctx)?;
+                        let alias = sc.fresh_ident(inner.as_str());
+                        assert_eq!(inner_columns, sc.column_info(input, ctx));
+
+                        let cols = inner_columns
+                            .iter()
+                            .map(|col_name| vec![alias.clone(), col_name.clone()])
+                            .collect::<Vec<_>>();
+                        fq_columns.extend(cols.clone());
+                        fq_colexprs.extend(cols.into_iter().map(Expr::Identifier));
+
+                        q_aliases.push(alias);
+                        q_idents.push(inner);
+                        q_columns.push(inner_columns);
+                    }
+                    assert_eq!(
+                        columns.len(),
+                        q_columns.iter().map(|cols| cols.len()).sum::<usize>()
+                    );
+
                     // a real join! find the order...
                     let (first, rest): (_, Vec<_>) = match implementation {
                         crate::JoinImplementation::Differential((start, _, _), order) => {
@@ -457,28 +497,7 @@ impl MirToSql {
                         }
                     };
 
-                    // recursively generate inputs in the order...
-                    let mut fq_columns = Vec::with_capacity(columns.len());
-                    let mut q_idents = Vec::with_capacity(num_inputs);
-                    let mut q_aliases = Vec::with_capacity(num_inputs);
-                    let mut q_columns = Vec::with_capacity(num_inputs);
-                    for input in std::iter::once(&first).chain(rest.iter()) {
-                        let (inner, inner_columns) =
-                            sc.build_query(&inputs[*input], bindings, ctx)?;
-                        let alias = sc.fresh_ident(inner.as_str());
-                        assert!(inner_columns == sc.column_info(&inputs[*input], ctx));
-                        fq_columns.extend(
-                            inner_columns
-                                .iter()
-                                .map(|col_name| vec![alias.clone(), col_name.clone()]),
-                        );
-                        q_aliases.push(alias);
-                        q_idents.push(inner);
-                        q_columns.push(inner_columns);
-                    }
-                    assert!(columns == q_columns.clone().concat());
-
-                    // build the parts of the actual JOINing SELECT
+                    // build the parts of the actual JOINing SELECT, using join order
                     let from = vec![TableWithJoins {
                         relation: TableFactor::Table {
                             name: RawItemName::Name(UnresolvedItemName(vec![
@@ -514,7 +533,7 @@ impl MirToSql {
                     let mut selection: Option<Expr<Raw>> = None;
                     for equivalence in equivalences {
                         if let Some(conjunct) =
-                            sc.equivalence_to_conjunct(equivalence, &fq_columns)?
+                            sc.equivalence_to_conjunct(equivalence, &fq_colexprs)?
                         {
                             if let Some(sel) = selection {
                                 selection = Some(sel.and(conjunct))
@@ -557,20 +576,21 @@ impl MirToSql {
                     monotonic: _monotonic,
                     expected_group_size,
                 } => {
-                    assert!(columns.len() == group_key.len() + aggregates.len());
+                    assert_eq!(columns.len(), group_key.len() + aggregates.len());
 
                     let (inner, inner_columns) = sc.build_query(input, bindings, ctx)?;
 
-                    let fq_columns = inner_columns
+                    eprintln!("EAS: Reduce {expr:?}");
+                    let fq_colexprs = inner_columns
                         .iter()
-                        .map(|col_name| vec![inner.clone(), col_name.clone()])
+                        .map(|col_name| Expr::Identifier(vec![inner.clone(), col_name.clone()]))
                         .collect::<Vec<_>>();
                     // !!! selects group_key followed by each aggregate
                     let mut group_by = Vec::with_capacity(group_key.len());
                     let mut projection = Vec::with_capacity(columns.len());
 
                     for (gk, ident) in group_key.iter().zip(columns.iter()) {
-                        let expr = sc.to_sql_expr(gk, &fq_columns)?;
+                        let expr = sc.to_sql_expr(gk, &fq_colexprs)?;
                         group_by.push(expr.clone());
                         projection.push(SelectItem::Expr {
                             expr,
@@ -592,7 +612,7 @@ impl MirToSql {
                             shared_distinct_value = Some(agg.distinct);
                         }
 
-                        let expr = sc.agg_to_sql_expr(agg, &fq_columns)?;
+                        let expr = sc.agg_to_sql_expr(agg, &fq_colexprs)?;
                         projection.push(SelectItem::Expr {
                             expr,
                             alias: Some(ident.clone()),
@@ -634,7 +654,7 @@ impl MirToSql {
                     expected_group_size,
                 } => {
                     let (inner, inner_columns) = sc.build_query(input, bindings, ctx)?;
-                    assert!(inner_columns.len() == columns.len());
+                    assert_eq!(inner_columns.len(), columns.len());
 
                     let fq_columns = inner_columns
                         .iter()
@@ -668,11 +688,16 @@ impl MirToSql {
                         keys.push(columns[*col].clone());
                         fq_keys.push(fq_columns[*col].clone());
                     }
+                    let fq_colexprs = fq_columns
+                        .iter()
+                        .cloned()
+                        .map(Expr::Identifier)
+                        .collect::<Vec<_>>();
 
                     let limit = if let Some(limit) = limit {
                         Some(Limit {
                             with_ties: false,
-                            quantity: sc.to_sql_expr(limit, &fq_columns)?,
+                            quantity: sc.to_sql_expr(limit, &fq_colexprs)?,
                         })
                     } else {
                         None
@@ -712,7 +737,7 @@ impl MirToSql {
                         nulls_last,
                     } in order_key
                     {
-                        let expr = sc.to_sql_expr(&MirScalarExpr::Column(*column), &fq_columns)?;
+                        let expr = sc.to_sql_expr(&MirScalarExpr::Column(*column), &fq_colexprs)?;
                         let asc = Some(!*desc);
                         let nulls_last = Some(*nulls_last);
                         order_by.push(OrderByExpr {
@@ -724,7 +749,7 @@ impl MirToSql {
 
                     let mut outer_order_by = Vec::with_capacity(group_key.len() + order_key.len());
                     for col in group_key {
-                        let expr = sc.to_sql_expr(&MirScalarExpr::Column(*col), &fq_columns)?;
+                        let expr = sc.to_sql_expr(&MirScalarExpr::Column(*col), &fq_colexprs)?;
                         outer_order_by.push(OrderByExpr {
                             expr,
                             asc: None,
@@ -846,17 +871,80 @@ impl MirToSql {
                     )
                 }
                 Union { base, inputs } => {
-                    // detect left join
-                    if let Some(res) = sc.detect_left_join(base, inputs, bindings, ctx) {
-                        return Ok(res);
-                    }
-
                     // detect aggregates
                     if let Some(res) = sc.detect_aggregate_union(base, inputs, bindings, ctx) {
                         return Ok(res);
                     }
 
-                    unimplemented!("MIR-to-SQL Union\n{expr:?}")
+                    // in general, we'll have something of the form:
+                    //
+                    // Union
+                    //   [Negate]
+                    //     base
+                    //   [Negate]
+                    //     inputs[0]
+                    //   ...
+                    //   [Negate]
+                    //     inputs[n]
+                    //
+                    // it should not be the case that _all_ of them are negated
+
+                    // build the input queries and catalog them as positive (not negated) or negative (negated)
+                    let num_inputs = inputs.len() + 1;
+                    let mut pos = Vec::with_capacity(num_inputs);
+                    let mut neg = Vec::with_capacity(num_inputs);
+
+                    let base = &**base;
+                    for mut expr in std::iter::once(base).chain(inputs) {
+                        let mut positive = true;
+
+                        while let Negate { input } = expr {
+                            expr = &**input;
+                            positive = !positive;
+                        }
+
+                        let q = sc.build_query(expr, bindings, ctx)?;
+                        if positive {
+                            pos.push(q)
+                        } else {
+                            neg.push(q)
+                        }
+                    }
+
+                    // oops... they're all negated!
+                    if pos.is_empty() {
+                        return Err(SqlConversionError::UnexpectedFullyNegatedUnion);
+                    }
+
+                    let mut body = pos
+                        .into_iter()
+                        .map(|(i, _)| {
+                            SetExpr::Table::<Raw>(RawItemName::Name(
+                                UnresolvedItemName::unqualified(i),
+                            ))
+                        })
+                        .reduce(|left, right| SetExpr::SetOperation {
+                            op: SetOperator::Union,
+                            all: true,
+                            left: Box::new(left),
+                            right: Box::new(right),
+                        })
+                        .unwrap();
+
+                    for (i, _) in neg.into_iter() {
+                        let right = Box::new(SetExpr::Table::<Raw>(RawItemName::Name(
+                            UnresolvedItemName::unqualified(i),
+                        )));
+                        body = SetExpr::SetOperation {
+                            op: SetOperator::Except,
+                            all: true,
+                            left: Box::new(body),
+                            right,
+                        };
+                    }
+
+                    let ident = sc.fresh_ident("union");
+                    sc.push_body(ident, columns, body)
                 }
                 ArrangeBy { input, keys: _keys } => sc.build_query(input, bindings, ctx),
                 // Negate forms are handled under `Union` but not elsewhere (SQL doesn't have negative cardinalities!)
@@ -871,248 +959,6 @@ impl MirToSql {
                 } => Err(SqlConversionError::UnexpectedWMR),
             }
         })
-    }
-
-    fn detect_left_join(
-        &mut self,
-        base: &MirRelationExpr,
-        inputs: &Vec<MirRelationExpr>,
-        bindings: &mut BTreeMap<LocalId, (Ident, Vec<Ident>)>,
-        _ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
-    ) -> Option<(Ident, Vec<Ident>)> {
-        // detect the following idiom:
-        //
-        //  Union                                        +
-        //    Map (null, null)                           + base
-        //      Union                                    +
-        //        Negate                                 +
-        //          Project (l0 COLS)                    +
-        //            Join on=(EXPR) type=differential   +
-        //              Get l0                           +
-        //              ArrangeBy keys=[[KEYS]]          +
-        //                Distinct project=[KEYS]        +
-        //                  Project (KEYS)               +
-        //                    Get l1                     +
-        //        ReadStorage l0_underlying              +
-        //    Project (l0 COLS, l1 COLS)                 + inputs[0]
-        //      Get l1                                   +
-        //
-        // the names are:
-        //   - l0_underlying: the true left-hand side of the left join
-        //   - l0: support for the left-hand side of the left join
-        //   - l1: the result of the inner part of the left join
-
-        use MirRelationExpr::*;
-
-        //    Project (l0 COLS, l1 COLS)                 +
-        //      Get l1                                   +
-        // check outer projection, store in `id_joined`
-        if inputs.len() != 1 {
-            return None;
-        }
-        eprintln!("DLJ: looking at input...");
-        let Project { input, .. } = &inputs[0] else {
-            return None;
-        };
-        let Get { id: id_joined, .. } = &**input else {
-            return None;
-        };
-        eprintln!("DLJ: found {id_joined} as inner part");
-
-        //    Map (null, null)                           + base
-        let Map { input, scalars } = base else {
-            return None;
-        };
-        eprintln!("DLJ: checking nulls");
-        assert!(scalars.iter().all(|e| match e {
-            MirScalarExpr::Literal(Ok(row), _ty) => {
-                let datums = row.unpack();
-                datums.len() == 1 && datums[0].is_null()
-            }
-            _ => false,
-        }));
-
-        //      Union                                    +
-        //        Negate                                 + base
-        //          Project (l0 COLS)                    +
-        //            Join on=(EXPR) type=differential   +
-        //              Get l0                           +
-        //              ArrangeBy keys=[[KEYS]]          +
-        //                Distinct project=[KEYS]        +
-        //                  Project (KEYS)               +
-        //                    Get l1                     +
-        //        ReadStorage l0_underlying              + inputs[0]
-        eprintln!("DLJ: checking inner union");
-        let Union { base, inputs } = &**input else {
-            return None;
-        };
-
-        eprintln!("DLJ: underlying");
-        //        ReadStorage l0_underlying              +
-        if inputs.len() != 1 {
-            return None;
-        }
-        let Get {
-            id: _id_underlying, ..
-        } = &inputs[0]
-        else {
-            return None;
-        };
-
-        eprintln!("DLJ: negate");
-        //        Negate                                 +
-        let Negate { input } = &**base else {
-            return None;
-        };
-
-        eprintln!("DLJ: project");
-        //          Project (l0 COLS)                    +
-        let Project { input, .. } = &**input else {
-            return None;
-        };
-
-        //            Join on=(EXPR) type=differential   +
-        //              Get l0                           + inputs[0]
-        //              ArrangeBy keys=[[KEYS]]          + inputs[1]
-        //                Distinct project=[KEYS]        +
-        //                  Project (KEYS)               +
-        //                    Get l1                     +
-        eprintln!("DLJ: join");
-
-        let Join { inputs, .. } = &**input else {
-            return None;
-        };
-
-        eprintln!("DLJ: join inputs {}", inputs.len());
-        if inputs.len() != 2 {
-            return None;
-        }
-
-        //              Get l0                           + inputs[0]
-        eprintln!("DLJ: lhs");
-        let Get { id: _id_lhs, .. } = &inputs[0] else {
-            return None;
-        };
-
-        //              ArrangeBy keys=[[KEYS]]          + inputs[1]
-        eprintln!("DLJ: arrange");
-        let ArrangeBy { input, .. } = &inputs[1] else {
-            return None;
-        };
-
-        //                Distinct project=[KEYS]        +
-        // TODO(mgree) check that it's the reduce we're looking for, confirm KEYS and projection
-        eprintln!("looking for distinct in {input:?}");
-        let Reduce { input, .. } = &**input else {
-            return None;
-        };
-
-        //                  Project (KEYS)               +
-        eprintln!("DLJ: project");
-        let Project { input, .. } = &**input else {
-            return None;
-        };
-
-        //                    Get l1                     +
-        eprintln!("DLJ: final get");
-        let Get { id: id_joined2, .. } = &**input else {
-            return None;
-        };
-        eprintln!("DLJ: got {id_joined2}");
-
-        if id_joined != id_joined2 {
-            return None;
-        }
-
-        let Id::Local(local) = id_joined else {
-            eprintln!("DLJ: not a local");
-            return None;
-        };
-
-        // it matched! to render the left join, we'll render the inner join (l1) and update it
-        let Some((ident, columns)) = bindings.get(local) else {
-            eprintln!("DLJ: unbound");
-            return None;
-        };
-
-        // we'll try to find the inner join to update in a fresh query (in case someone else uses it)
-        let mut ident = ident;
-        let inner_join;
-        let mut query;
-        loop {
-            let Some((_, _, inner_join_query)) = self.query.iter().find(|(i, _, _)| i == ident)
-            else {
-                eprintln!("DLJ: couldn't find query");
-                return None;
-            };
-
-            query = inner_join_query.clone();
-
-            let SetExpr::Select(select) = &mut query.body else {
-                eprintln!("DLJ: not a select");
-                return None;
-            };
-            let Select { from, .. } = &mut **select;
-
-            if from.len() != 1 {
-                eprintln!("DLJ: bad FROM {from:?}");
-                return None;
-            }
-
-            let TableWithJoins { relation, joins } = &mut from[0];
-
-            // found it!
-            match joins.len() {
-                1 => {
-                    // found it!
-                    inner_join = &mut joins[0];
-                    break;
-                }
-                0 => {
-                    // could just be a table reference, keep looking
-                    eprintln!("DLJ: chasing...");
-                    let TableFactor::Table {
-                        name: RawItemName::Name(UnresolvedItemName(idents)),
-                        ..
-                    } = relation
-                    else {
-                        return None;
-                    };
-                    eprintln!("DLJ: chasing {idents:?}");
-
-                    if idents.len() != 1 {
-                        return None;
-                    }
-
-                    ident = &idents[0];
-                }
-                _ => {
-                    // huh... no idea where we are
-                    eprintln!("DLJ: couldn't find inner join");
-                    return None;
-                }
-            }
-        }
-
-        eprintln!("DLJ: join {inner_join:?}");
-        let JoinOperator::Inner(constraint) = &mut inner_join.join_operator else {
-            eprintln!("DLJ: not an inner join");
-            return None;
-        };
-
-        inner_join.join_operator = JoinOperator::LeftOuter(constraint.clone());
-
-        let ident = self.fresh_ident("left_join");
-        self.push_prequery(ident, columns.clone(), query)
-            .map_or_else(
-                |err| {
-                    ::tracing::error!(
-                        "MIR-to-SQL error caused aggregate detection to fail: {err:?}",
-                    );
-                    None
-                },
-                Some,
-            )
     }
 
     fn detect_aggregate_union(
@@ -1205,7 +1051,7 @@ impl MirToSql {
     fn equivalence_to_conjunct(
         &mut self,
         exprs: &Vec<MirScalarExpr>,
-        columns: &[Vec<Ident>],
+        columns: &[Expr<Raw>],
     ) -> Result<Option<Expr<Raw>>, SqlConversionError> {
         let mut iter = exprs.into_iter();
         let Some(lhs) = iter.next() else {
@@ -1231,7 +1077,7 @@ impl MirToSql {
     fn to_sql_expr(
         &mut self,
         expr: &MirScalarExpr,
-        columns: &[Vec<Ident>],
+        columns: &[Expr<Raw>],
     ) -> Result<Expr<Raw>, SqlConversionError> {
         use MirScalarExpr::*;
         fn call<S: ToString>(f: S, args: Vec<Expr<Raw>>) -> Expr<Raw> {
@@ -1244,7 +1090,7 @@ impl MirToSql {
         }
 
         match expr {
-            Column(col) => Ok(Expr::Identifier(columns[*col].clone())),
+            Column(col) => Ok(columns[*col].clone()),
             Literal(Ok(row), _) => {
                 let mut datums = row.unpack();
                 if datums.len() != 1 {
@@ -1285,7 +1131,7 @@ impl MirToSql {
     fn agg_to_sql_expr(
         &mut self,
         expr: &AggregateExpr,
-        columns: &[Vec<Ident>],
+        columns: &[Expr<Raw>],
     ) -> Result<Expr<Raw>, SqlConversionError> {
         let arg = self.to_sql_expr(&expr.expr, columns)?;
 
