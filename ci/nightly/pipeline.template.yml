@@ -1522,20 +1522,50 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
-  - id: cloudtest-slow
-    label: "Slow Cloudtest"
-    depends_on: build-aarch64
-    timeout_in_minutes: 45
-    env:
-      CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
-    agents:
-      # TODO: Debezium DNS flakiness doesn't allow running on hetzner
-      # queue: hetzner-aarch64-8cpu-16gb
-      queue: linux-aarch64-medium
-    plugins:
-      - ./ci/plugins/cloudtest:
-          args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
-    sanitizer: skip
+  - group: Cloud tests
+    key: cloudtests
+    steps:
+      - id: cloudtest
+        label: Cloudtest
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        inputs:
+          - test/cloudtest
+          - misc/python/materialize/cloudtest
+          - misc/kind
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/cloudtest:
+              args:
+                [
+                  --exitfirst,
+                  -m,
+                  "not long and not node_recovery",
+                  test/cloudtest/,
+                ]
+        agents:
+          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
+          queue: linux-aarch64
+        sanitizer: skip
+
+
+      - id: cloudtest-slow
+        label: "Slow Cloudtest"
+        depends_on: build-aarch64
+        timeout_in_minutes: 45
+        env:
+          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
+        agents:
+          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
+          # queue: hetzner-aarch64-8cpu-16gb
+          queue: linux-aarch64-medium
+        plugins:
+          - ./ci/plugins/cloudtest:
+              args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
+        sanitizer: skip
 
   - id: txn-wal-fencing
     label: Txn-wal fencing %N
