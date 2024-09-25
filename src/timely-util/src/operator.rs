@@ -42,8 +42,6 @@ where
     C1: Container,
     G: Scope,
 {
-    // TODO: add expiration() here
-
     /// Like `timely::dataflow::operators::generic::operator::Operator::unary`,
     /// but the logic function can handle failures.
     ///
@@ -185,8 +183,6 @@ where
     G: Scope,
     R: Semigroup,
 {
-    // TODO: add expiration() here
-
     /// Creates a new empty collection in `scope`.
     fn empty(scope: &G) -> Collection<G, D1, R>;
 

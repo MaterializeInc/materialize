@@ -63,8 +63,6 @@ where
             }
         }
 
-        // TODO: sink.refreshschedule set
-
         // TODO[btv] - We should determine the key and permutation to use during planning,
         // rather than at runtime.
         //

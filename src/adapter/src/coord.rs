@@ -1795,7 +1795,6 @@ impl Coordinator {
         let exert_prop = system_config.arrangement_exert_proportionality();
         self.controller.compute.update_configuration(compute_config);
         self.controller.storage.update_parameters(storage_config);
-        // TODO: follow storage dependencies on materialized views with refresh views?
         self.controller
             .update_orchestrator_scheduling_config(scheduling_config);
         self.controller

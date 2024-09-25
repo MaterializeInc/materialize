@@ -125,7 +125,7 @@ where
         };
 
         debug!(
-            "Dataflow {dataflow_id}: is_timeline_epochms: {}, expire_at: {expire_at:?}, until: {until:?}",
+            "dataflow {dataflow_id}: is_timeline_epochms: {}, expire_at: {expire_at:?}, until: {until:?}",
             dataflow.is_timeline_epochms
         );
 
