@@ -198,7 +198,10 @@ pub fn build_compute_dataflow<A: Allocate>(
         .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
         .collect::<Vec<_>>();
 
-    let expire_at = if dataflow.is_timeline_epochms && dataflow.refresh_schedule.is_none() {
+    let expire_at = if dataflow.is_timeline_epochms
+        && dataflow.refresh_schedule.is_none()
+        && !dataflow.is_single_time()
+    {
         compute_state
             .replica_expiration
             .map(Antichain::from_elem)
