@@ -18,7 +18,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
@@ -66,9 +65,6 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
-use mz_storage_types::dyncfgs::{
-    REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
-};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
@@ -91,7 +87,7 @@ use tokio::time::error::Elapsed;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
-use crate::collection_mgmt::CollectionManagerKind;
+use crate::collection_mgmt::{AppendOnlyIntrospectionConfig, CollectionManagerKind};
 use crate::instance::{Instance, ReplicaConfig};
 use crate::statistics::StatsState;
 
@@ -664,7 +660,7 @@ where
                     // and collection manager should only be responsible for
                     // built-in introspection collections?
                     self.collection_manager
-                        .register_append_only_collection(id, write, false);
+                        .register_append_only_collection(id, write, false, None);
                 }
                 DataSource::IngestionExport {
                     ingestion_id,
@@ -1539,60 +1535,13 @@ where
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> BoxFuture<Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>> {
-        let metadata = match self.storage_collections.collection_metadata(id) {
-            Ok(metadata) => metadata,
-            Err(e) => return async { Err(e) }.boxed(),
-        };
-        let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
-            assert_eq!(txns_id, self.txns_read.txns_id());
-            self.txns_read.clone()
-        });
-        let persist = Arc::clone(&self.persist);
-        async move {
-            let mut read_handle = read_handle_for_snapshot(&persist, id, &metadata).await?;
-            let contents = match txns_read {
-                None => {
-                    // We're not using txn-wal for tables, so we can take a snapshot directly.
-                    read_handle
-                        .snapshot_and_fetch(Antichain::from_elem(as_of))
-                        .await
-                }
-                Some(txns_read) => {
-                    // We _are_ using txn-wal for tables. It advances the physical upper of the
-                    // shard lazily, so we need to ask it for the snapshot to ensure the read is
-                    // unblocked.
-                    //
-                    // Consider the following scenario:
-                    // - Table A is written to via txns at time 5
-                    // - Tables other than A are written to via txns consuming timestamps up to 10
-                    // - We'd like to read A at 7
-                    // - The application process of A's txn has advanced the upper to 5+1, but we need
-                    //   it to be past 7, but the txns shard knows that (5,10) is empty of writes to A
-                    // - This branch allows it to handle that advancing the physical upper of Table A to
-                    //   10 (NB but only once we see it get past the write at 5!)
-                    // - Then we can read it normally.
-                    txns_read.update_gt(as_of.clone()).await;
-                    let data_snapshot = txns_read
-                        .data_snapshot(metadata.data_shard, as_of.clone())
-                        .await;
-                    data_snapshot.snapshot_and_fetch(&mut read_handle).await
-                }
-            };
-            match contents {
-                Ok(contents) => {
-                    let mut snapshot = Vec::with_capacity(contents.len());
-                    for ((data, _), _, diff) in contents {
-                        // TODO(petrosagg): We should accumulate the errors too and let the user
-                        // interprret the result
-                        let row = data.expect("invalid protobuf data").0?;
-                        snapshot.push((row, diff));
-                    }
-                    Ok(snapshot)
-                }
-                Err(_) => Err(StorageError::ReadBeforeSince(id)),
-            }
-        }
-        .boxed()
+        snapshot(
+            id,
+            as_of,
+            &self.storage_collections,
+            &self.txns_read,
+            &self.persist,
+        )
     }
 
     async fn snapshot_latest(
@@ -2776,6 +2725,7 @@ where
             // happens when we take over instead be a periodic thing, and make
             // it resilient to the upper moving concurrently.
             CollectionManagerKind::AppendOnly => {
+                // TODO(jkosh44) Handle this inside of the append only task.
                 if !self.read_only {
                     self.prepare_introspection_collection(
                         id,
@@ -2786,10 +2736,18 @@ where
                     .await?;
                 }
 
+                let introspection_config = AppendOnlyIntrospectionConfig {
+                    introspection_type,
+                    config_set: Arc::clone(self.config.config_set()),
+                    storage_collections: Arc::clone(&self.storage_collections),
+                    txns_read: self.txns_read.clone(),
+                    persist: Arc::clone(&self.persist),
+                };
                 self.collection_manager.register_append_only_collection(
                     id,
                     write_handle,
                     force_writable,
+                    Some(introspection_config),
                 );
             }
         }
@@ -2800,7 +2758,7 @@ where
     /// Does any work that is required before this controller instance starts
     /// writing to the given introspection collection.
     ///
-    /// This migh include consolidation, deleting older entries or seeding
+    /// This might include consolidation, deleting older entries or seeding
     /// in-memory state of, say, scrapers, with current collection contents.
     async fn prepare_introspection_collection(
         &mut self,
@@ -2818,17 +2776,6 @@ where
             IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
                 // Differential collections start with an empty
                 // desired state. No need to manually reset.
-            }
-            IntrospectionType::ReplicaMetricsHistory | IntrospectionType::WallclockLagHistory => {
-                let write_handle = write_handle.expect("filled in by caller");
-                let result = self
-                    .partially_truncate_metrics_history(introspection_type, write_handle)
-                    .await;
-                if let Err(error) = result {
-                    soft_panic_or_log!(
-                        "error truncating metrics history: {error} (type={introspection_type:?})"
-                    );
-                }
             }
             IntrospectionType::StorageSourceStatistics => {
                 let prev = self.snapshot_statistics(id, recent_upper).await;
@@ -2966,17 +2913,14 @@ where
                 // desired state. No need to manually reset.
             }
 
-            // Note [btv] - we don't truncate these, because that uses
-            // a huge amount of memory on environmentd startup.
-            IntrospectionType::PreparedStatementHistory
+            IntrospectionType::ReplicaMetricsHistory
+            | IntrospectionType::WallclockLagHistory
+            | IntrospectionType::PreparedStatementHistory
             | IntrospectionType::StatementExecutionHistory
             | IntrospectionType::SessionHistory
             | IntrospectionType::StatementLifecycleHistory
             | IntrospectionType::SqlText => {
-                // NOTE(aljoscha): We never remove from these
-                // collections. Someone, at some point needs to
-                // think about that! Issue:
-                // https://github.com/MaterializeInc/materialize/issues/25696
+                // Handled by append only task.
             }
         }
 
@@ -3162,91 +3106,6 @@ where
             .into_iter()
             .map(|(key, (_, row))| (key, row))
             .collect()
-    }
-
-    /// Truncates the given metrics history by removing all entries older than that history's
-    /// configured retention interval.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `collection` is not a metrics history.
-    async fn partially_truncate_metrics_history(
-        &mut self,
-        collection: IntrospectionType,
-        write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
-    ) -> Result<(), anyhow::Error> {
-        let (keep_duration, occurred_at_col) = match collection {
-            IntrospectionType::ReplicaMetricsHistory => (
-                REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(self.config.config_set()),
-                collection_status::REPLICA_METRICS_HISTORY_DESC
-                    .get_by_name(&ColumnName::from("occurred_at"))
-                    .expect("schema has not changed")
-                    .0,
-            ),
-            IntrospectionType::WallclockLagHistory => (
-                WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(self.config.config_set()),
-                collection_status::WALLCLOCK_LAG_HISTORY_DESC
-                    .get_by_name(&ColumnName::from("occurred_at"))
-                    .expect("schema has not changed")
-                    .0,
-            ),
-            _ => panic!("not a metrics history: {collection:?}"),
-        };
-
-        let id = self.introspection_ids.lock().expect("poisoned")[&collection];
-
-        let upper = write_handle.fetch_recent_upper().await;
-        let Some(upper_ts) = upper.as_option() else {
-            bail!("collection is sealed");
-        };
-        let Some(as_of_ts) = upper_ts.step_back() else {
-            return Ok(()); // nothing to truncate
-        };
-
-        let mut rows = self
-            .snapshot(id, as_of_ts)
-            .await
-            .map_err(|e| anyhow!("reading snapshot: {e:?}"))?;
-
-        let now = mz_ore::now::to_datetime((self.now)());
-        let keep_since = now - keep_duration;
-
-        // Produce retractions by inverting diffs of rows we want to delete and setting the diffs
-        // of all other rows to 0.
-        for (row, diff) in &mut rows {
-            let datums = row.unpack();
-            let occurred_at = datums[occurred_at_col].unwrap_timestamptz();
-            *diff = if *occurred_at < keep_since { -*diff } else { 0 };
-        }
-
-        // Consolidate to avoid superfluous writes.
-        differential_dataflow::consolidation::consolidate(&mut rows);
-
-        if rows.is_empty() {
-            return Ok(());
-        }
-
-        // It is very important that we append our retractions at the timestamp
-        // right after the timestamp at which we got our snapshot. Otherwise,
-        // it's possible for someone else to sneak in retractions or other
-        // unexpected changes.
-        let old_upper_ts = upper_ts.clone();
-        let write_ts = old_upper_ts.clone();
-        let new_upper_ts = TimestampManipulation::step_forward(&old_upper_ts);
-
-        let updates = rows
-            .into_iter()
-            .map(|(row, diff)| ((SourceData(Ok(row)), ()), write_ts.clone(), diff));
-
-        write_handle
-            .compare_and_append(
-                updates,
-                Antichain::from_elem(old_upper_ts),
-                Antichain::from_elem(new_upper_ts),
-            )
-            .await
-            .expect("valid usage")
-            .map_err(|e| anyhow!("appending retractions: {e:?}"))
     }
 
     /// Appends a new global ID, shard ID pair to the appropriate collection.
@@ -3763,6 +3622,77 @@ impl From<&IntrospectionType> for CollectionManagerKind {
             | IntrospectionType::SqlText => CollectionManagerKind::AppendOnly,
         }
     }
+}
+
+// TODO(petrosagg): This signature is not very useful in the context of partially ordered times
+// where the as_of frontier might have multiple elements. In the current form the mutually
+// incomparable updates will be accumulated together to a state of the collection that never
+// actually existed. We should include the original time in the updates advanced by the as_of
+// frontier in the result and let the caller decide what to do with the information.
+pub(crate) fn snapshot<T>(
+    id: GlobalId,
+    as_of: T,
+    storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    txns_read: &TxnsRead<T>,
+    persist: &Arc<PersistClientCache>,
+) -> BoxFuture<Result<Vec<(Row, Diff)>, StorageError<T>>>
+where
+    T: Codec64 + From<EpochMillis> + TimestampManipulation,
+{
+    let metadata = match storage_collections.collection_metadata(id) {
+        Ok(metadata) => metadata,
+        Err(e) => return async { Err(e) }.boxed(),
+    };
+    let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
+        assert_eq!(txns_id, txns_read.txns_id());
+        txns_read.clone()
+    });
+    let persist = Arc::clone(persist);
+    async move {
+        let mut read_handle = read_handle_for_snapshot(&persist, id, &metadata).await?;
+        let contents = match txns_read {
+            None => {
+                // We're not using txn-wal for tables, so we can take a snapshot directly.
+                read_handle
+                    .snapshot_and_fetch(Antichain::from_elem(as_of))
+                    .await
+            }
+            Some(txns_read) => {
+                // We _are_ using txn-wal for tables. It advances the physical upper of the
+                // shard lazily, so we need to ask it for the snapshot to ensure the read is
+                // unblocked.
+                //
+                // Consider the following scenario:
+                // - Table A is written to via txns at time 5
+                // - Tables other than A are written to via txns consuming timestamps up to 10
+                // - We'd like to read A at 7
+                // - The application process of A's txn has advanced the upper to 5+1, but we need
+                //   it to be past 7, but the txns shard knows that (5,10) is empty of writes to A
+                // - This branch allows it to handle that advancing the physical upper of Table A to
+                //   10 (NB but only once we see it get past the write at 5!)
+                // - Then we can read it normally.
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
+                data_snapshot.snapshot_and_fetch(&mut read_handle).await
+            }
+        };
+        match contents {
+            Ok(contents) => {
+                let mut snapshot = Vec::with_capacity(contents.len());
+                for ((data, _), _, diff) in contents {
+                    // TODO(petrosagg): We should accumulate the errors too and let the user
+                    // interprret the result
+                    let row = data.expect("invalid protobuf data").0?;
+                    snapshot.push((row, diff));
+                }
+                Ok(snapshot)
+            }
+            Err(_) => Err(StorageError::ReadBeforeSince(id)),
+        }
+    }
+    .boxed()
 }
 
 async fn read_handle_for_snapshot<T>(

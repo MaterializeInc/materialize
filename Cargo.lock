@@ -6564,6 +6564,7 @@ dependencies = [
  "mz-build-info",
  "mz-cluster-client",
  "mz-controller-types",
+ "mz-dyncfg",
  "mz-dyncfgs",
  "mz-ore",
  "mz-persist-client",
