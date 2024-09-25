@@ -125,6 +125,7 @@ use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, InspectC
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
+use tracing::trace;
 
 use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
@@ -536,21 +537,34 @@ mod mint {
             }
         }
 
+        fn trace<S: AsRef<str>>(&self, message: S) {
+            let message = message.as_ref();
+            trace!(
+                desired_frontier = ?self.desired_frontiers.frontier().elements(),
+                persist_frontier = ?self.persist_frontier.elements(),
+                last_lower = ?self.last_lower.as_ref().map(|f| f.elements()),
+                message,
+            );
+        }
+
         fn advance_desired_ok_frontier(&mut self, frontier: Antichain<Timestamp>) {
             if PartialOrder::less_than(&self.desired_frontiers.ok, &frontier) {
                 self.desired_frontiers.ok = frontier;
+                self.trace("advanced `desired` ok frontier");
             }
         }
 
         fn advance_desired_err_frontier(&mut self, frontier: Antichain<Timestamp>) {
             if PartialOrder::less_than(&self.desired_frontiers.err, &frontier) {
                 self.desired_frontiers.err = frontier;
+                self.trace("advanced `desired` err frontier");
             }
         }
 
         fn advance_persist_frontier(&mut self, frontier: Antichain<Timestamp>) {
             if PartialOrder::less_than(&self.persist_frontier, &frontier) {
                 self.persist_frontier = frontier;
+                self.trace("advanced `persist` frontier");
             }
         }
 
@@ -576,6 +590,7 @@ mod mint {
 
             self.last_lower = Some(desc.lower.clone());
 
+            self.trace(format!("minted batch description: {desc:?}"));
             Some(desc)
         }
     }
@@ -746,15 +761,28 @@ mod write {
             }
         }
 
+        fn trace<S: AsRef<str>>(&self, message: S) {
+            let message = message.as_ref();
+            trace!(
+                worker = %self.worker_id,
+                desired_frontier = ?self.desired_frontiers.frontier().elements(),
+                persist_frontier = ?self.persist_frontiers.frontier().elements(),
+                batch_description = ?self.batch_description.as_ref().map(|(d, _)| d),
+                message,
+            );
+        }
+
         fn advance_desired_ok_frontier(&mut self, frontier: Antichain<Timestamp>) {
             if PartialOrder::less_than(&self.desired_frontiers.ok, &frontier) {
                 self.desired_frontiers.ok = frontier;
+                self.trace("advanced `desired` ok frontier");
             }
         }
 
         fn advance_desired_err_frontier(&mut self, frontier: Antichain<Timestamp>) {
             if PartialOrder::less_than(&self.desired_frontiers.err, &frontier) {
                 self.desired_frontiers.err = frontier;
+                self.trace("advanced `desired` err frontier");
             }
         }
 
@@ -762,6 +790,7 @@ mod write {
             if PartialOrder::less_than(&self.persist_frontiers.ok, &frontier) {
                 self.persist_frontiers.ok = frontier;
                 self.apply_persist_frontier_advancement();
+                self.trace("advanced `persist` ok frontier");
             }
         }
 
@@ -769,6 +798,7 @@ mod write {
             if PartialOrder::less_than(&self.persist_frontiers.err, &frontier) {
                 self.persist_frontiers.err = frontier;
                 self.apply_persist_frontier_advancement();
+                self.trace("advanced `persist` err frontier");
             }
         }
 
@@ -792,10 +822,12 @@ mod write {
 
         fn absorb_batch_description(&mut self, desc: BatchDescription, cap: Capability<Timestamp>) {
             if PartialOrder::less_than(&desc.lower, self.persist_frontiers.frontier()) {
+                self.trace(format!("skipping outdated batch description: {desc:?}"));
                 return;
             }
 
             self.batch_description = Some((desc, cap));
+            self.trace("set batch description");
         }
 
         async fn maybe_write_batch(&mut self) -> Option<(BatchOrData, Capability<Timestamp>)> {
@@ -822,6 +854,7 @@ mod write {
             // Don't write empty batches.
             if update_count == 0 {
                 drop((batch_ok_updates, batch_err_updates));
+                self.trace("skipping empty batch");
                 return None;
             }
 
@@ -849,6 +882,7 @@ mod write {
                 BatchOrData::Batch(batch.into_transmittable_batch())
             };
 
+            self.trace(format!("wrote batch with {update_count} updates"));
             Some((batch, cap))
         }
     }
@@ -950,9 +984,20 @@ mod append {
             }
         }
 
+        fn trace<S: AsRef<str>>(&self, message: S) {
+            let message = message.as_ref();
+            trace!(
+                batches_frontier = ?self.batches_frontier.elements(),
+                lower = ?self.lower.elements(),
+                batch_description = ?self.batch_description,
+                message,
+            );
+        }
+
         fn advance_batches_frontier(&mut self, frontier: Antichain<Timestamp>) {
             if PartialOrder::less_than(&self.batches_frontier, &frontier) {
                 self.batches_frontier = frontier;
+                self.trace("advanced `batches` frontier");
             }
         }
 
@@ -967,6 +1012,8 @@ mod append {
             self.batch_description = None;
             self.written_batches.clear();
             self.unwritten_data = None;
+
+            self.trace("advanced `lower`");
         }
 
         /// Absorb the given batch description into the state, provided it is not outdated.
@@ -974,10 +1021,12 @@ mod append {
             if PartialOrder::less_than(&self.lower, &desc.lower) {
                 self.advance_lower(desc.lower.clone());
             } else if &self.lower != &desc.lower {
+                self.trace(format!("skipping outdated batch description: {desc:?}"));
                 return;
             }
 
             self.batch_description = Some(desc);
+            self.trace("set batch description");
         }
 
         /// Absorb the given batch into the state, provided it is not outdated.
@@ -988,6 +1037,11 @@ mod append {
                     if PartialOrder::less_than(&self.lower, batch.lower()) {
                         self.advance_lower(batch.lower().clone());
                     } else if &self.lower != batch.lower() {
+                        self.trace(format!(
+                            "skipping outdated batch: ({:?}, {:?})",
+                            batch.lower().elements(),
+                            batch.upper().elements(),
+                        ));
                         return;
                     }
                     self.written_batches.push(batch);
@@ -1000,6 +1054,11 @@ mod append {
                     if PartialOrder::less_than(&self.lower, &lower) {
                         self.advance_lower(lower.clone());
                     } else if self.lower != lower {
+                        self.trace(format!(
+                            "skipping outdated batch: ({:?}, {:?})",
+                            lower.elements(),
+                            upper.elements(),
+                        ));
                         return;
                     }
                     let builder = self
@@ -1013,6 +1072,8 @@ mod append {
                     }
                 }
             }
+
+            self.trace("absorbed a batch");
         }
 
         async fn maybe_append_batch(&mut self) {
@@ -1034,8 +1095,15 @@ mod append {
             }
 
             let new_lower = match self.append_written_batches(desc).await {
-                Ok(shard_upper) => shard_upper,
+                Ok(shard_upper) => {
+                    self.trace("appended a batch");
+                    shard_upper
+                }
                 Err(shard_upper) => {
+                    self.trace(format!(
+                        "append failed due to `lower` mismatch: {:?}",
+                        shard_upper.elements(),
+                    ));
                     // Clean up batches we didn't manage to append.
                     for batch in self.written_batches.drain(..) {
                         batch.delete().await;
