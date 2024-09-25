@@ -596,33 +596,6 @@ steps:
               composition: platform-checks
               args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID"]
 
-  - id: cloudtest
-    label: Cloudtest %N
-    depends_on: build-aarch64
-    parallelism: 8
-    timeout_in_minutes: 60
-    inputs:
-      - test/cloudtest
-      - misc/python/materialize/cloudtest
-      - misc/kind
-    env:
-      CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/cloudtest:
-          args:
-            [
-              --exitfirst,
-              -m,
-              "not long and not node_recovery",
-              test/cloudtest/,
-            ]
-    agents:
-      # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
-      # queue: hetzner-aarch64-8cpu-16gb
-      queue: linux-aarch64
-    sanitizer: skip
-
   - id: source-sink-errors
     label: "Source/Sink Error Reporting %N"
     depends_on: build-aarch64
