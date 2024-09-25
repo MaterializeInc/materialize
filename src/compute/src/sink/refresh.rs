@@ -31,9 +31,6 @@ where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
 {
-    // TODO: panic check here?
-    // Think about semantics.
-
     // We need to disconnect the reachability graph and manage capabilities manually, because we'd
     // like to round up frontiers as well as data: as soon as our input frontier passes a refresh
     // time, we'll round it up to the next refresh time.
