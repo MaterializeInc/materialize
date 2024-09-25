@@ -76,7 +76,7 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub is_timeline_epochms: bool,
 }
 
-impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
+impl<P: fmt::Debug, S> DataflowDescription<P, S, mz_repr::Timestamp> {
     /// Tests if the dataflow refers to a single timestamp, namely
     /// that `as_of` has a single coordinate and that the `until`
     /// value corresponds to the `as_of` value plus one, or `as_of`
@@ -109,7 +109,9 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
         // here (as expected) since we are going to compare two `None` values.
         as_of.try_step_forward().as_ref() == until.as_option()
     }
+}
 
+impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
     /// Check invariants expected to be true about `DataflowDescription`s.
     pub fn check_invariants(&self) -> Result<(), String> {
         let mut plans: Vec<_> = self.objects_to_build.iter().map(|o| &o.plan).collect();
