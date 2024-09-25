@@ -12,11 +12,6 @@ mode cockroach
 # Start from a pristine state
 reset-server
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_create_continual_task = true
-----
-COMPLETE 0
-
 query T
 SHOW CLUSTER;
 ----
