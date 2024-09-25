@@ -742,6 +742,7 @@ pub struct CreateMaterializedViewOptimize {
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
+    timeline_context: TimelineContext,
 }
 
 #[derive(Debug)]
@@ -1806,6 +1807,7 @@ impl Coordinator {
         let exert_prop = system_config.arrangement_exert_proportionality();
         self.controller.compute.update_configuration(compute_config);
         self.controller.storage.update_parameters(storage_config);
+        // TODO: follow storage dependencies on materialized views with refresh views?
         self.controller
             .update_orchestrator_scheduling_config(scheduling_config);
         self.controller
@@ -2646,6 +2648,7 @@ impl Coordinator {
                             entry.name().clone(),
                             idx.on,
                             idx.keys.to_vec(),
+                            None,
                         );
                         let global_mir_plan = optimizer.optimize(index_plan)?;
                         let optimized_plan = global_mir_plan.df_desc().clone();
@@ -2700,6 +2703,7 @@ impl Coordinator {
                             debug_name,
                             optimizer_config.clone(),
                             self.optimizer_metrics(),
+                            self.get_timeline_context(id.clone()),
                         );
 
                         // MIR ⇒ MIR optimization (global)

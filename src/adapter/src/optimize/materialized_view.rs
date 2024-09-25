@@ -36,7 +36,6 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
-use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
@@ -50,6 +49,7 @@ use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
     OptimizeMode, OptimizerCatalog, OptimizerConfig, OptimizerError,
 };
+use crate::TimelineContext;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
@@ -77,6 +77,8 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
+    /// The timeline context.
+    timeline_ctx: TimelineContext,
 }
 
 impl Optimizer {
@@ -91,6 +93,7 @@ impl Optimizer {
         debug_name: String,
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
+        timeline_ctx: TimelineContext,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -105,6 +108,7 @@ impl Optimizer {
             config,
             metrics,
             duration: Default::default(),
+            timeline_ctx,
         }
     }
 }
@@ -220,7 +224,10 @@ impl Optimize<LocalMirPlan> for Optimizer {
             let compute = self.compute_instance.clone();
             DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
-        let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
+        let mut df_desc = MirDataflowDescription::new(
+            self.debug_name.clone(),
+            self.timeline_ctx.is_timeline_epochms(),
+        );
 
         df_desc.refresh_schedule.clone_from(&self.refresh_schedule);
 
@@ -245,9 +252,6 @@ impl Optimize<LocalMirPlan> for Optimizer {
             refresh_schedule: self.refresh_schedule.clone(),
         };
         df_desc.export_sink(self.sink_id, sink_description);
-
-        // TODO(sdht0): consider other timelines such as `TimelineContext::TimestampIndependent`.
-        df_desc.timeline = Some(Timeline::EpochMilliseconds);
 
         // Prepare expressions in the assembled dataflow.
         let style = ExprPrepStyle::Index;

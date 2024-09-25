@@ -321,18 +321,19 @@ impl Coordinator {
             self.optimizer_metrics(),
         );
         let span = Span::current();
+        let timeline_ctx = self.get_timeline_context(exported_index_id);
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create index",
             move || {
                 span.in_scope(|| {
-                    let mut pipeline = || -> Result<(
+                    let pipeline = || -> Result<(
                     optimize::index::GlobalMirPlan,
                     optimize::index::GlobalLirPlan,
                 ), AdapterError> {
                     let _dispatch_guard = explain_ctx.dispatch_guard();
 
                     let index_plan =
-                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone());
+                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone(), Some(timeline_ctx));
 
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(index_plan)?;

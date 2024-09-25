@@ -118,6 +118,8 @@ impl Coordinator {
             owner_id: *session.current_role_id(),
         }];
 
+        let timeline_context = self.validate_timeline_context(resolved_ids.0.clone())?;
+
         let () = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 let catalog = coord.catalog_mut();
@@ -185,6 +187,7 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
+            timeline_context,
         );
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)

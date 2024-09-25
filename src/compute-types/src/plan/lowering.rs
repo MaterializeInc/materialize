@@ -117,7 +117,7 @@ impl Context {
             initial_storage_as_of: desc.initial_storage_as_of,
             refresh_schedule: desc.refresh_schedule,
             debug_name: desc.debug_name,
-            timeline: desc.timeline,
+            is_timeline_epochms: desc.is_timeline_epochms,
         })
     }
 

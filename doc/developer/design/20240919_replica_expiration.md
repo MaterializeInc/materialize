@@ -74,10 +74,13 @@ More concretely, we make the following changes:
   replica with a panic if the frontier exceeds the expiration time. This is to
   prevent the replica from serving requests without any data that has
   potentially been dropped.
+  * Explain where the checks have been added and why.
 * If the expiration time is exceeded, the replica will panic and restart with a
   new expiration limit as an offset of the new start time. This time, any data
   whose timestamps fall within the new limit are not filtered, thus maintaining
   correctness.
+
+* Replica now().
 
 ## Alternatives
 
@@ -89,3 +92,6 @@ More concretely, we make the following changes:
   - Given that we currently restart replicas every week as part of the DB release
     and leaving some buffer for skipped week, 3 weeks (+1 day margin) seems like
     a good limit to start with.
+- What to do with refresh at dataflows?
+    - We can ignore refresh at dataflows for now, as they are not expected to
+        generate retractions
