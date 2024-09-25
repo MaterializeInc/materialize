@@ -114,7 +114,7 @@ build --@rules_rust//:extra_rustc_flag="-Csymbol-mangling-version=v0"
 build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=64"
 # Enabling pipelined builds allows dependent libraries to begin compiling with
 # just `.rmeta` instead of the full `.rlib`.
-build --@rules_rust//rust/settings:pipelined_compilation=True
+#build --@rules_rust//rust/settings:pipelined_compilation=True
 
 # As of Jan 2024 all of the x86-64 and aarch64 hardware we run on support these
 # CPU targets.
