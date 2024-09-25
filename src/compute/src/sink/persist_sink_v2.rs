@@ -941,7 +941,8 @@ mod append {
             }
 
             let writer = persist_api.open_writer().await;
-            let mut state = State::new(writer);
+            let sink_metrics = persist_api.open_metrics().await;
+            let mut state = State::new(writer, sink_metrics);
 
             loop {
                 // Read from the inputs, absorb batch descriptions and batches. If the `batches`
@@ -982,6 +983,7 @@ mod append {
     /// State maintained by the `append` operator.
     struct State {
         persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
+        metrics: SinkMetrics,
         /// The current input frontier of `batches`.
         batches_frontier: Antichain<Timestamp>,
         /// The greatest observed `lower` from both `descs` and `batches`.
@@ -995,9 +997,13 @@ mod append {
     }
 
     impl State {
-        fn new(persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>) -> Self {
+        fn new(
+            persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
+            metrics: SinkMetrics,
+        ) -> Self {
             Self {
                 persist_writer,
+                metrics,
                 batches_frontier: Antichain::from_elem(Timestamp::MIN),
                 lower: Antichain::from_elem(Timestamp::MIN),
                 batch_description: None,
@@ -1091,6 +1097,7 @@ mod append {
                             .add(&SourceData(data), &(), &time, &diff)
                             .await
                             .expect("valid usage");
+                        self.metrics.forwarded_updates.inc();
                     }
                 }
             }
@@ -1114,6 +1121,7 @@ mod append {
                     .await
                     .expect("valid usage");
                 self.written_batches.push(batch);
+                self.metrics.forwarded_batches.inc();
             }
 
             let new_lower = match self.append_written_batches(desc).await {
