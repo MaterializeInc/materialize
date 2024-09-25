@@ -943,16 +943,26 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_source_references_update(
         &mut self,
-        _source_references: mz_catalog::durable::SourceReferences,
+        source_references: mz_catalog::durable::SourceReferences,
         diff: StateDiff,
         _retractions: &mut InProgressRetractions,
     ) {
         match diff {
             StateDiff::Addition => {
-                unimplemented!("source references are not yet implemented");
+                let prev = self
+                    .source_references
+                    .insert(source_references.source_id, source_references);
+                assert!(
+                    prev.is_none(),
+                    "values must be explicitly retracted before inserting a new value: {prev:?}"
+                );
             }
             StateDiff::Retraction => {
-                unimplemented!("source references are not yet implemented");
+                let prev = self.source_references.remove(&source_references.source_id);
+                assert!(
+                    prev.is_some(),
+                    "retraction for a non-existent existing value: {source_references:?}"
+                );
             }
         }
     }

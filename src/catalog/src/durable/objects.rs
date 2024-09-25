@@ -45,6 +45,7 @@ use mz_sql::catalog::{
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::plan::ClusterSchedule;
 use proptest_derive::Arbitrary;
+use serde::Serialize;
 
 use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
 use crate::durable::objects::serialization::proto;
@@ -501,14 +502,14 @@ impl DurableType for Item {
     }
 }
 
-#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, Serialize)]
 pub struct SourceReferences {
     pub source_id: GlobalId,
     pub updated_at: u64,
     pub references: Vec<SourceReference>,
 }
 
-#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, Arbitrary)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, Arbitrary, Serialize)]
 pub struct SourceReference {
     pub name: String,
     pub namespace: Option<String>,

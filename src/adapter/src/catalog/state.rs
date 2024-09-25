@@ -26,6 +26,7 @@ use mz_catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
 };
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
+use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, ContinualTask,
@@ -123,6 +124,7 @@ pub struct CatalogState {
     pub(super) default_privileges: DefaultPrivileges,
     pub(super) system_privileges: PrivilegeMap,
     pub(super) comments: CommentsMap,
+    pub(super) source_references: BTreeMap<GlobalId, SourceReferences>,
     pub(super) storage_metadata: StorageMetadata,
 
     // Mutable state not derived from the durable catalog.
@@ -194,6 +196,7 @@ impl CatalogState {
             default_privileges: Default::default(),
             system_privileges: Default::default(),
             comments: Default::default(),
+            source_references: Default::default(),
             storage_metadata: Default::default(),
         }
     }
