@@ -94,6 +94,18 @@
 //! The main simplification these invariants allow is that operators only need to keep track of the
 //! most recent batch description and/or `lower`. Previous batch descriptions are not valid
 //! anymore, so there is no reason to hold any state or perform any work in support of them.
+//!
+//! ### Read-only Mode
+//!
+//! The persist sink can optionally be initialized in read-only mode. In this mode it is passive
+//! and avoids any writes to persist. Activating the `read_only_rx` transitions the sink into write
+//! mode, where it commences normal operation.
+//!
+//! Read-only mode is implemented by the `mint` operator. To disable writes, the `mint` operator
+//! simply avoids minting any batch descriptions. Since both the `write` and the `append` operator
+//! require batch descriptions to write/append batches, this suppresses any persist communication.
+//! At the same time, the `write` operator still observes changes to the `desired` and `persist`
+//! collections, allowing it to keep its correction buffer up-to-date.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -123,6 +135,7 @@ use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, InspectC
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
+use tokio::sync::watch;
 use tracing::trace;
 
 use crate::compute_state::ComputeState;
@@ -198,6 +211,7 @@ where
         persist_api(name),
         as_of,
         active_worker_id,
+        compute_state.read_only_rx.clone(),
         &desired,
     );
 
@@ -383,6 +397,7 @@ mod mint {
         persist_api: PersistApi,
         as_of: Antichain<Timestamp>,
         active_worker_id: usize,
+        mut read_only_rx: watch::Receiver<bool>,
         desired: &DesiredStreams<S>,
     ) -> (DesiredStreams<S>, DescsStream<S>, Box<dyn Any>)
     where
@@ -434,7 +449,9 @@ mod mint {
             }
 
             let mut cap_set = CapabilitySet::from_elem(desc_cap);
-            let mut state = State::new(as_of);
+
+            let read_only = *read_only_rx.borrow_and_update();
+            let mut state = State::new(as_of, read_only);
 
             // Create a stream that reports advancements of the target shard's frontier.
             let mut persist_frontiers = pin!(async_stream::stream! {
@@ -480,6 +497,10 @@ mod mint {
                         state.advance_persist_frontier(frontier);
                         state.maybe_mint_batch_description()
                     }
+                    Ok(()) = read_only_rx.changed(), if read_only => {
+                        state.allow_writes();
+                        state.maybe_mint_batch_description()
+                    }
                     // All inputs are exhausted, so we can shut down.
                     else => return,
                 };
@@ -514,10 +535,14 @@ mod mint {
         /// The last `lower` we have emitted in a batch description, if any. Whenever the
         /// `persist_frontier` moves beyond this frontier, we need to mint a new description.
         last_lower: Option<Antichain<Timestamp>>,
+        /// Whether we are operating in read-only mode.
+        ///
+        /// In read-only mode, minting of batch descriptions is disabled.
+        read_only: bool,
     }
 
     impl State {
-        fn new(as_of: Antichain<Timestamp>) -> Self {
+        fn new(as_of: Antichain<Timestamp>, read_only: bool) -> Self {
             // Initializing `persist_frontier` to the `as_of` ensures that the first minted batch
             // description will have a `lower` of `as_of` or beyond, and thus that we don't spend
             // work needlessly writing batches at previous times.
@@ -527,6 +552,7 @@ mod mint {
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontier,
                 last_lower: None,
+                read_only,
             }
         }
 
@@ -558,19 +584,27 @@ mod mint {
             }
         }
 
+        fn allow_writes(&mut self) {
+            if self.read_only {
+                self.read_only = false;
+                self.trace("disabled read-only mode");
+            }
+        }
+
         fn maybe_mint_batch_description(&mut self) -> Option<BatchDescription> {
             let desired_frontier = self.desired_frontiers.frontier();
             let persist_frontier = &self.persist_frontier;
 
             // We only mint new batch descriptions when:
-            //  1. The `desired` frontier is ahead of the `persist` frontier.
-            //  2. The `persist` frontier advanced since we last emitted a batch description.
+            //  1. We are _not_ in read-only mode.
+            //  2. The `desired` frontier is ahead of the `persist` frontier.
+            //  3. The `persist` frontier advanced since we last emitted a batch description.
             let desired_ahead = PartialOrder::less_than(persist_frontier, desired_frontier);
             let persist_advanced = self.last_lower.as_ref().map_or(true, |lower| {
                 PartialOrder::less_than(lower, persist_frontier)
             });
 
-            if !desired_ahead || !persist_advanced {
+            if self.read_only || !desired_ahead || !persist_advanced {
                 return None;
             }
 
@@ -1062,6 +1096,12 @@ mod append {
         /// This method advances the shard upper to the batch `lower` if necessary. This is the
         /// mechanism that brings the shard upper to the sink as-of when appending the initial
         /// batch.
+        ///
+        /// An alternative mechanism for bringing the shard upper to the sink as-of would be making
+        /// a single append at operator startup. The reason we are doing it here instead is that it
+        /// simplifies the implementation of read-only mode. In read-only mode we have to defer any
+        /// persist writes, including the initial upper bump. Having only a single place that
+        /// performs writes makes it easy to ensure we are doing that correctly.
         async fn append_batches(
             &mut self,
             desc: BatchDescription,
