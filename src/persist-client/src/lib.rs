@@ -87,18 +87,6 @@ pub mod operators {
     );
 
     // TODO(cfg): Move this next to the use.
-    pub(crate) const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: Config<usize> = Config::new(
-        "storage_persist_sink_minimum_batch_updates",
-        // Reasonable default based on our experience in production.
-        1024,
-        "\
-    In the storage persist sink, workers with less than the minimum number of \
-    updates will flush their records to single downstream worker to be batched \
-    up there... in the hopes of grouping our updates into fewer, larger \
-    batches.",
-    );
-
-    // TODO(cfg): Move this next to the use.
     pub(crate) const STORAGE_SOURCE_DECODE_FUEL: Config<usize> = Config::new(
         "storage_source_decode_fuel",
         1_000_000,

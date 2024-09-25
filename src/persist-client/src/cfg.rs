@@ -32,10 +32,7 @@ use crate::internal::machine::{
     NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
 };
 use crate::internal::state::ROLLUP_THRESHOLD;
-use crate::operators::{
-    PERSIST_SINK_MINIMUM_BATCH_UPDATES, STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES,
-    STORAGE_SOURCE_DECODE_FUEL,
-};
+use crate::operators::{PERSIST_SINK_MINIMUM_BATCH_UPDATES, STORAGE_SOURCE_DECODE_FUEL};
 use crate::project::OPTIMIZE_IGNORED_DATA_DECODE;
 use crate::read::READER_LEASE_DURATION;
 
@@ -262,12 +259,6 @@ impl PersistConfig {
         PERSIST_SINK_MINIMUM_BATCH_UPDATES.get(self)
     }
 
-    /// The same as `Self::sink_minimum_batch_updates`, but
-    /// for storage `persist_sink`'s.
-    pub fn storage_sink_minimum_batch_updates(&self) -> usize {
-        STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.get(self)
-    }
-
     /// The maximum amount of work to do in the persist_source mfp_and_decode
     /// operator before yielding.
     pub fn storage_source_decode_fuel(&self) -> usize {
@@ -360,7 +351,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::state::WRITE_DIFFS_SUM)
         .add(&crate::internal::apply::ROUNDTRIP_SPINE)
         .add(&crate::operators::PERSIST_SINK_MINIMUM_BATCH_UPDATES)
-        .add(&crate::operators::STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
         .add(&crate::project::OPTIMIZE_IGNORED_DATA_DECODE)
         .add(&crate::project::OPTIMIZE_IGNORED_DATA_FETCH)
