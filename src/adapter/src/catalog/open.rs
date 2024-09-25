@@ -693,7 +693,8 @@ impl Catalog {
                 }
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
-                | CatalogItem::MaterializedView(_) => {
+                | CatalogItem::MaterializedView(_)
+                | CatalogItem::ContinualTask(_) => {
                     // Storage objects don't have any external objects to drop.
                 }
                 CatalogItem::Sink(_) => {

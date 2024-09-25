@@ -515,6 +515,7 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
+    ContinualTask(ContinualTask),
 }
 
 impl From<CatalogEntry> for durable::Item {
@@ -954,6 +955,17 @@ pub struct Connection {
     pub resolved_ids: ResolvedIds,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ContinualTask {
+    pub create_sql: String,
+    pub raw_expr: Arc<HirRelationExpr>,
+    pub desc: RelationDesc,
+    pub resolved_ids: ResolvedIds,
+    pub cluster_id: ClusterId,
+    /// See the comment on [MaterializedView::initial_as_of].
+    pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
+}
+
 impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
     pub fn typ(&self) -> mz_sql::catalog::CatalogItemType {
@@ -969,15 +981,17 @@ impl CatalogItem {
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
             CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
+            CatalogItem::ContinualTask(_) => mz_sql::catalog::CatalogItemType::ContinualTask,
         }
     }
 
     /// Whether this item represents a storage collection.
     pub fn is_storage_collection(&self) -> bool {
         match self {
-            CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::MaterializedView(_) => {
-                true
-            }
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::ContinualTask(_) => true,
             CatalogItem::Log(_)
             | CatalogItem::Sink(_)
             | CatalogItem::View(_)
@@ -1004,6 +1018,7 @@ impl CatalogItem {
             CatalogItem::View(view) => Some(Cow::Borrowed(&view.desc)),
             CatalogItem::MaterializedView(mview) => Some(Cow::Borrowed(&mview.desc)),
             CatalogItem::Type(typ) => typ.desc.as_ref().map(Cow::Borrowed),
+            CatalogItem::ContinualTask(ct) => Some(Cow::Borrowed(&ct.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
@@ -1073,6 +1088,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
+            CatalogItem::ContinualTask(ct) => &ct.resolved_ids,
         }
     }
 
@@ -1095,6 +1111,7 @@ impl CatalogItem {
             CatalogItem::Type(_) => {}
             CatalogItem::View(view) => uses.extend(view.raw_expr.depends_on()),
             CatalogItem::MaterializedView(mview) => uses.extend(mview.raw_expr.depends_on()),
+            CatalogItem::ContinualTask(ct) => uses.extend(ct.raw_expr.depends_on()),
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
         }
@@ -1115,7 +1132,8 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => None,
         }
     }
 
@@ -1195,6 +1213,11 @@ impl CatalogItem {
                 Ok(CatalogItem::Type(i))
             }
             CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
+            CatalogItem::ContinualTask(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::ContinualTask(i))
+            }
         }
     }
 
@@ -1264,6 +1287,11 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
+            }
+            CatalogItem::ContinualTask(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::ContinualTask(i))
             }
         }
     }
@@ -1350,7 +1378,8 @@ impl CatalogItem {
             | CatalogItem::MaterializedView(MaterializedView { create_sql, .. })
             | CatalogItem::Index(Index { create_sql, .. })
             | CatalogItem::Secret(Secret { create_sql, .. })
-            | CatalogItem::Connection(Connection { create_sql, .. }) => Some(create_sql),
+            | CatalogItem::Connection(Connection { create_sql, .. })
+            | CatalogItem::ContinualTask(ContinualTask { create_sql, .. }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
         };
         let Some(create_sql) = create_sql else {
@@ -1385,7 +1414,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => None,
         }
     }
 
@@ -1403,6 +1433,7 @@ impl CatalogItem {
                 DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
+            CatalogItem::ContinualTask(ct) => Some(ct.cluster_id),
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -1427,7 +1458,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => None,
         }
     }
 
@@ -1448,7 +1480,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => return None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => return None,
         };
         Some(cw)
     }
@@ -1465,7 +1498,8 @@ impl CatalogItem {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Index(_)
-            | CatalogItem::MaterializedView(_) => self.custom_logical_compaction_window(),
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::ContinualTask(_) => self.custom_logical_compaction_window(),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -1492,7 +1526,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => false,
         }
     }
 
@@ -1527,6 +1562,7 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => secret.create_sql.clone(),
             CatalogItem::Connection(connection) => connection.create_sql.clone(),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::ContinualTask(ct) => ct.create_sql.clone(),
         }
     }
 
@@ -1553,6 +1589,7 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => secret.create_sql,
             CatalogItem::Connection(connection) => connection.create_sql,
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::ContinualTask(ct) => ct.create_sql,
         }
     }
 }
@@ -1727,7 +1764,8 @@ impl CatalogEntry {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => None,
         }
     }
 
@@ -1759,6 +1797,11 @@ impl CatalogEntry {
     /// Reports whether this catalog entry is an index.
     pub fn is_index(&self) -> bool {
         matches!(self.item(), CatalogItem::Index(_))
+    }
+
+    /// Reports whether this catalog entry is a continual task.
+    pub fn is_continual_task(&self) -> bool {
+        matches!(self.item(), CatalogItem::ContinualTask(_))
     }
 
     /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
@@ -2421,6 +2464,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
+            CatalogItem::ContinualTask(ContinualTask { create_sql, .. }) => create_sql,
         }
     }
 

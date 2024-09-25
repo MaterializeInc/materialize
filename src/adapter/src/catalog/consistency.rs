@@ -237,7 +237,8 @@ impl CatalogState {
                 | CommentObjectId::Func(global_id)
                 | CommentObjectId::Connection(global_id)
                 | CommentObjectId::Type(global_id)
-                | CommentObjectId::Secret(global_id) => {
+                | CommentObjectId::Secret(global_id)
+                | CommentObjectId::ContinualTask(global_id) => {
                     let entry = self.entry_by_id.get(&global_id);
                     match entry {
                         None => comment_inconsistencies

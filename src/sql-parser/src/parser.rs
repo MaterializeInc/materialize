@@ -4359,7 +4359,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
-            | ObjectType::Connection => {
+            | ObjectType::Connection
+            | ObjectType::ContinualTask => {
                 let names = self.parse_comma_separated(|parser| {
                     Ok(UnresolvedObjectName::Item(parser.parse_item_name()?))
                 })?;
@@ -4880,9 +4881,10 @@ impl<'a> Parser<'a> {
             ObjectType::Index => self.parse_alter_index(),
             ObjectType::Secret => self.parse_alter_secret(),
             ObjectType::Connection => self.parse_alter_connection(),
-            ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
-                self.parse_alter_views(object_type)
-            }
+            ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Table
+            | ObjectType::ContinualTask => self.parse_alter_views(object_type),
             ObjectType::Type => {
                 let if_exists = self
                     .parse_if_exists()
@@ -6482,7 +6484,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
-            | ObjectType::Func => UnresolvedObjectName::Item(self.parse_item_name()?),
+            | ObjectType::Func
+            | ObjectType::ContinualTask => UnresolvedObjectName::Item(self.parse_item_name()?),
             ObjectType::Role => UnresolvedObjectName::Role(self.parse_identifier()?),
             ObjectType::Cluster => UnresolvedObjectName::Cluster(self.parse_identifier()?),
             ObjectType::ClusterReplica => {
@@ -7254,6 +7257,10 @@ impl<'a> Parser<'a> {
                 ObjectType::MaterializedView => {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::MaterializedView { in_cluster }
+                }
+                ObjectType::ContinualTask => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::ContinualTask { in_cluster }
                 }
                 ObjectType::Index => {
                     let on_object = if self.parse_one_of_keywords(&[ON]).is_some() {
@@ -8583,7 +8590,10 @@ impl<'a> Parser<'a> {
         object_type: ObjectType,
     ) -> Result<ObjectType, ParserError> {
         match object_type {
-            ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
+            ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source
+            | ObjectType::ContinualTask => {
                 parser_err!(
                             self,
                             self.peek_prev_pos(),

@@ -1582,7 +1582,9 @@ fn generate_read_privileges_inner(
                 privileges.push((SystemObjectId::Object(schema_id), AclMode::USAGE, role_id))
             }
             match item.item_type() {
-                CatalogItemType::View | CatalogItemType::MaterializedView => {
+                CatalogItemType::View
+                | CatalogItemType::MaterializedView
+                | CatalogItemType::ContinualTask => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
                     views.push((item.references().0.clone().into_iter(), item.owner_id()));
                 }
@@ -1711,6 +1713,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Database) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::ContinualTask) => AclMode::SELECT,
         SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
     }
 }
@@ -1728,7 +1731,8 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
-        | ObjectType::Source => AclMode::SELECT,
+        | ObjectType::Source
+        | ObjectType::ContinualTask => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
         ObjectType::Sink
         | ObjectType::Index

@@ -42,7 +42,7 @@ use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::plan::ConnectionDetails;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
-    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
+    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS, MAX_CONTINUAL_TASKS,
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
     MAX_MYSQL_CONNECTIONS, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
     MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
@@ -1321,6 +1321,7 @@ impl Coordinator {
         let mut new_objects_per_schema = BTreeMap::new();
         let mut new_secrets = 0;
         let mut new_roles = 0;
+        let mut new_continual_tasks = 0;
         for op in ops {
             match op {
                 Op::CreateDatabase { .. } => {
@@ -1385,6 +1386,9 @@ impl Coordinator {
                         }
                         CatalogItem::Secret(_) => {
                             new_secrets += 1;
+                        }
+                        CatalogItem::ContinualTask(_) => {
+                            new_continual_tasks += 1;
                         }
                         CatalogItem::Log(_)
                         | CatalogItem::View(_)
@@ -1458,6 +1462,9 @@ impl Coordinator {
                                     CatalogItem::Secret(_) => {
                                         new_secrets -= 1;
                                     }
+                                    CatalogItem::ContinualTask(_) => {
+                                        new_continual_tasks -= 1;
+                                    }
                                     CatalogItem::Log(_)
                                     | CatalogItem::View(_)
                                     | CatalogItem::Index(_)
@@ -1492,7 +1499,8 @@ impl Coordinator {
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
-                    | CatalogItem::Func(_) => {}
+                    | CatalogItem::Func(_)
+                    | CatalogItem::ContinualTask(_) => {}
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
@@ -1692,6 +1700,13 @@ impl Coordinator {
             SystemVars::max_roles,
             "role",
             MAX_ROLES.name(),
+        )?;
+        self.validate_resource_limit(
+            self.catalog().user_continual_tasks().count(),
+            new_continual_tasks,
+            SystemVars::max_continual_tasks,
+            "continual_task",
+            MAX_CONTINUAL_TASKS.name(),
         )?;
         Ok(())
     }

@@ -674,6 +674,8 @@ pub enum CatalogItemType {
     Secret,
     /// A connection.
     Connection,
+    /// A continual task.
+    ContinualTask,
 }
 
 impl CatalogItemType {
@@ -707,6 +709,7 @@ impl CatalogItemType {
             CatalogItemType::Func => false,
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
+            CatalogItemType::ContinualTask => true,
         }
     }
 }
@@ -724,6 +727,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
+            CatalogItemType::ContinualTask => f.write_str("continual task"),
         }
     }
 }
@@ -741,6 +745,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
+            CatalogItemType::ContinualTask => ObjectType::ContinualTask,
         }
     }
 }
@@ -758,6 +763,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Func => mz_audit_log::ObjectType::Func,
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
+            CatalogItemType::ContinualTask => mz_audit_log::ObjectType::ContinualTask,
         }
     }
 }
@@ -1320,6 +1326,7 @@ pub enum ObjectType {
     Database,
     Schema,
     Func,
+    ContinualTask,
 }
 
 impl ObjectType {
@@ -1329,7 +1336,8 @@ impl ObjectType {
             ObjectType::Table
             | ObjectType::View
             | ObjectType::MaterializedView
-            | ObjectType::Source => true,
+            | ObjectType::Source
+            | ObjectType::ContinualTask => true,
             ObjectType::Sink
             | ObjectType::Index
             | ObjectType::Type
@@ -1364,6 +1372,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Database => ObjectType::Database,
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
+            mz_sql_parser::ast::ObjectType::ContinualTask => ObjectType::ContinualTask,
         }
     }
 }
@@ -1386,6 +1395,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Schema(_) => ObjectType::Schema,
             CommentObjectId::Cluster(_) => ObjectType::Cluster,
             CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
+            CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
         }
     }
 }
@@ -1408,6 +1418,7 @@ impl Display for ObjectType {
             ObjectType::Database => "DATABASE",
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
+            ObjectType::ContinualTask => "CONTINUAL TASK",
         })
     }
 }

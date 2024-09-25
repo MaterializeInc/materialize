@@ -541,6 +541,13 @@ pub static MAX_ROLES: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_CONTINUAL_TASKS: VarDefinition = VarDefinition::new(
+    "max_continual_tasks",
+    value!(u32; 100),
+    "The maximum number of continual tasks in the region, across all schemas (Materialize).",
+    true,
+);
+
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
 // query.
 //

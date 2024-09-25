@@ -2421,6 +2421,30 @@ pub static MZ_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
+pub static MZ_CONTINUAL_TASKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_continual_tasks",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_CONTINUAL_TASKS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(false))
+        .with_column("definition", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        )
+        .with_column("create_sql", ScalarType::String.nullable(false))
+        .with_column("redacted_create_sql", ScalarType::String.nullable(false))
+        .with_key(vec![0])
+        .with_key(vec![1])
+        .finish(),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
 /// PostgreSQL-specific metadata about types that doesn't make sense to expose
 /// in the `mz_types` table as part of our public, stable API.
 pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -6752,6 +6776,32 @@ ORDER BY 1, 2"#,
     access: vec![PUBLIC_SELECT],
 });
 
+// TODO(ct): Index this like the other show commands.
+pub static MZ_SHOW_CONTINUAL_TASKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_show_continual_tasks",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_CONTINUAL_TASKS_OID,
+    column_defs: None,
+    sql: "
+WITH comments AS (
+    SELECT id, comment
+    FROM mz_internal.mz_comments
+    WHERE object_type = 'continual-task' AND object_sub_id IS NULL
+)
+SELECT
+    cts.id as id,
+    cts.name,
+    clusters.name AS cluster,
+    schema_id,
+    cluster_id,
+    COALESCE(comments.comment, '') as comment
+FROM
+    mz_internal.mz_continual_tasks AS cts
+    JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = cts.cluster_id
+    LEFT JOIN comments ON cts.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_SHOW_ROLE_MEMBERS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_show_role_members",
     schema: MZ_INTERNAL_SCHEMA,
@@ -8204,6 +8254,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_COMMENTS),
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
         Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
+        Builtin::Table(&MZ_CONTINUAL_TASKS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),
@@ -8266,6 +8317,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
         Builtin::View(&MZ_SHOW_INDEXES),
+        Builtin::View(&MZ_SHOW_CONTINUAL_TASKS),
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
         Builtin::View(&MZ_TIMEZONE_NAMES),
         Builtin::View(&MZ_TIMEZONE_ABBREVIATIONS),

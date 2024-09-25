@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, MaterializedView, Table, TableDataSource,
+    CatalogEntry, CatalogItem, ContinualTask, Table, TableDataSource,
 };
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ContinualTaskConnection, PersistSinkConnection,
@@ -164,19 +164,15 @@ impl Coordinator {
         let ops = vec![catalog::Op::CreateItem {
             id: sink_id,
             name: name.clone(),
-            item: CatalogItem::MaterializedView(MaterializedView {
+            item: CatalogItem::ContinualTask(ContinualTask {
                 // TODO(ct): This doesn't give the `DELETE FROM` / `INSERT INTO`
                 // names the `[u1 AS "materialize"."public"."append_only"]`
                 // style expansion. Bug?
                 create_sql,
                 raw_expr: Arc::new(raw_expr),
-                optimized_expr: Arc::new(local_mir_plan.expr()),
                 desc: desc.clone(),
                 resolved_ids,
                 cluster_id,
-                non_null_assertions: Vec::new(),
-                custom_logical_compaction_window: None,
-                refresh_schedule,
                 initial_as_of: Some(as_of.clone()),
             }),
             owner_id: *session.current_role_id(),

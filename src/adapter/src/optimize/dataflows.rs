@@ -226,6 +226,9 @@ impl<'a> DataflowBuilder<'a> {
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), monotonic);
                     }
+                    CatalogItem::ContinualTask(ct) => {
+                        dataflow.import_source(*id, ct.desc.typ().clone(), monotonic);
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -396,7 +399,8 @@ impl<'a> DataflowBuilder<'a> {
                 | CatalogItem::Log(_)
                 | CatalogItem::MaterializedView(_)
                 | CatalogItem::Sink(_)
-                | CatalogItem::Func(_) => Ok(false),
+                | CatalogItem::Func(_)
+                | CatalogItem::ContinualTask(_) => Ok(false),
             }
         })?;
 

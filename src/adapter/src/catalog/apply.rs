@@ -1619,7 +1619,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let mut builtin_index_additions = Vec::new();
     for (builtin_item_update, ts, diff) in builtin_item_updates {
         match &builtin_item_update.description.object_type {
-            CatalogItemType::Index => push_update(
+            CatalogItemType::Index | CatalogItemType::ContinualTask => push_update(
                 StateUpdate {
                     kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
                     ts,
