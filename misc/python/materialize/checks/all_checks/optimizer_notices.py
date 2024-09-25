@@ -9,13 +9,14 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, exclude_from_parallel_execution
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 
 SCHEMA = "optimizer_notices"
 
 
+@exclude_from_parallel_execution(True)
 class OptimizerNotices(Check):
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse_mz("v0.81.0-dev")

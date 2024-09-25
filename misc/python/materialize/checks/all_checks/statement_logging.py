@@ -9,11 +9,12 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, exclude_from_parallel_execution
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 
 
+@exclude_from_parallel_execution(True)
 class StatementLogging(Check):
     def _can_run(self, _e: Executor) -> bool:
         return self.base_version >= MzVersion(0, 69, 0)
