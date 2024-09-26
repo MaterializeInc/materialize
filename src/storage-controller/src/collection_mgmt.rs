@@ -58,13 +58,16 @@
 //! [`CollectionManager::monotonic_appender`].
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap};
+use std::fmt::Debug;
 use std::ops::ControlFlow;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail};
+use chrono::{DateTime, Utc};
 use differential_dataflow::consolidation;
 use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
@@ -80,6 +83,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::client::TimestamplessUpdate;
 use mz_storage_client::controller::{IntrospectionType, MonotonicAppender, StorageWriteOp};
@@ -90,7 +94,9 @@ use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::dyncfgs::{
     REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
 };
-use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
+use mz_storage_types::parameters::{
+    StorageParameters, STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
+};
 use mz_storage_types::sources::SourceData;
 use mz_txn_wal::txn_read::TxnsRead;
 use timely::progress::{Antichain, Timestamp};
@@ -99,7 +105,9 @@ use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
 use crate::{
-    collection_mgmt, collection_status, snapshot, snapshot_statistics, statistics, StorageError,
+    collection_mgmt,
+    collection_status, privatelink_status_history_desc, replica_status_history_desc,snapshot_statistics, snapshot,
+    StatusHistoryDesc, StorageError,
 };
 
 // Default rate at which we advance the uppers of managed collections.
@@ -1014,6 +1022,7 @@ where
 {
     pub(crate) introspection_type: IntrospectionType,
     pub(crate) config_set: Arc<ConfigSet>,
+    pub(crate) parameters: StorageParameters,
     pub(crate) storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     pub(crate) txns_read: TxnsRead<T>,
     pub(crate) persist: Arc<PersistClientCache>,
@@ -1046,6 +1055,7 @@ where
                 if let Some(AppendOnlyIntrospectionConfig {
                     introspection_type,
                     config_set,
+                    parameters,
                     storage_collections,
                     txns_read,
                     persist,
@@ -1056,6 +1066,7 @@ where
                         introspection_type,
                         &mut write_handle,
                         config_set,
+                        parameters,
                         now.clone(),
                         storage_collections,
                         txns_read,
@@ -1199,6 +1210,7 @@ async fn prepare_append_only_introspection_collection<T>(
     introspection_type: IntrospectionType,
     write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
     config_set: Arc<ConfigSet>,
+    parameters: StorageParameters,
     now: NowFn,
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     txns_read: TxnsRead<T>,
@@ -1228,6 +1240,31 @@ async fn prepare_append_only_introspection_collection<T>(
             }
         }
 
+        IntrospectionType::PrivatelinkConnectionStatusHistory => {
+            partially_truncate_status_history(
+                id,
+                IntrospectionType::PrivatelinkConnectionStatusHistory,
+                write_handle,
+                privatelink_status_history_desc(&parameters),
+                &storage_collections,
+                &txns_read,
+                &persist,
+            )
+            .await;
+        }
+        IntrospectionType::ReplicaStatusHistory => {
+            partially_truncate_status_history(
+                id,
+                IntrospectionType::ReplicaStatusHistory,
+                write_handle,
+                replica_status_history_desc(&parameters),
+                &storage_collections,
+                &txns_read,
+                &persist,
+            )
+            .await;
+        }
+
         // Note [btv] - we don't truncate these, because that uses
         // a huge amount of memory on environmentd startup.
         IntrospectionType::PreparedStatementHistory
@@ -1242,10 +1279,7 @@ async fn prepare_append_only_introspection_collection<T>(
         }
 
         // TODO(jkosh44) Handle these here instead of in the controller.
-        IntrospectionType::SourceStatusHistory
-        | IntrospectionType::SinkStatusHistory
-        | IntrospectionType::PrivatelinkConnectionStatusHistory
-        | IntrospectionType::ReplicaStatusHistory => {}
+        IntrospectionType::SourceStatusHistory | IntrospectionType::SinkStatusHistory => {}
 
         introspection_type @ IntrospectionType::ShardMapping
         | introspection_type @ IntrospectionType::Frontiers
@@ -1350,6 +1384,151 @@ where
         .await
         .expect("valid usage")
         .map_err(|e| anyhow!("appending retractions: {e:?}"))
+}
+
+/// Effectively truncates the status history shard except for the most
+/// recent updates from each key.
+///
+/// NOTE: The history collections are really append-only collections, but
+/// every-now-and-then we want to retract old updates so that the collection
+/// does not grow unboundedly. Crucially, these are _not_ incremental
+/// collections, they are not derived from a state at some time `t` and we
+/// cannot maintain a desired state for them.
+///
+/// Returns a map with latest unpacked row per key.
+pub(crate) async fn partially_truncate_status_history<T, K>(
+    id: GlobalId,
+    introspection_type: IntrospectionType,
+    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
+    status_history_desc: StatusHistoryDesc<K>,
+    storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    txns_read: &TxnsRead<T>,
+    persist: &Arc<PersistClientCache>,
+) -> BTreeMap<K, Row>
+where
+    T: Codec64 + From<EpochMillis> + TimestampManipulation,
+    K: Clone + Debug + Ord + Send + Sync,
+{
+    let upper = write_handle.fetch_recent_upper().await.clone();
+
+    let mut rows = match upper.as_option() {
+        Some(f) if f > &T::minimum() => {
+            let as_of = f.step_back().unwrap();
+
+            snapshot(id, as_of, storage_collections, txns_read, persist)
+                .await
+                .expect("snapshot succeeds")
+        }
+        // If collection is closed or the frontier is the minimum, we cannot
+        // or don't need to truncate (respectively).
+        _ => return BTreeMap::new(),
+    };
+
+    // BTreeMap to track the earliest events for each key.
+    let mut last_n_entries_per_key: BTreeMap<
+        K,
+        BinaryHeap<Reverse<(CheckedTimestamp<DateTime<Utc>>, Row)>>,
+    > = BTreeMap::new();
+
+    // BTreeMap to keep track of the row with the latest timestamp for each key.
+    let mut latest_row_per_key: BTreeMap<K, (CheckedTimestamp<DateTime<Utc>>, Row)> =
+        BTreeMap::new();
+
+    // Consolidate the snapshot, so we can process it correctly below.
+    differential_dataflow::consolidation::consolidate(&mut rows);
+
+    let mut deletions = vec![];
+
+    for (row, diff) in rows {
+        let datums = row.unpack();
+        let key = (status_history_desc.extract_key)(&datums);
+        let timestamp = (status_history_desc.extract_time)(&datums);
+
+        // Duplicate rows ARE possible if many status changes happen in VERY quick succession,
+        // so we go ahead and handle them.
+        assert!(
+            diff > 0,
+            "only know how to operate over consolidated data with diffs > 0, \
+                found diff {diff} for object {key:?} in {introspection_type:?}",
+        );
+
+        // Keep track of the timestamp of the latest row per key.
+        match latest_row_per_key.get(&key) {
+            Some(existing) if &existing.0 > &timestamp => {}
+            _ => {
+                latest_row_per_key.insert(key.clone(), (timestamp, row.clone()));
+            }
+        }
+
+        // Consider duplicated rows separately.
+        let entries = last_n_entries_per_key.entry(key).or_default();
+        for _ in 0..diff {
+            // We CAN have multiple statuses (most likely Starting and Running) at the exact same
+            // millisecond, depending on how the `health_operator` is scheduled.
+            //
+            // Note that these will be arbitrarily ordered, so a Starting event might
+            // survive and a Running one won't. The next restart will remove the other,
+            // so we don't bother being careful about it.
+            //
+            // TODO(guswynn): unpack these into health-status objects and use
+            // their `Ord` impl.
+            entries.push(Reverse((timestamp, row.clone())));
+
+            // Retain some number of entries, using pop to mark the oldest entries for
+            // deletion.
+            while entries.len() > status_history_desc.keep_n {
+                if let Some(Reverse((_, r))) = entries.pop() {
+                    deletions.push(r);
+                }
+            }
+        }
+    }
+
+    // It is very important that we append our retractions at the timestamp
+    // right after the timestamp at which we got our snapshot. Otherwise,
+    // it's possible for someone else to sneak in retractions or other
+    // unexpected changes.
+    let expected_upper = upper.into_option().expect("checked above");
+    let new_upper = TimestampManipulation::step_forward(&expected_upper);
+
+    // Updates are only deletes because everything else is already in the shard.
+    let updates = deletions
+        .into_iter()
+        .map(|row| ((SourceData(Ok(row)), ()), expected_upper.clone(), -1))
+        .collect::<Vec<_>>();
+
+    let res = write_handle
+        .compare_and_append(
+            updates,
+            Antichain::from_elem(expected_upper.clone()),
+            Antichain::from_elem(new_upper),
+        )
+        .await
+        .expect("usage was valid");
+
+    match res {
+        Ok(_) => {
+            // All good, yay!
+        }
+        Err(err) => {
+            // This is fine, it just means the upper moved because
+            // of continual upper advancement or because seomeone
+            // already appended some more retractions/updates.
+            //
+            // NOTE: We might want to attempt these partial
+            // retractions on an interval, instead of only when
+            // starting up!
+            info!(
+                %id, ?expected_upper, current_upper = ?err.current,
+                "failed to append partial truncation",
+            );
+        }
+    }
+
+    latest_row_per_key
+        .into_iter()
+        .map(|(key, (_, row))| (key, row))
+        .collect()
 }
 
 async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulation>(
