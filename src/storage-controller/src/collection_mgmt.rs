@@ -105,9 +105,9 @@ use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
 use crate::{
-    collection_mgmt,
-    collection_status, privatelink_status_history_desc, replica_status_history_desc,snapshot_statistics, snapshot,
-    StatusHistoryDesc, StorageError,
+    collection_mgmt, collection_status, privatelink_status_history_desc,
+    replica_status_history_desc, snapshot, snapshot_statistics, statistics, StatusHistoryDesc,
+    StorageError,
 };
 
 // Default rate at which we advance the uppers of managed collections.
