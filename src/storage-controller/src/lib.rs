@@ -3559,7 +3559,7 @@ impl From<&IntrospectionType> for CollectionManagerKind {
 /// the statistics tasks.
 ///
 // TODO(guswynn): we need to be more careful about the update time we get here:
-// <https://github.com/MaterializeInc/materialize/issues/25349>
+// <https://github.com/MaterializeInc/database-issues/issues/25349>
 async fn snapshot_statistics<T>(
     id: GlobalId,
     upper: Antichain<T>,
