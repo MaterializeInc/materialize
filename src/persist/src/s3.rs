@@ -33,6 +33,7 @@ use futures_util::{FutureExt, StreamExt};
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::bytes::{MaybeLgBytes, SegmentedBytes};
 use mz_ore::cast::CastFrom;
+use mz_ore::lgbytes::{LgBytes, MetricsRegion};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
@@ -343,6 +344,12 @@ pub(crate) const ENABLE_S3_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
     "A feature flag to enable copying fetched s3 data into lgalloc on non-cc sized clusters.",
 );
 
+pub(crate) const ENABLE_ONE_ALLOC_PER_REQUEST: Config<bool> = Config::new(
+    "persist_enable_one_alloc_per_request",
+    true,
+    "An incident flag to disable making only one lgalloc allocation per multi-part request.",
+);
+
 #[async_trait]
 impl Blob for S3Blob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
@@ -468,36 +475,72 @@ impl Blob for S3Blob {
 
                 // Request the body.
                 let body_start = Instant::now();
-                let mut body = Vec::new();
+                let mut body_parts = Vec::new();
+
+                // Get the data into lgalloc at the absolute earliest possible
+                // point without (yet) having to fork the s3 client library.
+                let enable_s3_lgalloc = if self.is_cc_active {
+                    ENABLE_S3_LGALLOC_CC_SIZES.get(&self.cfg)
+                } else {
+                    ENABLE_S3_LGALLOC_NONCC_SIZES.get(&self.cfg)
+                };
+
+                // Ideally we write all of the copy all of the bytes into a
+                // single allocation, but we retain a CYA fallback case.
+                let enable_one_allocation =
+                    ENABLE_ONE_ALLOC_PER_REQUEST.get(&self.cfg) && enable_s3_lgalloc;
+                let mut buffer = match object.content_length() {
+                    Some(len @ 1..) if enable_one_allocation => {
+                        let len: u64 = len.try_into().expect("positive integer");
+                        let buf: MetricsRegion<u8> = self
+                            .metrics
+                            .lgbytes
+                            .persist_s3
+                            .new_region(usize::cast_from(len));
+                        Some(buf)
+                    }
+                    Some(len) => {
+                        tracing::error!(?len, "found invalid content-length, falling back");
+                        None
+                    }
+                    _ => None,
+                };
+
                 while let Some(data) = object.body.next().await {
                     let data =
                         data.map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
-                    // Get the data into lgalloc at the absolute earliest
-                    // possible point without (yet) having to fork the s3 client
-                    // library.
-                    let enable_s3_lgalloc = if self.is_cc_active {
-                        ENABLE_S3_LGALLOC_CC_SIZES.get(&self.cfg)
-                    } else {
-                        ENABLE_S3_LGALLOC_NONCC_SIZES.get(&self.cfg)
-                    };
-                    let data = if enable_s3_lgalloc {
-                        MaybeLgBytes::LgBytes(self.metrics.lgbytes.persist_s3.try_mmap(&data))
-                    } else {
-                        // In the CYA fallback case, make sure we skip the
-                        // memcpy to preserve the previous behavior as closely
-                        // as possible.
-                        //
-                        // TODO: Once we've validated the LgBytes path, change
-                        // this fallback path to be a heap allocated LgBytes.
-                        // Then we can remove the pub from MaybeLgBytes.
-                        MaybeLgBytes::Bytes(data)
-                    };
-                    body.push(data)
+                    match &mut buffer {
+                        Some(buf) => buf.extend_from_slice(&data[..]),
+                        None if enable_s3_lgalloc => {
+                            body_parts.push(MaybeLgBytes::LgBytes(
+                                self.metrics.lgbytes.persist_s3.try_mmap(&data),
+                            ));
+                        }
+                        None => {
+                            // In the CYA fallback case, make sure we skip the
+                            // memcpy to preserve the previous behavior as closely
+                            // as possible.
+                            //
+                            // TODO: Once we've validated the LgBytes path, change
+                            // this fallback path to be a heap allocated LgBytes.
+                            // Then we can remove the pub from MaybeLgBytes.
+                            body_parts.push(MaybeLgBytes::Bytes(data));
+                        }
+                    }
                 }
+
+                // Append our single segment, if it exists.
+                if let Some(body) = buffer {
+                    // If we're writing into a single buffer we shouldn't have
+                    // pushed anything else into our segments.
+                    assert!(body_parts.is_empty());
+                    body_parts.push(MaybeLgBytes::LgBytes(LgBytes::from(Arc::new(body))));
+                }
+
                 let body_elapsed = body_start.elapsed();
                 min_body_elapsed.observe(body_elapsed, "s3 download part body");
 
-                Ok::<_, Error>(body)
+                Ok::<_, Error>(body_parts)
             };
 
             body_futures.push_back(request_future);

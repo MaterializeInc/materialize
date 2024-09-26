@@ -56,6 +56,11 @@ impl<T: Copy> MetricsRegion<T> {
     fn capacity_bytes(&self) -> usize {
         self.buf.capacity() * std::mem::size_of::<T>()
     }
+
+    /// Copy all of the elements from `slice` into the [`Region`].
+    pub fn extend_from_slice(&mut self, slice: &[T]) {
+        self.buf.extend_from_slice(slice);
+    }
 }
 
 impl<T: Copy + PartialEq> PartialEq for MetricsRegion<T> {
@@ -269,6 +274,14 @@ impl LgBytesMetrics {
 }
 
 impl LgBytesOpMetrics {
+    /// Returns a new empty [`MetricsRegion`] to hold at least `T` elements.
+    pub fn new_region<T: Copy>(&self, capacity: usize) -> MetricsRegion<T> {
+        let start = Instant::now();
+        let buf = Region::new_auto(capacity);
+        self.alloc_seconds.inc_by(start.elapsed().as_secs_f64());
+        self.metrics_region(buf)
+    }
+
     /// Attempts to copy the given buf into an lgalloc managed file-based mapped
     /// region, falling back to a heap allocation.
     pub fn try_mmap<T: AsRef<[u8]>>(&self, buf: T) -> LgBytes {
