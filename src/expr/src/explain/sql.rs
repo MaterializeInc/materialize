@@ -16,12 +16,12 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::str::Indent;
 use mz_repr::explain::sql::DisplaySql;
 use mz_repr::explain::PlanRenderingContext;
-use mz_repr::{Datum, GlobalId};
+use mz_repr::{ColumnType, Datum, GlobalId, ScalarType};
 use mz_sql_parser::ast::{
     Cte, CteBlock, Distinct, Expr, Ident, IdentError, JoinConstraint, JoinOperator, Limit,
-    OrderByExpr, Query, Raw, RawItemName, Select, SelectItem, SelectOption, SelectOptionName,
-    SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName, Value,
-    Values, WithOptionValue,
+    OrderByExpr, Query, Raw, RawDataType, RawItemName, Select, SelectItem, SelectOption,
+    SelectOptionName, SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins,
+    UnresolvedItemName, Value, Values, WithOptionValue,
 };
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
@@ -241,8 +241,8 @@ impl MirToSql {
                             .into_iter()
                             .map(|(row, _id)| {
                                 row.unpack()
-                                    .into_iter()
-                                    .map(|datum| sc.to_sql_value(datum))
+                                    .iter()
+                                    .map(|datum| sc.to_sql_value(&datum))
                                     .collect()
                             })
                             .collect(),
@@ -340,7 +340,7 @@ impl MirToSql {
                     for (col, expr) in scalars.iter().enumerate() {
                         let alias = Some(columns[num_inner_columns + col].clone());
 
-                        let expr = sc.to_sql_expr(expr, &fq_colexprs)?;
+                        let expr = sc.to_sql_expr(expr, &fq_colexprs, ctx)?;
                         fq_colexprs.push(expr.clone());
                         new_select_items.push(SelectItem::Expr { expr, alias });
                     }
@@ -401,9 +401,10 @@ impl MirToSql {
                         .collect::<Vec<_>>();
 
                     let mut predicates = predicates.into_iter();
-                    let mut selection = sc.to_sql_expr(predicates.next().unwrap(), &fq_colexprs)?;
+                    let mut selection =
+                        sc.to_sql_expr(predicates.next().unwrap(), &fq_colexprs, ctx)?;
                     for expr in predicates {
-                        selection = selection.and(sc.to_sql_expr(expr, &fq_colexprs)?);
+                        selection = selection.and(sc.to_sql_expr(expr, &fq_colexprs, ctx)?);
                     }
 
                     // TODO(mgree) this always generates a new CTE, but we can sometimes just add to the prior one (needs QB support)
@@ -533,7 +534,7 @@ impl MirToSql {
                     let mut selection: Option<Expr<Raw>> = None;
                     for equivalence in equivalences {
                         if let Some(conjunct) =
-                            sc.equivalence_to_conjunct(equivalence, &fq_colexprs)?
+                            sc.equivalence_to_conjunct(equivalence, &fq_colexprs, ctx)?
                         {
                             if let Some(sel) = selection {
                                 selection = Some(sel.and(conjunct))
@@ -580,7 +581,7 @@ impl MirToSql {
 
                     let (inner, inner_columns) = sc.build_query(input, bindings, ctx)?;
 
-                    eprintln!("EAS: Reduce {expr:?}");
+                    eprintln!("EAS: {expr:?}");
                     let fq_colexprs = inner_columns
                         .iter()
                         .map(|col_name| Expr::Identifier(vec![inner.clone(), col_name.clone()]))
@@ -590,7 +591,7 @@ impl MirToSql {
                     let mut projection = Vec::with_capacity(columns.len());
 
                     for (gk, ident) in group_key.iter().zip(columns.iter()) {
-                        let expr = sc.to_sql_expr(gk, &fq_colexprs)?;
+                        let expr = sc.to_sql_expr(gk, &fq_colexprs, ctx)?;
                         group_by.push(expr.clone());
                         projection.push(SelectItem::Expr {
                             expr,
@@ -599,6 +600,13 @@ impl MirToSql {
                     }
 
                     let mut shared_distinct_value = None;
+                    let distinct = if aggregates.is_empty() {
+                        let mut distinct = vec![];
+                        std::mem::swap(&mut distinct, &mut group_by);
+                        Some(Distinct::On(distinct))
+                    } else {
+                        None
+                    };
                     for (agg, ident) in aggregates
                         .iter()
                         .zip(columns.iter().dropping(group_key.len()))
@@ -612,7 +620,7 @@ impl MirToSql {
                             shared_distinct_value = Some(agg.distinct);
                         }
 
-                        let expr = sc.agg_to_sql_expr(agg, &fq_colexprs)?;
+                        let expr = sc.agg_to_sql_expr(agg, &fq_colexprs, ctx)?;
                         projection.push(SelectItem::Expr {
                             expr,
                             alias: Some(ident.clone()),
@@ -628,7 +636,7 @@ impl MirToSql {
 
                     let ident = sc.fresh_ident("reduce");
                     let body = SetExpr::Select(Box::new(Select {
-                        distinct: None,
+                        distinct,
                         projection,
                         from: vec![TableWithJoins {
                             relation: TableFactor::Table {
@@ -697,7 +705,7 @@ impl MirToSql {
                     let limit = if let Some(limit) = limit {
                         Some(Limit {
                             with_ties: false,
-                            quantity: sc.to_sql_expr(limit, &fq_colexprs)?,
+                            quantity: sc.to_sql_expr(limit, &fq_colexprs, ctx)?,
                         })
                     } else {
                         None
@@ -737,7 +745,8 @@ impl MirToSql {
                         nulls_last,
                     } in order_key
                     {
-                        let expr = sc.to_sql_expr(&MirScalarExpr::Column(*column), &fq_colexprs)?;
+                        let expr =
+                            sc.to_sql_expr(&MirScalarExpr::Column(*column), &fq_colexprs, ctx)?;
                         let asc = Some(!*desc);
                         let nulls_last = Some(*nulls_last);
                         order_by.push(OrderByExpr {
@@ -749,7 +758,8 @@ impl MirToSql {
 
                     let mut outer_order_by = Vec::with_capacity(group_key.len() + order_key.len());
                     for col in group_key {
-                        let expr = sc.to_sql_expr(&MirScalarExpr::Column(*col), &fq_colexprs)?;
+                        let expr =
+                            sc.to_sql_expr(&MirScalarExpr::Column(*col), &fq_colexprs, ctx)?;
                         outer_order_by.push(OrderByExpr {
                             expr,
                             asc: None,
@@ -1052,6 +1062,7 @@ impl MirToSql {
         &mut self,
         exprs: &Vec<MirScalarExpr>,
         columns: &[Expr<Raw>],
+        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> Result<Option<Expr<Raw>>, SqlConversionError> {
         let mut iter = exprs.into_iter();
         let Some(lhs) = iter.next() else {
@@ -1061,13 +1072,13 @@ impl MirToSql {
             return Ok(None);
         };
 
-        let canonical = self.to_sql_expr(lhs, columns)?;
+        let canonical = self.to_sql_expr(lhs, columns, ctx)?;
 
-        let right = self.to_sql_expr(rhs, columns)?;
+        let right = self.to_sql_expr(rhs, columns, ctx)?;
         let mut equiv = Expr::equals(canonical.clone(), right);
 
         for rhs in iter {
-            let right = self.to_sql_expr(rhs, columns)?;
+            let right = self.to_sql_expr(rhs, columns, ctx)?;
             equiv = equiv.and(canonical.clone().equals(right));
         }
 
@@ -1078,6 +1089,7 @@ impl MirToSql {
         &mut self,
         expr: &MirScalarExpr,
         columns: &[Expr<Raw>],
+        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> Result<Expr<Raw>, SqlConversionError> {
         use MirScalarExpr::*;
         fn call<S: ToString>(f: S, args: Vec<Expr<Raw>>) -> Expr<Raw> {
@@ -1091,7 +1103,7 @@ impl MirToSql {
 
         match expr {
             Column(col) => Ok(columns[*col].clone()),
-            Literal(Ok(row), _) => {
+            Literal(Ok(row), ty) => {
                 let mut datums = row.unpack();
                 if datums.len() != 1 {
                     return Err(SqlConversionError::BadConstant {
@@ -1099,44 +1111,55 @@ impl MirToSql {
                     });
                 }
 
-                Ok(self.to_sql_value(datums.pop().unwrap()))
+                let datum = datums.pop().unwrap();
+                let mut value = self.to_sql_value(&datum);
+
+                if datum.is_null() {
+                    value = Expr::cast(value, self.to_sql_type(&ty.scalar_type, ctx));
+                }
+                Ok(value)
             }
             Literal(Err(err), _) => Err(SqlConversionError::BadConstant { err: err.clone() }),
             CallUnmaterializable(uf) => Ok(call(uf, vec![])),
             CallUnary { func, expr } => {
-                let arg = self.to_sql_expr(expr, columns)?;
+                let arg = self.to_sql_expr(expr, columns, ctx)?;
                 Ok(call(func, vec![arg]))
             }
             CallBinary { func, expr1, expr2 } => {
-                let arg1 = self.to_sql_expr(expr1, columns)?;
-                let arg2 = self.to_sql_expr(expr2, columns)?;
+                let arg1 = self.to_sql_expr(expr1, columns, ctx)?;
+                let arg2 = self.to_sql_expr(expr2, columns, ctx)?;
                 Ok(call(func, vec![arg1, arg2]))
             }
             CallVariadic { func, exprs } => {
                 let mut args = Vec::with_capacity(exprs.len());
                 for expr in exprs {
-                    args.push(self.to_sql_expr(expr, columns)?);
+                    args.push(self.to_sql_expr(expr, columns, ctx)?);
                 }
                 Ok(call(func, args))
             }
             If { cond, then, els } => Ok(Expr::Case {
                 operand: None,
-                conditions: vec![self.to_sql_expr(cond, columns)?],
-                results: vec![self.to_sql_expr(then, columns)?],
-                else_result: Some(Box::new(self.to_sql_expr(els, columns)?)),
+                conditions: vec![self.to_sql_expr(cond, columns, ctx)?],
+                results: vec![self.to_sql_expr(then, columns, ctx)?],
+                else_result: Some(Box::new(self.to_sql_expr(els, columns, ctx)?)),
             }),
         }
     }
 
     fn agg_to_sql_expr(
         &mut self,
-        expr: &AggregateExpr,
+        AggregateExpr {
+            expr,
+            func,
+            distinct: _distinct,
+        }: &AggregateExpr,
         columns: &[Expr<Raw>],
+        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
     ) -> Result<Expr<Raw>, SqlConversionError> {
-        let arg = self.to_sql_expr(&expr.expr, columns)?;
+        let arg = self.to_sql_expr(expr, columns, ctx)?;
 
         use AggregateFunc::*;
-        match expr.func {
+        match func {
             Any
             | All
             | JsonbAgg { .. }
@@ -1152,18 +1175,16 @@ impl MirToSql {
             | FirstValue { .. }
             | LastValue { .. }
             | WindowAggregate { .. }
-            | Dummy { .. } => unimplemented!("MIR-to-SQL AggregateFunc: {:?}", expr.func),
+            | Dummy { .. } => unimplemented!("MIR-to-SQL AggregateFunc: {:?}", func),
             _ => (),
         };
 
-        let name = RawItemName::Name(UnresolvedItemName(vec![Ident::new_unchecked(
-            expr.func.name(),
-        )]));
+        let name = RawItemName::Name(UnresolvedItemName(vec![Ident::new_unchecked(func.name())]));
 
         Ok(Expr::call(name, vec![arg]))
     }
 
-    fn to_sql_value(&self, datum: Datum) -> Expr<Raw> {
+    fn to_sql_value(&self, datum: &Datum) -> Expr<Raw> {
         match datum {
             Datum::False => Expr::Value(Value::Boolean(false)),
             Datum::True => Expr::Value(Value::Boolean(true)),
@@ -1195,6 +1216,77 @@ impl MirToSql {
             | Datum::Range(_)
             | Datum::MzAclItem(_)
             | Datum::AclItem(_) => unimplemented!("MIR-to-SQL esoteric Datum: {datum}"),
+        }
+    }
+
+    fn to_sql_type(
+        &self,
+        scalar_type: &ScalarType,
+        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+    ) -> RawDataType {
+        fn named<S: Into<String>>(s: S) -> RawDataType {
+            RawDataType::Other {
+                name: RawItemName::Name(UnresolvedItemName(vec![Ident::new_unchecked(s)])),
+                typ_mod: vec![],
+            }
+        }
+
+        match scalar_type {
+            ScalarType::Array(scalar_type) => {
+                RawDataType::Array(Box::new(self.to_sql_type(&**scalar_type, ctx)))
+            }
+            ScalarType::List { element_type, .. } => {
+                RawDataType::List(Box::new(self.to_sql_type(element_type, ctx)))
+            }
+            ScalarType::Record { .. } => named("record"),
+            ScalarType::Map { value_type, .. } => RawDataType::Map {
+                key_type: Box::new(named("text")),
+                value_type: Box::new(self.to_sql_type(value_type, ctx)),
+            },
+            ScalarType::Range { element_type } => {
+                let inner_name = ctx.humanizer.humanize_scalar_type(element_type);
+                named(format!("{inner_name}range"))
+            }
+            ScalarType::Char {
+                length: Some(length),
+            } => named(format!("char({})", length.into_u32())),
+            ScalarType::Char { length: None } => named("char"),
+            ScalarType::VarChar {
+                max_length: Some(max_length),
+            } => named(format!("varchar({})", max_length.into_u32())),
+            ScalarType::VarChar { max_length: None } => named("varchar"),
+            ScalarType::Timestamp { precision } => todo!(),
+            ScalarType::TimestampTz { precision } => todo!(),
+            ScalarType::Numeric {
+                max_scale: Some(max_scale),
+            } => named(format!("numeric(39, {})", max_scale.into_u8())), // precision is always 39
+            ScalarType::Numeric { max_scale: None } => named("numeric"),
+            ScalarType::Bool
+            | ScalarType::Int16
+            | ScalarType::Int32
+            | ScalarType::Int64
+            | ScalarType::UInt16
+            | ScalarType::UInt32
+            | ScalarType::UInt64
+            | ScalarType::Float32
+            | ScalarType::Float64
+            | ScalarType::Date
+            | ScalarType::Time
+            | ScalarType::Interval
+            | ScalarType::PgLegacyChar
+            | ScalarType::PgLegacyName
+            | ScalarType::Bytes
+            | ScalarType::String
+            | ScalarType::Jsonb
+            | ScalarType::Uuid
+            | ScalarType::Oid
+            | ScalarType::RegProc
+            | ScalarType::RegType
+            | ScalarType::RegClass
+            | ScalarType::Int2Vector
+            | ScalarType::MzTimestamp
+            | ScalarType::MzAclItem
+            | ScalarType::AclItem => named(ctx.humanizer.humanize_scalar_type(scalar_type)),
         }
     }
 
