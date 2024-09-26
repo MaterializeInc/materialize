@@ -11,11 +11,13 @@
 Native Postgres source tests, functional.
 """
 
+import glob
 import time
 
 import psycopg
 from psycopg import Connection
 
+from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service, ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
@@ -284,6 +286,14 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
+    matching_files = []
+    for filter in args.filter:
+        matching_files.extend(glob.glob(filter, root_dir="test/pg-cdc"))
+    sharded_files: list[str] = sorted(
+        buildkite.shard_list(matching_files, lambda file: file)
+    )
+    print(f"Files: {sharded_files}")
+
     ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
     ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
     ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout
@@ -305,7 +315,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"--var=ssl-wrong-key={ssl_wrong_key}",
             f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-            *args.filter,
+            *sharded_files,
         )
 
 
