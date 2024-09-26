@@ -713,18 +713,6 @@ steps:
               composition: platform-checks
               args: [--scenario=KillClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-parallel-restart-redpanda
-        label: "Checks parallel + restart Redpanda & Debezium %N"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        parallelism: 2
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=RestartRedpandaDebezium, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
-
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart %N"
         depends_on: build-aarch64
