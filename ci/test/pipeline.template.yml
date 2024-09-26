@@ -403,7 +403,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          # Larger argent so it runs faster
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: mysql-rtr
         label: "MySQL RTR tests"
@@ -433,7 +434,7 @@ steps:
 
       - id: pg-cdc-resumption
         label: "Postgres CDC resumption tests %N"
-        parallelism: 2
+        parallelism: 3
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc-resumption]

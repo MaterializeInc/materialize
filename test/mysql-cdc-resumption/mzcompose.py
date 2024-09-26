@@ -63,16 +63,16 @@ def workflow_default(c: Composition) -> None:
         f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
     )
     for name in sharded_workflows:
-        # clear to avoid issues
-        c.kill("mysql")
-        c.rm("mysql")
-
         if name == "default":
             continue
 
         # TODO(def-): Reenable when materialize#26127 is fixed
         if name in ("bin-log-manipulations", "short-bin-log-retention"):
             continue
+
+        # clear to avoid issues
+        c.kill("mysql")
+        c.rm("mysql")
 
         with c.test_case(name):
             c.workflow(name)

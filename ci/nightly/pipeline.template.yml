@@ -523,10 +523,9 @@ steps:
     steps:
 
       - id: mysql-cdc-old-syntax
-        label: MySQL CDC tests %N (before source versioning)
-        parallelism: 2
+        label: MySQL CDC tests (before source versioning)
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-old-syntax
@@ -535,10 +534,9 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-cdc-resumption-old-syntax
-        label: MySQL CDC resumption tests %N (before source versioning)
-        parallelism: 3
+        label: MySQL CDC resumption tests (before source versioning)
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption-old-syntax
@@ -567,10 +565,9 @@ steps:
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-cdc-resumption-old-syntax
-        label: Postgres CDC resumption tests %N (before source versioning)
-        parallelism: 2
+        label: Postgres CDC resumption tests (before source versioning)
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-resumption-old-syntax
