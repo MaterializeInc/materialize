@@ -91,8 +91,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
 use crate::collection_mgmt::{
-    AppendOnlyIntrospectionConfig, CollectionManagerKind,
-    DifferentialIntrospectionConfig,
+    AppendOnlyIntrospectionConfig, CollectionManagerKind, DifferentialIntrospectionConfig,
 };
 use crate::instance::{Instance, ReplicaConfig};
 use crate::statistics::StatsState;
@@ -3483,7 +3482,8 @@ struct IngestionState<T: TimelyTimestamp> {
 
 /// A description of a status history collection.
 ///
-/// Used to inform partial truncation, see [`partially_truncate_status_history`].
+/// Used to inform partial truncation, see
+/// [`collection_mgmt::partially_truncate_status_history`].
 struct StatusHistoryDesc<K> {
     keep_n: usize,
     extract_key: Box<dyn Fn(&[Datum]) -> K + Send>,

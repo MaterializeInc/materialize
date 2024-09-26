@@ -110,9 +110,9 @@ use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
 use crate::{
-    collection_mgmt, privatelink_status_history_desc,
-    replica_status_history_desc,sink_status_history_desc, snapshot, snapshot_statistics, source_status_history_desc,statistics, StatusHistoryDesc,
-    StorageError,
+    collection_mgmt, privatelink_status_history_desc, replica_status_history_desc,
+    sink_status_history_desc, snapshot, snapshot_statistics, source_status_history_desc,
+    statistics, StatusHistoryDesc, StorageError,
 };
 
 // Default rate at which we advance the uppers of managed collections.
@@ -673,7 +673,6 @@ where
                     .insert(self.id, scraper_token);
             }
 
-            // Truncate compute-maintained collections.
             IntrospectionType::ComputeDependencies
             | IntrospectionType::ComputeOperatorHydrationStatus
             | IntrospectionType::ComputeMaterializedViewRefreshes
@@ -1063,7 +1062,7 @@ impl<T> AppendOnlyWriteTask<T>
 where
     T: Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
-    /// Spawns an [`AppendOnlyWriteTask] in an [`mz_ore::task`] that will continuously bump the
+    /// Spawns an [`AppendOnlyWriteTask`] in an [`mz_ore::task`] that will continuously bump the
     /// upper for the specified collection,
     /// and append data that is sent via the provided [`mpsc::UnboundedSender`].
     ///
@@ -1427,7 +1426,8 @@ where
         info!("write_task-{} ending", self.id);
     }
 
-    /// Deduplicate any [`StatusUpdate`] within `updates` and converts `updates` to rows and diffs.
+    /// Deduplicate any [`mz_storage_client::client::StatusUpdate`] within `updates` and converts
+    /// `updates` to rows and diffs.
     fn process_updates(
         &mut self,
         updates: Vec<AppendOnlyUpdate>,
