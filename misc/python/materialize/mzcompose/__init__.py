@@ -72,6 +72,7 @@ def get_default_system_parameters(
         # Persist internals changes: advance coverage
         "persist_enable_arrow_lgalloc_noncc_sizes": "true",
         "persist_enable_s3_lgalloc_noncc_sizes": "true",
+        "persist_enable_one_alloc_per_request": "true",
         # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",

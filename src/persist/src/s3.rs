@@ -276,7 +276,8 @@ impl S3BlobConfig {
             Arc::new(
                 ConfigSet::default()
                     .add(&ENABLE_S3_LGALLOC_CC_SIZES)
-                    .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
+                    .add(&ENABLE_S3_LGALLOC_NONCC_SIZES)
+                    .add(&ENABLE_ONE_ALLOC_PER_REQUEST),
             ),
         )
         .await?;
@@ -510,12 +511,15 @@ impl Blob for S3Blob {
                     let data =
                         data.map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
                     match &mut buffer {
+                        // Write to our single allocation, if it's enabled.
                         Some(buf) => buf.extend_from_slice(&data[..]),
+                        // Fallback to spilling into lgalloc is quick as possible.
                         None if enable_s3_lgalloc => {
                             body_parts.push(MaybeLgBytes::LgBytes(
                                 self.metrics.lgbytes.persist_s3.try_mmap(&data),
                             ));
                         }
+                        // If all else false just heap allocate.
                         None => {
                             // In the CYA fallback case, make sure we skip the
                             // memcpy to preserve the previous behavior as closely
@@ -1099,7 +1103,8 @@ mod tests {
                     cfg: Arc::new(
                         ConfigSet::default()
                             .add(&ENABLE_S3_LGALLOC_CC_SIZES)
-                            .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
+                            .add(&ENABLE_S3_LGALLOC_NONCC_SIZES)
+                            .add(&ENABLE_ONE_ALLOC_PER_REQUEST),
                     ),
                     is_cc_active: true,
                 };
