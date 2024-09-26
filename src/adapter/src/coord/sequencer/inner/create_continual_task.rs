@@ -145,7 +145,11 @@ impl Coordinator {
         let as_of = read_holds.least_valid_read();
         df_desc.set_as_of(as_of.clone());
 
-        // TODO(ct): HACKs
+        // The MV optimizer is hardcoded to output a PersistSinkConnection.
+        // Sniff it and swap for the ContinualTaskSink. If/when we split out a
+        // Continual Task optimizer, this won't be necessary, and in the
+        // meantime, it seems undesirable to burden the MV optimizer with a
+        // configuration for this.
         for sink in df_desc.sink_exports.values_mut() {
             match &mut sink.connection {
                 ComputeSinkConnection::Persist(PersistSinkConnection {
