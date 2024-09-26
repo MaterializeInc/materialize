@@ -10,14 +10,22 @@ menu:
 
 ## Overview
 
-Last value in each group pattern returns the last value, according to some
-ordering, in each group.
+The "last value in each group" query pattern returns the last value, according
+to some ordering, in each group.
+
+{{< callout >}}
+
+### Materialize and window functions
+
+{{< idiomatic-sql/materialize-window-functions >}}
+
+{{</ callout >}}
 
 ## Idiomatic Materialize SQL
 
-**Idiomatic Materialize SQL:** To find the last value in each group, use
+**Idiomatic Materialize SQL:** To find the last value in each group, use the
 [MIN()](/sql/functions/#min) or [MAX()](/sql/functions/#max) aggregate function
-in a subquery. instead of a .
+in a subquery.
 
 <table>
 <thead>
@@ -93,6 +101,28 @@ ORDER BY fieldA, ...;
 
 </tbody>
 </table>
+
+### Query hints
+
+To further improve the memory usage of the idiomatic Materialize SQL, you can
+specify a [`AGGREGATE INPUT GROUP SIZE` query hint](/sql/select/#query-hints) in
+the idiomatic Materialize SQL.
+
+```mzsql
+SELECT tableA.fieldA, tableA.fieldB, minmax.Z
+ FROM tableA,
+ (SELECT fieldA,
+    MAX(fieldZ),
+    MIN(fieldZ)
+ FROM tableA
+ OPTIONS (AGGREGATE INPUT GROUP SIZE = ...)
+ GROUP BY fieldA) minmax
+WHERE tableA.fieldA = minmax.fieldA
+ORDER BY fieldA ... ;
+```
+
+For more information on setting `AGGREGATE INPUT GROUP SIZE`, see
+[Optimization](/transform-data/optimization/#query-hints).
 
 ## Examples
 
@@ -299,7 +329,7 @@ ORDER BY o.order_id, o.item;
 <td>
 
 <red>Do not use `LAST_VALUE() OVER (PARTITION BY ... ORDER BY
-)` for first value within groups queries.</red>
+)` for last value within groups queries.</red>
 
 {{< note >}}
 
@@ -348,6 +378,8 @@ ORDER BY order_id, item;
 
 ## See also
 
+- [First value in a
+  group](/transform-data/idiomatic-materialize-sql/first-value)
 - [`MIN()`](/sql/functions/#min)
 - [`MAX()`](/sql/functions/#max)
 - [Query hints for MIN/MAX](/transform-data/optimization/#query-hints)

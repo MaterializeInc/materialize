@@ -33,7 +33,7 @@ ORDER BY fieldA, fieldZ ... ;
 ```mzsql
 SELECT DISTINCT ON(fieldA) fieldA, fieldB, ...
 FROM tableA
-ORDER BY fieldA, fieldZ ...  -- Top-K where is 1;
+ORDER BY fieldA, fieldZ ...  -- Top-K where K is 1;
 ```
 
 </td>
@@ -76,7 +76,12 @@ ORDER BY fieldA ... ;
 </tr>
 
 <tr>
-<td>Lag over a column that advances by regular intervals<br>to access previous row</td>
+<td>
+
+Lag over (order by) whose ordering can be represented by some equality
+condition.
+
+</td>
 <td class="copyableCode">
 
 ***To exclude the first row since it has no previous row***
@@ -84,7 +89,7 @@ ORDER BY fieldA ... ;
 ```mzsql
 SELECT t1.fieldA, t2.fieldB
 FROM tableA t1, tableA t2
-WHERE t1.fieldA = t2.fieldA + INTERVAL ...
+WHERE t1.fieldA = t2.fieldA +  ...
 ORDER BY fieldA;
 ```
 
@@ -94,7 +99,7 @@ ORDER BY fieldA;
 SELECT t1.fieldA, t2.fieldB
 FROM tableA t1
 LEFT JOIN tableA t2
-ON t1.fieldA = t2.fieldA + INTERVAL ...
+ON t1.fieldA = t2.fieldA +  ...
 ORDER BY fieldA;
 ```
 
@@ -102,7 +107,12 @@ ORDER BY fieldA;
 </tr>
 
 <tr>
-<td>Lead over a column that advances by regular intervals<br>to access next row</td>
+<td>
+
+Lead over (order by) whose ordering can be represented by some equality
+condition.
+
+</td>
 <td class="copyableCode">
 
 ***To exclude the last row since it has no next row***
@@ -111,7 +121,7 @@ ORDER BY fieldA;
 SELECT t1.fieldA, t2.fieldB
 FROM tableA t1
 LEFT JOIN tableA t2
-ON t1.fieldA = t2.fieldA - INTERVAL ...
+ON t1.fieldA = t2.fieldA -  ...
 ORDER BY fieldA;
 ```
 
@@ -120,7 +130,7 @@ ORDER BY fieldA;
 ```mzsql
 SELECT t1.fieldA, t2.fieldB
 FROM tableA t1, tableA t2
-WHERE t1.fieldA = t2.fieldA - INTERVAL ...
+WHERE t1.fieldA = t2.fieldA - ...
 ORDER BY fieldA;
 ```
 

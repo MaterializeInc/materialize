@@ -815,6 +815,14 @@
     - the default frame, which is `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT
     ROW`.
 
+    {{< note >}}
+    {{% idiomatic-sql/materialize-window-functions %}}
+
+    See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/)
+    for examples of rewriting window functions.
+
+    {{</ note >}}
+
     In addition to the below window functions, you can use the `OVER` clause with any [aggregation function](#aggregate-functions)
     (e.g., `sum`, `avg`) as well. Using an aggregation with an `OVER` clause is called a _window aggregation_. A
     window aggregation computes the aggregate not on the groups specified by the `GROUP BY` clause, but on the frames

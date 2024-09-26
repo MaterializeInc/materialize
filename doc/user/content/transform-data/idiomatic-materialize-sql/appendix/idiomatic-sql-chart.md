@@ -13,6 +13,14 @@ compatibility with the PostgreSQL dialect. However, for some use cases,
 Materialize provides its own idiomatic query patterns that can provide better
 performance.
 
+{{< callout >}}
+
+### Materialize and window functions
+
+{{< idiomatic-sql/materialize-window-functions >}}
+
+{{</ callout >}}
+
 ## Query Patterns
 
 {{% idiomatic-sql/syntax-table %}}
@@ -20,7 +28,6 @@ performance.
 ## Examples
 
 {{% idiomatic-sql/example-table %}}
-
 
 ## See also
 

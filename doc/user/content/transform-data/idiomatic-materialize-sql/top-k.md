@@ -15,8 +15,16 @@ aliases:
 
 ## Overview
 
-Top-K in group queries group by some key and return the first K elements within
-each group according to some ordering.
+The "Top-K in group" query pattern groups by some key and return the first K
+elements within each group according to some ordering.
+
+{{< callout >}}
+
+### Materialize and window functions
+
+{{< idiomatic-sql/materialize-window-functions >}}
+
+{{</ callout >}}
 
 ## Idiomatic Materialize SQL
 
@@ -83,12 +91,31 @@ ORDER BY fieldA, fieldZ ...;
 </tbody>
 </table>
 
+#### Query hints
+
+To further improve the memory usage of the idiomatic Materialize SQL, you can
+specify a [`LIMIT INPUT GROUP SIZE` query hint](/sql/select/#query-hints) in the
+idiomatic Materialize SQL.
+
+```mzsql
+SELECT fieldA, fieldB, ...
+FROM (SELECT DISTINCT fieldA FROM tableA) grp,
+     LATERAL (SELECT fieldB, ... , fieldZ FROM tableA
+        WHERE fieldA = grp.fieldA
+        OPTIONS (LIMIT INPUT GROUP SIZE = ...)
+        ORDER BY fieldZ ... LIMIT K)   -- K is a number >= 1
+ORDER BY fieldA, fieldZ ... ;
+```
+
+For more information on setting `LIMIT INPUT GROUP SIZE`, see
+[Optimization](/transform-data/optimization/#query-hints).
 
 ### For K = 1
 
 **Idiomatic Materialize SQL**: For K = 1, use a [SELECT DISTINCT
 ON()](/sql/select/#select-distinct-on) on the grouping key (e.g., `fieldA`) and
-order the results (e.g., `fieldZ [ASC|DESC]`).
+order the results first by the `DISTINCT ON` key and then the Top-K ordering
+key the (e.g., `fieldA, fieldZ [ASC|DESC]`).
 
 Alternatively, you can also use the more general [Top-K where K >= 1](#for-k--1)
 pattern, specifying 1 as the limit.
@@ -132,7 +159,7 @@ FROM (
       ROW_NUMBER() OVER (PARTITION BY fieldA
       ORDER BY fieldZ ... ) as rn
    FROM tableA)
-WHERE rn <= K     -- K is a number >= 1
+WHERE rn = 1
 ORDER BY fieldA, fieldZ ...;
 ```
 
@@ -141,6 +168,22 @@ ORDER BY fieldA, fieldZ ...;
 </tr>
 </tbody>
 </table>
+
+### Query hints
+
+To further improve the memory usage of the idiomatic Materialize SQL, you can
+specify a [`DISTINCT ON INPUT GROUP SIZE` query hint](/sql/select/#query-hints)
+in the idiomatic Materialize SQL.
+
+```mzsql
+SELECT DISTINCT ON(fieldA) fieldA, fieldB, ...
+FROM tableA
+OPTIONS (DISTINCT ON INPUT GROUP SIZE = ...)
+ORDER BY fieldA, fieldZ ... ;
+```
+
+For more information on setting `DISTINCT ON INPUT GROUP SIZE`, see
+[Optimization](/transform-data/optimization/#query-hints).
 
 ## Examples
 
@@ -214,9 +257,10 @@ ORDER BY order_id, subtotal DESC;
 ### Select Top-1 item
 
 Using idiomatic Materialize SQL, the following example finds the top 1 item (by
-descending subtotal) in each order. The example uses a subquery to [SELECT
-DISTINCT ON()](/sql/select/#select-distinct-on) on the grouping key (`order_id`)
-with an `ORDER BY order_id, subtotal DESC`. [^1]
+descending subtotal) in each order. The example uses a query to [SELECT DISTINCT
+ON()](/sql/select/#select-distinct-on) on the grouping key (`order_id`) with an
+`ORDER BY order_id, subtotal DESC` (i.e., ordering first by the `DISTINCT
+ON`/grouping key, then the descending subtotal). [^1]
 
 <table>
 <thead>
@@ -254,7 +298,7 @@ FROM (
    SELECT order_id, item, subtotal,
       ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY subtotal DESC) as rn
    FROM orders_view)
-WHERE rn <= 1
+WHERE rn = 1
 ORDER BY order_id, subtotal DESC;
 ```
 

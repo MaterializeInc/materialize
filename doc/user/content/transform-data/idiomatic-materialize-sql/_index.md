@@ -13,7 +13,7 @@ aliases:
 ---
 
 Materialize follows the SQL standard (SQL-92) implementation and strives for
-compatibility with the PostgreSQL dialect.  However, for some use cases,
+compatibility with the PostgreSQL dialect. However, for some use cases,
 Materialize provides its own idiomatic query patterns that can provide better
 performance.
 
@@ -38,7 +38,7 @@ Idiomatic Materialize
 </td>
 <td>
 
-[Use `MIN/MAX ... GROUP BY` subquery](/transform-data/idiomatic-materialize-sql/first-value/)
+[Use `MIN/MAX ... GROUP BY` subquery](/transform-data/idiomatic-materialize-sql/first-value/).
 
 </td>
 </tr>
@@ -46,14 +46,14 @@ Idiomatic Materialize
 <tr>
 <td>
 
-[Lag over](/transform-data/idiomatic-materialize-sql/lag/)
+[Lag over a regularly increasing
+field](/transform-data/idiomatic-materialize-sql/lag/)
 
 </td>
 <td>
 
-[Use self join or a self `LEFT JOIN/LEFT OUTER JOIN` that specifies an equality
-match on the regularly increasing
-field](/transform-data/idiomatic-materialize-sql/lag/)
+[Use self join or a self `LEFT JOIN/LEFT OUTER JOIN` by an **equality match** on
+the regularly increasing field](/transform-data/idiomatic-materialize-sql/lag/).
 
 </td>
 </tr>
@@ -74,14 +74,14 @@ field](/transform-data/idiomatic-materialize-sql/lag/)
 <tr>
 <td>
 
-[Lead over](/transform-data/idiomatic-materialize-sql/lead/)
+[Lead over a regularly increasing
+field](/transform-data/idiomatic-materialize-sql/lead/)
 
 </td>
 <td>
 
-[Use self join or a self `LEFT JOIN/LEFT OUTER JOIN` that specifies an equality
-match on the regularly increasing
-field](/transform-data/idiomatic-materialize-sql/lead/)
+[Use self join or a self `LEFT JOIN/LEFT OUTER JOIN` by an **equality match** on
+the regularly increasing field](/transform-data/idiomatic-materialize-sql/lead/).
 
 </td>
 </tr>
@@ -95,7 +95,9 @@ field](/transform-data/idiomatic-materialize-sql/lead/)
 </td>
 <td>
 
-[Use `LATERAL JOIN` on a `DISTINCT` subquery and an `ORDER BY ... LIMIT` subquery](/transform-data/idiomatic-materialize-sql/top-k/)
+[Use an `ORDER BY ... LIMIT` subquery with a `LATERAL JOIN` on a `DISTINCT`
+subquery (or, for K=1,  a `SELECT DISTINCT ON ... ORDER BY ... LIMIT`
+query)](/transform-data/idiomatic-materialize-sql/top-k/)
 
 </td>
 </tr>

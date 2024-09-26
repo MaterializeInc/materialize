@@ -143,7 +143,8 @@ p+p {
     pre,
     .warning,
     .note,
-    .tip {
+    .tip,
+    .important {
         font-size: rem(1.5);
         font-weight: 300;
     }
@@ -478,7 +479,8 @@ p+p {
         }
     }
 
-    .note {
+    .note,
+    .important {
         background: var(--note);
         border: 1px solid var(--note-border);
 
@@ -552,6 +554,7 @@ p+p {
     .warning,
     .note,
     .tip,
+    .important,
     .private-preview,
     .public-preview {
         box-sizing: border-box;
@@ -1150,7 +1153,8 @@ pre {
 
 body.dark .content {
 
-    .note {
+    .note,
+    .important {
         a {
             color: var(--link);
         }

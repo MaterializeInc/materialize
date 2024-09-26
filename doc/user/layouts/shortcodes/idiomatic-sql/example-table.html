@@ -86,7 +86,12 @@ ORDER BY o.order_id, o.item;
 </tr>
 
 <tr>
-<td>Lag over a column that advances by regular intervals<br>to access previous row</td>
+<td>
+
+Lag over (order by) whose ordering can be represented by some equality
+condition.
+
+</td>
 <td class="copyableCode">
 
 ***If suppressing the first row since it has no previous row***
@@ -114,7 +119,12 @@ ORDER BY order_date;
 </tr>
 
 <tr>
-<td>Lead over a column that advances by regular intervals<br>to access the next row</td>
+<td>
+
+Lead over (order by) whose ordering can be represented by some equality
+condition.
+
+</td>
 <td class="copyableCode">
 
 ***To suppress the last row since it has no next row***

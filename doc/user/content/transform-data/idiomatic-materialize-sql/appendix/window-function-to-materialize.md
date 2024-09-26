@@ -1,6 +1,7 @@
 ---
 title: "Window function to idiomatic Materialize"
 description: "Cheatsheet for window functions to idiomatic Materialize SQL."
+disable_toc: true
 menu:
   main:
     parent: idiomatic-materialize-appendix
@@ -16,6 +17,14 @@ functions](/sql/functions/#window-functions). However, for some
 [`LAST_VALUE()`](/sql/functions/#last_value) use cases, Materialize provides its
 own idiomatic query patterns that do <red>not</red> use the window functions and
 can provide better performance.
+
+{{< callout >}}
+
+### Materialize and window functions
+
+{{< idiomatic-sql/materialize-window-functions >}}
+
+{{</ callout >}}
 
 <table>
 <thead>
@@ -72,7 +81,9 @@ ORDER BY fieldA ... ;
 <tr>
 <td colspan=2>
 
-**Lag over.**  For more information and examples, see [Idiomatic Materialize SQL: Lag over](/transform-data/idiomatic-materialize-sql/lag/).
+**Lag over whose order by field advances in a regular pattern.**
+For more information and examples, see [Idiomatic Materialize SQL: Lag
+over](/transform-data/idiomatic-materialize-sql/lag/).
 
 </td>
 </tr>
@@ -81,7 +92,7 @@ ORDER BY fieldA ... ;
 <div style="background-color: var(--code-block)">
 
 ```nofmt
--- Anti-pattern. Avoid. --
+-- Anti-pattern. Avoid --
 SELECT fieldA, ...
   LAG(fieldZ)
     OVER (ORDER BY fieldA) as previous_row_value
@@ -96,7 +107,7 @@ FROM tableA;
 -- Excludes the first row in the results --
 SELECT t1.fieldA, t2.fieldB as previous_row_value
 FROM tableA t1, tableA t2
-WHERE t1.fieldA = t2.fieldA + INTERVAL ...
+WHERE t1.fieldA = t2.fieldA + ...
 ORDER BY fieldA;
 ```
 
@@ -149,7 +160,9 @@ ORDER BY fieldA ... ;
 <tr>
 <td colspan=2>
 
-**Lead over.**  For more information and examples, see [Idiomatic Materialize SQL: Lead over](/transform-data/idiomatic-materialize-sql/lead/).
+**Lead over whose order by field advances in a regular pattern.** For more
+information and examples, see [Idiomatic Materialize SQL: Lead
+over](/transform-data/idiomatic-materialize-sql/lead/).
 
 </td>
 </tr>
@@ -173,7 +186,7 @@ FROM tableA;
 -- Excludes the last row in the results --
 SELECT t1.fieldA, t2.fieldB as next_row_value
 FROM tableA t1, tableA t2
-WHERE t1.fieldA = t2.fieldA - INTERVAL ...
+WHERE t1.fieldA = t2.fieldA - ...
 ORDER BY fieldA;
 ```
 

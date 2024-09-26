@@ -23,8 +23,8 @@ The following sample data is used in:
 CREATE TABLE orders (
     order_id int NOT NULL,
     order_date timestamp NOT NULL,
-    item text not null,
-    quantity int not null
+    item text NOT NULL,
+    quantity int NOT NULL
 );
 
 INSERT INTO orders VALUES
@@ -63,9 +63,9 @@ INSERT INTO orders VALUES
 ;
 
 CREATE TABLE items(
-    item text not null,
-    price numeric(8,4) not null,
-    currency text not null DEFAULT 'USD'
+    item text NOT NULL,
+    price numeric(8,4) NOT NULL,
+    currency text NOT NULL DEFAULT 'USD'
 );
 
 INSERT INTO items VALUES
