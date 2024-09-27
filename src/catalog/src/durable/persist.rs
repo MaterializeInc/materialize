@@ -1240,7 +1240,7 @@ impl UnopenedPersistCatalogState {
                 .into());
             }
             (
-                Mode::Writable | Mode::Savepoint,
+                Mode::Writable,
                 FenceableToken::Initializing {
                     current_deploy_generation: None,
                     ..
