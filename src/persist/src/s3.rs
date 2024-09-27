@@ -493,6 +493,8 @@ impl Blob for S3Blob {
                 let mut buffer = match object.content_length() {
                     Some(len @ 1..) if enable_one_allocation => {
                         let len: u64 = len.try_into().expect("positive integer");
+                        // N.B. `lgalloc` cannot reallocate so we need to make sure the initial
+                        // allocation is large enough to fit then entire blob.
                         let buf: MetricsRegion<u8> = self
                             .metrics
                             .lgbytes
