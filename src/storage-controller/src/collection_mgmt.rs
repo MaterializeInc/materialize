@@ -1032,7 +1032,7 @@ where
     pub(crate) persist: Arc<PersistClientCache>,
 }
 
-/// A task write to append only collections and continuously bump the upper for the specified
+/// A task that writes to an append only collection and continuously bumps the upper for the specified
 /// collection.
 ///
 /// For status history collections, this task can deduplicate redundant [`Status`]s.
