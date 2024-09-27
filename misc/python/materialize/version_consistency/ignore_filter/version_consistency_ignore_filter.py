@@ -20,6 +20,7 @@ from materialize.output_consistency.expression.expression_characteristics import
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     involves_data_type_category,
     is_any_date_time_expression,
+    is_known_to_involve_exact_data_types,
     is_operation_tagged,
     matches_fun_by_any_name,
     matches_fun_by_name,
@@ -40,6 +41,9 @@ from materialize.output_consistency.ignore_filter.internal_output_inconsistency_
 )
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     TAG_REGEX,
+)
+from materialize.output_consistency.input_data.types.number_types_provider import (
+    NON_INTEGER_TYPE_IDENTIFIERS,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.row_selection import DataRowSelection
@@ -233,6 +237,12 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
                 partial(
                     matches_fun_by_any_name,
                     function_names_in_lower_case=MATH_FUNCTIONS_WITH_PROBLEMATIC_FLOATING_BEHAVIOR,
+                ),
+                True,
+            ) or expression.matches(
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers=NON_INTEGER_TYPE_IDENTIFIERS,
                 ),
                 True,
             ):
