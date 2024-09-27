@@ -635,7 +635,13 @@ pub struct CreateSourcePlan {
     pub in_cluster: Option<ClusterId>,
     // All the available upstream references for this source.
     // Populated for top-level sources that can contain subsources/tables
-    pub available_source_references: Option<Vec<SourceReference>>,
+    pub available_source_references: Option<SourceReferences>,
+}
+
+#[derive(Debug)]
+pub struct SourceReferences {
+    pub updated_at: u64,
+    pub references: Vec<SourceReference>,
 }
 
 /// An available external reference for a source and if possible to retrieve,

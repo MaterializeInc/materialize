@@ -728,6 +728,7 @@ impl CatalogState {
                             },
                         ),
                         is_retained_metrics_object: coll.is_retained_metrics_object,
+                        available_source_references: None,
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(acl_items),
@@ -949,20 +950,12 @@ impl CatalogState {
     ) {
         match diff {
             StateDiff::Addition => {
-                let prev = self
-                    .source_references
-                    .insert(source_references.source_id, source_references.into());
-                assert!(
-                    prev.is_none(),
-                    "values must be explicitly retracted before inserting a new value: {prev:?}"
-                );
+                let source = self.get_entry_mut(&source_references.source_id);
+                source.update_source_available_references(Some(source_references.into()));
             }
             StateDiff::Retraction => {
-                let prev = self.source_references.remove(&source_references.source_id);
-                assert!(
-                    prev.is_some(),
-                    "retraction for a non-existent existing value: {source_references:?}"
-                );
+                let source = self.get_entry_mut(&source_references.source_id);
+                source.update_source_available_references(None);
             }
         }
     }

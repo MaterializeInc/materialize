@@ -25,7 +25,7 @@ use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::Transaction;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterConfig, DataSourceDesc, SourceReference, StateDiff, StateUpdate,
+    CatalogItem, ClusterConfig, DataSourceDesc, SourceReferences, StateDiff, StateUpdate,
     StateUpdateKind, TemporaryItem,
 };
 use mz_catalog::SYSTEM_CONN_ID;
@@ -181,7 +181,7 @@ pub enum Op {
     },
     UpdateSourceReferences {
         source_id: GlobalId,
-        references: Vec<SourceReference>,
+        references: SourceReferences,
     },
     UpdateSystemConfiguration {
         name: String,
@@ -1142,11 +1142,11 @@ impl Catalog {
                 tx.update_source_references(
                     source_id,
                     references
+                        .references
                         .into_iter()
                         .map(|reference| reference.into())
                         .collect(),
-                    // Use the oracle timestamp as the 'time' recorded for the update.
-                    oracle_write_ts.into(),
+                    references.updated_at,
                 )?;
             }
             Op::DropObjects(drop_object_infos) => {

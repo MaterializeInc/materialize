@@ -335,14 +335,18 @@ impl Coordinator {
             if let Some(references) = &plan.available_source_references {
                 ops.push(catalog::Op::UpdateSourceReferences {
                     source_id,
-                    references: references
-                        .iter()
-                        .map(|reference| mz_catalog::memory::objects::SourceReference {
-                            name: reference.name.clone(),
-                            namespace: reference.namespace.clone(),
-                            columns: reference.columns.clone(),
-                        })
-                        .collect(),
+                    references: mz_catalog::memory::objects::SourceReferences {
+                        updated_at: references.updated_at,
+                        references: references
+                            .references
+                            .iter()
+                            .map(|reference| mz_catalog::memory::objects::SourceReference {
+                                name: reference.name.clone(),
+                                namespace: reference.namespace.clone(),
+                                columns: reference.columns.clone(),
+                            })
+                            .collect(),
+                    },
                 });
             }
 
