@@ -334,6 +334,10 @@ class Scenario:
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         raise NotImplementedError
 
+    @staticmethod
+    def enabled_by_default() -> bool:
+        return True
+
     @classmethod
     def name(cls) -> str:
         return cls.__name__
@@ -364,7 +368,9 @@ class Scenario:
             thread.start()
         # Start threads and have them wait for work from a queue
         for i in range(self.conn_pool_size):
-            self.conns.put(conn_info.connect())
+            conn = conn_info.connect()
+            conn.autocommit = True
+            self.conns.put(conn)
 
     def run(
         self,

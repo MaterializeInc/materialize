@@ -23,6 +23,7 @@ import numpy
 from matplotlib.markers import MarkerStyle
 
 from materialize import MZ_ROOT, buildkite
+from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
@@ -183,7 +184,7 @@ def report(
         times: list[float] = [x.timestamp - start_time for x in m]
         durations: list[float] = [x.duration * 1000 for x in m]
         stats[key] = Statistics(times, durations)
-        plt.scatter(times, durations, label=key, marker=MarkerStyle("+"))
+        plt.scatter(times, durations, label=key[:60], marker=MarkerStyle("+"))
         print(f"Statistics for {key}:\n{stats[key]}")
         if key in scenario.guarantees and guarantees:
             for stat, guarantee in scenario.guarantees[key].items():
@@ -253,7 +254,45 @@ def run_once(
 
     overrides = []
 
-    if args.mz_url:
+    if args.benchmarking_env:
+        assert not args.mz_url
+        assert not args.canary_env
+        region = "aws/us-east-1"
+        environment = os.getenv("ENVIRONMENT", "staging")
+        app_password = os.environ["QA_BENCHMARKING_APP_PASSWORD"]
+
+        target = PgConnInfo(
+            user="qabenchmarking",
+            password=app_password,
+            database="materialize",
+            # Service accounts can't use mz
+            host="4pe2w4etmpsnwx1iizersezg7.lb.us-east-1.aws.staging.materialize.cloud",
+            # host=get_cloud_hostname(
+            #     c, region=region, environment=environment, app_password=app_password
+            # ),
+            port=6875,
+            ssl=True,
+        )
+    elif args.canary_env:
+        assert not args.mz_url
+        assert not args.benchmarking_env
+        region = "aws/us-east-1"
+        environment = os.getenv("ENVIRONMENT", "production")
+        app_password = os.environ["CANARY_LOADTEST_APP_PASSWORD"]
+
+        target = PgConnInfo(
+            user=os.getenv(
+                "CANARY_LOADTEST_USERNAME", "infra+qacanaryload@materialize.io"
+            ),
+            password=app_password,
+            database="materialize",
+            host=get_cloud_hostname(
+                c, region=region, environment=environment, app_password=app_password
+            ),
+            port=6875,
+            ssl=True,
+        )
+    elif args.mz_url:
         overrides = [
             Testdrive(
                 no_reset=True,
@@ -261,11 +300,11 @@ def run_once(
                 no_consistency_checks=True,
             )
         ]
+        target = parse_pg_conn_string(args.mz_url)
     else:
-        mz_image = f"materialize/materialized:{tag}" if tag else None
         overrides = [
             Materialized(
-                image=mz_image,
+                image=f"materialize/materialized:{tag}" if tag else None,
                 default_size=args.size,
                 soft_assertions=False,
                 external_cockroach=True,
@@ -275,16 +314,13 @@ def run_once(
                 | {"max_connections": "100000"},
             )
         ]
+        target = None
 
     c.silent = True
 
     with c.override(*overrides):
         for scenario_class in scenarios:
-            scenario_name = scenario_class.name()
-            print(f"--- Running scenario {scenario_name}")
-
-            if args.mz_url:
-                target = parse_pg_conn_string(args.mz_url)
+            if target:
                 c.up("testdrive", persistent=True)
                 conn_infos = {"materialized": target}
                 conn = target.connect()
@@ -294,6 +330,7 @@ def run_once(
                 conn.close()
                 mz_string = f"{mz_version} ({target.host})"
             else:
+                print("~~~ Starting up services")
                 c.up(*service_names)
                 c.up("testdrive", persistent=True)
 
@@ -321,6 +358,8 @@ def run_once(
                     ),
                 }
 
+            scenario_name = scenario_class.name()
+            print(f"--- Running scenario {scenario_name}")
             state = State(
                 measurements=defaultdict(list),
                 load_phase_duration=args.load_phase_duration,
@@ -331,8 +370,9 @@ def run_once(
             start_time = time.time()
             Path(MZ_ROOT / "plots").mkdir(parents=True, exist_ok=True)
             try:
-                # Don't let the garbage collector interfere with our measurements
-                gc.disable()
+                if not args.benchmarking_env:
+                    # Don't let the garbage collector interfere with our measurements
+                    gc.disable()
                 scenario.run(c, state)
                 scenario.teardown()
                 gc.collect()
@@ -349,7 +389,10 @@ def run_once(
                 failures.extend(new_failures)
                 stats[scenario] = new_stats
 
-            if not args.mz_url:
+            if not target:
+                print(
+                    "~~~ Resetting materialized to prevent interference between scenarios"
+                )
                 c.kill("cockroach", "materialized", "testdrive")
                 c.rm("cockroach", "materialized", "testdrive")
                 c.rm_volumes("mzdata")
@@ -571,6 +614,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     parser.add_argument("--mz-url", type=str, help="Remote Mz instance to run against")
 
+    parser.add_argument(
+        "--canary-env",
+        action="store_true",
+        help="Run against QA Canary production environment",
+    )
+
+    parser.add_argument(
+        "--benchmarking-env",
+        action="store_true",
+        help="Run against QA Benchmarking staging environment",
+    )
+
     args = parser.parse_args()
 
     if args.scenario:
@@ -624,8 +679,5 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         raise FailedTestExecutionError(errors=failures)
 
 
-# TODO: 24 hour runs (also against real staging with sources, similar to QA canary)
-#       Set up remote sources, share with QA canary pipeline, use concurrency group, start first 24 hour runs
-#       Maybe also set up the real rr-bench there as a separate step
 # TODO: Choose an existing cluster name (for remote mz)
 # TODO: Measure Memory?

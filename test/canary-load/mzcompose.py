@@ -261,7 +261,7 @@ def validate_updated_data(c: Composition, i: int) -> None:
     c.testdrive(
         dedent(
             f"""
-                # TODO: Reenable when materialize#18645 is fixed
+                # TODO: Reenable when database-issues#5511 is fixed
                 # > SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0
                 # 0
 
@@ -333,7 +333,7 @@ def validate_data_through_http_connection(
     result = http_sql_query(host, "SELECT 1", token)
     assert result == [["1"]]
 
-    # TODO: Reenable when materialize#18645 is fixed
+    # TODO: Reenable when database-issues#5511 is fixed
     # result = http_sql_query(
     #    host,
     #    "SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0",

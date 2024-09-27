@@ -24,7 +24,7 @@ from enum import Enum
 from pathlib import Path
 from threading import Thread
 from typing import Protocol, TypeVar
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import psycopg
 import xxhash
@@ -157,15 +157,30 @@ class PgConnInfo:
     database: str
     password: str | None = None
     ssl: bool = False
+    cluster: str | None = None
+    autocommit: bool = False
 
     def connect(self) -> psycopg.Connection:
-        return psycopg.connect(
+        conn = psycopg.connect(
             host=self.host,
             port=self.port,
             user=self.user,
             password=self.password,
             dbname=self.database,
             sslmode="require" if self.ssl else None,
+        )
+        if self.autocommit:
+            conn.autocommit = True
+        if self.cluster:
+            with conn.cursor() as cur:
+                cur.execute(f"SET cluster = {self.cluster}".encode())
+        return conn
+
+    def to_conn_string(self) -> str:
+        return (
+            f"postgres://{quote(self.user)}:{quote(self.password)}@{self.host}:{self.port}/{quote(self.database)}"
+            if self.password
+            else f"postgres://{quote(self.user)}@{self.host}:{self.port}/{quote(self.database)}"
         )
 
 
