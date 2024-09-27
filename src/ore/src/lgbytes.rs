@@ -296,9 +296,10 @@ impl LgBytesOpMetrics {
                 Region::new_heap(capacity)
             }
         };
+        let region = self.metrics_region(region);
         self.alloc_seconds.inc_by(start.elapsed().as_secs_f64());
 
-        self.metrics_region(region)
+        region
     }
 
     /// Attempts to copy the given buf into an lgalloc managed file-based mapped
