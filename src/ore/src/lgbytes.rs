@@ -281,9 +281,24 @@ impl LgBytesOpMetrics {
     /// Returns a new empty [`MetricsRegion`] to hold at least `T` elements.
     pub fn new_region<T: Copy>(&self, capacity: usize) -> MetricsRegion<T> {
         let start = Instant::now();
-        let buf = Region::new_auto(capacity);
+
+        // Round the capacity up to the minimum lgalloc mmap size.
+        let capacity = std::cmp::max(capacity, 1 << lgalloc::VALID_SIZE_CLASS.start);
+        let region = match Region::new_mmap(capacity) {
+            Ok(region) => region,
+            Err(err) => {
+                if let AllocError::Disabled = err {
+                    self.mmap_disabled_count.inc()
+                } else {
+                    debug!("failed to mmap allocate: {}", err);
+                    self.mmap_error_count.inc();
+                }
+                Region::new_heap(capacity)
+            }
+        };
         self.alloc_seconds.inc_by(start.elapsed().as_secs_f64());
-        self.metrics_region(buf)
+
+        self.metrics_region(region)
     }
 
     /// Attempts to copy the given buf into an lgalloc managed file-based mapped
