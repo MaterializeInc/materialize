@@ -58,6 +58,10 @@ impl<T: Copy> MetricsRegion<T> {
     }
 
     /// Copy all of the elements from `slice` into the [`Region`].
+    ///
+    /// # Panics
+    ///
+    /// * If the [`Region`] does not have enough capacity.
     pub fn extend_from_slice(&mut self, slice: &[T]) {
         self.buf.extend_from_slice(slice);
     }
