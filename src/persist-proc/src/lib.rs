@@ -98,12 +98,6 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                 {
                     // Write the format of a Part in State.
                     let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_batch_record_part_format", ::mz_dyncfg::ConfigVal::Bool(true));
-                    x
-                },
-                {
-                    // Write the format of a Part in State.
-                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
                     x.add_dynamic("persist_batch_record_run_meta", ::mz_dyncfg::ConfigVal::Bool(true));
                     x
                 },

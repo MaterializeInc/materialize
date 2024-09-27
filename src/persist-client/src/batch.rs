@@ -344,7 +344,6 @@ pub struct BatchBuilderConfig {
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) batch_columnar_format: BatchColumnarFormat,
     pub(crate) batch_columnar_format_percent: usize,
-    pub(crate) batch_record_part_format: bool,
     pub(crate) inline_writes_single_max_bytes: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
@@ -373,12 +372,6 @@ pub(crate) const BATCH_COLUMNAR_FORMAT_PERCENT: Config<usize> = Config::new(
     "persist_batch_columnar_format_percent",
     0,
     "Percent of parts to write using 'persist_batch_columnar_format', falling back to 'row'.",
-);
-
-pub(crate) const BATCH_RECORD_PART_FORMAT: Config<bool> = Config::new(
-    "persist_batch_record_part_format",
-    false,
-    "Wether we record the format of the Part in state (Materialize).",
 );
 
 pub(crate) const ENCODING_ENABLE_DICTIONARY: Config<bool> = Config::new(
@@ -469,7 +462,6 @@ impl BatchBuilderConfig {
                 .batch_builder_max_outstanding_parts(),
             batch_columnar_format,
             batch_columnar_format_percent,
-            batch_record_part_format: BATCH_RECORD_PART_FORMAT.get(value),
             inline_writes_single_max_bytes: INLINE_WRITES_SINGLE_MAX_BYTES.get(value),
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
             stats_budget: STATS_BUDGET_BYTES.get(value),
@@ -1313,11 +1305,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             }
             stats
         });
-        let format = if cfg.batch_record_part_format {
-            Some(cfg.batch_columnar_format)
-        } else {
-            None
-        };
 
         BatchPart::Hollow(HollowBatchPart {
             key: partial_key,
@@ -1327,7 +1314,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             stats,
             ts_rewrite,
             diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
-            format,
+            format: Some(cfg.batch_columnar_format),
             schema_id,
         })
     }
