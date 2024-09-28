@@ -74,9 +74,33 @@ By default, you are using the `quickstart` cluster, working in the
 
 - `public` is the schema name.
 
-Create a separate schema for this quickstart.
+Create a separate schema for this quickstart. For a schema name to be valid:
 
-1. Use [`CREATE SCHEMA`](/sql/create-schema/) to create your own schema.
+- The first character must be either: an ASCII letter (`a-z` and `A-Z`), an
+  underscore (`_`), or a non-ASCII character.
+
+- The remaining characters can be: an ASCII letter (`a-z` and `A-Z`), ASCII
+  numbers (`0-9`), an underscore (`_`), dollar signs (`$`), or a non-ASCII character.
+
+Alternatively, by double-quoting the name, you can bypass the aforementioned
+constraints with the following exception: schema names, whether double-quoted or
+not, cannot contain the dot (`.`).
+
+See also [Naming restrictions](/sql/identifiers/#naming-restrictions).
+
+{{< tabs >}}
+{{< tab "Materialize Console" >}}
+
+1. Enter a schema name in the text field and click the `Create` button.
+
+1. Switch to the new schema. From the top of the SQL Shell, select your schema
+   from the namespace dropdown.
+
+{{</ tabs >}}
+
+{{< tab "Other Clients" >}}
+
+1. Use [`CREATE SCHEMA`](/sql/create-schema/) to create your schema.
 
    ```mzsql
    -- Replace <schema> with the name for your schema
@@ -89,6 +113,10 @@ Create a separate schema for this quickstart.
    -- Replace <schema> with the name for your schema
    SET SCHEMA <schema>;
    ```
+
+{{</ tabs >}}
+{{</ tabs >}}
+
 
 ## Step 2. Create the source.
 
@@ -431,7 +459,7 @@ data arrives (either from the known_flippers table or the flip_activities view).
 
    1. In the Materialize Console quickstart page, enter an id (for example
       `450`) into the text input field to insert a new user into the
-      `known-flippers` table.
+      `known-flippers` table. You can specify any number for the flipper id.
 
       The flipper should immediately appear in the `SUBSCRIBE` results.
 
@@ -470,7 +498,8 @@ data arrives (either from the known_flippers table or the flip_activities view).
       SET SCHEMA <schema>;
       ```
 
-   1. Manually insert a row into the `known_flippers` table:
+   1. Manually insert a row into the `known_flippers` table. You can specify any
+      number for the flipper id.
 
       ```mzsql
       INSERT INTO known_flippers values (450);
@@ -556,6 +585,8 @@ data comes in, this step creates the following views for completed auctions:
    );
    ```
 
+   Toggle `Show diffs` to see changes to `funds_movement`.
+
    - As new data comes in and auctions complete, the `total_credits` and
      `total_debits` values should change but the `total_difference` should
      remain `0`.
@@ -591,7 +622,7 @@ To clean up the quickstart environment:
    ```
 
 1. Use the [`DROP TABLE`](/sql/drop-table) command to drop the separate
-   `known_flippers` table and its indexes.
+   `known_flippers` table.
 
    ```mzsql
    DROP TABLE known_flippers;
@@ -599,17 +630,19 @@ To clean up the quickstart environment:
 
 ## Summary
 
-In Materialize, [indexes](/concepts/indexes/) **incrementally
-update** results when Materialize ingests new data. These up-to-date results
-are then immediately available and computationally free for reads within the cluster.
+In Materialize, [indexes](/concepts/indexes/) represent query results stored in
+memory within a cluster. When you create an index on a view, the index
+incrementally updates the view results (instead of recalculating the results
+from scratch) as Materialize ingests new data. These up-to-date results are then
+immediately available and computationally free for reads within the cluster.
 
-### Use of indexed views
+### General guidelines
 
 This quickstart created an index on a view to maintain in-memory up-to-date
-results in the cluster. In Materialize, both indexes on views and materialized
-views incrementally update the view results. Indexes maintain the view results
-in memory within a cluster while the materialized views persist the query
-results in durable storage and is available across clusters.
+results in the cluster. In Materialize, both materialized views and indexes on
+views incrementally update the view results. Materialized views persist the
+query results in durable storage and is available across clusters while indexes
+maintain the view results in memory within a single cluster.
 
 {{% views-indexes/table-usage-pattern %}}
 
@@ -619,12 +652,13 @@ The quickstart used an index since:
 
 - All activities were limited to the single `quickstart` cluster.
 
-- Although used, `SUBSCRIBE` operations were for illustrative purposes and were
-  not the final consumer of the views.
+- Although used, `SUBSCRIBE` operations were for illustrative/validation
+  purposes and were not the final consumer of the views.
 
 ### Considerations
 
-Before creating an index, consider its memory usage as well as its [compute cost
+Before creating an index (which represents query results stored in memory),
+consider its memory usage as well as its [compute cost
 implications](/administration/billing/#compute). For best practices when
 creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 
@@ -635,16 +669,14 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 - [Sources](/concepts/sources)
 - [Views](/concepts/views/)
 - [Usage & Billing](/administration/billing/#compute)
-- [`CREATE VIEW`](/sql/create-view/)
 - [`CREATE INDEX`](/sql/create-index/)
 - [`CREATE SCHEMA`](/sql/create-schema/)
 - [`CREATE SOURCE`](/sql/create-source/)
 - [`CREATE TABLE`](/sql/create-table)
-- [`DROP INDEX`](/sql/drop-index/)
+- [`CREATE VIEW`](/sql/create-view/)
 - [`DROP VIEW`](/sql/drop-view)
 - [`DROP SOURCE`](/sql/drop-source/)
 - [`DROP TABLE`](/sql/drop-table)
-- [`EXPLAIN`](/sql/explain/)
 - [`SELECT`](/sql/select)
 - [`SUBSCRIBE`](/sql/subscribe/)
 
