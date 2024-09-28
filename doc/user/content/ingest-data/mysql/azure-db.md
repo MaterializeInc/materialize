@@ -1,5 +1,5 @@
 ---
-title: "Ingest data from Azure DB for MySQL"
+title: "Ingest data from Azure DB"
 description: "How to stream data from Azure DB for MySQL to Materialize"
 menu:
   main:
@@ -50,7 +50,13 @@ For guidance on enabling GTID-based binlog replication in Azure DB, see the
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-## B. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your Azure DB instance is publicly accessible, **you
+can skip this step**. For production scenarios, we recommend configuring one of
+the network security options below.
+{{< /note >}}
 
 There are various ways to configure your database's network to allow Materialize
 to connect:

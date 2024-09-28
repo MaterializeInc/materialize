@@ -39,7 +39,13 @@ To enable logical replication in AlloyDB, see the
 
 {{% postgres-direct/create-a-publication-other %}}
 
-## B. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your AlloyDB instance is publicly accessible, **you
+can skip this step**. For production scenarios, we recommend configuring one of
+the network security options below.
+{{</ note >}}
 
 To establish authorized and secure connections to an AlloyDB instance, an
 authentication proxy is necessary. Google Cloud Platform provides [a guide](https://cloud.google.com/alloydb/docs/auth-proxy/connect)

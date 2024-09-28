@@ -1,5 +1,5 @@
 ---
-title: "Ingest data from Amazon RDS for MySQL"
+title: "Ingest data from Amazon RDS"
 description: "How to stream data from Amazon RDS for MySQL to Materialize"
 menu:
   main:
@@ -105,7 +105,13 @@ binary logging.
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-## B. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your RDS instance is publicly accessible, **you can
+skip this step**. For production scenarios, we recommend configuring one of the
+network security options below.
+{{< /note >}}
 
 {{< note >}}
 Support for AWS PrivateLink connections is planned for a future release.

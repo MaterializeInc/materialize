@@ -1,5 +1,5 @@
 ---
-title: "Ingest data from Amazon Aurora MySQL"
+title: "Ingest data from Amazon Aurora"
 description: "How to stream data from Amazon Aurora for MySQL to Materialize"
 menu:
   main:
@@ -21,7 +21,7 @@ to Materialize using the [MySQL source](/sql/create-source/mysql/).
 
 {{% mysql-direct/before-you-begin %}}
 
-## A. Configure Aurora
+## A. Configure Amazon Aurora
 
 ### 1. Enable GTID-based binlog replication
 
@@ -51,7 +51,13 @@ For guidance on enabling GTID-based binlog replication in Aurora, see the
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-## B. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your Aurora instance is publicly accessible, **you
+can skip this step**. For production scenarios, we recommend configuring one of
+the network security options below.
+{{< /note >}}
 
 {{< note >}}
 Support for AWS PrivateLink connections is planned for a future release.
@@ -182,7 +188,7 @@ networking configuration, so start by selecting the relevant option.
 
 [//]: # "TODO(morsapaes) Replace these Step 6. and 7. with guidance using the
 new progress metrics in mz_source_statistics + console monitoring, when
-available(also for PostgreSQL)."
+available (also for PostgreSQL)."
 
 ### 3. Monitor the ingestion status
 

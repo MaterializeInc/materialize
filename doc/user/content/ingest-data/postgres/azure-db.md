@@ -35,7 +35,13 @@ To enable logical replication in Azure DB, see the
 
 {{% postgres-direct/create-a-publication-other %}}
 
-## B. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your AzureDB instance is publicly accessible, **you
+can skip this step**. For production scenarios, we recommend configuring one of
+the network security options below.
+{{</ note >}}
 
 There are various ways to configure your database's network to allow Materialize
 to connect:

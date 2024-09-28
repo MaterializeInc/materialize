@@ -1,5 +1,5 @@
 ---
-title: "Ingest data from Google Cloud SQL for MySQL"
+title: "Ingest data from Google Cloud SQL"
 description: "How to stream data from Google Cloud SQL for MySQL to Materialize"
 menu:
   main:
@@ -44,7 +44,13 @@ For guidance on enabling GTID-based binlog replication in Cloud SQL, see the [Cl
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-## B. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your Google Cloud SQL instance is publicly
+accessible, **you can skip this step**. For production scenarios, we recommend
+configuring one of the network security options below.
+{{< /note >}}
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
