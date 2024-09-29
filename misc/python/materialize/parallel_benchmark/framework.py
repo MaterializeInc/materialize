@@ -334,10 +334,6 @@ class Scenario:
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         raise NotImplementedError
 
-    @staticmethod
-    def enabled_by_default() -> bool:
-        return True
-
     @classmethod
     def name(cls) -> str:
         return cls.__name__

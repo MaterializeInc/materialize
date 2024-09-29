@@ -1089,14 +1089,11 @@ class ReadReplicaBenchmark(Scenario):
         )
 
 
+@disabled("Only run separately in QA Canary pipeline")
 class StagingBench(Scenario):
     # TODO: Reenable queries other than SELECT 1
     # TODO: Kafka source + sink
     # TODO: Webhook source
-    @staticmethod
-    def enabled_by_default() -> bool:
-        return False
-
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         conn_infos = deepcopy(conn_infos)
         conn_infos["materialized"].cluster = "quickstart"
