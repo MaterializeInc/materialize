@@ -119,7 +119,7 @@ FROM t
 ----
 1 a b
 
-# Regression test for materialize#8963
+# Regression test for database-issues#2730
 query II
 SELECT row_number() OVER (), row_number() OVER ()
 ----
@@ -179,7 +179,7 @@ Target cluster: quickstart
 EOF
 
 #
-# Regression test for materialize#9077
+# Regression test for database-issues#2760
 #
 
 statement ok
@@ -404,7 +404,7 @@ CREATE TABLE t(x string);
 statement ok
 INSERT INTO t VALUES ('a'), ('b'), ('c');
 
-# Regression for materialize#9749
+# Regression for database-issues#2962
 query error window functions are not allowed in ON
 SELECT * FROM t AS v JOIN t ON row_number() over () > 1;
 
@@ -5497,7 +5497,7 @@ ORDER BY a;
 3  three  2
 
 # Window function inside CASE WHEN
-# Regression test for https://github.com/MaterializeInc/materialize/issues/20746
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/6250
 
 statement ok
 CREATE TABLE bools(cond bool, x int);
@@ -6233,7 +6233,7 @@ NULL  3  NULL  {9,3,11}  {6,18,22}  18
 NULL  9  NULL  {9,11}  {18,22}  22
 NULL  11  NULL  {11}  {22}  NULL
 
-# https://github.com/MaterializeInc/materialize/issues/22015
+# https://github.com/MaterializeInc/database-issues/issues/6626
 query error db error: ERROR: DISTINCT in window aggregates not yet supported
 SELECT
   x-y,

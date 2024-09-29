@@ -3192,7 +3192,7 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
                 // take and return the `HirRelationExpr` that is being aliased,
                 // which is a rather large refactor.
                 //
-                // [0]: https://github.com/MaterializeInc/materialize/issues/16920
+                // [0]: https://github.com/MaterializeInc/database-issues/issues/4887
                 None
             };
             item.column_name = columns
@@ -4609,7 +4609,7 @@ fn plan_array(
     };
 
     // Arrays of `char` type are disallowed due to a known limitation:
-    // https://github.com/MaterializeInc/materialize/issues/7613.
+    // https://github.com/MaterializeInc/database-issues/issues/2360.
     //
     // Arrays of `list` and `map` types are disallowed due to mind-bending
     // semantics.
@@ -5145,7 +5145,7 @@ fn plan_function<'a>(
                 let (ignore_nulls, order_by_exprs, col_orders, window_frame, partition_by) =
                     plan_window_function_common(ecx, &f.name, &f.over)?;
 
-                // https://github.com/MaterializeInc/materialize/issues/22268
+                // https://github.com/MaterializeInc/database-issues/issues/6720
                 match (&window_frame.start_bound, &window_frame.end_bound) {
                     (
                         mz_expr::WindowFrameBound::UnboundedPreceding,
@@ -5167,7 +5167,7 @@ fn plan_function<'a>(
                 }
 
                 if ignore_nulls {
-                    // https://github.com/MaterializeInc/materialize/issues/22272
+                    // https://github.com/MaterializeInc/database-issues/issues/6722
                     // If we ever add support for ignore_nulls for a window aggregate, then don't
                     // forget to also update HIR EXPLAIN.
                     bail_unsupported!(IGNORE_NULLS_ERROR_MSG);
@@ -5176,7 +5176,7 @@ fn plan_function<'a>(
                 let aggregate_expr = plan_aggregate_common(ecx, f)?;
 
                 if aggregate_expr.distinct {
-                    // https://github.com/MaterializeInc/materialize/issues/22015
+                    // https://github.com/MaterializeInc/database-issues/issues/6626
                     bail_unsupported!("DISTINCT in window aggregates");
                 }
 
@@ -5590,7 +5590,7 @@ fn plan_window_frame(
     }
 
     // RANGE is only supported in the default frame
-    // https://github.com/MaterializeInc/materialize/issues/21934
+    // https://github.com/MaterializeInc/database-issues/issues/6585
     if units == mz_expr::WindowFrameUnits::Range
         && (start_bound != UnboundedPreceding || end_bound != CurrentRow)
     {

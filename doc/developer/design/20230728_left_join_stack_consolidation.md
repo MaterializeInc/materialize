@@ -1,5 +1,5 @@
 - Feature name: Consolidation in LEFT JOIN stacks
-- Associated: [#20828](https://github.com/MaterializeInc/materialize/issues/20828)
+- Associated: [#20828](https://github.com/MaterializeInc/database-issues/issues/6276)
 
 # Summary
 [summary]: #summary

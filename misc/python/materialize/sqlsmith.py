@@ -25,7 +25,7 @@ known_errors = [
     "function list_prepend(",  # insufficient type system, parameter types have to match
     "function list_cat(",  # insufficient type system, parameter types have to match
     "does not support implicitly casting from",
-    "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/materialize/issues/3720
+    "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/database-issues/issues/1163
     "range lower bound must be less than or equal to range upper bound",
     "violates not-null constraint",
     "division by zero",
@@ -68,7 +68,7 @@ known_errors = [
     "field position must be greater than zero",
     "array_fill on ",  # Not yet supported
     "must not be null",  # Expected with array_fill, array_position
-    "' not recognized",  # Expected, see https://github.com/MaterializeInc/materialize/issues/17981
+    "' not recognized",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5253
     "must appear in the GROUP BY clause or be used in an aggregate function",
     "Expected joined table, found",  # Should fix for multi table join
     "Expected ON, or USING after JOIN, found",  # Should fix for multi table join
@@ -79,9 +79,9 @@ known_errors = [
     "expected expression, but found reserved keyword",  # Should fix, but only happens rarely with subqueries
     "Expected right parenthesis, found left parenthesis",  # Should fix, but only happens rarely with cast+coalesce
     "invalid selection: operation may only refer to user-defined tables",  # Seems expected when using catalog tables
-    "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
-    "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
-    "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/materialize/issues/14290
+    "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
+    "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
+    "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/database-issues/issues/4083
     "string is not a valid identifier:",  # Expected in parse_ident & quote_ident
     "invalid datepart",
     "pg_cancel_backend in this position not yet supported",
@@ -115,7 +115,7 @@ known_errors = [
     "arrays must not contain null values",  # aclexplode, mz_aclexplode
     "OVER clause not allowed on",  # window functions
     "cannot reference pseudo type",
-    "window functions are not allowed in table function arguments",  # TODO: Remove when materialize#20979 is implemented
+    "window functions are not allowed in table function arguments",  # TODO: Remove when database-issues#6317 is implemented
     "window functions are not allowed in OR argument",  # wrong error message
     "window functions are not allowed in AND argument",  # wrong error message
     "window functions are not allowed in aggregate function",

@@ -1220,7 +1220,7 @@ impl MirScalarExpr {
                             let (limit, flags) = regexp_replace_parse_flags(flags);
 
                             // Defer errors until evaluation instead of eagerly returning them here
-                            // to match the error behavior of the dynamic function (part of materialize#17189).
+                            // to match the error behavior of the dynamic function (part of database-issues#4972).
                             let regex = match func::build_regex(pattern, &flags) {
                                 Ok(regex) => Ok((regex, limit)),
                                 Err(err) => Err(err),

@@ -453,7 +453,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         # frontier forward. If the targeted replica is crashing, the write
         # frontier cannot advance and thus the read frontier cannot either.
         #
-        # TODO(materialize#27399): Fix this by installing targeted subscribes only on the
+        # TODO(database-issues#8091): Fix this by installing targeted subscribes only on the
         #               targeted replica.
         c.sql(
             "ALTER SYSTEM SET enable_introspection_subscribes = false;",

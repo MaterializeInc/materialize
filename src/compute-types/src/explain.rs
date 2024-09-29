@@ -151,7 +151,7 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
     }
 }
 
-/// TODO(materialize#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 pub fn export_ids_for<P, S, T>(dd: &DataflowDescription<P, S, T>) -> BTreeMap<GlobalId, GlobalId> {
     let mut map = BTreeMap::<GlobalId, GlobalId>::default();
 

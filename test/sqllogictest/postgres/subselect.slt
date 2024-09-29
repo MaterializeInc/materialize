@@ -519,7 +519,7 @@ min
 0
 
 # --
-# -- Test case for bug materialize#4290: bogus calculation of subplan param sets
+# -- Test case for bug database-issues#1339: bogus calculation of subplan param sets
 # --
 # create temp table ta (id int primary key, val int);
 # insert into ta values(1,1);
@@ -724,7 +724,7 @@ select exists(select * from nocolumns)
 exists
 false
 
-# Check behavior with a SubPlan in VALUES (bug materialize#14924)
+# Check behavior with a SubPlan in VALUES (bug database-issues#4272)
 query I rowsort
 select val.x
   from generate_series(1,10) as s(i),

@@ -165,7 +165,7 @@ contains:column "a" specified more than once
 
 > CREATE TYPE int4_map_map AS MAP (KEY TYPE = text, VALUE TYPE = int4_map);
 
-# We do this dance here to work around materialize#25282
+# We do this dance here to work around database-issues#7544
 $ set-from-sql var=int4_id
 SELECT id FROM mz_objects WHERE name = '_int4';
 $ set-from-sql var=text_id

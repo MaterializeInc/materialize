@@ -1,5 +1,5 @@
 - Feature name: Envelope upsert with order by timestamp (limited scope)
-- Associated: https://github.com/MaterializeInc/materialize/issues/16512
+- Associated: https://github.com/MaterializeInc/database-issues/issues/4782
 
 # Summary
 

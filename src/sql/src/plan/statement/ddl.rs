@@ -947,7 +947,7 @@ pub fn plan_create_source(
     // Apply user-specified key constraint
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
         // Don't remove this without addressing
-        // https://github.com/MaterializeInc/materialize/issues/15272.
+        // https://github.com/MaterializeInc/database-issues/issues/4371.
         scx.require_feature_flag(&vars::ENABLE_PRIMARY_KEY_NOT_ENFORCED)?;
 
         let key_columns = columns
@@ -2320,9 +2320,9 @@ pub fn plan_view(
     } = query::plan_root_query(scx, query.clone(), QueryLifetime::View)?;
     // We get back a trivial finishing, because `plan_root_query` applies the given finishing.
     // Note: Earlier, we were thinking to maybe persist the finishing information with the view
-    // here to help with materialize#724. However, in the meantime, there might be a better
-    // approach to solve materialize#724:
-    // https://github.com/MaterializeInc/materialize/issues/724#issuecomment-1688293709
+    // here to help with database-issues#236. However, in the meantime, there might be a better
+    // approach to solve database-issues#236:
+    // https://github.com/MaterializeInc/database-issues/issues/236#issuecomment-1688293709
     assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
@@ -3198,7 +3198,7 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanErro
 }
 
 /// Creating this by hand instead of using generate_extracted_config! macro
-/// because the macro doesn't support parameterized enums. See <https://github.com/MaterializeInc/materialize/issues/22213>
+/// because the macro doesn't support parameterized enums. See <https://github.com/MaterializeInc/database-issues/issues/6698>
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct CsrConfigOptionExtracted {
     seen: ::std::collections::BTreeSet<CsrConfigOptionName<Aug>>,
@@ -5251,7 +5251,7 @@ fn plan_retain_history(
         // A zero duration has already been converted to `None` by `OptionalDuration` (and means
         // disable compaction), and should never occur here. Furthermore, some things actually do
         // break when this is set to real zero:
-        // https://github.com/MaterializeInc/materialize/issues/13221.
+        // https://github.com/MaterializeInc/database-issues/issues/3798.
         Some(Duration::ZERO) => Err(PlanError::InvalidOptionValue {
             option_name: "RETAIN HISTORY".to_string(),
             err: Box::new(PlanError::Unstructured(
@@ -6795,7 +6795,7 @@ pub fn plan_comment(
     // store a `usize` which would be a `Uint8`. We guard against a safe conversion here because
     // it's the easiest place to raise an error.
     //
-    // TODO(parkmycar): https://github.com/MaterializeInc/materialize/issues/22246.
+    // TODO(parkmycar): https://github.com/MaterializeInc/database-issues/issues/6711.
     if let Some(p) = column_pos {
         i32::try_from(p).map_err(|_| PlanError::TooManyColumns {
             max_num_columns: MAX_NUM_COLUMNS,

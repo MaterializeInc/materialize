@@ -922,7 +922,7 @@ class Composition:
             )
             exclusion_clause = f"name NOT IN ({excluded_items})"
 
-        # starting sources are currently expected if no new data is produced, see materialize#21980
+        # starting sources are currently expected if no new data is produced, see database-issues#6605
         results = self.sql_query(
             f"""
             SELECT name, status, error, details

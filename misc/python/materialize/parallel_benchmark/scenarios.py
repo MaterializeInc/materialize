@@ -338,7 +338,7 @@ class ConnectRead(Scenario):
 
 
 class FlagUpdate(Scenario):
-    """Reproduces materialize#29235"""
+    """Reproduces database-issues#8480"""
 
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
@@ -367,7 +367,7 @@ class FlagUpdate(Scenario):
                 ),
             ],
             guarantees={
-                # TODO(def-): Lower when materialize#29235 is fixed to prevent regressions
+                # TODO(def-): Lower when database-issues#8480 is fixed to prevent regressions
                 "SELECT 1 (reuse connection)": {"avg": 5, "max": 500, "slope": 0.1},
             },
         )
@@ -485,7 +485,7 @@ class InsertWhereNotExists(Scenario):
                 ),
             ],
             conn_pool_size=100,
-            # TODO(def-): Bump per_second and add guarantees when materialize#29371 is fixed
+            # TODO(def-): Bump per_second and add guarantees when database-issues#8510 is fixed
         )
 
 

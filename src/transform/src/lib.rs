@@ -356,7 +356,7 @@ impl Transform for Fixpoint {
                             // done now, but it would be great to eventually find a way to prevent
                             // these loops from happening in the first place. We have several
                             // relevant issues, see
-                            // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
+                            // https://github.com/MaterializeInc/database-issues/issues/8197#issuecomment-2200172227
                             mz_repr::explain::trace_plan(relation);
                             soft_panic_or_log!(
                                 "Fixpoint `{}` detected a loop of length {} after {} iterations",
@@ -397,7 +397,7 @@ impl Transform for Fixpoint {
                 // This is not catastrophic, because we can just say we are done now,
                 // but it would be great to eventually find a way to prevent these loops from
                 // happening in the first place. We have several relevant issues, see
-                // https://github.com/MaterializeInc/materialize/issues/27954#issuecomment-2200172227
+                // https://github.com/MaterializeInc/database-issues/issues/8197#issuecomment-2200172227
                 mz_repr::explain::trace_plan(relation);
                 soft_panic_or_log!(
                     "Fixpoint {} failed to reach a fixed point, or cycle of length at most {}",
@@ -470,7 +470,7 @@ impl Default for FuseAndCollapse {
         Self {
             // TODO: The relative orders of the transforms have not been
             // determined except where there are comments.
-            // TODO (materialize#6542): All the transforms here except for `ProjectionLifting`
+            // TODO (database-issues#2036): All the transforms here except for `ProjectionLifting`
             //  and `RedundantJoin` can be implemented as free functions.
             transforms: vec![
                 Box::new(canonicalization::ProjectionExtraction),
@@ -591,7 +591,7 @@ impl Optimizer {
                     // Lifts the information `!isnull(col)`
                     Box::new(nonnullable::NonNullable),
                     // Lifts the information `col = literal`
-                    // TODO (materialize#6613): this also tries to lift `!isnull(col)` but
+                    // TODO (database-issues#2062): this also tries to lift `!isnull(col)` but
                     // less well than the previous transform. Eliminate
                     // redundancy between the two transforms.
                     Box::new(column_knowledge::ColumnKnowledge::default()),
@@ -657,11 +657,11 @@ impl Optimizer {
             //   run in the logical optimizer).
             // - Not running ColumnKnowledge in the same fixpoint loop with JoinImplementation
             //   is slightly hurting our plans. However, I'd say we should fix these problems by
-            //   making ColumnKnowledge (and/or JoinImplementation) smarter (materialize#18051), rather than
+            //   making ColumnKnowledge (and/or JoinImplementation) smarter (database-issues#5289), rather than
             //   having them in the same fixpoint loop. If they would be in the same fixpoint loop,
-            //   then we either run the risk of ColumnKnowledge invalidating a join plan (materialize#17993),
+            //   then we either run the risk of ColumnKnowledge invalidating a join plan (database-issues#5260),
             //   or we would have to run JoinImplementation an unbounded number of times, which is
-            //   also not good materialize#16076.
+            //   also not good database-issues#4639.
             //   (The same is true for FoldConstants, Demand, and LiteralLifting to a lesser
             //   extent.)
             //
@@ -708,7 +708,7 @@ impl Optimizer {
             Box::new(threshold_elision::ThresholdElision),
             // We need this to ensure that `CollectIndexRequests` gets a normalized plan.
             // (For example, `FoldConstants` can break the normalized form by removing all
-            // references to a Let, see https://github.com/MaterializeInc/materialize/issues/21175)
+            // references to a Let, see https://github.com/MaterializeInc/database-issues/issues/6371)
             Box::new(normalize_lets::NormalizeLets::new(false)),
             Box::new(typecheck::Typecheck::new(ctx.typecheck()).disallow_new_globals()),
         ];
@@ -824,7 +824,7 @@ impl Optimizer {
             Err(e) => {
                 // Without this, the dropping of `relation` (which happens automatically when
                 // returning from this function) might run into a stack overflow, see
-                // https://github.com/MaterializeInc/materialize/issues/14141
+                // https://github.com/MaterializeInc/database-issues/issues/4043
                 relation.destroy_carefully();
                 error!("Optimizer::optimize(): {}", e);
                 Err(e)

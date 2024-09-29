@@ -339,7 +339,7 @@ where
         // TODO(benesch): rather than blindly dropping the existing cancellation
         // token, we should check epochs, and only drop the existing connection
         // if it is at a lower epoch.
-        // See: https://github.com/MaterializeInc/materialize/issues/13377
+        // See: https://github.com/MaterializeInc/database-issues/issues/3840
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
         *self.state.cancel_tx.lock().await = cancel_tx;
 

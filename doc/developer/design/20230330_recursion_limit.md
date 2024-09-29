@@ -1,5 +1,5 @@
 - Feature name: (Recursion limit in WITH MUTUALLY RECURSIVE)
-- Associated: (Issues: [Stabilizing WMR (#17012)](https://github.com/MaterializeInc/materialize/issues/17012), [#16800](https://github.com/MaterializeInc/materialize/issues/16800), [#18362](https://github.com/MaterializeInc/materialize/issues/18362), [#2392](https://github.com/MaterializeInc/materialize/issues/2392))
+- Associated: (Issues: [Stabilizing WMR (#17012)](https://github.com/MaterializeInc/database-issues/issues/6172), [#16800](https://github.com/MaterializeInc/database-issues/issues/4869), [#18362](https://github.com/MaterializeInc/database-issues/issues/5409), [#2392](https://github.com/MaterializeInc/database-issues/issues/835))
 
 # Summary
 [summary]: #summary
@@ -14,8 +14,8 @@ The user can specify a limit using a SQL syntax extension at the level of WMR bl
 [motivation]: #motivation
 
 I can imagine 3 use cases, of which the 2. seems urgent to me:
-1. _Stopping divergent queries ([#16800](https://github.com/MaterializeInc/materialize/issues/16800)):_ It is very easy to accidentally write a WMR query that runs forever (actually, until OOM in most cases, but that would often take a very long time). We used to have the additional problem that Ctrl+C (or dropping a materialized view or index) didn't cancel a dataflow ([#2392](https://github.com/MaterializeInc/materialize/issues/2392)), which made for quite an unpleasant user experience, as the user had to manually DROP the entire replica. However, proper dataflow cancellation for WMR queries has been [recently implemented](https://github.com/MaterializeInc/materialize/pull/18718), and therefore this use case of recursion limits is not so important anymore.
-2. _Debugging state between iterations ([#18362](https://github.com/MaterializeInc/materialize/issues/18362)):_ WMR queries are not so obvious to write, so users often need to debug their queries during development. In such cases, it can be enlightening to inspect the intermediate states between iterations. If we had an option to limit the number of iterations, the user could just run the query repeatedly with successively larger limits. Multiple people expressed their wish for this feature, e.g., [here](https://materializeinc.slack.com/archives/C02CB7L4TCG/p1678266977745819?thread_ts=1678266846.169599&cid=C02CB7L4TCG).
+1. _Stopping divergent queries ([#16800](https://github.com/MaterializeInc/database-issues/issues/4869)):_ It is very easy to accidentally write a WMR query that runs forever (actually, until OOM in most cases, but that would often take a very long time). We used to have the additional problem that Ctrl+C (or dropping a materialized view or index) didn't cancel a dataflow ([#2392](https://github.com/MaterializeInc/database-issues/issues/835)), which made for quite an unpleasant user experience, as the user had to manually DROP the entire replica. However, proper dataflow cancellation for WMR queries has been [recently implemented](https://github.com/MaterializeInc/materialize/pull/18718), and therefore this use case of recursion limits is not so important anymore.
+2. _Debugging state between iterations ([#18362](https://github.com/MaterializeInc/database-issues/issues/5409)):_ WMR queries are not so obvious to write, so users often need to debug their queries during development. In such cases, it can be enlightening to inspect the intermediate states between iterations. If we had an option to limit the number of iterations, the user could just run the query repeatedly with successively larger limits. Multiple people expressed their wish for this feature, e.g., [here](https://materializeinc.slack.com/archives/C02CB7L4TCG/p1678266977745819?thread_ts=1678266846.169599&cid=C02CB7L4TCG).
 3. _Algorithms requiring a fixed number of iterations:_ Some algorithms are unintuitive to express as a loop running until a fixpoint (or reaching a fixpoint can't be ensured), and instead need a loop that runs a specific number of times. Note that in the above two use cases, we don't expect to run into the limit in production under normal operation, but in this use case a limit will be part of the logic of production queries.
 
 # Explanation
@@ -135,7 +135,7 @@ One trick would be to implement an HIR rewrite to an extra binding that counts i
 
 ### Workaround: Manually setting a limit using existing SQL building blocks
 
-[Users can manually write SQL that counts the number of iterations, and converts reaching the iteration count limit into a fixpoint.](https://github.com/MaterializeInc/materialize/issues/18362#issuecomment-1481605865)
+[Users can manually write SQL that counts the number of iterations, and converts reaching the iteration count limit into a fixpoint.](https://github.com/MaterializeInc/database-issues/issues/5409#issuecomment-1481605865)
 However, it would be cumbersome for users to do this every time they want to debug a query.
 Also note that, currently, this would have the problem for use case 3. that it would involve a cross join with a singleton collection, which would need a broadcast join to avoid grabbing everything onto one worker.
 
@@ -161,4 +161,4 @@ The bookkeeping for different limits for different WMR blocks inside the same qu
 
 What should be the keyword? This also depends on what will the final keywords be for `WITH MUTUALLY RECURSIVE` itself. (The latest suggestion was `WITH REPEATEDLY`.)
 
-[Do we want also a hard limit later?](https://github.com/MaterializeInc/materialize/issues/18832) If yes, what should be the default value?
+[Do we want also a hard limit later?](https://github.com/MaterializeInc/database-issues/issues/5564) If yes, what should be the default value?

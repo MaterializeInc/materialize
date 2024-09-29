@@ -572,7 +572,7 @@ where
                 // that the sentry layer would specifically communicating that it wants to see
                 // everything. This bug appears to be related to the presence of a `reload::Layer`
                 // _around a filter, not a layer_, and guswynn is tracking investigating it here:
-                // <https://github.com/MaterializeInc/materialize/issues/16556>. Because we don't
+                // <https://github.com/MaterializeInc/database-issues/issues/4794>. Because we don't
                 // enable a reload-able filter in CI/locally, but DO in production (the otel layer), it
                 // was once possible to trigger and rely on the fast path in CI, but not notice that it
                 // was disabled in production.

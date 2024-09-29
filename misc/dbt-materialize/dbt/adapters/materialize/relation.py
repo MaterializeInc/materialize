@@ -49,7 +49,7 @@ class MaterializeRelation(PostgresRelation):
 
     # Materialize does not have a 63-character limit for relation names, unlike
     # PostgreSQL (see dbt-core #2727). Instead, we set 255 as the maximum
-    # identifier length (see materialize#20931).
+    # identifier length (see database-issues#6303).
     def relation_max_name_length(self):
         return 255
 

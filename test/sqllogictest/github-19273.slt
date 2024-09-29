@@ -7,9 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for materialize#19273 and materialize#19283.
+# Regression test for database-issues#5717 and database-issues#5722.
 
-# The query from materialize#19273.
+# The query from database-issues#5717.
 
 statement ok
 CREATE SOURCE tpch
@@ -40,7 +40,7 @@ from
 where subq_0."c5" > subq_0."c5"
 limit 21;
 
-# The query from materialize#19283.
+# The query from database-issues#5722.
 
 statement ok
 CREATE TABLE t (a int, b int);

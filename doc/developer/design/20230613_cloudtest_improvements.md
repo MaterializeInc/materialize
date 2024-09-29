@@ -1,7 +1,7 @@
 # Cloudtest improvements
 
 Associated:
-* https://github.com/MaterializeInc/materialize/issues/19626
+* https://github.com/MaterializeInc/database-issues/issues/5836
 
 ## Summary
 

@@ -34,7 +34,7 @@ SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 3  l3  3     r3
 
 # This test may look the same as the last, but listing out the columns
-# explicitly checks for regressions of materialize#1314.
+# explicitly checks for regressions of database-issues#472.
 query ITIT rowsort
 SELECT l.la, l.lb, r.ra, r.rb FROM l LEFT JOIN r ON l.la = r.ra
 ----
@@ -50,7 +50,7 @@ NULL  NULL  4  r4
 3     l3    3  r3
 
 # This test may look the same as the last, but listing out the columns
-# explicitly checks for regressions of materialize#1314.
+# explicitly checks for regressions of database-issues#472.
 query ITIT rowsort
 SELECT l.la, l.lb, r.ra, r.rb FROM l RIGHT JOIN r ON l.la = r.ra
 ----
@@ -59,21 +59,21 @@ NULL  NULL  4  r4
 3     l3    3  r3
 
 # Test that columns detected to be equivalent retain the names that the user
-# asks for. Protects against regression of materialize#1217.
+# asks for. Protects against regression of database-issues#429.
 query II colnames,rowsort
 SELECT ra, r.ra FROM l JOIN r ON l.la = r.ra LIMIT 0
 ----
 ra  ra
 
 # Test that columns detected to be equivalent retain the names that the user
-# asks for. Protects against regression of materialize#1217.
+# asks for. Protects against regression of database-issues#429.
 query ITIT colnames,rowsort
 SELECT * FROM l JOIN r ON l.la = r.ra LIMIT 0
 ----
 la  lb  ra  rb
 
 # Test that columns detected to be equivalent do not interfere with qualified
-# wildcard expansion. Protects against regression of materialize#4477.
+# wildcard expansion. Protects against regression of database-issues#1389.
 query ITIT colnames
 SELECT l.*, r.* FROM l JOIN r ON l.la = r.ra LIMIT 0
 ----
@@ -212,7 +212,7 @@ Target cluster: quickstart
 EOF
 
 # Test that multiplicities in outer joins are preserved.
-# Fixed in materialize#2724.
+# Fixed in database-issues#931.
 statement ok
 CREATE TABLE l2 (la int, lb text)
 
@@ -242,7 +242,7 @@ NULL  NULL  4  r4
 3     l3    3  r3
 
 
-# Test that outer joins work correctly in correlated subqueries (materialize#3047)
+# Test that outer joins work correctly in correlated subqueries (database-issues#1007)
 
 query IT rowsort
 SELECT * FROM l WHERE EXISTS (SELECT * from l as l2 LEFT JOIN r ON l.la = r.ra)
@@ -265,7 +265,7 @@ SELECT * FROM r WHERE EXISTS (SELECT * from l RIGHT JOIN r as r2 ON l.la = r.ra)
 1  r1
 3  r3
 
-# Regression test for materialize#3426.
+# Regression test for database-issues#1089.
 query III colnames
 SELECT * FROM
     (SELECT 1 AS baz) t1
@@ -304,7 +304,7 @@ SELECT * FROM
 1  NULL  NULL
 1  NULL  NULL
 
-# Regression test for materialize#3914. The gist is that we want to exercise the
+# Regression test for database-issues#1218. The gist is that we want to exercise the
 # redundant join optimization on a join whose inputs contain projections. This
 # turns out to be extremely hard to accomplish because the projection lifting
 # optimization is very good at eliminating all but the top-level projection.
@@ -484,7 +484,7 @@ SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 3 l3 3 r3
 
 # Test that when both keys are expressions, the join is not planned as a cross
-# join. Protects against regression of materialize#4170.
+# join. Protects against regression of database-issues#1290.
 query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 ----
@@ -508,7 +508,7 @@ Target cluster: quickstart
 
 EOF
 
-# Regression test for materialize#4361, in which inter-view predicate pushdown would cause
+# Regression test for database-issues#1355, in which inter-view predicate pushdown would cause
 # misoptimizations. Specifically, a predicate that was applied to only one use
 # of a view could be incorrectly applied to all uses of that view.
 #
@@ -705,7 +705,7 @@ l1  r1
 l3  r3
 l4  r5
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/7618
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/2364
 
 statement ok
 CREATE TABLE t1 (f1 int, f2 int);
@@ -1144,7 +1144,7 @@ SELECT * FROM l NATURAL JOIN l AS a LIMIT 0
 ----
 la  lb
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/17897
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/5220
 # This query fails if JoinImplementation is not in the same fixpoint loop with LiteralLifting.
 
 statement ok
@@ -1270,7 +1270,7 @@ INSERT INTO error_test VALUES (0)
 query error division by zero
 SELECT t1.a / t2.a FROM error_test t1, error_test t2
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/20060
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/5998
 query
 select
   from

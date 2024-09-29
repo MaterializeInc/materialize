@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/8241
-# See https://github.com/MaterializeInc/materialize/issues/8318
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/2514
+# See https://github.com/MaterializeInc/database-issues/issues/2535
 
 # Verify that an index added after a transaction has started complains.
 

@@ -213,7 +213,7 @@ def workflow_audit_log(c: Composition) -> None:
         raise Exception("audit logs emtpy or not equal after restart")
 
 
-# Test for GitHub issue materialize#13726
+# Test for GitHub issue database-issues#3923
 def workflow_timelines(c: Composition) -> None:
     for _ in range(3):
         c.up("zookeeper", "kafka", "schema-registry", "materialized")
@@ -250,7 +250,7 @@ def workflow_stash(c: Composition) -> None:
         cursor.execute("CREATE TABLE b (i INT)")
 
         # No implicit restart as sanity check here, will panic:
-        # https://github.com/MaterializeInc/materialize/issues/20510
+        # https://github.com/MaterializeInc/database-issues/issues/6168
         c.down(sanity_restart_mz=False)
 
 

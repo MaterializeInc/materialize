@@ -352,7 +352,7 @@ This allows you to replicate tables with `REPLICA IDENTITY DEFAULT`, `INDEX`, or
 Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata)
 that can be used to preserve transactional boundaries downstream. We are
 working on using this topic to support transaction-aware processing in
-[Materialize #7537](https://github.com/MaterializeInc/materialize/issues/7537)!
+[Materialize #7537](https://github.com/MaterializeInc/database-issues/issues/2337)!
 
 ## D. Create a materialized view
 

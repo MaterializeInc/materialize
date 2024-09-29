@@ -32,7 +32,7 @@ USE public;
 CREATE TABLE enum_type (f1 ENUM ('val1', 'val2'), f2 TEXT);
 INSERT INTO enum_type VALUES ('val1', 'val1'), ('val2', 'val2');
 
-# TODO: materialize#25881 (enum unsupported)
+# TODO: database-issues#7719 (enum unsupported)
 ! CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
@@ -77,7 +77,7 @@ $ mysql-execute name=mysql
 ALTER TABLE enum_type CHANGE f1 f1 ENUM ('val2', 'val1', 'val3', 'val4');
 INSERT INTO enum_type VALUES ('val1', 'val1');
 
-# TODO: materialize#26128 (expected incompatible schema change)
+# TODO: database-issues#7776 (expected incompatible schema change)
 $ skip-if
 SELECT true
 

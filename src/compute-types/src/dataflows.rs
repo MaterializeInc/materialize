@@ -820,9 +820,9 @@ pub struct IndexImport {
 /// An association of a global identifier to an expression.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildDesc<P> {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub id: GlobalId,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub plan: P,
 }
 

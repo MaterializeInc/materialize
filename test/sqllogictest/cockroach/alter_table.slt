@@ -440,7 +440,7 @@ ALTER TABLE t ADD d INT UNIQUE, ADD e INT UNIQUE, ADD f INT
 statement error pq: validation of CHECK "g = h" failed on row:.* g=3.* h=2
 ALTER TABLE t ADD g INT DEFAULT 3, ADD h INT DEFAULT 2 CHECK (g = h)
 
-# Multiple unique columns can be added, followed by other commands (materialize#35011)
+# Multiple unique columns can be added, followed by other commands (cockroach#35011)
 statement ok
 ALTER TABLE t ADD COLUMN u INT UNIQUE, ADD COLUMN v INT UNIQUE, ADD CONSTRAINT ck CHECK (a > 0);
 
@@ -720,7 +720,7 @@ statement error pgcode 42809 "privsview" is not a table
 ALTER TABLE privsview UNSPLIT AT VALUES (42)
 
 # Verify that impure defaults are evaluated separately on each row
-# (materialize#14352)
+# (database-issues#4105)
 statement ok
 CREATE TABLE impure (x INT); INSERT INTO impure(x) VALUES (1), (2), (3);
 
@@ -902,7 +902,7 @@ statement ok
 ALTER TABLE vehicles DROP COLUMN mycol;
 
 # check that adding a reference on a column still being backfilled fails.
-# fix through materialize#32917
+# fix through cockroach#32917
 
 statement ok
 CREATE TABLE t32917 (a INT PRIMARY KEY)

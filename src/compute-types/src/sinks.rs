@@ -25,19 +25,19 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_types.sinks.rs"));
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ComputeSinkDesc<S: 'static = (), T = Timestamp> {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub from: GlobalId,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub from_desc: RelationDesc,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub connection: ComputeSinkConnection<S>,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub with_snapshot: bool,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub up_to: Antichain<T>,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub non_null_assertions: Vec<usize>,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub refresh_schedule: Option<RefreshSchedule>,
 }
 
@@ -112,14 +112,14 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, Time
     }
 }
 
-/// TODO(materialize#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum ComputeSinkConnection<S: 'static = ()> {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Subscribe(SubscribeSinkConnection),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Persist(PersistSinkConnection<S>),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     ///
     /// TODO(ct): This also writes to persist, but with different behavior
     /// (conflict resolution, only at input times, etc). It might be time to
@@ -183,7 +183,7 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
     }
 }
 
-/// TODO(materialize#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(Arbitrary, Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SubscribeSinkConnection {}
 
@@ -228,12 +228,12 @@ impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnect
     }
 }
 
-/// TODO(materialize#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PersistSinkConnection<S> {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub value_desc: RelationDesc,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub storage_metadata: S,
 }
 
@@ -260,7 +260,7 @@ impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMe
 /// TODO(ct): Add documentation.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContinualTaskConnection<S> {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     //
     // TODO(ct): This can be removed once we render the "input" sources without
     // the hack.

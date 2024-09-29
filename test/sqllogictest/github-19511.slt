@@ -10,7 +10,7 @@
 mode cockroach
 
 # The following is a regression test for cases 3), 4), and 6)
-# of https://github.com/MaterializeInc/materialize/issues/19511,
+# of https://github.com/MaterializeInc/database-issues/issues/5797,
 # where aggregate functions would type-promote to floating point,
 # but could promote to numeric.
 
@@ -31,7 +31,7 @@ CREATE OR REPLACE VIEW v_19511_case_3 (row_index, decimal_39_8_val)
 # Note that we get an error in the evaluation of this case, while
 # PostgreSQL successfully computes a result. This is due to the
 # precision of our numeric types vs. the algorithm used to calculate
-# standard deviation (https://github.com/MaterializeInc/materialize/issues/1240).
+# standard deviation (https://github.com/MaterializeInc/database-issues/issues/436).
 query error
 SELECT
   stddev_samp(decimal_39_8_val)

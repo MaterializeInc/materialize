@@ -123,7 +123,7 @@ $ file-append container=fivetran path=d.csv compression=gzip header=a,b,c,d repe
 # Note: Both 'c.csv' and 'd.csv' are individually under the 'max_copy_from_size', but together
 # they exceed it. We want to make sure the write_batch still succeeds in this case.
 
-# TODO(def-) Reenable when materialize#28687 is fixed
+# TODO(def-) Reenable when database-issues#8373 is fixed
 $ skip-if
 SELECT true
 

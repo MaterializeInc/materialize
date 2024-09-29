@@ -205,7 +205,7 @@ where
         S: Scope<Timestamp = G::Timestamp>,
     {
         // TODO(vmarcos): Arrangement specialization here could eventually be extended to keys,
-        // not only values (materialize#22103).
+        // not only values (database-issues#6658).
         let arrangement = match plan {
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
@@ -409,7 +409,7 @@ where
 
                         // If we did not have enough values to stitch together, then we do not
                         // generate an output row. Not outputting here corresponds to the semantics
-                        // of an equi-join on the key, similarly to the proposal in PR materialize#17013.
+                        // of an equi-join on the key, similarly to the proposal in PR database-issues#6173.
                         //
                         // Note that we also do not want to have anything left over to stich. If we
                         // do, then we also have an error, reported elsewhere, and would violate
@@ -1923,7 +1923,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
             | (AggregateFunc::SumUInt32, Accum::SimpleNumber { accum, .. }) => {
                 if !accum.is_negative() {
                     // Our semantics of overflow are not clearly articulated wrt.
-                    // unsigned vs. signed types (materialize#17758). We adopt an
+                    // unsigned vs. signed types (database-issues#5172). We adopt an
                     // unsigned wrapping behavior to match what we do above for
                     // signed types.
                     // TODO(vmarcos): remove potentially dangerous usage of `as`.

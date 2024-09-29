@@ -31,7 +31,7 @@ SELECT '{"a": 1, "a": 2, "a": 3}'::jsonb
 ----
 {"a":3}
 
-# Regression test for materialize#5919, in which 64-bit integers could not be represented
+# Regression test for database-issues#1824, in which 64-bit integers could not be represented
 # in the jsonb type.
 query T
 SELECT '1614259308542846100'::jsonb
@@ -932,7 +932,7 @@ SELECT '[1,"1",1.0]'::JSONB - '1'
 # ----
 # {"b":[],"c":{"a":"b"}}
 
-# # Regression test for materialize#34756.
+# # Regression test for cockroach#34756.
 # query T
 # SELECT '{"b":[],"c":{"a":"b"}}'::JSONB - array['foo',NULL]
 # ----
@@ -1480,7 +1480,7 @@ SELECT jsonb_build_array('\x0001'::BYTEA)
 # ----
 # [1,1,1.2,null,["x","y"]]
 
-# # Regression for materialize#37318
+# # Regression for cockroach#37318
 # query T
 # SELECT jsonb_build_array('+Inf'::FLOAT,'-Inf'::FLOAT,'NaN'::FLOAT)::STRING::JSONB
 # ----
@@ -2109,7 +2109,7 @@ SELECT jsonb_object_agg(a, a) FILTER (WHERE a IS NOT NULL) FROM t1
 ----
 {"1":1,"2":2,"3":3}
 
-# Null casts. Protects against materialize#7183.
+# Null casts. Protects against database-issues#2244.
 query TTTTTTT
 SELECT
     NULL::jsonb::text,

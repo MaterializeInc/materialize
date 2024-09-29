@@ -213,7 +213,7 @@ A
 > SELECT * FROM source1
 A
 
-# TODO: This should be made reliable without sleeping, materialize#25479
+# TODO: This should be made reliable without sleeping, database-issues#7611
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
 
 # Sinks

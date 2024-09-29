@@ -507,7 +507,7 @@ statement error view "materialize.public.int4" already exists
 CREATE TYPE int4 AS (a int)
 
 # creating relations with the same name as an existing type is not allowed
-# (see materialize#23789)...
+# (see database-issues#7142)...
 
 statement ok
 CREATE TYPE rectype AS (a int)

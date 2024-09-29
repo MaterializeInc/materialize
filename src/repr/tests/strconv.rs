@@ -109,7 +109,7 @@ fn test_parse_time() {
     );
     run_test_parse_time("01:02", NaiveTime::from_hms_opt(1, 2, 0).unwrap());
 
-    // Regression for materialize#6272.
+    // Regression for database-issues#1933.
     run_test_parse_time(
         "9::60",
         NaiveTime::from_hms_nano_opt(9, 0, 59, 1_000_000_000).unwrap(),

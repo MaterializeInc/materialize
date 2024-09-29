@@ -322,7 +322,7 @@ Target cluster: quickstart
 
 EOF
 
-# Regression test for materialize#1158
+# Regression test for database-issues#396
 # The following subquery currently generates a plan with a map with
 # 4 scalars that refer to other scalars in the map. If query planning optimizes away
 # this particular case, replace with another query that generates such a plan
@@ -377,7 +377,7 @@ SELECT age, ascii_num * 2 as result FROM (
 103  210
 103  236
 
-# regression test for https://github.com/MaterializeInc/materialize/issues/1708
+# regression test for https://github.com/MaterializeInc/database-issues/issues/621
 
 statement ok
 CREATE TABLE tab0(pk INTEGER PRIMARY KEY, col0 INTEGER, col1 FLOAT, col3 INTEGER)
@@ -635,14 +635,14 @@ from ys
 1  -1
 2  0.5
 
-# Regression test for materialize#3924, in which quantified comparision simplification was
+# Regression test for database-issues#1221, in which quantified comparision simplification was
 # not correctly handling LATERAL joins.
 query II
 SELECT * FROM (VALUES (1)), LATERAL (SELECT * FROM (SELECT column1) WHERE true)
 ----
 1  1
 
-# Regression test for materialize#3933, in which the query planner mishandled the outer
+# Regression test for database-issues#1222, in which the query planner mishandled the outer
 # scope of a nested LATERAL join.
 query IIII
 SELECT * FROM
@@ -651,7 +651,7 @@ SELECT * FROM
 ----
 1  1  1  1
 
-# Regression test for materialize#4157, in which quantified expression simplification
+# Regression test for database-issues#1287, in which quantified expression simplification
 # failed to handle map expressions which depended upon a column introduced by
 # an earlier expression in the same map node.
 query I
@@ -663,7 +663,7 @@ FROM (SELECT 1 col1)
 query error aggregate functions that refer exclusively to outer columns not yet supported
 SELECT (SELECT count(likes.likee)) FROM likes
 
-# Regression test for materialize#7121, where the multiplicity of the outer query was not
+# Regression test for database-issues#2209, where the multiplicity of the outer query was not
 # preserved when an EXISTS subquery only involves constants/mpf/flatmaps.
 query I
 SELECT x FROM xs WHERE EXISTS (SELECT y FROM (SELECT 1 as y) WHERE x = y)
@@ -671,7 +671,7 @@ SELECT x FROM xs WHERE EXISTS (SELECT y FROM (SELECT 1 as y) WHERE x = y)
 1
 1
 
-# Regression test for materialize#9921, in which the presence of a SELECT subquery inside
+# Regression test for database-issues#2994, in which the presence of a SELECT subquery inside
 # of another subexpression produced a degenerate join that was not elided before
 # join implementation planning.
 query I

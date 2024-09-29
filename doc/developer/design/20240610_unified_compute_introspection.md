@@ -1,9 +1,9 @@
 # Unified Compute Introspection
 
 - Associated:
-  - https://github.com/MaterializeInc/materialize/issues/26730
-  - https://github.com/MaterializeInc/materialize/issues/26682
-  - https://github.com/MaterializeInc/materialize/issues/21835
+  - https://github.com/MaterializeInc/database-issues/issues/7898
+  - https://github.com/MaterializeInc/database-issues/issues/7886
+  - https://github.com/MaterializeInc/database-issues/issues/6551
 
 ## The Problem
 

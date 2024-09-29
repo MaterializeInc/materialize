@@ -19,7 +19,7 @@ CREATE TABLE edges(src INTEGER NOT NULL, dst INTEGER NOT NULL);
 # If we make it so that reductions on constants
 # can be computed without writing out
 # the entire input constant in unary, we can get rid of this test:
-# See https://github.com/MaterializeInc/materialize/issues/12963 .
+# See https://github.com/MaterializeInc/database-issues/issues/3723 .
 
 query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT count(*) FROM billion;
@@ -45,7 +45,7 @@ Target cluster: quickstart
 
 EOF
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/16195
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/4672
 
 statement ok
 CREATE TABLE t1 (f1 int, f2 int);
@@ -239,7 +239,7 @@ FROM t
 ----
 1 a b
 
-# Regression test for materialize#8963
+# Regression test for database-issues#2730
 query II
 SELECT row_number() OVER (), row_number() OVER ()
 ----
@@ -252,7 +252,7 @@ SELECT row_number() OVER (), row_number() OVER () from t
 1 1
 2 2
 
-# Regression for materialize#9749
+# Regression for database-issues#2962
 query error window functions are not allowed in ON
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT * FROM t AS v JOIN t ON row_number() over () > 1;

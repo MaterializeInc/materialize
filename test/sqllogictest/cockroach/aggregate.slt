@@ -216,7 +216,7 @@ SELECT 3 FROM kv HAVING TRUE
 query error column "kv.k" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT count(*), k FROM kv
 
-# materialize#3164
+# database-issues#1036
 # query error unsupported comparison operator: <string> < <int>
 # SELECT count(*) FROM kv GROUP BY s < 5
 
@@ -531,7 +531,7 @@ SELECT length(s), count(DISTINCT k), count(DISTINCT v), count(DISTINCT (v)) FROM
 1    5 2 2
 NULL 1 0 0
 
-# materialize#1195
+# database-issues#414
 # query I
 # SELECT count((k, v)) FROM kv
 # ----
@@ -772,7 +772,7 @@ SELECT max(y) FROM xyz WHERE x = 7
 ----
 NULL
 
-# materialize#1195
+# database-issues#414
 # query I
 # SELECT min(x) FROM xyz WHERE (y, z) = (2, 3.0)
 # ----
@@ -1007,7 +1007,7 @@ CREATE TABLE xy(x TEXT, y TEXT);
 statement ok
 INSERT INTO xy(x, y) VALUES ('a', 'b'), ('c', 'd')
 
-# materialize#1195
+# database-issues#414
 # query T rowsort
 # SELECT (b, a) FROM ab GROUP BY (b, a)
 # ----
@@ -1499,7 +1499,7 @@ FROM (
 GROUP BY e.company_id
 ORDER BY e.company_id;
 
-# This will differ from PG until we close https://github.com/MaterializeInc/materialize/issues/2415
+# This will differ from PG until we close https://github.com/MaterializeInc/database-issues/issues/843
 query TT
 SELECT e.company_id, string_agg(e.employee, ', ')
 FROM (
@@ -1522,7 +1522,7 @@ FROM (
 GROUP BY e.company_id
 ORDER BY e.company_id;
 
-# This will differ from PG until we close https://github.com/MaterializeInc/materialize/issues/2415
+# This will differ from PG until we close https://github.com/MaterializeInc/database-issues/issues/843
 query TT
 SELECT e.company_id, string_agg(e.employee, NULL)
 FROM (
@@ -1556,7 +1556,7 @@ SELECT string_agg('foo', CAST ((SELECT NULL) AS BYTEA)) OVER ();
 query error table functions are not allowed in aggregate function calls
 SELECT array_agg(generate_series(1, 2))
 
-# Regression test for materialize#31882.
+# Regression test for cockroach#31882.
 
 statement ok
 CREATE TABLE uvw (u INT, v INT, w INT)
@@ -1570,7 +1570,7 @@ SELECT u, v, array_agg(w) AS s FROM (SELECT * FROM uvw ORDER BY w) GROUP BY u, v
 1 2 {3,3}
 3 2 {1,3}
 
-# Regression test for materialize#36433: don't panic with count_agg if a post-render produces an error.
+# Regression test for cockroach#36433: don't panic with count_agg if a post-render produces an error.
 
 query error lpad
 SELECT count(*)::TEXT||lpad('foo', 23984729388383834723984) FROM (VALUES(1));

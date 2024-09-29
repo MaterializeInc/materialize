@@ -261,7 +261,7 @@ UPDATE xyz SET z = (SELECT (10, 11)) WHERE x = 7
 statement error [subquery must return 2 columns, found 1 | number of columns (2) does not match number of values (1)]
 UPDATE xyz SET (y, z) = (SELECT (11, 12)) WHERE x = 7
 
-#regression, see materialize#6852
+#regression, see database-issues#2135
 #statement ok
 #UPDATE xyz SET (y, z) = (SELECT 11, 12) WHERE x = 7
 #
@@ -492,7 +492,7 @@ query I
 SELECT * FROM test2 WHERE 0 = CASE WHEN true THEN (SELECT a FROM test LIMIT 1) ELSE 10 END
 ----
 
-# Regression test for materialize#28335.
+# Regression test for database-issues#8301.
 query I
 SELECT (SELECT ARRAY(SELECT 1))[1]
 ----

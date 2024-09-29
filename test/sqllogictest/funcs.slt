@@ -481,7 +481,7 @@ SELECT coalesce('abcde',null::char(1),'abc');
 ----
 abcde
 
-# TODO(materialize#11469)
+# TODO(database-issues#3339)
 query error coalesce could not convert type record
 SELECT coalesce(row(1, 2), row(3), row(4, 5));
 
@@ -568,7 +568,7 @@ SELECT greatest(row(row(2, 4), 5), row(row(0, 10), 10), row(row(4, 3), 4));
 ----
 ("(4,3)",4)
 
-# TODO(materialize#11469)
+# TODO(database-issues#3339)
 query error greatest could not convert type record
 SELECT greatest(row(1, 2), row(3), row(4, 5));
 
@@ -629,7 +629,7 @@ SELECT least(row(row(2, 4), 5), row(row(0, 10), 10), row(row(4, 3), 4));
 ----
 ("(0,10)",10)
 
-# TODO(materialize#11469)
+# TODO(database-issues#3339)
 query error least could not convert type record
 SELECT least(row(1, 2), row(3), row(4, 5));
 
@@ -644,7 +644,7 @@ SELECT least(row(1), row(1)::custom_composite)
 query error least types integer and text cannot be matched
 SELECT least(1::int, 2::text)
 
-# Tests issue materialize#2355, that type information for Maps are correctly constructed
+# Tests issue database-issues#827, that type information for Maps are correctly constructed
 # before being passed to expressions for optimization.
 statement ok
 CREATE VIEW bytes AS SELECT null::bytea AS data
@@ -991,7 +991,7 @@ NULL
 query error could not determine polymorphic type because input has type unknown
 SELECT array_length(NULL, 1);
 
-# Test strange collapsing behavior of nested empty arrays. See materialize#5545.
+# Test strange collapsing behavior of nested empty arrays. See database-issues#1709.
 
 query TIII
 SELECT arr, array_lower(arr, 1), array_upper(arr, 1), array_length(arr, 1) FROM

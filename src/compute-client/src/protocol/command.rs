@@ -60,9 +60,9 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// use the `epoch` to ensure that their individual processes agree on which protocol iteration
     /// they are in.
     CreateTimely {
-        /// TODO(materialize#25239): Add documentation.
+        /// TODO(database-issues#7533): Add documentation.
         config: TimelyConfig,
-        /// TODO(materialize#25239): Add documentation.
+        /// TODO(database-issues#7533): Add documentation.
         epoch: ClusterStartupEpoch,
     },
 
@@ -210,11 +210,11 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// same collection. ([#16271])
     ///
     /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
-    /// [#16271]: https://github.com/MaterializeInc/materialize/issues/16271
+    /// [#16271]: https://github.com/MaterializeInc/database-issues/issues/4699
     AllowCompaction {
-        /// TODO(materialize#25239): Add documentation.
+        /// TODO(database-issues#7533): Add documentation.
         id: GlobalId,
-        /// TODO(materialize#25239): Add documentation.
+        /// TODO(database-issues#7533): Add documentation.
         frontier: Antichain<T>,
     },
 
@@ -368,7 +368,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 /// for anything in this struct.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct InstanceConfig {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub logging: LoggingConfig,
 }
 

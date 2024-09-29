@@ -88,7 +88,7 @@ NULL
 
 # Regression for materialize issue 9194
 # This shouldn't be an error but seems to be impacted by
-# some evaluation order issue akin to materialize#17189
+# some evaluation order issue akin to database-issues#4972
 # TODO: this has an optimization bug.
 query error
 select 'date'::regtype::oid::text::regtype

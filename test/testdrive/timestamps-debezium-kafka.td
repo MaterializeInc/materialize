@@ -122,7 +122,7 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
 
 # Verify that we don't see any data yet. We can't use `set-sql-timeout` here
 # because the SELECT is blocked in the coordinator. For the same reason we
-# can't use `DECLARE c CURSOR FOR SELECT ...` (see materialize#10763).
+# can't use `DECLARE c CURSOR FOR SELECT ...` (see database-issues#3168).
 
 > BEGIN
 

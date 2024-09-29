@@ -700,7 +700,7 @@ impl Catalog {
                 CatalogItem::Sink(_) => {
                     // Sinks don't have any external objects to drop--however,
                     // this would change if we add a collections for sinks
-                    // materialize#17672.
+                    // database-issues#5148.
                 }
                 CatalogItem::View(_) => {
                     // Views don't have any external objects to drop.
@@ -772,7 +772,7 @@ impl Catalog {
                 error!(
                     "user sink {full_name} will be recreated as part of a builtin migration which \
                     can result in duplicate data being emitted. This is a known issue, \
-                    https://github.com/MaterializeInc/materialize/issues/18767. Please inform the \
+                    https://github.com/MaterializeInc/database-issues/issues/5553. Please inform the \
                     customer that their sink may produce duplicate data."
                 )
             }

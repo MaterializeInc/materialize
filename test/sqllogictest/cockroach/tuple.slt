@@ -270,7 +270,7 @@ k  v
 statement ok
 DROP TABLE kv
 
-# Issue materialize#12295
+# Issue database-issues#3567
 
 query B colnames
 SELECT 'foo' IN (x, 'aaa') AS r FROM (SELECT 'foo' AS x FROM tb)

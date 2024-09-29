@@ -118,7 +118,7 @@ Target cluster: quickstart
 
 EOF
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/21178
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/6372
 
 statement ok
 CREATE TABLE t(x int);

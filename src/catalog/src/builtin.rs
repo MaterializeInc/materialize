@@ -3137,7 +3137,7 @@ SELECT
     name,
     mz_sources.type,
     occurred_at AS last_status_change_at,
-    -- TODO(parkmycar): Report status of webhook source once materialize#20036 is closed.
+    -- TODO(parkmycar): Report status of webhook source once database-issues#5986 is closed.
     CASE
             WHEN
                 mz_sources.type = 'webhook' OR
@@ -4124,7 +4124,7 @@ SELECT
     -- MZ doesn't use TOAST tables so reltoastrelid is filled with 0
     0::pg_catalog.oid AS reltoastrelid,
     EXISTS (SELECT id, oid, name, on_id, cluster_id FROM mz_catalog.mz_indexes where mz_indexes.on_id = class_objects.id) AS relhasindex,
-    -- MZ doesn't have unlogged tables and because of (https://github.com/MaterializeInc/materialize/issues/8805)
+    -- MZ doesn't have unlogged tables and because of (https://github.com/MaterializeInc/database-issues/issues/2689)
     -- temporary objects don't show up here, so relpersistence is filled with 'p' for permanent.
     -- TODO(jkosh44): update this column when issue is resolved.
     'p'::pg_catalog.\"char\" AS relpersistence,
@@ -5072,7 +5072,7 @@ HAVING pg_catalog.sum(count) != 0",
 
 pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
-        // TODO(materialize#27831): Rename this source to `mz_compute_error_counts_raw`. Currently this causes a
+        // TODO(database-issues#8173): Rename this source to `mz_compute_error_counts_raw`. Currently this causes a
         // naming conflict because the resolver stumbles over the source with the same name in
         // `mz_introspection` due to the automatic schema translation.
         name: "mz_compute_error_counts_raw_unified",
@@ -7205,7 +7205,7 @@ sources AS (
     JOIN mz_catalog.mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
 ),
--- We don't yet report sink hydration status (materialize#28459), so we do a best effort attempt here and
+-- We don't yet report sink hydration status (database-issues#8331), so we do a best effort attempt here and
 -- define a sink as hydrated when it's both "running" and has a frontier greater than the minimum.
 -- There is likely still a possibility of FPs.
 sinks AS (

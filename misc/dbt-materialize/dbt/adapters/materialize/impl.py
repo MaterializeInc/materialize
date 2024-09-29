@@ -113,7 +113,7 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
 
     # NOTE(morsapaes): Materialize supports enforcing the NOT NULL constraint
     # for materialized views (via the ASSERT NOT NULL clause) and tables. As a
-    # reminder, tables are modeled as static materialized views (see materialize#5266).
+    # reminder, tables are modeled as static materialized views (see database-issues#1623).
     CONSTRAINT_SUPPORT = {
         ConstraintType.check: ConstraintSupport.NOT_SUPPORTED,
         ConstraintType.not_null: ConstraintSupport.ENFORCED,

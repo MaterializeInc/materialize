@@ -194,7 +194,7 @@ class KafkaDisruption:
                   )
                   FORMAT BYTES
                   ENVELOPE NONE
-                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/database-issues/issues/4800
 
                 # Ensure the source makes _real_ progress before we disrupt it. This also
                 # ensures the sink makes progress, which is required to hit certain stalls.
@@ -206,7 +206,7 @@ class KafkaDisruption:
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
-                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/database-issues/issues/4800
 
                 $ kafka-verify-topic sink=materialize.public.sink1
                 """
@@ -303,13 +303,13 @@ class KafkaSinkDisruption:
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
-                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/database-issues/issues/4800
 
                 > CREATE SINK sink1 FROM source1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
-                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/database-issues/issues/4800
 
                 $ kafka-verify-data format=avro sink=materialize.public.sink1 sort-messages=true
                 {"before": null, "after": {"row":{"f1": "A"}}}
@@ -435,7 +435,7 @@ class PgDisruption:
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO source1 VALUES (3);
 
-                # TODO: materialize#29373 (introspection tables)
+                # TODO: database-issues#8511 (introspection tables)
                 # > SELECT status, error
                 #   FROM mz_internal.mz_source_statuses
                 #   WHERE name = 'source1'
@@ -499,7 +499,7 @@ disruptions: list[Disruption] = [
         expected_error="BrokerTransportFailure|Resolve|Broker transport failure|Timed out",
         fixage=lambda c, _: c.up("redpanda"),
     ),
-    # https://github.com/MaterializeInc/materialize/issues/16582
+    # https://github.com/MaterializeInc/database-issues/issues/4800
     # KafkaDisruption(
     #     name="kill-redpanda-clusterd",
     #     breakage=lambda c, _: c.kill("redpanda", "clusterd"),
@@ -527,14 +527,14 @@ disruptions: list[Disruption] = [
         # Can't recover when publication state is deleted.
         fixage=None,
     ),
-    # TODO: materialize#29373 (introspection tables)
+    # TODO: database-issues#8511 (introspection tables)
     # PgDisruption(
     #     name="alter-postgres",
     #     breakage=lambda c, _: alter_pg_table(c),
     #     expected_error="source table source1 with oid .+ has been altered",
     #     fixage=None,
     # ),
-    # TODO: materialize#29373 (introspection tables)
+    # TODO: database-issues#8511 (introspection tables)
     # PgDisruption(
     #     name="unsupported-postgres",
     #     breakage=lambda c, _: unsupported_pg_table(c),

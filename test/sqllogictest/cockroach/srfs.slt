@@ -397,7 +397,7 @@ SELECT a.*, b.*, c.* FROM generate_series(1,1) a, unnest(ARRAY[1]) b, pg_get_key
 ----
 a  b  word  catcode  catdesc
 
-# Regression for materialize#36501: the column from a single-column SRF should not be
+# Regression for cockroach#36501: the column from a single-column SRF should not be
 # renamed because of a higher-level table alias.
 query I colnames
 SELECT * FROM (SELECT * FROM generate_series(1, 2)) AS a
@@ -427,7 +427,7 @@ ON uq.filter_id2 = ab.filter_id
 ----
 1  1
 
-# Beware of multi-valued SRFs in render position (materialize#19149)
+# Beware of multi-valued SRFs in render position (database-issues#5675)
 query TTT colnames
 SELECT 'a' AS a, pg_get_keywords(), 'c' AS c LIMIT 1
 ----
@@ -1046,7 +1046,7 @@ subtest liquibase_example_query
 
 # # Test from materialize#24713 (Liquibase) listed on materialize#16971.
 # # TODO(knz) Needs support for pg_get_indexdef with 3 arguments,
-# # see materialize#26629.
+# # see database-issues#7870.
 # query TTTBTTIITTTTT
 # SELECT NULL AS table_cat,
 #        n.nspname AS table_schem,

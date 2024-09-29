@@ -322,7 +322,7 @@ impl From<Option<DatabaseId>> for ResolvedDatabaseSpecifier {
 
 /*
  * TODO(jkosh44) It's possible that in order to fix
- * https://github.com/MaterializeInc/materialize/issues/8805 we will need to assign temporary
+ * https://github.com/MaterializeInc/database-issues/issues/2689 we will need to assign temporary
  * schemas unique Ids. If/when that happens we can remove this enum and refer to all schemas by
  * their Id.
  */
@@ -1203,7 +1203,7 @@ pub enum CommentObjectId {
 /// relations.
 // NOTE(benesch,sploiselle): The fact that some names are looked up in multiple
 // namespaces is a bit dubious, and stems from the fact that we don't
-// automatically create types for relations (see materialize#23789). It's possible that we
+// automatically create types for relations (see database-issues#7142). It's possible that we
 // don't allow names to be looked up in multiple namespaces (i.e., this becomes
 // `enum ItemResolutionNamespace`), but it's also possible that the design of
 // the `DOC ON TYPE` option means we're forever stuck with this complexity.
@@ -2058,7 +2058,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 // In `DOC ON TYPE ...`, the type can refer to either a type or
                 // a relation.
                 //
-                // It's possible this will get simpler once materialize#23789 is fixed. See
+                // It's possible this will get simpler once database-issues#7142 is fixed. See
                 // the comment on `ItemResolutionConfig` for details.
                 ItemResolutionConfig {
                     functions: false,

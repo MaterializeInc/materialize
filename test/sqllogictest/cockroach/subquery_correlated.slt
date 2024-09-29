@@ -1023,7 +1023,7 @@ ON c.c_id=o.c_id AND EXISTS(SELECT * FROM o WHERE o.c_id=c.c_id AND ship IS NULL
 # 5  {}
 # 6  {90}
 
-# Regression for issue materialize#24676: missing support for correlated subquery in JSON
+# Regression for issue database-issues#7343: missing support for correlated subquery in JSON
 # operator.
 statement ok
 CREATE TABLE groups(
@@ -1037,7 +1037,7 @@ INSERT INTO groups(id, data) VALUES(1, '{"name": "Group 1", "members": [{"name":
 statement ok
 INSERT INTO groups(id, data) VALUES(2, '{"name": "Group 2", "members": [{"name": "admin2", "type": "USER"}]}')
 
-# materialize#1546
+# database-issues#544
 # query TT
 # SELECT
 #   g.data->>'name' AS group_name,
@@ -1119,7 +1119,7 @@ INSERT INTO stuff(id, date, user_id) VALUES (5, '2007-06-15'::DATE, 3)
 statement ok
 INSERT INTO stuff(id, date, user_id) VALUES (6, '2007-03-15'::DATE, 3)
 
-# materialize#2804
+# database-issues#949
 # query ITITI
 # SELECT
 #     users.id AS users_id,

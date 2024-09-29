@@ -747,7 +747,7 @@ steps:
           composition: rtr-combined
     agents:
       queue: hetzner-aarch64-8cpu-16gb
-    skip: "Flakes because of materialize#29289"
+    skip: "Flakes because of database-issues#8489"
 
   - id: skip-version-upgrade
     label: "Skip Version Upgrade"

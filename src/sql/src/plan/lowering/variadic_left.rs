@@ -420,7 +420,7 @@ fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>>
     // Ensure that every rhs column c2 appears only once. Otherwise, we have at
     // least two lhs columns c1 and c1' that are rendered equal by the same c2
     // column. The VOJ lowering will then produce a plan that will incorrectly
-    // push down a local filter c1 = c1' to the lhs (see materialize#26707).
+    // push down a local filter c1 = c1' to the lhs (see database-issues#7892).
     if equations.iter().duplicates_by(|(_, c)| c).next().is_some() {
         return None;
     }

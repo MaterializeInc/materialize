@@ -26,7 +26,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_client.logging.rs"));
 //
 // Ideally we'd want to instead signal disabled logging by leaving `index_logs`
 // empty. Unfortunately, we have to always provide `index_logs`, because we must
-// install the logging dataflows even on replicas that have logging disabled. See materialize#15799.
+// install the logging dataflows even on replicas that have logging disabled. See database-issues#4545.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     /// The logging interval
@@ -100,16 +100,16 @@ impl ProtoMapEntry<LogVariant, GlobalId> for ProtoIndexLog {
     }
 }
 
-/// TODO(materialize#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(
     Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
 )]
 pub enum LogVariant {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Timely(TimelyLog),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Differential(DifferentialLog),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Compute(ComputeLog),
 }
 
@@ -154,32 +154,32 @@ impl RustType<ProtoLogVariant> for LogVariant {
     }
 }
 
-/// TODO(materialize#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(
     Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
 )]
 pub enum TimelyLog {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Operates,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Channels,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Elapsed,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Histogram,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Addresses,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Parks,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     MessagesSent,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     MessagesReceived,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Reachability,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     BatchesSent,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     BatchesReceived,
 }
 
@@ -222,24 +222,24 @@ impl RustType<ProtoTimelyLog> for TimelyLog {
     }
 }
 
-/// TODO(materialize#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(
     Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
 )]
 pub enum DifferentialLog {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     ArrangementBatches,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     ArrangementRecords,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     Sharing,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     BatcherRecords,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     BatcherSize,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     BatcherCapacity,
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     BatcherAllocations,
 }
 
@@ -360,7 +360,7 @@ impl LogVariant {
             .unwrap_or_else(|| (0..arity).collect())
     }
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn desc(&self) -> RelationDesc {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::builder()

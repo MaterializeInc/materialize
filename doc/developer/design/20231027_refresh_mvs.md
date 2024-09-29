@@ -1,15 +1,15 @@
 # Tuning Freshness on Materialized Views
 
 - Associated:
-  - Big tracking issue: [#26010 `REFRESH` options](https://github.com/MaterializeInc/materialize/issues/26010)
+  - Big tracking issue: [#26010 `REFRESH` options](https://github.com/MaterializeInc/database-issues/issues/7751)
   - Main epics:
-    - [#22878 [Epic] Refresh options for materialized views](https://github.com/MaterializeInc/materialize/issues/22878)
-    - [#25712 [Epic] Automatic cluster scheduling for REFRESH EVERY matviews](https://github.com/MaterializeInc/materialize/issues/25712)
+    - [#22878 [Epic] Refresh options for materialized views](https://github.com/MaterializeInc/database-issues/issues/6905)
+    - [#25712 [Epic] Automatic cluster scheduling for REFRESH EVERY matviews](https://github.com/MaterializeInc/database-issues/issues/7673)
   - The user whose needs originally prompted this work: [accounts/#3](https://github.com/MaterializeInc/accounts/issues/3)
   - Older issues:
-    - [#13762: CREATE MATERIALIZED VIEW could support REFRESH modifiers](https://github.com/MaterializeInc/materialize/issues/13762)
-    - [#6745: Consider WITH FREQUENCY option for sources, views, sinks.](https://github.com/MaterializeInc/materialize/issues/6745)
-    - [#21479: Support for static data collections](https://github.com/MaterializeInc/materialize/issues/21479)
+    - [#13762: CREATE MATERIALIZED VIEW could support REFRESH modifiers](https://github.com/MaterializeInc/database-issues/issues/3940)
+    - [#6745: Consider WITH FREQUENCY option for sources, views, sinks.](https://github.com/MaterializeInc/database-issues/issues/2099)
+    - [#21479: Support for static data collections](https://github.com/MaterializeInc/database-issues/issues/6456)
   - Slack:
     - [channel #wg-tuning-freshness](https://materializeinc.slack.com/archives/C06535JL58R/p1699395646085619)
     - [big design thread in #epd-sql-council](https://materializeinc.slack.com/archives/C063H5S7NKE/p1699543250405409)
@@ -57,7 +57,7 @@ Criteria:
 We are targeting the new refresh options only to materialized views, but not indexes for now. Note that one can create an index that is refreshed at a specified interval simply by creating a normal index on top of a `REFRESH EVERY <interval>` materialized view.
 
 We are not aiming to cover the entire range of possible freshness-cost trade-off settings. In particular:
-- We are not aiming here to make results more fresh at a higher cost than what Materialize can provide by default. For efforts in that direction, see [materialize#19322: Re-enable TIMESTAMP INTERVAL source option](https://github.com/MaterializeInc/materialize/issues/19322).
+- We are not aiming here to make results more fresh at a higher cost than what Materialize can provide by default. For efforts in that direction, see [database-issues#5730: Re-enable TIMESTAMP INTERVAL source option](https://github.com/MaterializeInc/database-issues/issues/5730).
 - A more subtle scoping consideration is that we are also not targeting the range of settings that would require incremental computation with on-disk computation state. Instead, we now focus only on the easy case that is the range of freshness where redoing the entire computation periodically yields a lower cost than having a continuously running dataflow. This means that setting a refresh interval of less than 1 hour will not work well in most cases. It might be that even a few-hour refresh interval won't make using this feature worthwhile. Note that for one important user, a 1-day refresh interval is ok. Later, we might be able to cover this missing intermediate range of freshness by entirely different approaches:
    - When we have robust [out-of-core in Compute](https://materializeinc.slack.com/archives/C04UK7BNVL7/p1700084826815849) (probably with auto-scaling), we might be able to trade off freshness vs. cost by simply using a much smaller replica than the cluster's total memory needs, but supplying input data at a much larger tick interval than the default 1 sec. For example, we might supply new input data at every 10 mins, and hope that even with a lot of swapping, we'll be able to process the update in 10 mins.
   - We could suspend replica processes and save their entire state to S3 and a local disk cache, and restore it when a refresh is needed. [There are existing techniques for saving process state, e.g., CRIU](https://faun.pub/kubernetes-checkpointing-a-definitive-guide-33dd1a0310f6).
@@ -126,7 +126,7 @@ The implementation for refreshes scheduled by cron expressions will be similar t
 
 #### Refresh `AT {CREATION | <timestamp>}`
 
-We perform just one refresh of the MV at the specified time. (`REFRESH AT` can be given multiple times.) Note that if the only given refresh options are all `AT` options, then there will be a last refresh, after which the MV will never be refreshed again. This will allow for certain performance optimizations in dataflows that consume the MV as input ([#23179](https://github.com/MaterializeInc/materialize/issues/23179), [26571](https://github.com/MaterializeInc/materialize/issues/26571)).
+We perform just one refresh of the MV at the specified time. (`REFRESH AT` can be given multiple times.) Note that if the only given refresh options are all `AT` options, then there will be a last refresh, after which the MV will never be refreshed again. This will allow for certain performance optimizations in dataflows that consume the MV as input ([#23179](https://github.com/MaterializeInc/database-issues/issues/6981), [26571](https://github.com/MaterializeInc/database-issues/issues/7862)).
 
 _Before the first refresh is performed, MVs are not queryable_ (queries will block until the first refresh completes), because their `since` will be initially set to the time of the first refresh. The first refresh can be a significant time away from the time of creating the MV. For example, the first refresh of an MV that is updated daily could be at night, while the MV is probably created during the day. In such cases, the user would have to wait a long time to actually start using the MV. To prevent this annoying situation, users might often want to add an extra refresh at the time of creation by specifying `REFRESH AT mz_now()`. A syntactic sugar for this is `REFRESH AT CREATION`. For example,
 ```SQL
@@ -191,11 +191,11 @@ Note that generally we can't guarantee that refreshes will happen at exactly the
 
 ### Delta Join Tweaks
 
-See [#23179](https://github.com/MaterializeInc/materialize/issues/23179).
+See [#23179](https://github.com/MaterializeInc/database-issues/issues/6981).
 
 ## Possible Future Work
 
-- REFRESH ON DEMAND (and ALTER ...). This is hard, see [#26572](https://github.com/MaterializeInc/materialize/issues/26572)
+- REFRESH ON DEMAND (and ALTER ...). This is hard, see [#26572](https://github.com/MaterializeInc/database-issues/issues/7863)
 - When we have custom compaction windows, make sure stuff works. E.g., `<aligned_to_timestamp>` in the past should actually start in the past.
 
 ## Minimal Viable Prototype
@@ -257,7 +257,7 @@ ALTER CLUSTER c1 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
 ```
 
 Discussions:
-- [Original discussion](https://github.com/MaterializeInc/materialize/issues/25712)
+- [Original discussion](https://github.com/MaterializeInc/database-issues/issues/7673)
 - [Overview](https://www.notion.so/materialize/REFRESH-user-docs-draft-4a8f30b737a94619ac9f645abc9f84ce?pvs=4#025fd5733fcd4f38b48ee967bc8fb763)
 - [Syntax discussion](https://materializeinc.slack.com/archives/C063H5S7NKE/p1710355545343079)
 - [HYDRATION TIME ESTIMATE discussion](https://materializeinc.slack.com/archives/C063H5S7NKE/p1712165305916299)

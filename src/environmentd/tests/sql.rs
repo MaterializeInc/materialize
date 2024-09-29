@@ -599,7 +599,7 @@ fn test_subscribe_basic() {
 
     // Aggressively compact the data in the index, then subscribe an unmaterialized
     // view derived from the index. This previously selected an invalid
-    // `AS OF` timestamp (materialize#5391).
+    // `AS OF` timestamp (database-issues#1666).
     client_writes
         .batch_execute("ALTER TABLE t SET (RETAIN HISTORY = FOR '1s')")
         .unwrap();
@@ -756,7 +756,7 @@ fn test_subscribe_progress() {
 }
 
 // Verifies that subscribing to non-nullable columns with progress information
-// turns them into nullable columns. See materialize#6304.
+// turns them into nullable columns. See database-issues#1946.
 #[mz_ore::test]
 fn test_subscribe_progress_non_nullable_columns() {
     let server = test_util::TestHarness::default().start_blocking();
@@ -966,7 +966,7 @@ fn test_subscribe_fetch_timeout() {
     // Make a third cursor. Fetch should return immediately if there are enough
     // rows, even with a really long timeout.
     //
-    // Regression test for materialize#6307
+    // Regression test for database-issues#1949
     client
         .batch_execute(
             "COMMIT; BEGIN;
@@ -1378,8 +1378,8 @@ fn test_transactional_explain_timestamps() {
 // Feel free to modify this test if that product requirement changes,
 // but please at least keep _something_ that tests that custom compaction windows are working.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18934
-#[ignore] // TODO: Reenable when materialize#29299 is fixed
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5600
+#[ignore] // TODO: Reenable when database-issues#8491 is fixed
 async fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
     // `mz_catalog_server` tests indexes, `quickstart` tests tables.
@@ -1624,7 +1624,7 @@ fn test_github_12951() {
 }
 
 #[mz_ore::test]
-// Tests github issue materialize#13100
+// Tests github issue database-issues#3761
 fn test_subscribe_outlive_cluster() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -3359,7 +3359,7 @@ async fn test_explain_as_of() {
 
 // Test that RETAIN HISTORY results in the since and upper being separated by the specified amount.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[ignore] // TODO: Reenable when materialize#24957 is fixed
+#[ignore] // TODO: Reenable when database-issues#7450 is fixed
 async fn test_retain_history() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3655,7 +3655,7 @@ async fn test_explain_timestamp_blocking() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 async fn test_explain_timestamp_on_const_with_temporal() {
-    // Regression test for https://github.com/MaterializeInc/materialize/issues/25841
+    // Regression test for https://github.com/MaterializeInc/database-issues/issues/7705
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
 

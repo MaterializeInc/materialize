@@ -50,7 +50,7 @@ class ParallelBenchmarkResultStorage(BaseDataStorage):
         sql_statements = []
 
         for result_entry in results:
-            # TODO: remove NULL castings when materialize#27429 is resolved
+            # TODO: remove NULL castings when database-issues#8100 is resolved
             sql_statements.append(
                 f"""
                 INSERT INTO parallel_benchmark_result

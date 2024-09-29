@@ -434,7 +434,7 @@ impl TransactionalProducer {
             // internal use, so we silently drop any such user-specified
             // headers. While this behavior is documented, it'd be a nicer UX to
             // send a warning or error somewhere. Unfortunately sinks don't have
-            // anywhere user-visible to send errors. See materialize#17672.
+            // anywhere user-visible to send errors. See database-issues#5148.
             if header.key.starts_with("materialize-") {
                 continue;
             }

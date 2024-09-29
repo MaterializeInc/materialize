@@ -166,20 +166,20 @@ There were some, which lead to the addition of a `DEGRADED` state above.
 ## References
 
  - Product thoughts from Nicolle: https://docs.google.com/document/d/10RsEnpJJBN-lQKyYl08KRQ15Ckn-_gCWa5MAnZcc-ts/edit#heading=h.yvax2aldz1n9
- - Meta-issue by Eli: https://github.com/MaterializeInc/materialize/issues/7115
+ - Meta-issue by Eli: https://github.com/MaterializeInc/database-issues/issues/2208
 
 Critical:
- - https://github.com/MaterializeInc/materialize/issues/7396: sink error during startup kills materialized
- - https://github.com/MaterializeInc/materialize/issues/7009: failure in S3 source is printed to log but source doesn't error out
- - https://github.com/MaterializeInc/materialize/issues/6586: transient broker failure leads to error in log, but source doesn't report as errored and doesn't continue to produce data
+ - https://github.com/MaterializeInc/database-issues/issues/2304: sink error during startup kills materialized
+ - https://github.com/MaterializeInc/database-issues/issues/2180: failure in S3 source is printed to log but source doesn't error out
+ - https://github.com/MaterializeInc/database-issues/issues/2051: transient broker failure leads to error in log, but source doesn't report as errored and doesn't continue to produce data
 
 Unknown:
- - https://github.com/MaterializeInc/materialize/issues/7035: fetching in source doesn't continue after transient failure
- - https://github.com/MaterializeInc/materialize/issues/6916: metadata fetch errors in log
+ - https://github.com/MaterializeInc/database-issues/issues/2187: fetching in source doesn't continue after transient failure
+ - https://github.com/MaterializeInc/database-issues/issues/2153: metadata fetch errors in log
 
 Related:
- - https://github.com/MaterializeInc/materialize/issues/3122: "no complete timestamps" message is not useful
- - related: https://github.com/MaterializeInc/materialize/issues/2917
+ - https://github.com/MaterializeInc/database-issues/issues/1024: "no complete timestamps" message is not useful
+ - related: https://github.com/MaterializeInc/database-issues/issues/978
 
 Future Work, aka. non-goals:
  - https://github.com/MaterializeInc/materialize/discussions/5340: more structured user errors (error, details, hints)

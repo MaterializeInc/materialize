@@ -337,7 +337,7 @@ GROUP BY round;
 ----
 0  10
 
-## Regression test for https://github.com/MaterializeInc/materialize/issues/18759
+## Regression test for https://github.com/MaterializeInc/database-issues/issues/5550
 ## Test a WMR query with a delta join.
 query III
 WITH MUTUALLY RECURSIVE
@@ -363,7 +363,7 @@ SELECT * FROM c1;
 ----
 0  0  0
 
-## Regression test for https://github.com/MaterializeInc/materialize/issues/18949
+## Regression test for https://github.com/MaterializeInc/database-issues/issues/5606
 ## Test the situation when a WMR cte has an inner WMR whose body ends with an arrangement.
 query I
 WITH MUTUALLY RECURSIVE

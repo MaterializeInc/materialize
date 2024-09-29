@@ -58,7 +58,7 @@ class FeatureFlagPostExecutionInconsistencyIgnoreFilter(
         if query_template.uses_join() and (
             query_template.has_where_condition() or query_template.has_row_selection()
         ):
-            return YesIgnore("materialize#17189: evaluation order")
+            return YesIgnore("database-issues#4972: evaluation order")
 
         return super()._shall_ignore_success_mismatch(
             error, query_template, contains_aggregation
@@ -73,7 +73,7 @@ class FeatureFlagPostExecutionInconsistencyIgnoreFilter(
         if query_template.uses_join() and (
             query_template.has_where_condition() or query_template.has_row_selection()
         ):
-            return YesIgnore("materialize#17189: evaluation order")
+            return YesIgnore("database-issues#4972: evaluation order")
 
         return super()._shall_ignore_error_mismatch(
             error, query_template, contains_aggregation

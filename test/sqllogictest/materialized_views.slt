@@ -226,7 +226,7 @@ SELECT * FROM v
 
 # Test: a view on a materialized view that optimizes to the empty set
 # still prevents the underlying view from being dropped.
-# See: https://github.com/MaterializeInc/materialize/issues/20315
+# See: https://github.com/MaterializeInc/database-issues/issues/6101
 
 statement ok
 CREATE VIEW v AS SELECT 1 AS c
@@ -1005,7 +1005,7 @@ NULL  -1  -2
 30  30  30
 100  100  100
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/24288
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/7265
 # The sleep makes _optimization_ take a few seconds, so we need to grab read holds in purification right away after
 # choosing a timestamp for mz_now.
 

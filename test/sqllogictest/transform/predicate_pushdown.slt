@@ -186,7 +186,7 @@ Target cluster: quickstart
 
 EOF
 
-# materialize#7684 avoidable cross joins
+# database-issues#2377 avoidable cross joins
 query T multiline
 EXPLAIN WITH(arity, join implementations)
 select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and t2.f1 is null);
@@ -387,7 +387,7 @@ Target cluster: quickstart
 
 EOF
 
-# Regression tests for https://github.com/MaterializeInc/materialize/issues/16128
+# Regression tests for https://github.com/MaterializeInc/database-issues/issues/4659
 
 statement ok
 CREATE TABLE tt1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
@@ -450,7 +450,7 @@ Target cluster: mz_catalog_server
 
 EOF
 
-# Regression tests for materialize#17515
+# Regression tests for database-issues#5089
 # Push predicates through Threshold and TopK
 
 # Test Threshold.
@@ -516,7 +516,7 @@ Target cluster: quickstart
 
 EOF
 
-# One more for https://github.com/MaterializeInc/materialize/issues/16128
+# One more for https://github.com/MaterializeInc/database-issues/issues/4659
 # https://github.com/MaterializeInc/materialize/pull/16147#issuecomment-1322042176
 
 simple conn=mz_system,user=mz_system
@@ -925,7 +925,7 @@ Target cluster: quickstart
 
 EOF
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/19179
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/5691
 statement ok
 with
   v1 as (
@@ -954,7 +954,7 @@ with
 select * from v1
 WHERE credits_per_hour > credits_per_hour;
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/20199
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/6049
 
 statement ok
 CREATE ROLE r2;
@@ -1009,7 +1009,7 @@ EOF
 statement ok
 DROP ROLE r2;
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/22257
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/6714
 # The transitive closure computation in `inline_if_not_too_big` has to do more than one step here. For this, later map
 # expressions should mention only the previous map expression, but not earlier ones. Also, there has to be at least
 # 3 map expressions, so that adding the support of the last one doesn't immediately cover all of the map expressions.

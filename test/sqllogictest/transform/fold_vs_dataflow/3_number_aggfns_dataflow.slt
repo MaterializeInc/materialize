@@ -24,7 +24,7 @@ INSERT INTO t_using_dataflow_rendering VALUES
  (2, 2, 2, 32767::INT2, 1::INT2);
 
 # DIFF TO CONSTANT FOLDING ([SUM, AVG] with types [REAL, DOUBLE])!
-# to be addressed with https://github.com/MaterializeInc/materialize/issues/15186
+# to be addressed with https://github.com/MaterializeInc/database-issues/issues/4341
 query IIIIIIIIIIIIIIIIIIIIIIII
 SELECT
  SUM(real1), SUM(double1), SUM(numeric1),

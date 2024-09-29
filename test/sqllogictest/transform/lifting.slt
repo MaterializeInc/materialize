@@ -735,7 +735,7 @@ Target cluster: quickstart
 
 EOF
 
-# regression tests for materialize#6943
+# regression tests for database-issues#2159
 query T multiline
 explain with(arity, join implementations) select min(1/x) from (select a as y, 0 as x from t);
 ----

@@ -83,7 +83,7 @@ class Identifiers(Check):
         }
         # ERROR: invalid input syntax for type bytea: invalid escape sequence
         self.ident["secret_value"] = "secret_value"
-        # https://github.com/MaterializeInc/materialize/issues/22535
+        # https://github.com/MaterializeInc/database-issues/issues/6813
         self.ident["source"] = "source"
         super().__init__(base_version, rng)
 

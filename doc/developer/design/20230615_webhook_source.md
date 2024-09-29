@@ -1,8 +1,8 @@
 # Webhook Source
 
 ### Associated
- * [Epic] Webhook Source - [materialize#19951](https://github.com/MaterializeInc/materialize/issues/19951)
- * Support an HTTP Post Source - [materialize#1701](https://github.com/MaterializeInc/materialize/issues/1701#issuecomment-1537908820)
+ * [Epic] Webhook Source - [database-issues#5954](https://github.com/MaterializeInc/database-issues/issues/5954)
+ * Support an HTTP Post Source - [database-issues#617](https://github.com/MaterializeInc/database-issues/issues/617#issuecomment-1537908820)
 
 ## Context
 

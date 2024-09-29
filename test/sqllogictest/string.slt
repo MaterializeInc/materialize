@@ -1521,7 +1521,7 @@ SELECT CONCAT('a'::text, 'b'::char(3), 'c');
 ----
 ab  c
 
-# Regression for https://github.com/MaterializeInc/materialize/issues/18095
+# Regression for https://github.com/MaterializeInc/database-issues/issues/5304
 
 statement ok
 CREATE TABLE gh18095_0(c0 VARCHAR(55))

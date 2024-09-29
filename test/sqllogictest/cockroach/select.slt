@@ -172,7 +172,7 @@ SELECT kv.* FROM kv
 ----
 a NULL
 
-# Regression tests for materialize#24169
+# Regression tests for database-issues#7241
 query TT
 SELECT test.kv.* FROM kv
 ----

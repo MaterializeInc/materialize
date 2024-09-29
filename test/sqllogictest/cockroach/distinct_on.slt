@@ -232,7 +232,7 @@ SELECT DISTINCT ON (x) y, z, x FROM xyz ORDER BY x ASC, z DESC, y DESC
 2 3 2
 5 6 4
 
-# Regression test for materialize#35437: Discard extra ordering columns after performing
+# Regression test for cockroach#35437: Discard extra ordering columns after performing
 # DISTINCT operation.
 query T
 SELECT (SELECT DISTINCT ON (a) a FROM abc ORDER BY a, b||'foo') || 'bar';
@@ -397,7 +397,7 @@ SELECT DISTINCT ON (x, y, z) pk1 FROM (SELECT * FROM xyz WHERE x >= 2) ORDER BY 
 6
 7
 
-# Regression tests for materialize#34112: distinct on constant column.
+# Regression tests for cockroach#34112: distinct on constant column.
 query II
 SELECT DISTINCT ON (x) x, y FROM xyz WHERE x = 1 ORDER BY x, y
 ----

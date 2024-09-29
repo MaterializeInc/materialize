@@ -483,7 +483,7 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
     let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-");
 
-    // Supporting other encodings is tracked by materialize#2282.
+    // Supporting other encodings is tracked by database-issues#797.
     if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some("utf-8") {
         return Err(EvalError::InvalidEncodingName(encoding_name));
     }
@@ -8003,7 +8003,7 @@ impl VariadicFunc {
                 .nullable(true),
             ListCreate { elem_type } => {
                 // commented out to work around
-                // https://github.com/MaterializeInc/materialize/issues/8963
+                // https://github.com/MaterializeInc/database-issues/issues/2730
                 // soft_assert!(
                 //     input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
                 //     "{}", format!("Args to ListCreate should have types that are compatible with the elem_type.\nArgs:{:#?}\nelem_type:{:#?}", input_types, elem_type)

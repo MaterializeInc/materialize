@@ -31,7 +31,7 @@ def workflow_default(c: Composition) -> None:
     run_test_with_mv_on_table_with_altered_retention(c)
     run_test_with_mv_on_counter_source(c)
     run_test_with_counter_source(c)
-    # TODO: materialize#24479 needs to be fixed
+    # TODO: database-issues#7310 needs to be fixed
     # run_test_gh_24479(c)
     run_test_with_index(c)
     run_test_consistency(c)

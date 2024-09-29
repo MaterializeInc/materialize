@@ -702,7 +702,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
     write: &WriteHandle<K, V, T, D>,
     fuel: impl Fn() -> usize,
     wait: impl Fn() -> Duration,
-    // TODO: Here to make the test semi-work until we fix materialize#29459.
+    // TODO: Here to make the test semi-work until we fix database-issues#8530.
     max_attempts: Option<usize>,
 ) where
     K: Debug + Codec,
@@ -830,7 +830,7 @@ mod tests {
             .await;
             let batches_after = machine.applier.all_batches().len();
             println!("{}: got {} batches after", num_batches, batches_after);
-            // TODO: Enable this after materialize#29459 is fixed.
+            // TODO: Enable this after database-issues#8530 is fixed.
             // assert!(batches_after < 2, "{} vs {}", num_batches, batches_after);
         }
     }

@@ -11,7 +11,7 @@
 # Test that dropping the primary key is handled correctly
 #
 
-# TODO: Reenable when materialize#6521 is fixed
+# TODO: Reenable when database-issues#2025 is fixed
 $ skip-if
 SELECT true
 
