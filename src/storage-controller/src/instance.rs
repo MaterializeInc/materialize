@@ -38,7 +38,7 @@ use crate::history::CommandHistory;
 ///
 /// Encapsulates communication with replicas in this instance, and their rehydration.
 ///
-/// Note that storage objects (sources and sinks) don't currently support replication (materialize#17418).
+/// Note that storage objects (sources and sinks) don't currently support replication (database-issues#5051).
 /// An instance can have muliple replicas connected, but only if it has no storage objects
 /// installed. Attempting to install storage objects on multi-replica instances, or attempting to
 /// add more than one replica to instances that have storage objects installed, is illegal and will

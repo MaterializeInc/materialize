@@ -362,7 +362,7 @@ pub struct CatalogConfig {
     /// A random integer associated with this instance of the catalog.
     ///
     /// NOTE(benesch): this is only necessary for producing unique Kafka sink
-    /// topics. Perhaps we can remove this when materialize#2915 is complete.
+    /// topics. Perhaps we can remove this when database-issues#977 is complete.
     pub nonce: u64,
     /// A persistent ID associated with the environment.
     pub environment_id: EnvironmentId,
@@ -693,7 +693,7 @@ impl CatalogItemType {
     ///
     /// We don't presently construct types that mirror relational objects,
     /// though we likely will need to in the future for full PostgreSQL
-    /// compatibility (see materialize#23789). For now, we use this method to
+    /// compatibility (see database-issues#7142). For now, we use this method to
     /// prevent creating types and relational objects that have the same name, so
     /// that it is a backwards compatible change in the future to introduce a
     /// type named after each relational object in the system.

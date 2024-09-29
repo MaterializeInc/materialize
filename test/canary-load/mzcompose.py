@@ -123,7 +123,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             except FailedTestExecutionError as e:
                 assert len(e.errors) > 0, "Exception contains no errors"
                 for error in e.errors:
-                    # TODO(def-): Remove when materialize#22576 is fixed
+                    # TODO(def-): Remove when database-issues#6825 is fixed
                     if "Non-positive multiplicity in DistinctBy" in error.message:
                         continue
                     print(
@@ -133,7 +133,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     failures.append(error)
             except CommandFailureCausedUIError as e:
                 msg = (e.stdout or "") + (e.stderr or "")
-                # TODO(def-): Remove when materialize#22576 is fixed
+                # TODO(def-): Remove when database-issues#6825 is fixed
                 if "Non-positive multiplicity in DistinctBy" in msg:
                     continue
                 print(f"Test failure occurred ({msg}), collecting it, and continuing.")

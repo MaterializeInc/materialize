@@ -200,7 +200,7 @@ fn setup_statement_logging(
 
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
 #[mz_ore::test]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/21598
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/6487
 fn test_statement_logging_immediate() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0);
     let successful_immediates: &[&str] = &[
@@ -1295,7 +1295,7 @@ fn test_storage_usage_updates_between_restarts() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18896
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5584
 fn test_storage_usage_doesnt_update_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(10);
@@ -1624,7 +1624,7 @@ fn test_default_cluster_sizes() {
 }
 
 #[mz_ore::test]
-#[ignore] // TODO: Reenable when materialize#22998 is fixed
+#[ignore] // TODO: Reenable when database-issues#6931 is fixed
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
@@ -3137,7 +3137,7 @@ fn test_github_20262() {
 }
 
 // Test that the server properly handles cancellation requests of read-then-write queries.
-// See materialize#20404.
+// See database-issues#6134.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_read_then_write() {

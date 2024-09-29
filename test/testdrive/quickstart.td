@@ -10,7 +10,7 @@
 # This test verifies the Quickstart page works: https://materialize.com/docs/get-started/quickstart/
 # Uses shared compute+storage cluster
 
-# TODO: Reenable when materialize#29696 is fixed
+# TODO: Reenable when database-issues#8581 is fixed
 $ skip-if
 SELECT true
 

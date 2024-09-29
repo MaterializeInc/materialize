@@ -726,7 +726,7 @@ mod inlining {
     ///    there was no recursion in it.
     ///
     /// The case of `Constant` binding is handled here (as opposed to
-    /// `FoldConstants`) in a somewhat limited manner (see materialize#18180). Although a
+    /// `FoldConstants`) in a somewhat limited manner (see database-issues#5346). Although a
     /// bit weird, constants should also not be inlined into prior bindings as
     /// this does change the behavior from one where the collection is initially
     /// empty to one where it is always the constant.
@@ -805,7 +805,7 @@ mod inlining {
                         match stripped_value {
                             // TODO: One could imagine CSEing multiple occurrences of a global Get
                             // to make us read from Persist only once.
-                            // See <https://github.com/MaterializeInc/materialize/issues/21145>
+                            // See <https://github.com/MaterializeInc/database-issues/issues/6363>
                             MirRelationExpr::Get { .. } | MirRelationExpr::Constant { .. } => true,
                             _ => false,
                         }

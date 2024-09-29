@@ -152,7 +152,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(
         Cockroach(
             image=f"cockroachdb/cockroach:{args.cockroach_tag}",
-            # Workaround for materialize#19276
+            # Workaround for database-issues#5719
             restart="on-failure:5",
             setup_materialize=True,
         ),

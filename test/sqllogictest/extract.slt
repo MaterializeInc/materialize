@@ -28,7 +28,7 @@ asdfjkl  asdf     NULL
 jkl      NULL     jkl
 
 # TODO(brennan): test that the regex columns have the correct nullability, once
-# they actually do (materialize#1685).
+# they actually do (database-issues#612).
 
 query TTT colnames
 SELECT data.*, csv.* FROM data, csv_extract(2, data.input) csv

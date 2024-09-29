@@ -5,10 +5,10 @@ This design encompases 2 existing proposals also known as
 
 Associated:
 
--   https://github.com/MaterializeInc/materialize/issues/20208
--   https://github.com/MaterializeInc/materialize/issues/24843
--   https://github.com/MaterializeInc/materialize/issues/15897
--   https://github.com/MaterializeInc/materialize/issues/17021
+-   https://github.com/MaterializeInc/database-issues/issues/6051
+-   https://github.com/MaterializeInc/database-issues/issues/7417
+-   https://github.com/MaterializeInc/database-issues/issues/4576
+-   https://github.com/MaterializeInc/database-issues/issues/4924
 
 ## The Problems
 
@@ -78,7 +78,7 @@ and why. This leads to crisper designs, and it aids in focusing the reviewer.
 -->
 
 -   Accomplishing 'subsource demuxing' using the concept of _subsources_ in-use today.
-    The goals of https://github.com/MaterializeInc/materialize/issues/24843 will be
+    The goals of https://github.com/MaterializeInc/database-issues/issues/7417 will be
     accomplished during the process of replacing _subsources_ with _tables_ (see
     solution proposal below).
 
@@ -562,7 +562,7 @@ problems outlined above:
    have to be implemented for both top-level sources and subsources).
 
 3. Implement demuxing of upstream tables using existing subsource model
-   (https://github.com/MaterializeInc/materialize/issues/24843). This would be an
+   (https://github.com/MaterializeInc/database-issues/issues/7417). This would be an
    easier effort to implement, but rather than doing this work in the short term
    for it to be later ripped out, it is preferable to implement the interface
    that solves both this need and the other problems outlined above.

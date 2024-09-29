@@ -1336,7 +1336,7 @@ Target cluster: quickstart
 EOF
 
 # Test `LetRec` printing, with and without RECURSION LIMIT
-# With materialize#27389 this stopped testing a thing; see issue materialize#28308.
+# With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
 EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT * FROM (

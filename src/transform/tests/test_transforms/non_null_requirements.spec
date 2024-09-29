@@ -103,7 +103,7 @@ With
     Constant <empty>
 
 
-# Regression test for materialize#5520
+# Regression test for database-issues#1700
 apply pipeline=non_null_requirements
 Filter #0 = #3
   FlatMap generate_series(#1)

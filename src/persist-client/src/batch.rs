@@ -310,7 +310,7 @@ where
     /// to be _not possible_ for partially ordered times. It is believed that we
     /// could fix this by collecting different metadata in batch creation (e.g.
     /// the join of or an antichain of the original contained timestamps), but
-    /// the experience of materialize#26384 has shaken our confidence in our own abilities
+    /// the experience of database-issues#7825 has shaken our confidence in our own abilities
     /// to reason about partially ordered times and anyway all the initial uses
     /// have totally ordered times.
     pub fn rewrite_ts(
@@ -510,7 +510,7 @@ pub(crate) struct UntrimmableColumns {
 impl UntrimmableColumns {
     pub(crate) fn should_retain(&self, name: &str) -> bool {
         // TODO: see if there's a better way to match different formats than lowercasing
-        // https://github.com/MaterializeInc/materialize/issues/21353#issue-1863623805
+        // https://github.com/MaterializeInc/database-issues/issues/6421#issue-1863623805
         let name_lower = name.to_lowercase();
         for s in &self.equals {
             if *s == name_lower {

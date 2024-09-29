@@ -10,7 +10,7 @@
 mode cockroach
 
 # Regression test for
-# https://github.com/MaterializeInc/materialize/issues/21244.
+# https://github.com/MaterializeInc/database-issues/issues/6388.
 
 statement ok
 CREATE TABLE r(x bool);

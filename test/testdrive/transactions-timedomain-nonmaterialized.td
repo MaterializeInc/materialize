@@ -118,7 +118,7 @@ $ kafka-ingest topic=static format=bytes
 
 > COMMIT
 
-# Regression for materialize#8657
+# Regression for database-issues#2647
 # Ensure that views referencing other schemas are transitively included. Here,
 # pg_catalog is generally a view over mz_catalog.
 > BEGIN
@@ -126,7 +126,7 @@ $ kafka-ingest topic=static format=bytes
 > SELECT pg_catalog.format_type(a.atttypid, a.atttypmod) FROM pg_catalog.pg_attribute a LIMIT 0;
 > COMMIT
 
-# Regression for materialize#8942
+# Regression for database-issues#2727
 # Ensure that non-materialized, transitive views are not included. Here,
 # unindexed should not be included in the timedomain.
 > CREATE MATERIALIZED VIEW v_materialized AS SELECT count(*) FROM unindexed

@@ -2,7 +2,7 @@
 
 - Associated:
   - MaterializeInc/materialize#19223
-  - MaterializeInc/materialize#18089
+  - MaterializeInc/database-issues#5301
 
 <!--
 The goal of a design document is to thoroughly discover problems and

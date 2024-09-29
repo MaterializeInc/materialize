@@ -95,7 +95,7 @@ SELECT * FROM a ORDER BY b
 -2   3
 7    8
 
-# Regression for materialize#30936: ensure that wrapped planNodes with non-needed columns work ok
+# Regression for cockroach#30936: ensure that wrapped planNodes with non-needed columns work ok
 
 statement ok
 CREATE TABLE b (a int, b int)

@@ -39,7 +39,7 @@ module. At a high level it stores the following types of objects:
 - Cluster replicas
 - Cluster introspection source indexes
 - Config: This is a misc catch all that stores the deployment generation and the stash
-  version. [This issue](https://github.com/MaterializeInc/materialize/issues/20922) describes what
+  version. [This issue](https://github.com/MaterializeInc/database-issues/issues/6298) describes what
   it is and how it should be cleaned up.
 - Databases
 - Default privileges
@@ -349,7 +349,7 @@ safe.
 - Upgrade Check: Will use the `check_open` method.
 
 NB: There is an open issue that you need two different versions of the stash debug tool to perform
-upgrade checks: https://github.com/MaterializeInc/materialize/issues/21121. This proposal will not
+upgrade checks: https://github.com/MaterializeInc/database-issues/issues/6355. This proposal will not
 fix that issue and suffers from the exact same issue.
 
 ### Migrations
@@ -357,7 +357,7 @@ fix that issue and suffers from the exact same issue.
 This section is currently hand-wavy and needs the most additional design work.
 
 Stash migration ownership is currently tangled between the adapter crate and the stash crate,
-see [stash: Untangle the stash config collection](https://github.com/MaterializeInc/materialize/issues/20922).
+see [stash: Untangle the stash config collection](https://github.com/MaterializeInc/database-issues/issues/6298).
 Ideally the adapter would be in charge of how and why to migrate the catalog contents while the
 stash provides the primitives needed to migrate a stash collection.
 

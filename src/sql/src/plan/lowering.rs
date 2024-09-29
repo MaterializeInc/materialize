@@ -132,9 +132,9 @@ struct CteDesc {
 
 #[derive(Debug)]
 pub struct Config {
-    /// Enable outer join lowering implemented in materialize#22343.
+    /// Enable outer join lowering implemented in database-issues#6747.
     pub enable_new_outer_join_lowering: bool,
-    /// Enable outer join lowering implemented in materialize#25340.
+    /// Enable outer join lowering implemented in database-issues#7561.
     pub enable_variadic_left_join_lowering: bool,
     /// Enable the extra null filter implemented in materialize#28018.
     pub enable_outer_join_null_filter: bool,
@@ -1375,7 +1375,7 @@ impl HirScalarExpr {
         //     ORDER BY columns.
         //   - The <original row> currently always captures the entire original row. This should
         //     improve when we make `ProjectionPushdown` smarter, see
-        //     https://github.com/MaterializeInc/materialize/issues/17522
+        //     https://github.com/MaterializeInc/database-issues/issues/5090
         //
         // TODO:
         // We should probably introduce some dedicated Datum constructor functions instead of `row`
@@ -1994,11 +1994,11 @@ fn attempt_outer_equijoin(
     id_gen: &mut mz_ore::id_gen::IdGen,
     context: &Context,
 ) -> Result<Option<MirRelationExpr>, PlanError> {
-    // TODO(materialize#22581): In theory, we can be smarter and also handle `on`
+    // TODO(database-issues#6827): In theory, we can be smarter and also handle `on`
     // predicates that reference subqueries as long as these subqueries don't
     // reference `left` and `right` at the same time.
     //
-    // TODO(materialize#22582): This code can be improved as follows:
+    // TODO(database-issues#6828): This code can be improved as follows:
     //
     // 1. Move the `canonicalize_predicates(...)` call to `applied_to`.
     // 2. Use the canonicalized `on` predicate in the non-equijoin based

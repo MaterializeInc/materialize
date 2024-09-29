@@ -32,7 +32,7 @@ class Cockroach(Service):
         setup_materialize: bool = True,
         in_memory: bool = False,
         healthcheck: ServiceHealthcheck | None = None,
-        # Workaround for materialize#19809, should be "no" otherwise
+        # Workaround for database-issues#5898, should be "no" otherwise
         restart: str = "on-failure:5",
     ):
         volumes = []

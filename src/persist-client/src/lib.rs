@@ -1770,7 +1770,7 @@ mod tests {
         );
     }
 
-    // Regression test for materialize#12131. Snapshot with as_of >= upper would
+    // Regression test for database-issues#3523. Snapshot with as_of >= upper would
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
     #[mz_persist_proc::test(tokio::test)]

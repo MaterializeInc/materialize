@@ -2996,7 +2996,7 @@ Tablet      iPad             700.00   NULL  700.00
 Tablet      Kindle Fire      150.00   NULL  150.00
 Tablet      Samsung          200.00   NULL  200.00
 
-# Test for materialize#32702
+# Test for cockroach#32702
 
 statement ok
 CREATE TABLE x (a INT)
@@ -3011,7 +3011,7 @@ SELECT a, json_agg(a) OVER (ORDER BY a) FROM x ORDER BY a
 2 [1, 2]
 3 [1, 2, 3]
 
-# Test for materialize#35267
+# Test for cockroach#35267
 query I
 SELECT
     row_number() OVER (PARTITION BY s)
@@ -3022,7 +3022,7 @@ FROM
 1
 1
 
-# Tests for materialize#32050
+# Tests for cockroach#32050
 
 statement error window function calls cannot be nested
 SELECT sum(a) OVER (PARTITION BY count(a) OVER ()) FROM x
@@ -3073,7 +3073,7 @@ SELECT string_agg('foo', s) OVER () FROM (SELECT * FROM kv LIMIT 1)
 ----
 foo
 
-# Regression test for materialize#37201.
+# Regression test for cockroach#37201.
 query I
 SELECT jsonb_agg(a) OVER (ORDER BY a GROUPS BETWEEN 5 FOLLOWING AND UNBOUNDED FOLLOWING) FROM x
 ----

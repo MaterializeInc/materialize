@@ -1734,7 +1734,7 @@ impl CatalogState {
                     id: &*MZ_AGGREGATES,
                     row: Row::pack_slice(&[
                         Datum::UInt32(func_impl_details.oid),
-                        // TODO(materialize#3326): Support ordered-set aggregate functions.
+                        // TODO(database-issues#1064): Support ordered-set aggregate functions.
                         Datum::String("n"),
                         Datum::Int16(0),
                     ]),
@@ -2114,7 +2114,7 @@ impl CatalogState {
         };
         let column_pos_datum = match column_pos {
             Some(pos) => {
-                // TODO(parkmycar): https://github.com/MaterializeInc/materialize/issues/22246.
+                // TODO(parkmycar): https://github.com/MaterializeInc/database-issues/issues/6711.
                 let pos =
                     i32::try_from(pos).expect("we constrain this value in the planning layer");
                 Datum::Int32(pos)

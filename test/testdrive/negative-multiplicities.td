@@ -33,7 +33,7 @@ contains:Invalid data in source, saw retractions (1) for row that does not exist
 ! SELECT * FROM data
 contains:Invalid data in source, saw retractions (2) for row that does not exist: [Int64(1), UInt32(1)]
 
-# regression scenario per materialize#17963, with non-monotonic rendering
+# regression scenario per database-issues#5246, with non-monotonic rendering
 > CREATE VIEW topk AS
   SELECT grp.id, count(t.data) AS top_2_count,
            (SELECT COUNT(d.data) FROM data d WHERE d.data % 2 = grp.id) AS total_count
@@ -46,19 +46,19 @@ contains:Invalid data in source, saw retractions (2) for row that does not exist
 ! SELECT * from topk;
 contains:Negative multiplicities in TopK
 
-# regression scenario per materialize#17908
+# regression scenario per database-issues#5224
 ! SELECT DISTINCT data FROM data;
 contains:Non-positive multiplicity in DistinctBy
 
-# regression scenario per materialize#18211
+# regression scenario per database-issues#5359
 ! SELECT list_agg(DISTINCT data)[1] FROM data;
 contains:Non-positive accumulation in ReduceInaccumulable DISTINCT
 
-# regression scenario per materialize#18212
+# regression scenario per database-issues#5360
 ! SELECT list_agg(data)[1] FROM data;
 contains:Non-positive accumulation in ReduceInaccumulable
 
-# regression scenario per materialize#17509, with non-monotonic rendering
+# regression scenario per database-issues#5086, with non-monotonic rendering
 > CREATE VIEW max_data AS
   SELECT MAX(data) FROM data;
 
@@ -89,7 +89,7 @@ contains:on-positive accumulation
 
 # Window aggregations
 # These are currently commented out, because window functions currently don't check their inputs for negative
-# multiplicities, see https://github.com/MaterializeInc/materialize/issues/29624
+# multiplicities, see https://github.com/MaterializeInc/database-issues/issues/8568
 
 #! SELECT list_agg(data) OVER ()[1] FROM data;
 #contains:Non-positive accumulation in ReduceInaccumulable

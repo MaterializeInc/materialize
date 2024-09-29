@@ -241,7 +241,7 @@ SELECT 'mz_tables'::regclass::oid = (SELECT oid FROM mz_objects WHERE name = 'mz
 true
 
 # This shouldn't be an error but seems to be impacted by
-# some evaluation order issue akin to materialize#17189
+# some evaluation order issue akin to database-issues#4972
 # # Regression for 9194
 # query B
 # select 'mz_tables'::regclass::oid::text::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')

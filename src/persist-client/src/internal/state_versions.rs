@@ -1220,7 +1220,7 @@ mod tests {
 
     use super::*;
 
-    /// Regression test for (part of) materialize#17752, where an interrupted
+    /// Regression test for (part of) database-issues#5170, where an interrupted
     /// `bin/environmentd --reset` resulted in panic in persist usage code.
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented

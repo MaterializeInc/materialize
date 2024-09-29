@@ -164,7 +164,7 @@ contains:division by zero
 
 > DROP VIEW v_monotonic;
 
-# The following tests repeat the scenario in materialize#18445.
+# The following tests repeat the scenario in database-issues#5442.
 $ set other-non-dbz-schema={
     "type": "record",
     "name": "cpx",

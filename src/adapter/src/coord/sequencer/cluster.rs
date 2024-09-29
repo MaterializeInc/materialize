@@ -134,7 +134,7 @@ impl Coordinator {
         // Eagerly validate the `max_replicas_per_cluster` limit.
         // `catalog_transact` will do this validation too, but allocating
         // replica IDs is expensive enough that we need to do this validation
-        // before allocating replica IDs. See materialize#20195.
+        // before allocating replica IDs. See database-issues#6046.
         self.validate_resource_limit(
             0,
             i64::from(replication_factor),
@@ -266,7 +266,7 @@ impl Coordinator {
         // Eagerly validate the `max_replicas_per_cluster` limit.
         // `catalog_transact` will do this validation too, but allocating
         // replica IDs is expensive enough that we need to do this validation
-        // before allocating replica IDs. See materialize#20195.
+        // before allocating replica IDs. See database-issues#6046.
         self.validate_resource_limit(
             0,
             i64::try_from(replicas.len()).unwrap_or(i64::MAX),
@@ -622,7 +622,7 @@ impl Coordinator {
         // Eagerly validate the `max_replicas_per_cluster` limit.
         // `catalog_transact` will do this validation too, but allocating
         // replica IDs is expensive enough that we need to do this validation
-        // before allocating replica IDs. See materialize#20195.
+        // before allocating replica IDs. See database-issues#6046.
         if new_replication_factor > replication_factor {
             self.validate_resource_limit(
                 usize::cast_from(*replication_factor),

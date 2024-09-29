@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Regression test for
-# bug: https://github.com/MaterializeInc/materialize/issues/9397
+# bug: https://github.com/MaterializeInc/database-issues/issues/2874
 # fix: https://github.com/MaterializeInc/materialize/pull/9398
 
 simple conn=mz_system,user=mz_system

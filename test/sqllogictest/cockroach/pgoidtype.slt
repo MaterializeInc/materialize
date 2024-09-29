@@ -326,7 +326,7 @@ SELECT crdb_internal.create_regtype(10, 'foo')::oid, crdb_internal.create_regcla
 ----
 10 10 10 10 10
 
-# Regression test for materialize#32422: ensure that VALUES nodes properly retain special
+# Regression test for cockroach#32422: ensure that VALUES nodes properly retain special
 # OID properties.
 
 query OO

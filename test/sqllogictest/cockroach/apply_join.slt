@@ -55,7 +55,7 @@ FROM
 4
 
 
-# Regression test for materialize#36197: 0-col applyjoin RHS doesn't panic
+# Regression test for cockroach#36197: 0-col applyjoin RHS doesn't panic
 
 statement ok
 CREATE TABLE table9 (
@@ -135,7 +135,7 @@ LIMIT
 ----
 true
 
-# Regression test for materialize#37454: untyped null produced at top level.
+# Regression test for cockroach#37454: untyped null produced at top level.
 
 statement ok
 CREATE TABLE x (a INT)

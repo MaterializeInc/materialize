@@ -1,9 +1,9 @@
 # Self Describing Persist Batches
 
 - Associated:
-  - [write Schema-ified data blobs #24830](https://github.com/MaterializeInc/materialize/issues/24830)
-  - [persist: schema evolution](https://github.com/MaterializeInc/materialize/issues/16625)
-  - [Table support for push sources](https://github.com/MaterializeInc/materialize/issues/22836)
+  - [write Schema-ified data blobs #24830](https://github.com/MaterializeInc/database-issues/issues/7411)
+  - [persist: schema evolution](https://github.com/MaterializeInc/database-issues/issues/4818)
+  - [Table support for push sources](https://github.com/MaterializeInc/database-issues/issues/6896)
   - [[dnm] columnar: Write columnar encodings as part of a Batch](https://github.com/MaterializeInc/materialize/pull/26120)
   - [[dnm] columnar: Array support](https://github.com/MaterializeInc/materialize/pull/25848)
 
@@ -55,7 +55,7 @@ column named `b`.
   * User defined sort order of data, i.e. `PARTITION BY`.
   * Only fetch the columns from a shard that are needed, i.e. projection
     pushdown.
-  * Make `persist_source` faster [#25901](https://github.com/MaterializeInc/materialize/issues/25901).
+  * Make `persist_source` faster [#25901](https://github.com/MaterializeInc/database-issues/issues/7726).
 
 ## Out of Scope
 
@@ -831,7 +831,7 @@ be relatively inefficient, but none of these scenarios should happen too often.
 > **Note:** In the current state of the world we'll need to support compacting
 `Codec` and Arrow data forever since we can't guarantee all batches written
 with `Codec` have been compacted yet. The ability to make this guarantee is
-something we could add to [Compaction 2.0](https://github.com/MaterializeInc/materialize/issues/16607).
+something we could add to [Compaction 2.0](https://github.com/MaterializeInc/database-issues/issues/4809).
 
 > **Note:** While technically out-of-scope for this design doc, we can
 implement efficient consolidation for case 3 (table evolution) without decoding

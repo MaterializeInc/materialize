@@ -354,7 +354,7 @@ impl TryFrom<&ProtoRow> for Row {
 
     fn try_from(x: &ProtoRow) -> Result<Self, Self::Error> {
         // TODO: Try to pre-size this.
-        // see https://github.com/MaterializeInc/materialize/issues/12631
+        // see https://github.com/MaterializeInc/database-issues/issues/3640
         let mut row = Row::default();
         let mut packer = row.packer();
         for d in x.datums.iter() {
@@ -372,7 +372,7 @@ impl RustType<ProtoRow> for Row {
 
     fn from_proto(proto: ProtoRow) -> Result<Self, TryFromProtoError> {
         // TODO: Try to pre-size this.
-        // see https://github.com/MaterializeInc/materialize/issues/12631
+        // see https://github.com/MaterializeInc/database-issues/issues/3640
         let mut row = Row::default();
         let mut packer = row.packer();
         for d in proto.datums.iter() {

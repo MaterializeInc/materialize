@@ -140,7 +140,7 @@ def workflow_source_resumption(c: Composition, parser: WorkflowArgumentParser) -
         c.run_testdrive_files("source-resumption/setup.td")
         c.run_testdrive_files("source-resumption/verify.td")
 
-        # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
+        # Disabled due to https://github.com/MaterializeInc/database-issues/issues/6271
         # assert (
         #    find_source_resume_upper(
         #        c,
@@ -160,7 +160,7 @@ def workflow_source_resumption(c: Composition, parser: WorkflowArgumentParser) -
         # the first clusterd instance ingested 3 messages, so our
         # upper is at the 4th offset (0-indexed)
 
-        # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
+        # Disabled due to https://github.com/MaterializeInc/database-issues/issues/6271
         # assert (
         #    find_source_resume_upper(
         #        c,
@@ -188,7 +188,7 @@ def find_source_resume_upper(c: Composition, partition_id: str) -> int | None:
 
 
 def workflow_sink_queue_full(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Similar to the sink-networking workflow, but with 11 million rows (more then the 11 million defined as queue.buffering.max.messages) and only creating the sink after these rows are ingested into Mz. Triggers materialize#24936"""
+    """Similar to the sink-networking workflow, but with 11 million rows (more then the 11 million defined as queue.buffering.max.messages) and only creating the sink after these rows are ingested into Mz. Triggers database-issues#7442"""
     args = parse_args(parser)
     seed = random.getrandbits(16)
     c.up(*(["materialized", "toxiproxy"] + get_kafka_services(args.redpanda)))

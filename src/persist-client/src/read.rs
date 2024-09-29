@@ -605,7 +605,7 @@ where
             .downgrade_since(&self.reader_id, outstanding_seqno, new_since, heartbeat_ts)
             .await;
 
-        // Debugging for materialize#15937.
+        // Debugging for database-issues#4590.
         if let Some(outstanding_seqno) = outstanding_seqno {
             let seqnos_held = _seqno.0.saturating_sub(outstanding_seqno.0);
             // We get just over 1 seqno-per-second on average for a shard in
@@ -1336,7 +1336,7 @@ mod tests {
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // https://github.com/MaterializeInc/materialize/issues/19983
+    #[cfg_attr(miri, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5964
     async fn seqno_leases(dyncfgs: ConfigUpdates) {
         let mut data = vec![];
         for i in 0..20 {

@@ -1,5 +1,5 @@
 - Feature name: storage `persist_sink` upgrade
-- Associated: <https://github.com/MaterializeInc/materialize/issues/17413>
+- Associated: <https://github.com/MaterializeInc/database-issues/issues/5046>
 
 # Summary
 [summary]: #summary

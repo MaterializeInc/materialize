@@ -33,7 +33,7 @@ use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
 type Counter = DeleteOnDropCounter<'static, AtomicF64, Vec<String>>;
 type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
 type Gauge = DeleteOnDropGauge<'static, AtomicF64, Vec<String>>;
-/// TODO(materialize#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
 type Histogram = DeleteOnDropHistogram<'static, Vec<String>>;
 
@@ -267,7 +267,7 @@ pub struct InstanceMetrics {
 }
 
 impl InstanceMetrics {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn for_replica(&self, replica_id: ReplicaId) -> ReplicaMetrics {
         let labels = vec![self.instance_id.to_string(), replica_id.to_string()];
         let extended_labels = |extra: &str| {
@@ -332,7 +332,7 @@ impl InstanceMetrics {
         }
     }
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
         let labels = vec![self.instance_id.to_string()];
         let command_counts = CommandMetrics::build(|typ| {
@@ -530,7 +530,7 @@ pub struct CommandMetrics<M> {
 }
 
 impl<M> CommandMetrics<M> {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn build<F>(build_metric: F) -> Self
     where
         F: Fn(&str) -> M,
@@ -564,7 +564,7 @@ impl<M> CommandMetrics<M> {
         f(&self.cancel_peek);
     }
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn for_command<T>(&self, command: &ComputeCommand<T>) -> &M {
         use ComputeCommand::*;
 

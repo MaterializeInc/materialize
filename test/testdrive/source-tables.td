@@ -10,7 +10,7 @@
 $ set-arg-default default-replica-size=1
 $ set-arg-default single-replica-cluster=quickstart
 
-# TODO(def-) Remove when materialize#29397 and materialize#29435 are fixed
+# TODO(def-) Remove when materialize#29397 and database-issues#8526 are fixed
 $ skip-if
 SELECT true
 
@@ -280,7 +280,7 @@ var1 4444 12
 ! SELECT * FROM mysql_table_3;
 contains:unknown catalog item 'mysql_table_3'
 
-# TODO(def-) Remove when materialize#29397 and materialize#29435 are fixed
+# TODO(def-) Remove when materialize#29397 and database-issues#8526 are fixed
 $ skip-end
 
 #

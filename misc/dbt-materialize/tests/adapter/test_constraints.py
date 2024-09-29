@@ -157,7 +157,7 @@ class TestContractInvalidCluster:
 
     # In the absence of the pre-installed `quickstart` cluster, Materialize should
     # not error if data contracts are enforced.
-    # See materialize#23600: https://github.com/MaterializeInc/materialize/issues/23600
+    # See database-issues#7091: https://github.com/MaterializeInc/database-issues/issues/7091
     def test_materialize_drop_quickstart(self, project):
         project.run_sql("DROP CLUSTER quickstart CASCADE")
 
@@ -176,6 +176,6 @@ class TestContractPseudoTypes:
 
     # Pseudo-types in Materialize cannot be cast using the cast() function, so we
     # special-handle their NULL casting for contract validation.
-    # See materialize#17870: https://github.com/MaterializeInc/materialize/issues/17870
+    # See database-issues#5211: https://github.com/MaterializeInc/database-issues/issues/5211
     def test_pseudo_types(self, project):
         run_dbt(["run", "--models", "contract_pseudo_types"], expect_pass=True)

@@ -1034,7 +1034,7 @@ WITH MUTUALLY RECURSIVE
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
 
-# Regression test for materialize#19148: support mz_now() on select from indexed table
+# Regression test for database-issues#5674: support mz_now() on select from indexed table
 # ---
 
 simple conn=mz_system,user=mz_system

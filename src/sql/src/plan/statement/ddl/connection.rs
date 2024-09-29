@@ -337,7 +337,7 @@ impl ConnectionOptionExtracted {
                     password: self.password.map(|secret| secret.into()),
                 });
 
-                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/materialize/issues/24712#issuecomment-1925443977>
+                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/database-issues/issues/7359#issuecomment-1925443977>
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!("invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka")
@@ -380,7 +380,7 @@ impl ConnectionOptionExtracted {
                     Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
                 };
 
-                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/materialize/issues/24712#issuecomment-1925443977>
+                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/database-issues/issues/7359#issuecomment-1925443977>
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!("invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka")
@@ -470,7 +470,7 @@ impl ConnectionOptionExtracted {
                     Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
                 };
 
-                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/materialize/issues/24712#issuecomment-1925443977>
+                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/database-issues/issues/7359#issuecomment-1925443977>
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!("invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka")
@@ -719,7 +719,7 @@ fn plan_kafka_security(
                         // Materialize previously rejected with an error of "SASL
                         // mechanism must be uppercase." This was deeply frustarting for
                         // users who were not familiar with identifier case folding
-                        // rules. See materialize#22205.
+                        // rules. See database-issues#6693.
                         mechanism: mechanism.to_uppercase(),
                         username: username.clone(),
                         password: Some((*password).into()),

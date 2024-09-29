@@ -25,7 +25,7 @@ count
 > CREATE VIEW delta_join (t1_f1, t1_f2, t2_f1, t2_f2) AS SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1;
 
 # This should cause a delta join to be executed.
-# But this test is currently broken: https://github.com/MaterializeInc/materialize/issues/16478
+# But this test is currently broken: https://github.com/MaterializeInc/database-issues/issues/4772
 > SELECT COUNT(*) FROM delta_join;
 count
 ----

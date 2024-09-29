@@ -115,7 +115,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            # Execution times longer than 4h are apparently not feasible at this time due to materialize#17845
+            # Execution times longer than 4h are apparently not feasible at this time due to database-issues#5201
             args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=4h]
 
     - id: zippy-user-tables-large
@@ -166,7 +166,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            # TODO(def-) Increase number of actions when materialize#24250 is fixed
+            # TODO(def-) Increase number of actions when database-issues#7257 is fixed
             args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=50000, --max-execution-time=4h]
 
   - group: Benchmarks
@@ -216,7 +216,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
             args: [--max-joins=2, --runtime=6000]
-      skip: "Reenable when materialize#23451 is fixed"
+      skip: "Reenable when database-issues#7046 is fixed"
 
     - id: sqlsmith-explain-long
       label: "Longer SQLsmith explain"
@@ -228,7 +228,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
             args: [--max-joins=15, --explain-only, --runtime=6000]
-      skip: "Reenable when materialize#23451 is fixed"
+      skip: "Reenable when database-issues#7046 is fixed"
 
   - id: test-preflight-check-rollback
     label: Test with preflight check and rollback

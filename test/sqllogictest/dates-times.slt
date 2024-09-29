@@ -1345,7 +1345,7 @@ SELECT '"?!?2024-02-13 17:01:58.37848+  0 0'::timestamp with time zone;
 query error invalid input syntax for type timestamp with time zone: Cannot parse timezone offset \+ \? 00: "\\"\?!\?2024\-02\-13 17:01:58\.37848\+ \? 00"
 SELECT '"?!?2024-02-13 17:01:58.37848+ ? 00'::timestamp with time zone;
 
-# Regression for materialize#6272. These match postgres.
+# Regression for database-issues#1933. These match postgres.
 query TTT
 select '9::60'::time, '9:59:60'::time, '9::59.999999'::time
 ----
@@ -1449,7 +1449,7 @@ SELECT to_timestamp(-0.1::float8);
 ----
 1969-12-31 23:59:59.9+00
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/20077
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/6002
 query T
 SELECT now() + null;
 ----
@@ -1661,7 +1661,7 @@ query error precision for type timestamp or timestamptz must be between 0 and 6
 SELECT timestamptz(-1) '95143-12-31 23:59:59.123456789+06';
 
 # Note: we regressed the error messages for the following
-# See <https://github.com/MaterializeInc/materialize/issues/22397>
+# See <https://github.com/MaterializeInc/incidents-and-escalations/issues/90>
 query error Expected end of statement
 SELECT timestamp(10000000000000000000) '95143-12-31 23:59:59.123456789+06';
 

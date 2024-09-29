@@ -1079,10 +1079,10 @@ impl Coordinator {
                 // If we didn't do this, then there would be a danger of missing the first refresh,
                 // which might cause the materialized view to be unreadable for hours. This might
                 // be what was happening here:
-                // https://github.com/MaterializeInc/materialize/issues/24288#issuecomment-1931856361
+                // https://github.com/MaterializeInc/database-issues/issues/7265#issuecomment-1931856361
                 //
                 // In the long term, it would be good to actually block the MV creation statement
-                // until `least_valid_read`. https://github.com/MaterializeInc/materialize/issues/25127
+                // until `least_valid_read`. https://github.com/MaterializeInc/database-issues/issues/7504
                 // Without blocking, we have the problem that a REFRESH AT CREATION is not linearized
                 // with the CREATE MATERIALIZED VIEW statement, in the sense that a query from the MV
                 // after its creation might see input changes that happened after the CRATE MATERIALIZED
@@ -1212,7 +1212,7 @@ impl Coordinator {
             // If the session doesn't exist in `active_conns`, then this method will panic later on.
             // Instead we explicitly panic here while dumping the entire Coord to the logs to help
             // debug. This panic is very infrequent so we want as much information as possible.
-            // See https://github.com/MaterializeInc/materialize/issues/18996.
+            // See https://github.com/MaterializeInc/database-issues/issues/5627.
             panic!("unknown connection: {conn_id:?}\n\n{self:?}")
         }
 

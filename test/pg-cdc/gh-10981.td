@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Test for issue materialize#10981
+# Test for issue database-issues#3215
 #
 
 > CREATE SECRET pgpass AS 'postgres'

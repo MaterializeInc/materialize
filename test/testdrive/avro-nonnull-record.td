@@ -9,7 +9,7 @@
 
 $ set-arg-default single-replica-cluster=quickstart
 
-# Regression test for materialize#7170, in which non-nullable fields of nullable records
+# Regression test for database-issues#2237, in which non-nullable fields of nullable records
 # were not correctly handled.
 
 $ set writer-schema={

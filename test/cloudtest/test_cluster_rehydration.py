@@ -13,7 +13,7 @@ from materialize.cloudtest.app.materialize_application import MaterializeApplica
 
 
 # Test that a crashed (and restarted) cluster replica handles rehydration
-# correctly by not recreating dropped sources. Tests materialize#18102.
+# correctly by not recreating dropped sources. Tests database-issues#5308.
 def test_create_drop_source(mz: MaterializeApplication) -> None:
     mz.testdrive.run(
         input=dedent(

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Regression test for https://github.com/MaterializeInc/materialize/issues/5984
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/1846
 #
 # wrong result with ORDER BY and NULLs in scalar subquery
 #

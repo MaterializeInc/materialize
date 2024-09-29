@@ -1,7 +1,7 @@
 - Feature name: Stabilize `WITH MUTUALLY RECURSIVE`
 - Associated:
-  MaterializeInc/materialize#11176 (first iteration),
-  MaterializeInc/materialize#17012 (current epic).
+  MaterializeInc/database-issues#3264 (first iteration),
+  MaterializeInc/database-issues#6172 (current epic).
 
 # Summary
 [Summary]: #summary
@@ -17,9 +17,9 @@ Adding first-class support for recursive queries will:
 
 1. Exercise one of the key strengths of the underlying runtime (support for incremental maintenance of iterative dataflows).
 1. Enable new use cases across different domains, most likely based on various forms of graph analysis (for example for social networks, fraud detection, software security).
-1. Enable tractable encodings of high-level concepts such as session windows in terms of SQL (see MaterializeInc/materialize#8698).
+1. Enable tractable encodings of high-level concepts such as session windows in terms of SQL (see MaterializeInc/database-issues#2664).
 
-We should fill in the implementation gaps that were intentionally left as TODOs during MaterializeInc/materialize#11176 and bring the feature into a shape where it can be gradually rolled out behind a feature toggle and ultimately stabilized.
+We should fill in the implementation gaps that were intentionally left as TODOs during MaterializeInc/database-issues#3264 and bring the feature into a shape where it can be gradually rolled out behind a feature toggle and ultimately stabilized.
 
 # Explanation
 [Explanation]: #explanation
@@ -47,7 +47,7 @@ The original design doc laid out a plan for adding support in each of the follow
 6. MIR generalization (&check; in MaterializeInc/materialize#16561)
 7. MIR optimization corrections (focus of this document)
 8. LIR generalization (&check; in MaterializeInc/materialize#16656, MaterializeInc/materialize#17705)
-9. Rendering (&check; in MaterializeInc/materialize#16787, TODO: MaterializeInc/materialize#16800)
+9. Rendering (&check; in MaterializeInc/materialize#16787, TODO: MaterializeInc/database-issues#4869)
 
 The outstanding tracks of work can be summarized as follows:
 
@@ -93,46 +93,46 @@ The proposed implementation plan is summarized after the table.
 
 transformation              | estimate | solution | tracked in
 ----------------------------|----------|----------|-------------------------------------------------
-`canonicalize_mfp`          | &check;  | trivial  | MaterializeInc/materialize#18123
-`column_knowledge`          | &check;  | advanced | MaterializeInc/materialize#18161
-`demand`                    | &check;  | basic    | MaterializeInc/materialize#18162
-`filter_fusion`             | &check;  | trivial  | MaterializeInc/materialize#18123 (depends on type inference)
+`canonicalize_mfp`          | &check;  | trivial  | MaterializeInc/database-issues#5317
+`column_knowledge`          | &check;  | advanced | MaterializeInc/database-issues#5330
+`demand`                    | &check;  | basic    | MaterializeInc/database-issues#5331
+`filter_fusion`             | &check;  | trivial  | MaterializeInc/database-issues#5317 (depends on type inference)
 `fixpoint`                  | &check;  | trivial  | MaterializeInc/materialize#16561
-`flatmap_to_map`            | &check;  | trivial  | MaterializeInc/materialize#18123
-`fold_constants`            | &check;  | basic    | MaterializeInc/materialize#18163
-`fuse_and_collapse`         | &check;  | trivial  | MaterializeInc/materialize#18164
-`fusion`                    | &check;  | trivial  | MaterializeInc/materialize#18123
-`join_fusion`               | &check;  | trivial  | MaterializeInc/materialize#18123
+`flatmap_to_map`            | &check;  | trivial  | MaterializeInc/database-issues#5317
+`fold_constants`            | &check;  | basic    | MaterializeInc/database-issues#5332
+`fuse_and_collapse`         | &check;  | trivial  | MaterializeInc/database-issues#5333
+`fusion`                    | &check;  | trivial  | MaterializeInc/database-issues#5317
+`join_fusion`               | &check;  | trivial  | MaterializeInc/database-issues#5317
 `join_implementation`       | &check;  | advanced | MaterializeInc/materialize#16561
-`literal_constraints`       | &check;  | trivial  | MaterializeInc/materialize#18123
-`literal_lifting`           | &check;  | basic    | MaterializeInc/materialize#18165
-`map_fusion`                | &check;  | trivial  | MaterializeInc/materialize#18123
-`monotonic_flag`            | &check;  | advanced | MaterializeInc/materialize#18472
-`negate_fusion`             | &check;  | trivial  | MaterializeInc/materialize#18123
-`non_null_requirements`     | &check;  | basic    | MaterializeInc/materialize#18166
-`non_nullable`              | &check;  | trivial  | MaterializeInc/materialize#18123 (somewhat restricted)
-`normalize_ops`             | &check;  | trivial  | MaterializeInc/materialize#18123
+`literal_constraints`       | &check;  | trivial  | MaterializeInc/database-issues#5317
+`literal_lifting`           | &check;  | basic    | MaterializeInc/database-issues#5334
+`map_fusion`                | &check;  | trivial  | MaterializeInc/database-issues#5317
+`monotonic_flag`            | &check;  | advanced | MaterializeInc/database-issues#5453
+`negate_fusion`             | &check;  | trivial  | MaterializeInc/database-issues#5317
+`non_null_requirements`     | &check;  | basic    | MaterializeInc/database-issues#5335
+`non_nullable`              | &check;  | trivial  | MaterializeInc/database-issues#5317 (somewhat restricted)
+`normalize_ops`             | &check;  | trivial  | MaterializeInc/database-issues#5317
 `normalize_lets`            | &check;  | advanced | MaterializeInc/materialize#16665
-`predicate_pushdown`        | &check;  | basic    | MaterializeInc/materialize#18167
-`project_fusion`            | &check;  | trivial  | MaterializeInc/materialize#18123
-`projection_extraction`     | &check;  | trivial  | MaterializeInc/materialize#18123
-`projection_lifting`        | &check;  | basic    | MaterializeInc/materialize#18168
-`projection_pushdown`       | &check;  | basic    | MaterializeInc/materialize#18169 (depends on MaterializeInc/materialize#18553)
-`reduce_elision`            | &check;  | basic    | MaterializeInc/materialize#18170 (depends on MaterializeInc/materialize#18553)
-`reduce_fusion`             | &check;  | trivial  | MaterializeInc/materialize#18123
-`reduction_pushdown`        | &check;  | basic    | MaterializeInc/materialize#18171 (depends on MaterializeInc/materialize#18553)
-`redundant_join`            | &check;  | basic    | MaterializeInc/materialize#18172
-`relation_cse`              | &check;  | basic    | MaterializeInc/materialize#18173
-`semijoin_idempotence`      | &check;  | basic    | MaterializeInc/materialize#18174 (depends on MaterializeInc/materialize#18553)
-`threshold_elision`         | &check;  | basic    | MaterializeInc/materialize#18175
-`topk_elision`              | &check;  | trivial  | MaterializeInc/materialize#18123
-`topk_fusion`               | &check;  | trivial  | MaterializeInc/materialize#18123
-`union`                     | &check;  | trivial  | MaterializeInc/materialize#18123
-`union_branch_cancellation` | &check;  | trivial  | MaterializeInc/materialize#18176
-`union_negate`              | &check;  | trivial  | MaterializeInc/materialize#18123
+`predicate_pushdown`        | &check;  | basic    | MaterializeInc/database-issues#5336
+`project_fusion`            | &check;  | trivial  | MaterializeInc/database-issues#5317
+`projection_extraction`     | &check;  | trivial  | MaterializeInc/database-issues#5317
+`projection_lifting`        | &check;  | basic    | MaterializeInc/database-issues#5337
+`projection_pushdown`       | &check;  | basic    | MaterializeInc/materialize#18169 (depends on MaterializeInc/database-issues#5487)
+`reduce_elision`            | &check;  | basic    | MaterializeInc/materialize#18170 (depends on MaterializeInc/database-issues#5487)
+`reduce_fusion`             | &check;  | trivial  | MaterializeInc/database-issues#5317
+`reduction_pushdown`        | &check;  | basic    | MaterializeInc/materialize#18171 (depends on MaterializeInc/database-issues#5487)
+`redundant_join`            | &check;  | basic    | MaterializeInc/database-issues#5341
+`relation_cse`              | &check;  | basic    | MaterializeInc/database-issues#5342
+`semijoin_idempotence`      | &check;  | basic    | MaterializeInc/database-issues#5343 (depends on MaterializeInc/database-issues#5487)
+`threshold_elision`         | &check;  | basic    | MaterializeInc/database-issues#5344
+`topk_elision`              | &check;  | trivial  | MaterializeInc/database-issues#5317
+`topk_fusion`               | &check;  | trivial  | MaterializeInc/database-issues#5317
+`union`                     | &check;  | trivial  | MaterializeInc/database-issues#5317
+`union_branch_cancellation` | &check;  | trivial  | MaterializeInc/database-issues#5345
+`union_negate`              | &check;  | trivial  | MaterializeInc/database-issues#5317
 
 We have 36 `Transform` implementations, of which 3 are currently marked as `recursion_safe`.
-All but 16 can be trivially marked as recursion safe (done in MaterializeInc/materialize#18123) because they represent local transformations that don't depend on transformation context that depends on the `Let` bindings that are currently in scope.
+All but 16 can be trivially marked as recursion safe (done in MaterializeInc/database-issues#5317) because they represent local transformations that don't depend on transformation context that depends on the `Let` bindings that are currently in scope.
 
 From the remaining 16, based on an initial analysis it seems that:
 - 4 are relatively straight-forward to fix (size estimate `M?`),
@@ -145,13 +145,13 @@ For most non-trivial transforms, we have multiple solutions at our disposal:
 2. An _advanced_ solution which uses abstract interpretation based on lattice theory to propagate information through `LetRec` nodes.
    Transforms using this solution are marked with _solution = advanced_ in the table above.
    For the _basic_ transforms the _advanced_ solution is sketched in the linked issue in case we want to improve them as future work.
-3. An _advanced_ solution that we will get without changes to the actual `Transform` code if we implement MaterializeInc/materialize#18174.
-   Those are marked with _solution = basic_ and the corresponding issue as depending on MaterializeInc/materialize#18553.
+3. An _advanced_ solution that we will get without changes to the actual `Transform` code if we implement MaterializeInc/database-issues#5343.
+   Those are marked with _solution = basic_ and the corresponding issue as depending on MaterializeInc/database-issues#5487.
 
 ## Generalization of LIR rendering
 
 This should be mostly handled by MaterializeInc/materialize#17705.
-There is also an additional feature request for an optional max recursion limit in MaterializeInc/materialize#16800 which will affect how plans are rendered.
+There is also an additional feature request for an optional max recursion limit in MaterializeInc/database-issues#4869 which will affect how plans are rendered.
 We might have to add more tests for that (see [Testing and observability](#testing-and-observability)).
 
 # Rollout
@@ -167,7 +167,7 @@ The following aspects need special attention:
 1. Queries producing wrong results (discussed in [Testing and observability](testing-and-observability)).
 2. Queries that do not terminate.
    This is tricky because some queries might be divergent because of a bad query definition (a user error) instead of an optimization or interpretation bug (a system error).
-   A related issue to track this is MaterializeInc/materialize#16800. The plan is to have maximum iteration limit as a safeguard. Edit: We won't have a default limit, because we now have proper dataflow cancellation between iterations. However, the user can set `ERROR AT RECURSION LIMIT 1000`, if she wants an additional guardrail.
+   A related issue to track this is MaterializeInc/database-issues#4869. The plan is to have maximum iteration limit as a safeguard. Edit: We won't have a default limit, because we now have proper dataflow cancellation between iterations. However, the user can set `ERROR AT RECURSION LIMIT 1000`, if she wants an additional guardrail.
 
 To validate (1), I suggest to:
 
@@ -220,7 +220,7 @@ We will perform a bunch of end-to-end experiments (available in [the `letrec-ben
 
 1. **Synthetic tests.** (punted as follow-up work)
 The best synthetic use case that we have identified so far seems to be the LDBC social network benchmark[^ldbc].
-With the scope of the dedicated epic (MaterializeInc/materialize#17591), we will select a subset of the work in order to bootstrap a testing environment that consists of
+With the scope of the dedicated epic (MaterializeInc/database-issues#5110), we will select a subset of the work in order to bootstrap a testing environment that consists of
   (a) LDBC data + updates, and
   (b) several of the recursive queries defined by the benchmark.
 We can use the choke-point characterization of each query to figure out the most representative subset.
@@ -303,7 +303,7 @@ I think that we can re-evaluate these points as part of an "end of epic" retrosp
   See discussion of use-case driven tests in [By test scenario].
 - Can we measure / observe the amount of work / data diff that a specific change to the input introduces?
   See discussion of use-case driven tests in [By test scenario].
-  Tracked in MaterializeInc/materialize#18022.
+  Tracked in MaterializeInc/database-issues#5271.
 
 # Future work
 [Future work]: #future-work
@@ -315,7 +315,7 @@ This section can also serve as a place to dump ideas that are related but not pa
 If you can't think of any, please note this down.
 -->
 
-We are still lacking operational observability (tracked in MaterializeInc/materialize#18022).
+We are still lacking operational observability (tracked in MaterializeInc/database-issues#5271).
 
 At the very least, we can export a Prometheus metric that tracks the number of indexed or materialized views that have recursive CTEs.
 
@@ -323,7 +323,7 @@ Once we have anonymized query logging, we can get some deper insights which woul
 
 ---
 
-Within the scope of MaterializeInc/materialize#17012 we only provided the _basic case_ for most non-trivial transforms.
+Within the scope of MaterializeInc/database-issues#6172 we only provided the _basic case_ for most non-trivial transforms.
 Issues marked in [the above table](#mir-transformations) with _solution = basic_ represent opportunities for improvement.
 
 ---
@@ -332,16 +332,16 @@ UI/UX improvements:
 
 - In "linear chains" mode the `EXPLAIN` output of plans that have recursive queries does not work.
   We will need to revisit this if we ever decide to make this the default or we have people that use it on a daily basis.
-  Tracked in MaterializeInc/materialize#19012.
+  Tracked in MaterializeInc/database-issues#5631.
 - Similarly, the graph visualizer for dataflows that have iterative scopes might need to be fixed.
 - As we gain insights how people use the feature, we might want to follow-up with more focused "guidance docs" that go in depth of some common considerations and pitfalls.
   Currently, this is partially covered by [the final two sections of the reference docs](https://materialize.com/docs/sql/recursive-ctes/#examples), but this might not be sufficient to cover everything in the long run.
-  Tracked in MaterializeInc/materialize#19334.
+  Tracked in MaterializeInc/database-issues#5734.
 
 ---
 
 Due to time constraints benchmarking of WMR based on LDBC has been punted in favor of a more limited benchmark available in [the `letrec-bench` GitHub repository](https://github.com/MaterializeInc/letrec-bench).
-The tracking epic for this is MaterializeInc/materialize#17591.
+The tracking epic for this is MaterializeInc/database-issues#5110.
 
 ---
 
@@ -368,7 +368,7 @@ select * from reach;
 
 ---
 
-Session windows can be defined in an easier way (see MaterializeInc/materialize#8698).
+Session windows can be defined in an easier way (see MaterializeInc/database-issues#2664).
 [@sploiselle](https://github.com/sploiselle) was kind enough to add a PR for a prototype of that function in MaterializeInc/materialize#18330.
 
 ---

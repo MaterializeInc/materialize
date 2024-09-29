@@ -31,7 +31,7 @@ statement ok
 CREATE MATERIALIZED VIEW mv_using_dataflow_rendering AS
   SELECT data FROM t_base, repeat_row(diff);
 
-# see also: https://github.com/MaterializeInc/materialize/issues/17758
+# see also: https://github.com/MaterializeInc/database-issues/issues/5172
 # query error
 # SELECT SUM(data)
 # FROM mv_using_dataflow_rendering;

@@ -11,7 +11,7 @@
 # Make sure that temporal types are properly replicated, including sub-second precision
 #
 
-# TODO: Reenable when materialize#6535 is fixed
+# TODO: Reenable when database-issues#2031 is fixed
 $ skip-if
 SELECT true
 

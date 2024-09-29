@@ -94,7 +94,7 @@ buildkite-agent artifact upload "$artifacts_str"
 bin/ci-builder run stable bin/ci-annotate-errors --test-cmd="$(cat test_cmd)" "${artifacts[@]}" > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
 buildkite-agent artifact upload "ci-annotate-errors.log"
 
-# File should not be empty, see materialize#25369
+# File should not be empty, see database-issues#7569
 test -s kubectl-get-logs-previous.log
 
 if [ "$CI_ANNOTATE_ERRORS_RESULT" -ne 0 ]; then

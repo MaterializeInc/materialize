@@ -120,7 +120,7 @@ class MultiplePartitions(Check):
                 > SELECT SUM(p.offset) FROM multiple_partitions_source_progress p;
                 420
 
-                # TODO: Reenable when materialize#25803 is fixed
+                # TODO: Reenable when database-issues#7695 is fixed
                 # > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
                 # running
 

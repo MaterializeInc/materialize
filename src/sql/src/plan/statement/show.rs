@@ -430,7 +430,7 @@ fn show_subsources<'a>(
         query_filter.push(format!("subsources.schema_id = '{schema_spec}'"));
     }
 
-    // TODO(materialize#28430): this looks in both directions for subsources as long as
+    // TODO(database-issues#8322): this looks in both directions for subsources as long as
     // progress collections still exist
     let query = format!(
         "SELECT DISTINCT
@@ -1082,7 +1082,7 @@ fn humanize_sql_for_show_create(
                 }
                 CreateSourceConnection::LoadGenerator { .. } if !curr_references.is_empty() => {
                     // Load generator sources with any references only support
-                    // `FOR ALL TABLES`. However, this would change if materialize#26765
+                    // `FOR ALL TABLES`. However, this would change if database-issues#7911
                     // landed.
                     curr_references.clear();
                     stmt.external_references = Some(ExternalReferences::All);

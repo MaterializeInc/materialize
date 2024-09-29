@@ -544,7 +544,7 @@ impl<'a> Parser<'a> {
         // "date".
         //
         // Note: the maybe! block here does swallow valid parsing errors
-        // See <https://github.com/MaterializeInc/materialize/issues/22397> for more details
+        // See <https://github.com/MaterializeInc/incidents-and-escalations/issues/90> for more details
         maybe!(self.maybe_parse(|parser| {
             let data_type = parser.parse_data_type()?;
             if data_type.to_string().as_str() == "interval" {
@@ -763,7 +763,7 @@ impl<'a> Parser<'a> {
         let over =
             if self.peek_keyword(OVER) || self.peek_keyword(IGNORE) || self.peek_keyword(RESPECT) {
                 // TBD: support window names (`OVER mywin`) in place of inline specification
-                // https://github.com/MaterializeInc/materialize/issues/19755
+                // https://github.com/MaterializeInc/database-issues/issues/5882
 
                 let ignore_nulls = self.parse_keywords(&[IGNORE, NULLS]);
                 let respect_nulls = self.parse_keywords(&[RESPECT, NULLS]);

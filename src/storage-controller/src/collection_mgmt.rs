@@ -1275,7 +1275,7 @@ async fn prepare_append_only_introspection_collection<T>(
             // NOTE(aljoscha): We never remove from these
             // collections. Someone, at some point needs to
             // think about that! Issue:
-            // https://github.com/MaterializeInc/materialize/issues/25696
+            // https://github.com/MaterializeInc/database-issues/issues/7666
         }
 
         // TODO(jkosh44) Handle these here instead of in the controller.

@@ -232,7 +232,7 @@ class QueryGenerator:
             if self.randomized_picker.random_boolean(
                 probability.NO_SOURCE_MINIMIZATION
             ):
-                # do not minimize sources to catch errors like materialize#29110
+                # do not minimize sources to catch errors like database-issues#8463
                 pass
             else:
                 # remove sources that are not used by any (remaining) expression

@@ -1356,7 +1356,7 @@ impl<'a> RunnerInner<'a> {
         match output {
             Ok(_) => {
                 if self.auto_transactions && !*in_transaction {
-                    // No ISOLATION LEVEL SERIALIZABLE because of materialize#18136
+                    // No ISOLATION LEVEL SERIALIZABLE because of database-issues#5323
                     self.client.execute("BEGIN", &[]).await?;
                     *in_transaction = true;
                 }

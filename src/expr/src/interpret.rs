@@ -1430,7 +1430,7 @@ mod tests {
 
     #[mz_ore::test]
     fn test_mfp() {
-        // Regression test for https://github.com/MaterializeInc/materialize/issues/19338
+        // Regression test for https://github.com/MaterializeInc/database-issues/issues/5736
         use MirScalarExpr::*;
 
         let mfp = MapFilterProject {

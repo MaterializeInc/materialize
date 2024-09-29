@@ -261,7 +261,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         try:
             c.run("mz", "region", "enable", "--version", VERSION)
         except UIError:
-            # Work around https://github.com/MaterializeInc/materialize/issues/17219
+            # Work around https://github.com/MaterializeInc/database-issues/issues/4989
             pass
 
         time.sleep(10)

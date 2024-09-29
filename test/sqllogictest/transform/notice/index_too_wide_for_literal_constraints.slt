@@ -405,7 +405,7 @@ Notices:
 
 EOF
 
-# Regression test for materialize#24301
+# Regression test for database-issues#7268
 # --------------------------
 
 statement ok

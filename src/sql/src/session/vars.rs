@@ -836,7 +836,7 @@ impl SessionVars {
     }
 }
 
-// TODO(materialize#27285) remove together with `compat_translate`
+// TODO(database-issues#8069) remove together with `compat_translate`
 pub const OLD_CATALOG_SERVER_CLUSTER: &str = "mz_introspection";
 pub const OLD_AUTO_ROUTE_CATALOG_QUERIES: &str = "auto_route_introspection_queries";
 
@@ -846,7 +846,7 @@ pub const OLD_AUTO_ROUTE_CATALOG_QUERIES: &str = "auto_route_introspection_queri
 /// This method was introduced to gracefully handle the rename of the `mz_introspection` cluster to
 /// `mz_cluster_server`. The plan is to remove it once all users have migrated to the new name. The
 /// debug logs will be helpful for checking this in production.
-// TODO(materialize#27285) remove this after sufficient time has passed
+// TODO(database-issues#8069) remove this after sufficient time has passed
 fn compat_translate<'a, 'b>(name: &'a str, input: VarInput<'b>) -> (&'a str, VarInput<'b>) {
     if name == CLUSTER.name() {
         if let Ok(value) = CLUSTER.parse(input) {

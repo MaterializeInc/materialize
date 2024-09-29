@@ -920,7 +920,7 @@ where
         // In the case that we weren't going to apply the `key_val` optimization,
         // this path results in a slightly smaller and faster
         // dataflow graph, and is intended to fix
-        // https://github.com/MaterializeInc/materialize/issues/10507
+        // https://github.com/MaterializeInc/database-issues/issues/3111
         let has_key_val = if let Some((_key, Some(_val))) = &key_val {
             true
         } else {

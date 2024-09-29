@@ -107,7 +107,7 @@ contains:table "mz_temp.temp_t" already exists
 
 > SHOW INDEXES ON temp_t
 
-# Blocked on https://github.com/MaterializeInc/materialize/issues/3105.
+# Blocked on https://github.com/MaterializeInc/database-issues/issues/1017.
 #
 # > CREATE TEMPORARY DEFAULT INDEX ON temp_t
 #
