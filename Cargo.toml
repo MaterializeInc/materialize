@@ -229,7 +229,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.80.1"
+rust-version = "1.81.0"
 
 [profile.dev]
 split-debuginfo = "unpacked"
@@ -373,7 +373,7 @@ unnecessary_mut_passed = "warn"
 wildcard_in_or_patterns = "warn"
 crosspointer_transmute = "warn"
 excessive_precision = "warn"
-overflow_check_conditional = "warn"
+panicking_overflow_checks = "warn"
 as_conversions = "warn"
 match_overlapping_arm = "warn"
 zero_divided_by_zero = "warn"
