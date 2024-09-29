@@ -35,6 +35,7 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_NONCC_SIZES)
         .add(&crate::s3::ENABLE_S3_LGALLOC_CC_SIZES)
         .add(&crate::s3::ENABLE_S3_LGALLOC_NONCC_SIZES)
+        .add(&crate::s3::ENABLE_ONE_ALLOC_PER_REQUEST)
 }
 
 /// Config for an implementation of [Blob].
