@@ -5512,7 +5512,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "atty",
  "bytes",
  "chrono",
  "clap",
@@ -6721,7 +6720,6 @@ dependencies = [
  "arrow",
  "async-compression",
  "async-trait",
- "atty",
  "aws-config",
  "aws-credential-types",
  "aws-sdk-sts",
