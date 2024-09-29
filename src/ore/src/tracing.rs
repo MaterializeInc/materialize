@@ -27,6 +27,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::io::IsTerminal;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
@@ -350,7 +351,7 @@ where
                         inner: format(),
                         prefix,
                     })
-                    .with_ansi(!no_color && atty::is(atty::Stream::Stderr)),
+                    .with_ansi(!no_color && io::stderr().is_terminal()),
             )
         }
         StderrLogFormat::Json => Box::new(
