@@ -326,6 +326,7 @@ steps:
 
   - id: legacy-upgrade
     label: "Legacy upgrade tests (last version from docs)"
+    parallelism: 2
     depends_on: build-aarch64
     timeout_in_minutes: 60
     plugins:
@@ -395,7 +396,7 @@ steps:
 
       - id: mysql-cdc-resumption
         label: "MySQL CDC resumption tests %N"
-        parallelism: 3
+        parallelism: 4
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-cdc-resumption]
@@ -403,8 +404,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption
         agents:
-          # Larger argent so it runs faster
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-rtr
         label: "MySQL RTR tests"
@@ -421,7 +421,8 @@ steps:
     key: postgres-tests
     steps:
       - id: pg-cdc
-        label: "Postgres CDC tests"
+        label: "Postgres CDC tests %N"
+        parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
@@ -550,7 +551,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-rtr
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          # Larger agent to run test faster
+          queue: hetzner-aarch64-8cpu-16gb
 
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
@@ -607,16 +609,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
-
-  - id: backup-restore
-    label: "CRDB / Persist backup and restore"
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: backup-restore
 
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
