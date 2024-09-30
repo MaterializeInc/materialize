@@ -1658,4 +1658,41 @@ mod tests {
         let expected = vec![(((Ok("foo".to_owned())), Ok(())), 2, 1)];
         assert_eq!(actual, expected);
     }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn structured_lowers() {
+        let cache = PersistClientCache::new_no_metrics();
+        // Ensure structured data is calculated, and that we give some budget for a key lower.
+        cache.cfg().set_config(&BATCH_COLUMNAR_FORMAT, "both_v2");
+        cache.cfg().set_config(&BATCH_COLUMNAR_FORMAT_PERCENT, 100);
+        cache.cfg().set_config(&STRUCTURED_KEY_LOWER_LEN, 1024);
+        let client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed");
+        let shard_id = ShardId::new();
+        let (mut write, _) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        let batch = write
+            .expect_batch(
+                &[
+                    (("1".into(), "one".into()), 1, 1),
+                    (("2".into(), "two".into()), 2, 1),
+                    (("3".into(), "three".into()), 3, 1),
+                ],
+                0,
+                4,
+            )
+            .await;
+
+        assert_eq!(batch.batch.part_count(), 1);
+        let [part] = batch.batch.parts.as_slice() else {
+            panic!("expected single part")
+        };
+        // Verifies that the structured key lower is stored and decoded.
+        assert!(part.structured_key_lower().is_some());
+    }
 }

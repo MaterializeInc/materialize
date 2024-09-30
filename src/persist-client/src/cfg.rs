@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
-use mz_dyncfg::{Config, ConfigSet, ConfigType, ConfigUpdates};
+use mz_dyncfg::{Config, ConfigDefault, ConfigSet, ConfigUpdates};
 use mz_ore::instrument;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
@@ -222,7 +222,7 @@ impl PersistConfig {
         }
     }
 
-    pub(crate) fn set_config<T: ConfigType>(&self, cfg: &Config<T>, val: T) {
+    pub(crate) fn set_config<T: ConfigDefault>(&self, cfg: &Config<T>, val: T) {
         let mut updates = ConfigUpdates::default();
         updates.add(cfg, val);
         updates.apply(self)
