@@ -229,6 +229,13 @@ materialized views.
 For more information, see [`EXPLAIN FILTER
 PUSHDOWN`](/sql/explain-filter-pushdown/).
 
+### Recursive CTE
+
+Materialize adds the `WITH MUTUALLY RECURSIVE` option to support recursive CTEs.
+
+For more information, see [`WITH MUTUALLY
+RECURSIVE`](/sql/select/recursive-ctes/).
+
 ## Private previews enabled by default
 
 The features listed below are in preview but enabled by default.
