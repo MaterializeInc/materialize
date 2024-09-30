@@ -16,6 +16,7 @@ futures = "0.3.25"
 mz-adapter = { path = "../adapter" }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
+mz-cloud-resources = { path = "../cloud-resources" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore" }
 mz-storage-types = { path = "../storage-types" }
@@ -23,6 +24,7 @@ mz-persist-client = { path = "../persist-client" }
 mz-tls-util = { path = "../tls-util" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
+mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 serde = "1.0.152"
 serde_json = "1.0.125"
