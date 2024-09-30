@@ -38,6 +38,7 @@ use prost::Message;
 mod proto {
     include!(concat!(env!("OUT_DIR"), "/mz_persist_types.arrow.rs"));
 }
+use crate::arrow::proto::data_type;
 pub use proto::ProtoArrayData;
 
 /// Extract the list of fields for our recursive datatypes.
@@ -85,8 +86,8 @@ fn fields_for_type(data_type: &DataType) -> &[FieldRef] {
     }
 }
 
-/// Encode the array into proto.
-/// We omit the data type if it matches the expected type, to save space.
+/// Encode the array into proto. If an expected data type is passed, that implies it is
+/// encoded at some higher level, and we omit it from the data.
 fn into_proto_with_type(data: &ArrayData, expected_type: Option<&DataType>) -> ProtoArrayData {
     let data_type = match expected_type {
         Some(expected) => {
@@ -597,7 +598,9 @@ impl ArrayBound {
             return Some(proto);
         }
 
-        maybe_trim_proto(&mut proto, max_len);
+        let mut data_type = proto.data_type.take()?;
+        maybe_trim_proto(&mut data_type, &mut proto, max_len);
+        proto.data_type = Some(data_type);
 
         if cfg!(debug_assertions) {
             let array: ArrayData = proto
@@ -621,39 +624,40 @@ impl ArrayBound {
 }
 
 /// Makes a best effort to shrink the proto while preserving the ordering.
-/// (The proto may not be smaller after this method is called, but it should always
+/// (The proto might not be smaller after this method is called, but it should always
 /// be a valid lower bound.)
-fn maybe_trim_proto(proto: &mut ProtoArrayData, max_len: usize) {
+///
+/// Note that we pass in the data type and the array data separately, since we only keep
+/// type info at the top level. If a caller does have a top-level `ArrayData` instance,
+/// they should take that type and pass it in separately.
+fn maybe_trim_proto(data_type: &mut proto::DataType, body: &mut ProtoArrayData, max_len: usize) {
+    assert!(body.data_type.is_none(), "expected separate data type");
     // TODO: consider adding cases for strings and byte arrays
-    let encoded_len = proto.encoded_len();
-    match &mut proto.data_type {
-        Some(proto::DataType {
-            kind:
-                Some(proto::data_type::Kind::Struct(proto::data_type::Struct { children: fields })),
-        }) => {
+    let encoded_len = data_type.encoded_len() + body.encoded_len();
+    match &mut data_type.kind {
+        Some(data_type::Kind::Struct(data_type::Struct { children: fields })) => {
             // Pop off fields one by one, keeping an estimate of the encoded length.
             let mut struct_len = encoded_len;
             while struct_len > max_len {
-                let Some(mut child) = proto.children.pop() else {
+                let Some(mut child) = body.children.pop() else {
                     break;
                 };
                 let Some(mut field) = fields.pop() else { break };
 
-                struct_len -= child.encoded_len();
-                if let Some(max_child_len) = max_len.checked_sub(struct_len) {
+                struct_len -= field.encoded_len() + child.encoded_len();
+                if let Some(remaining_len) = max_len.checked_sub(struct_len) {
                     // We're under budget after removing this field! See if we can
                     // shrink it to fit, but exit the loop regardless.
-                    maybe_trim_proto(&mut child, max_child_len);
-                    if child.encoded_len() <= max_child_len {
-                        // NB: update the data type of the field to match the data itself.
-                        field.data_type = child.data_type.as_ref().map(|t| t.clone().into());
+                    let Some(field_type) = field.data_type.as_mut() else {
+                        break;
+                    };
+                    maybe_trim_proto(field_type, &mut child, remaining_len);
+                    if field.encoded_len() + child.encoded_len() <= remaining_len {
                         fields.push(field);
-                        proto.children.push(child);
+                        body.children.push(child);
                     }
                     break;
                 }
-
-                struct_len -= field.encoded_len();
             }
         }
         _ => {}
@@ -662,10 +666,57 @@ fn maybe_trim_proto(proto: &mut ProtoArrayData, max_len: usize) {
 
 #[cfg(test)]
 mod tests {
-    use crate::arrow::ArrayOrd;
-    use arrow::array::{BooleanArray, StringArray, StructArray, UInt64Array};
-    use arrow::datatypes::{DataType, Field};
+    use crate::arrow::{ArrayBound, ArrayOrd};
+    use arrow::array::{
+        make_array, ArrayRef, AsArray, BooleanArray, StringArray, StructArray, UInt64Array,
+    };
+    use arrow::datatypes::{DataType, Field, Fields};
+    use mz_ore::assert_none;
+    use mz_proto::ProtoType;
     use std::sync::Arc;
+
+    #[mz_ore::test]
+    fn trim_proto() {
+        let nested_fields: Fields = vec![Field::new("a", DataType::UInt64, true)].into();
+        let array: ArrayRef = Arc::new(StructArray::new(
+            vec![
+                Field::new("a", DataType::UInt64, true),
+                Field::new("b", DataType::Utf8, true),
+                Field::new_struct("c", nested_fields.clone(), true),
+            ]
+            .into(),
+            vec![
+                Arc::new(UInt64Array::from_iter_values([1])),
+                Arc::new(StringArray::from_iter_values(["large".repeat(50)])),
+                Arc::new(StructArray::new_null(nested_fields, 1)),
+            ],
+            None,
+        ));
+        let bound = ArrayBound::new(array, 0);
+
+        assert_none!(bound.to_proto_lower(0));
+        assert_none!(bound.to_proto_lower(1));
+
+        let proto = bound
+            .to_proto_lower(100)
+            .expect("can fit something in less than 100 bytes");
+        let array = make_array(proto.into_rust().expect("valid proto"));
+        assert_eq!(
+            array.as_struct().column_names().as_slice(),
+            &["a"],
+            "only the first column should fit"
+        );
+
+        let proto = bound
+            .to_proto_lower(1000)
+            .expect("can fit everything in less than 1000 bytes");
+        let array = make_array(proto.into_rust().expect("valid proto"));
+        assert_eq!(
+            array.as_struct().column_names().as_slice(),
+            &["a", "b", "c"],
+            "all columns should fit"
+        )
+    }
 
     #[mz_ore::test]
     fn struct_ord() {
