@@ -91,7 +91,8 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: zippy
             # Runs into upload size limits of Buildkite
-            args: [--scenario=PostgresCdcLarge, --actions=100000]
+            # Runs into slowness with new source syntax after a while
+            args: [--scenario=PostgresCdcLarge, --actions=50000]
 
     - id: zippy-mysql-cdc-large
       label: "Large Zippy MySqlCdc"
@@ -262,8 +263,9 @@ steps:
         agents:
           # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
           # TODO(def-) Switch back to Hetzner when we have increased server limit
-          queue: linux-x86_64-small
-          # queue: hetzner-x86-64-4cpu-8gb
+          # Increased memory usage following new source syntax
+          queue: linux-x86_64
+          # queue: hetzner-x86-64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
