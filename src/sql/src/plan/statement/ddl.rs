@@ -6681,7 +6681,6 @@ pub fn plan_comment(
         }
     }
 
-    // TODO(ct): Add ::ContinualTask variant.
     let (object_id, column_pos) = match &object {
         com_ty @ CommentObjectType::Table { name }
         | com_ty @ CommentObjectType::View { name }
@@ -6691,7 +6690,8 @@ pub fn plan_comment(
         | com_ty @ CommentObjectType::Connection { name }
         | com_ty @ CommentObjectType::Source { name }
         | com_ty @ CommentObjectType::Sink { name }
-        | com_ty @ CommentObjectType::Secret { name } => {
+        | com_ty @ CommentObjectType::Secret { name }
+        | com_ty @ CommentObjectType::ContinualTask { name } => {
             let item = scx.get_item_by_resolved_name(name)?;
             match (com_ty, item.item_type()) {
                 (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
@@ -6720,6 +6720,9 @@ pub fn plan_comment(
                 }
                 (CommentObjectType::Secret { .. }, CatalogItemType::Secret) => {
                     (CommentObjectId::Secret(item.id()), None)
+                }
+                (CommentObjectType::ContinualTask { .. }, CatalogItemType::ContinualTask) => {
+                    (CommentObjectId::ContinualTask(item.id()), None)
                 }
                 (com_ty, cat_ty) => {
                     let expected_type = match com_ty {

@@ -7650,6 +7650,15 @@ ON mz_internal.mz_sink_status_history (sink_id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_SHOW_CONTINUAL_TASKS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_continual_tasks_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_CONTINUAL_TASKS_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_show_continual_tasks (id)",
+    is_retained_metrics_object: false,
+};
+
 // In both `mz_source_statistics` and `mz_sink_statistics` we cast the `SUM` of
 // uint8's to `uint8` instead of leaving them as `numeric`. This is because we want to
 // save index space, and we don't expect the sum to be > 2^63

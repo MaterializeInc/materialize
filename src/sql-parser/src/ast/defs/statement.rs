@@ -5143,6 +5143,7 @@ pub enum CommentObjectType<T: AstInfo> {
     Schema { name: T::SchemaName },
     Cluster { name: T::ClusterName },
     ClusterReplica { name: QualifiedReplica },
+    ContinualTask { name: T::ItemName },
 }
 
 impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
@@ -5212,6 +5213,10 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
             }
             ClusterReplica { name } => {
                 f.write_str("CLUSTER REPLICA ");
+                f.write_node(name);
+            }
+            ContinualTask { name } => {
+                f.write_str("CONTINUAL TASK ");
                 f.write_node(name);
             }
         }

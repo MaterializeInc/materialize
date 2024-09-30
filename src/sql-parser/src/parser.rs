@@ -8796,6 +8796,7 @@ impl<'a> Parser<'a> {
                 DATABASES,
                 SCHEMAS,
                 SUBSOURCES,
+                CONTINUAL,
             ])? {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
@@ -8826,6 +8827,14 @@ impl<'a> Parser<'a> {
                 DATABASES => ObjectType::Database,
                 SCHEMAS => ObjectType::Schema,
                 SUBSOURCES => ObjectType::Subsource,
+                CONTINUAL => {
+                    if self.parse_keyword(TASKS) {
+                        ObjectType::ContinualTask
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 _ => unreachable!(),
             },
         )
@@ -9005,6 +9014,7 @@ impl<'a> Parser<'a> {
             DATABASE,
             SCHEMA,
             CLUSTER,
+            CONTINUAL,
         ])? {
             TABLE => {
                 let name = self.parse_raw_name()?;
@@ -9071,6 +9081,11 @@ impl<'a> Parser<'a> {
             COLUMN => {
                 let name = self.parse_column_name()?;
                 CommentObjectType::Column { name }
+            }
+            CONTINUAL => {
+                self.expect_keyword(TASK)?;
+                let name = self.parse_raw_name()?;
+                CommentObjectType::ContinualTask { name }
             }
             _ => unreachable!(),
         };

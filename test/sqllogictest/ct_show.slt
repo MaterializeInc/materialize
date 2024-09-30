@@ -1,0 +1,36 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_create_continual_task = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE input (key INT)
+
+statement ok
+CREATE CONTINUAL TASK ct (key INT) ON INPUT input AS (
+    INSERT INTO ct SELECT * FROM input;
+)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_comment TO true;
+----
+COMPLETE 0
+
+statement ok
+COMMENT ON CONTINUAL TASK ct is 'foo'
+
+query TTT
+SHOW CONTINUAL TASKS;
+----
+ct  quickstart  foo
