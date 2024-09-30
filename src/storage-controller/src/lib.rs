@@ -815,7 +815,7 @@ where
                 DataSource::Ingestion(ingestion) => {
                     if !self.read_only || (
                         ENABLE_0DT_DEPLOYMENT_SOURCES.get(self.config.config_set())
-                        && ingestion.desc.connection.supports_read_only()
+                        && ingestion.wants_read_only()
                     ) {
                         self.run_ingestion(id)?;
                     }
