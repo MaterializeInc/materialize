@@ -16,6 +16,7 @@ use anyhow::bail;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_dyncfg::ConfigSet;
+use mz_ore::channel::InstrumentedUnboundedSender;
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use mz_service::client::GenericClient;
@@ -25,10 +26,11 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, info, trace, warn};
 
-use crate::controller::instance::Generation;
+use crate::controller::instance::ReplicaResponse;
 use crate::controller::sequential_hydration::SequentialHydration;
 use crate::controller::{ComputeControllerTimestamp, ReplicaId};
 use crate::logging::LoggingConfig;
+use crate::metrics::IntCounter;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, InstanceConfig};
 use crate::protocol::response::ComputeResponse;
@@ -70,7 +72,7 @@ where
         epoch: ClusterStartupEpoch,
         metrics: ReplicaMetrics,
         dyncfg: Arc<ConfigSet>,
-        response_tx: UnboundedSender<(ReplicaId, Generation, ComputeResponse<T>)>,
+        response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
     ) -> Self {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -129,7 +131,7 @@ struct ReplicaTask<T> {
     /// A channel upon which commands intended for the replica are delivered.
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
-    response_tx: UnboundedSender<(ReplicaId, Generation, ComputeResponse<T>)>,
+    response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
     /// A number (technically, pair of numbers) identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
     epoch: ClusterStartupEpoch,
@@ -215,7 +217,7 @@ where
         ComputeGrpcClient: ComputeClient<T>,
     {
         let id = self.replica_id;
-        let generation = self.epoch.replica();
+        let incarnation = self.epoch.replica();
         loop {
             select! {
                 // Command from controller to forward to replica.
@@ -237,7 +239,7 @@ where
 
                     self.observe_response(&response);
 
-                    if self.response_tx.send((id, generation, response)).is_err() {
+                    if self.response_tx.send((id, incarnation, response)).is_err() {
                         // Controller is no longer interested in this replica. Shut down.
                         break;
                     }
@@ -296,7 +298,5 @@ where
             response = ?response,
             "received response from replica",
         );
-
-        self.metrics.inner.response_queue_size.inc();
     }
 }

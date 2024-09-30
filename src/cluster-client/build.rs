@@ -11,7 +11,8 @@ fn main() {
     let mut config = prost_build::Config::new();
     config
         .protoc_executable(mz_build_tools::protoc())
-        .btree_map(["."]);
+        .btree_map(["."])
+        .type_attribute(".", "#[allow(missing_docs)]");
 
     tonic_build::configure()
         // Enabling `emit_rerun_if_changed` will rerun the build script when

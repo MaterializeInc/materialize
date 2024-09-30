@@ -30,6 +30,7 @@ use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
+use mz_ore::channel::instrumented_unbounded_channel;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
@@ -57,6 +58,7 @@ use crate::controller::{
     StorageCollections,
 };
 use crate::logging::LogVariant;
+use crate::metrics::IntCounter;
 use crate::metrics::{InstanceMetrics, ReplicaCollectionMetrics, ReplicaMetrics, UIntGauge};
 use crate::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
@@ -186,8 +188,9 @@ where
     }
 }
 
-/// An identifier of a specific replica generation.
-pub(super) type Generation = u64;
+/// A response from a replica, composed of a replica ID, the replica's current epoch, and the
+/// compute response itself.
+pub(super) type ReplicaResponse<T> = (ReplicaId, u64, ComputeResponse<T>);
 
 /// The state we keep for a compute instance.
 pub(super) struct Instance<T: ComputeControllerTimestamp> {
@@ -280,9 +283,9 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// Received updates are applied by [`Instance::apply_read_hold_changes`].
     read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
     /// A sender for responses from replicas.
-    replica_tx: mpsc::UnboundedSender<(ReplicaId, Generation, ComputeResponse<T>)>,
+    replica_tx: mz_ore::channel::InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
     /// A receiver for responses from replicas.
-    replica_rx: mpsc::UnboundedReceiver<(ReplicaId, Generation, ComputeResponse<T>)>,
+    replica_rx: mz_ore::channel::InstrumentedUnboundedReceiver<ReplicaResponse<T>, IntCounter>,
 }
 
 impl<T: ComputeControllerTimestamp> Instance<T> {
@@ -848,7 +851,10 @@ where
         }
 
         let history = ComputeCommandHistory::new(metrics.for_history());
-        let (replica_tx, replica_rx) = mpsc::unbounded_channel();
+
+        let send_count = metrics.response_send_count.clone();
+        let recv_count = metrics.response_recv_count.clone();
+        let (replica_tx, replica_rx) = instrumented_unbounded_channel(send_count, recv_count);
 
         Self {
             build_info,
@@ -897,8 +903,8 @@ where
                     None => break,
                 },
                 response = self.replica_rx.recv() => match response {
-                    Some((replica_id, generation, response)) => self.handle_response(response, replica_id, generation),
-                    None => break,
+                    Some(response) => self.handle_response(response),
+                    None => unreachable!("self owns a sender side of the channel"),
                 }
             }
         }
@@ -1679,20 +1685,19 @@ where
     }
 
     /// Handles a response from a replica. Replica IDs are re-used across replica restarts, so we
-    /// use the generation to drop stale responses.
-    fn handle_response(
-        &mut self,
-        response: ComputeResponse<T>,
-        replica_id: ReplicaId,
-        generation: Generation,
-    ) {
-        if let Some(replica) = self.replicas.get(&replica_id) {
-            if replica.epoch.replica() != generation {
-                return;
-            }
-        } else {
+    /// use the replica incarnation to drop stale responses.
+    fn handle_response(&mut self, (replica_id, incarnation, response): ReplicaResponse<T>) {
+        // Filter responses from non-existing or stale replicas.
+        if self
+            .replicas
+            .get(&replica_id)
+            .filter(|replica| replica.epoch.replica() == incarnation)
+            .is_none()
+        {
             return;
         }
+
+        // Invariant: the replica exists and has the expected incarnation.
 
         match response {
             ComputeResponse::Frontiers(id, frontiers) => {
@@ -1722,21 +1727,21 @@ where
         replica_id: ReplicaId,
     ) {
         if !self.collections.contains_key(&id) {
-            warn!(
+            soft_panic_or_log!(
                 "frontiers update for an unknown collection \
                  (id={id}, replica_id={replica_id}, frontiers={frontiers:?})"
             );
             return;
         }
         let Some(replica) = self.replicas.get_mut(&replica_id) else {
-            warn!(
+            soft_panic_or_log!(
                 "frontiers update for an unknown replica \
                  (replica_id={replica_id}, frontiers={frontiers:?})"
             );
             return;
         };
         let Some(replica_collection) = replica.collections.get_mut(&id) else {
-            warn!(
+            soft_panic_or_log!(
                 "frontiers update for an unknown replica collection \
                  (id={id}, replica_id={replica_id}, frontiers={frontiers:?})"
             );
