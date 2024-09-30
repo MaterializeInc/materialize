@@ -847,7 +847,6 @@ impl CatalogState {
                 source,
                 timeline,
                 in_cluster,
-                available_source_references,
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql: Some(source.create_sql),
@@ -896,7 +895,8 @@ impl CatalogState {
                     .compaction_window
                     .or(custom_logical_compaction_window),
                 is_retained_metrics_object,
-                available_source_references: available_source_references.map(Into::into),
+                // This will be populated separately
+                available_source_references: None,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 // Collect optimizer parameters.
