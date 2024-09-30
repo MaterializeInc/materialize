@@ -16,10 +16,10 @@ sources:
       - name: mysql_cdc_progress
         tests:
           - makes_progress
-      - name: people
+      - name: mysql_people
         tests:
           - makes_progress
-      - name: relationships
+      - name: mysql_relationships
         tests:
           - makes_progress
 

@@ -12,13 +12,15 @@
 -- to ensure the result updates frequently
 
 -- depends_on: {{ ref('pg_cdc') }}
+-- depends_on: {{ ref('pg_people') }}
+-- depends_on: {{ ref('pg_relationships') }}
 {{ config(materialized='materialized_view', cluster="qa_canary_environment_compute", indexes=[{'default': True}]) }}
 
 WITH MUTUALLY RECURSIVE
     symm (a int, b int) AS (
-        SELECT a, b FROM {{ source('pg_cdc','relationships') }}
+        SELECT a, b FROM {{ source('pg_cdc','pg_relationships') }}
         UNION
-        SELECT b, a FROM {{ source('pg_cdc','relationships') }}
+        SELECT b, a FROM {{ source('pg_cdc','pg_relationships') }}
     ),
     candidates (a int, b int, degree int) AS (
         SELECT a, b, 1 FROM symm
@@ -32,6 +34,6 @@ WITH MUTUALLY RECURSIVE
     )
 SELECT DISTINCT a_people.name AS a_name, b_people.name AS b_name, degree
 FROM reach
-LEFT JOIN {{ source('pg_cdc','people') }} AS a_people ON (a = a_people.id)
-LEFT JOIN {{ source('pg_cdc','people') }} AS b_people ON (b = b_people.id)
+LEFT JOIN {{ source('pg_cdc','pg_people') }} AS a_people ON (a = a_people.id)
+LEFT JOIN {{ source('pg_cdc','pg_people') }} AS b_people ON (b = b_people.id)
 WHERE degree >= 2

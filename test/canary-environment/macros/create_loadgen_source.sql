@@ -8,9 +8,5 @@
 -- by the Apache License, Version 2.0.
 
 {% macro create_loadgen_source(name) %}
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'datagen_demo_snowflakeschema_{{ name.table }}')
-KEY FORMAT BYTES
-VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-INCLUDE TIMESTAMP as kafka_timestamp
-ENVELOPE UPSERT ;
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'datagen_demo_snowflakeschema_{{ name.table }}');
 {% endmacro %}

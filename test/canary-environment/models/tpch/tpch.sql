@@ -10,4 +10,3 @@
 {{ config(materialized='source', cluster='qa_canary_environment_storage') }}
 FROM LOAD GENERATOR
 TPCH (SCALE FACTOR 1, TICK INTERVAL '0.1s')
-FOR ALL TABLES

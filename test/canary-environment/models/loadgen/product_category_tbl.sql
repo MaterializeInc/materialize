@@ -7,5 +7,13 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-{{ config(materialized='source', cluster='qa_canary_environment_storage') }}
-FROM MYSQL CONNECTION mysql
+-- depends_on: {{ ref('product_category') }}
+{{ config(
+    materialized='source_table'
+) }}
+FROM SOURCE {{ ref('product_category') }}
+(REFERENCE "datagen_demo_snowflakeschema_product_category")
+KEY FORMAT BYTES
+VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+INCLUDE TIMESTAMP as kafka_timestamp
+ENVELOPE UPSERT;
