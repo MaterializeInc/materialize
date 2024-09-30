@@ -46,7 +46,6 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc;
-use tracing::warn;
 use uuid::Uuid;
 
 use crate::controller::error::{

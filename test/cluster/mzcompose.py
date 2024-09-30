@@ -2765,8 +2765,11 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count > 0, f"got {count}"
     count = metrics.get_value("mz_compute_controller_command_queue_size")
     assert count < 10, f"got {count}"
-    count = metrics.get_value("mz_compute_controller_response_queue_size")
-    assert count < 10, f"got {count}"
+    send_count = metrics.get_value("mz_compute_controller_response_send_count")
+    assert send_count > 10, f"got {send_count}"
+    recv_count = metrics.get_value("mz_compute_controller_response_recv_count")
+    assert recv_count > 10, f"got {recv_count}"
+    assert send_count - recv_count < 10, f"got {send_count}, {recv_count}"
     count = metrics.get_value("mz_compute_controller_hydration_queue_size")
     assert count == 0, f"got {count}"
 
