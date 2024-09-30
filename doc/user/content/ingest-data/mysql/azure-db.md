@@ -1,5 +1,5 @@
 ---
-title: "Ingest data from Azure DB for MySQL"
+title: "Ingest data from Azure DB"
 description: "How to stream data from Azure DB for MySQL to Materialize"
 menu:
   main:
@@ -21,7 +21,9 @@ to Materialize using the [MySQL source](/sql/create-source/mysql/).
 
 {{% mysql-direct/before-you-begin %}}
 
-## Step 1. Enable GTID-based binlog replication
+## A. Configure Azure DB
+
+### 1. Enable GTID-based binlog replication
 
 {{< note >}}
 GTID-based replication is supported for Azure DB for MySQL [flexible server](https://learn.microsoft.com/en-us/azure/mysql/flexible-server/overview-single).
@@ -44,11 +46,17 @@ Configuration parameter          | Value  | Details
 For guidance on enabling GTID-based binlog replication in Azure DB, see the
 [Azure documentation](https://learn.microsoft.com/en-us/azure/mysql/flexible-server/how-to-data-in-replication?tabs=shell%2Ccommand-line#configure-the-source-mysql-server).
 
-## Step 2. Create a user for replication
+### 2. Create a user for replication
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-## Step 3. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your Azure DB instance is publicly accessible, **you
+can skip this step**. For production scenarios, we recommend configuring one of
+the network security options below.
+{{< /note >}}
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -116,7 +124,9 @@ to serve as your SSH bastion host.
 
 {{< /tabs >}}
 
-## Step 4. (Optional) Create a cluster
+## C. Ingest data in Materialize
+
+### 1. (Optional) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your MySQL
@@ -127,7 +137,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% mysql-direct/create-a-cluster %}}
 
-## Step 5. Start ingesting data
+### 2. Start ingesting data
 
 [//]: # "TODO(morsapaes) MySQL connections support multiple SSL modes. We should
 adapt to that, rather than just state SSL MODE REQUIRED."
@@ -152,11 +162,11 @@ networking configuration, so start by selecting the relevant option.
 new progress metrics in mz_source_statistics + console monitoring, when
 available(also for PostgreSQL)."
 
-## Step 6. Check the ingestion status
+### 3. Monitor the ingestion status
 
 {{% mysql-direct/check-the-ingestion-status %}}
 
-## Step 7. Right-size the cluster
+### 4. Right-size the cluster
 
 {{% mysql-direct/right-size-the-cluster %}}
 
