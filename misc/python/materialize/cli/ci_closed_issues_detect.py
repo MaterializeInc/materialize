@@ -217,9 +217,7 @@ def is_issue_closed_on_github(repository: str | None, issue_id: int) -> bool:
         )
 
     issue_json = response.json()
-    assert (
-        issue_json["number"] == issue_id
-    ), f"Returned issue number {issue_json['number']} is not the expected issue number {issue_id}"
+    # We can't check the issue number anymore because issues can have moved
     return issue_json["state"] == "closed"
 
 
