@@ -326,14 +326,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if remaining_args:
         workflow_cdc(c, parser)
     else:
+        workflows_with_internal_sharding = ["cdc"]
         # Otherwise we are running all workflows
-        for name in c.workflows:
-            # clear postgres and materialized to avoid issues with special arguments conflicting with existing state
-            c.kill("postgres")
-            c.rm("postgres")
-            c.kill("materialized")
-            c.rm("materialized")
-
+        sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
+            [w for w in c.workflows if w not in workflows_with_internal_sharding],
+            lambda w: w,
+        )
+        print(
+            f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
+        )
+        for name in sharded_workflows:
             if name == "default":
                 continue
 
@@ -344,6 +346,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             # TODO: Flaky, reenable when database-issues#8447 is fixed
             if name == "silent-connection-drop":
                 continue
+
+            # clear postgres and materialized to avoid issues with special arguments conflicting with existing state
+            c.kill("postgres")
+            c.rm("postgres")
+            c.kill("materialized")
+            c.rm("materialized")
 
             with c.test_case(name):
                 c.workflow(name)
