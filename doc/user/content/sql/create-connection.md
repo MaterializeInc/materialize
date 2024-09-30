@@ -312,7 +312,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 {{< tab "AWS IAM">}}
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 ```mzsql
 CREATE CONNECTION aws_msk TO AWS (

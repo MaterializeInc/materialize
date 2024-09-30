@@ -226,6 +226,15 @@ parent = "integrations"
 weight = 15
 
 #
+# Releases
+#
+
+[[menu.main]]
+identifier = "releases-previews"
+name = "Releases and Previews"
+weight = 65
+
+#
 # About
 #
 
