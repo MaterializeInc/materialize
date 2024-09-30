@@ -27,7 +27,7 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
-use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
+use mz_controller_types::dyncfgs::{ENABLE_0DT_DEPLOYMENT_SOURCES, WALLCLOCK_LAG_REFRESH_INTERVAL};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -70,7 +70,8 @@ use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
-    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExport,
+    GenericSourceConnection, IngestionDescription, SourceConnection, SourceData, SourceDesc,
+    SourceExport,
 };
 use mz_storage_types::AlterCompatible;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -345,6 +346,10 @@ where
         self.storage_collections.active_collection_metadatas()
     }
 
+    fn active_ingestions(&self, instance_id: StorageInstanceId) -> &BTreeSet<GlobalId> {
+        self.instances[&instance_id].active_ingestions()
+    }
+
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
         self.storage_collections.check_exists(id)
     }
@@ -359,6 +364,9 @@ where
         );
         if self.initialized {
             instance.send(StorageCommand::InitializationComplete);
+        }
+        if !self.read_only {
+            instance.send(StorageCommand::AllowWrites);
         }
         instance.send(StorageCommand::UpdateConfiguration(
             self.config.parameters.clone(),
@@ -804,8 +812,11 @@ where
         // TODO(guswynn): perform the io in this final section concurrently.
         for id in to_execute {
             match &self.collection(id)?.data_source {
-                DataSource::Ingestion(_) => {
-                    if !self.read_only {
+                DataSource::Ingestion(ingestion) => {
+                    if !self.read_only || (
+                        ENABLE_0DT_DEPLOYMENT_SOURCES.get(self.config.config_set())
+                        && ingestion.desc.connection.supports_read_only()
+                    ) {
                         self.run_ingestion(id)?;
                     }
                 }

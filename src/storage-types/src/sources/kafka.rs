@@ -224,6 +224,10 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
             metadata_columns: self.metadata_columns.clone(),
         })
     }
+
+    fn supports_read_only(&self) -> bool {
+        true
+    }
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {

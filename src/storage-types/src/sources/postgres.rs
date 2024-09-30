@@ -126,6 +126,10 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
     fn primary_export_details(&self) -> SourceExportDetails {
         SourceExportDetails::None
     }
+
+    fn supports_read_only(&self) -> bool {
+        false
+    }
 }
 
 impl<C: ConnectionAccess> AlterCompatible for PostgresSourceConnection<C> {

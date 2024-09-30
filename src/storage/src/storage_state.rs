@@ -105,7 +105,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
@@ -174,6 +174,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let storage_configuration =
             StorageConfiguration::new(connection_context, mz_dyncfgs::all_dyncfgs());
 
+        // We always initialize as read_only=true. Only when we're explicitly
+        // allowed do we switch to doing writes.
+        let (read_only_tx, read_only_rx) = watch::channel(true);
+
         // Similar to the internal command sequencer, it is very important that
         // we only create the async worker once because a) the worker state is
         // re-used when a new client connects and b) commands that have already
@@ -225,6 +229,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
             ),
             object_status_updates: Default::default(),
             internal_cmd_tx: command_sequencer,
+            read_only_tx,
+            read_only_rx,
             async_worker,
             storage_configuration,
             dataflow_parameters: DataflowParameters::new(
@@ -307,6 +313,22 @@ pub struct StorageState {
     /// example, for shutting down an entire dataflow from within a
     /// operator/worker.
     pub internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
+
+    /// When this replica/cluster is in read-only mode it must not affect any
+    /// changes to external state. This flag can only be changed by a
+    /// [StorageCommand::AllowWrites].
+    ///
+    /// Everything running on this replica/cluster must obey this flag. At the
+    /// time of writing, nothing currently looks at this flag.
+    /// TODO(benesch): fix this.
+    ///
+    /// NOTE: In the future, we might want a more complicated flag, for example
+    /// something that tells us after which timestamp we are allowed to write.
+    /// In this first version we are keeping things as simple as possible!
+    pub read_only_rx: watch::Receiver<bool>,
+
+    /// Send-side for read-only state.
+    pub read_only_tx: watch::Sender<bool>,
 
     /// Async worker companion, used for running code that requires async, which
     /// the timely main loop cannot do.
@@ -893,9 +915,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     }
                 }
-                StorageCommand::InitializationComplete | StorageCommand::UpdateConfiguration(_) => {
-                    ()
-                }
+                StorageCommand::InitializationComplete
+                | StorageCommand::AllowWrites
+                | StorageCommand::UpdateConfiguration(_) => (),
             }
         }
 
@@ -1001,6 +1023,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     })
                 }
                 StorageCommand::InitializationComplete
+                | StorageCommand::AllowWrites
                 | StorageCommand::UpdateConfiguration(_)
                 | StorageCommand::AllowCompaction(_) => (),
             }
@@ -1075,6 +1098,11 @@ impl StorageState {
         match cmd {
             StorageCommand::CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             StorageCommand::InitializationComplete => (),
+            StorageCommand::AllowWrites => {
+                self.read_only_tx
+                    .send(false)
+                    .expect("we're holding one other end");
+            }
             StorageCommand::UpdateConfiguration(params) => {
                 // These can be done from all workers safely.
                 tracing::info!("Applying configuration update: {params:?}");
