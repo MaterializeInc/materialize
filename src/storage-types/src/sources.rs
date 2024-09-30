@@ -2051,6 +2051,45 @@ mod tests {
         });
     }
 
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn decode_with_nullable_schema() {
+        /// At one point in time we "relaxed" all of the schemas by making columns nullable, this
+        /// test asserts that previously written data can still be decoded.
+        fn test_case(desc: RelationDesc, datas: Vec<SourceData>) {
+            let mut encoder = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
+            for data in &datas {
+                encoder.append(data);
+            }
+            let col = encoder.finish();
+
+            // Change all of the columns in the RelationDesc to be nullable.
+            let nullable_desc =
+                RelationDesc::from_names_and_types(desc.iter().map(|(name, typ)| {
+                    let mut nullable_typ = typ.clone();
+                    nullable_typ.nullable = true;
+                    (name, nullable_typ)
+                }));
+
+            // Make sure we can decode with the nullable schema.
+            let mut rnd_data = SourceData(Ok(Row::default()));
+            let decoder =
+                <RelationDesc as Schema2<SourceData>>::decoder(&nullable_desc, col).unwrap();
+            for (idx, og_data) in datas.into_iter().enumerate() {
+                decoder.decode(idx, &mut rnd_data);
+                assert_eq!(og_data, rnd_data);
+            }
+        }
+
+        let strat = any::<RelationDesc>().prop_flat_map(|desc| {
+            proptest::collection::vec(arb_source_data_for_relation_desc(&desc), 0..8)
+                .prop_map(move |datas| (desc.clone(), datas))
+        });
+        proptest!(|((desc, source_datas) in strat)| {
+            test_case(desc, source_datas);
+        })
+    }
+
     fn is_sorted(array: &dyn Array) -> bool {
         let Ok(cmp) = build_compare(array, array) else {
             // TODO: arrow v51.0.0 doesn't support comparing structs. When
@@ -2111,7 +2150,7 @@ mod tests {
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
-    fn backward_compatible_migrate1() {
+    fn backward_compatible_migrate() {
         let strat = (any::<RelationDesc>(), any::<RelationDesc>()).prop_flat_map(|(old, new)| {
             proptest::collection::vec(arb_source_data_for_relation_desc(&old), 2)
                 .prop_map(move |datas| (old.clone(), new.clone(), datas))
