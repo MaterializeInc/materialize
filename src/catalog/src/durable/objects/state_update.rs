@@ -212,7 +212,6 @@ pub enum StateUpdateKind {
     Config(proto::ConfigKey, proto::ConfigValue),
     Database(proto::DatabaseKey, proto::DatabaseValue),
     DefaultPrivilege(proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue),
-    Epoch(Epoch),
     FenceToken(FenceToken),
     IdAllocator(proto::IdAllocKey, proto::IdAllocValue),
     IntrospectionSourceIndex(
@@ -248,7 +247,6 @@ impl StateUpdateKind {
             StateUpdateKind::Config(_, _) => Some(CollectionType::Config),
             StateUpdateKind::Database(_, _) => Some(CollectionType::Database),
             StateUpdateKind::DefaultPrivilege(_, _) => Some(CollectionType::DefaultPrivileges),
-            StateUpdateKind::Epoch(_) => None,
             StateUpdateKind::FenceToken(_) => None,
             StateUpdateKind::IdAllocator(_, _) => Some(CollectionType::IdAlloc),
             StateUpdateKind::IntrospectionSourceIndex(_, _) => {
@@ -419,7 +417,6 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             // Not exposed to higher layers.
             StateUpdateKind::Config(_, _)
             | StateUpdateKind::FenceToken(_)
-            | StateUpdateKind::Epoch(_)
             | StateUpdateKind::IdAllocator(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::TxnWalShard(_, _) => None,
@@ -514,11 +511,6 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                             value: Some(value),
                         },
                     )
-                }
-                StateUpdateKind::Epoch(epoch) => {
-                    proto::state_update_kind::Kind::Epoch(proto::state_update_kind::Epoch {
-                        epoch: epoch.get(),
-                    })
                 }
                 StateUpdateKind::FenceToken(fence_token) => {
                     proto::state_update_kind::Kind::FenceToken(
@@ -702,11 +694,6 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         )
                     })?,
                 ),
-                proto::state_update_kind::Kind::Epoch(proto::state_update_kind::Epoch {
-                    epoch,
-                }) => StateUpdateKind::Epoch(Epoch::new(epoch).ok_or_else(|| {
-                    TryFromProtoError::missing_field("state_update_kind::Epoch::epoch")
-                })?),
                 proto::state_update_kind::Kind::FenceToken(
                     proto::state_update_kind::FenceToken {
                         deploy_generation,
