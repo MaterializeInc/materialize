@@ -16,6 +16,7 @@ use anyhow::bail;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_dyncfg::ConfigSet;
+use mz_ore::channel::InstrumentedUnboundedSender;
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use mz_service::client::GenericClient;
@@ -25,9 +26,11 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, info, trace, warn};
 
+use crate::controller::instance::ReplicaResponse;
 use crate::controller::sequential_hydration::SequentialHydration;
 use crate::controller::{ComputeControllerTimestamp, ReplicaId};
 use crate::logging::LoggingConfig;
+use crate::metrics::IntCounter;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, InstanceConfig};
 use crate::protocol::response::ComputeResponse;
@@ -48,17 +51,11 @@ pub(super) struct ReplicaConfig {
 #[derive(Debug)]
 pub(super) struct ReplicaClient<T> {
     /// A sender for commands for the replica.
-    ///
-    /// If sending to this channel fails, the replica has failed and requires
-    /// rehydration.
     command_tx: UnboundedSender<ComputeCommand<T>>,
-    /// A receiver for responses from the replica.
-    ///
-    /// If receiving from the channel returns `None`, the replica has failed
-    /// and requires rehydration.
-    response_rx: UnboundedReceiver<ComputeResponse<T>>,
     /// A handle to the task that aborts it when the replica is dropped.
-    _task: AbortOnDropHandle<()>,
+    ///
+    /// If the task is finished, the replica has failed and needs rehydration.
+    task: AbortOnDropHandle<()>,
     /// Replica metrics.
     metrics: ReplicaMetrics,
 }
@@ -75,12 +72,12 @@ where
         epoch: ClusterStartupEpoch,
         metrics: ReplicaMetrics,
         dyncfg: Arc<ConfigSet>,
+        response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
     ) -> Self {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
         // the replica.
         let (command_tx, command_rx) = unbounded_channel();
-        let (response_tx, response_rx) = unbounded_channel();
 
         let task = mz_ore::task::spawn(
             || format!("active-replication-replica-{id}"),
@@ -99,12 +96,13 @@ where
 
         Self {
             command_tx,
-            response_rx,
-            _task: task.abort_on_drop(),
+            task: task.abort_on_drop(),
             metrics,
         }
     }
+}
 
+impl<T> ReplicaClient<T> {
     /// Sends a command to this replica.
     pub(super) fn send(
         &self,
@@ -116,14 +114,9 @@ where
         })
     }
 
-    /// Receives the next response from this replica.
-    ///
-    /// This method is cancellation safe.
-    pub(super) async fn recv(&mut self) -> Option<ComputeResponse<T>> {
-        self.response_rx.recv().await.map(|r| {
-            self.metrics.inner.response_queue_size.dec();
-            r
-        })
+    /// Determine if the replica task has failed.
+    pub(super) fn is_failed(&self) -> bool {
+        self.task.is_finished()
     }
 }
 
@@ -138,7 +131,7 @@ struct ReplicaTask<T> {
     /// A channel upon which commands intended for the replica are delivered.
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
-    response_tx: UnboundedSender<ComputeResponse<T>>,
+    response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
     /// A number (technically, pair of numbers) identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
     epoch: ClusterStartupEpoch,
@@ -223,6 +216,8 @@ where
         T: ComputeControllerTimestamp,
         ComputeGrpcClient: ComputeClient<T>,
     {
+        let id = self.replica_id;
+        let incarnation = self.epoch.replica();
         loop {
             select! {
                 // Command from controller to forward to replica.
@@ -244,7 +239,7 @@ where
 
                     self.observe_response(&response);
 
-                    if self.response_tx.send(response).is_err() {
+                    if self.response_tx.send((id, incarnation, response)).is_err() {
                         // Controller is no longer interested in this replica. Shut down.
                         break;
                     }
@@ -303,7 +298,5 @@ where
             response = ?response,
             "received response from replica",
         );
-
-        self.metrics.inner.response_queue_size.inc();
     }
 }
