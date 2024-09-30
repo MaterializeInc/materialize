@@ -341,6 +341,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             hollow_batches,
             spine_batches,
             merges,
+            deprecated_schemas,
         } = self;
 
         let proto = ProtoStateFieldDiffs::default();
@@ -359,6 +360,11 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
         );
         field_diffs_into_proto(ProtoStateField::Writers, writers, &mut writer);
         field_diffs_into_proto(ProtoStateField::Schemas, schemas, &mut writer);
+        field_diffs_into_proto(
+            ProtoStateField::DeprecatedSchemas,
+            deprecated_schemas,
+            &mut writer,
+        );
         field_diffs_into_proto(ProtoStateField::Since, since, &mut writer);
         field_diffs_into_proto(ProtoStateField::LegacyBatches, legacy_batches, &mut writer);
         field_diffs_into_proto(ProtoStateField::HollowBatches, hollow_batches, &mut writer);
@@ -469,6 +475,14 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
                         field_diff_into_rust::<u64, ProtoEncodedSchemas, _, _, _, _>(
                             diff,
                             &mut state_diff.schemas,
+                            |k| k.into_rust(),
+                            |v| v.into_rust(),
+                        )?
+                    }
+                    ProtoStateField::DeprecatedSchemas => {
+                        field_diff_into_rust::<u64, ProtoEncodedSchemas, _, _, _, _>(
+                            diff,
+                            &mut state_diff.deprecated_schemas,
                             |k| k.into_rust(),
                             |v| v.into_rust(),
                         )?
@@ -878,6 +892,14 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
                 .iter()
                 .map(|(id, state)| (id.into_proto(), state.into_proto()))
                 .collect(),
+            deprecated_schemas: self
+                .state
+                .state
+                .collections
+                .deprecated_schemas
+                .iter()
+                .map(|(id, schema)| (id.into_proto(), schema.into_proto()))
+                .collect(),
             schemas: self
                 .state
                 .state
@@ -935,6 +957,10 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
         for (id, x) in x.schemas {
             schemas.insert(id.into_rust()?, x.into_rust()?);
         }
+        let mut deprecated_schemas = BTreeMap::new();
+        for (id, x) in x.deprecated_schemas {
+            deprecated_schemas.insert(id.into_rust()?, x.into_rust()?);
+        }
         let collections = StateCollections {
             rollups,
             last_gc_req: x.last_gc_req.into_rust()?,
@@ -943,6 +969,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             writers,
             schemas,
             trace: x.trace.into_rust_if_some("trace")?,
+            deprecated_schemas,
         };
         let state = State {
             applier_version,

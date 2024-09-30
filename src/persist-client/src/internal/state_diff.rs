@@ -85,6 +85,8 @@ pub struct StateDiff<T> {
     pub(crate) hollow_batches: Vec<StateFieldDiff<SpineId, Arc<HollowBatch<T>>>>,
     pub(crate) spine_batches: Vec<StateFieldDiff<SpineId, ThinSpineBatch<T>>>,
     pub(crate) merges: Vec<StateFieldDiff<SpineId, ThinMerge<T>>>,
+    /// We previously wrote some schemas with the wrong nullability info.
+    pub(crate) deprecated_schemas: Vec<StateFieldDiff<SchemaId, EncodedSchemas>>,
 }
 
 impl<T: Timestamp + Codec64> StateDiff<T> {
@@ -113,6 +115,7 @@ impl<T: Timestamp + Codec64> StateDiff<T> {
             hollow_batches: Vec::default(),
             spine_batches: Vec::default(),
             merges: Vec::default(),
+            deprecated_schemas: Vec::default(),
         }
     }
 
@@ -153,6 +156,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     writers: from_writers,
                     schemas: from_schemas,
                     trace: from_trace,
+                    deprecated_schemas: from_deprecated_schemas,
                 },
         } = from;
         let State {
@@ -170,6 +174,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                     writers: to_writers,
                     schemas: to_schemas,
                     trace: to_trace,
+                    deprecated_schemas: to_deprecated_schemas,
                 },
         } = to;
         assert_eq!(from_shard_id, to_shard_id);
@@ -197,6 +202,11 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         );
         diff_field_sorted_iter(from_writers.iter(), to_writers, &mut diffs.writers);
         diff_field_sorted_iter(from_schemas.iter(), to_schemas, &mut diffs.schemas);
+        diff_field_sorted_iter(
+            from_deprecated_schemas.iter(),
+            to_deprecated_schemas,
+            &mut diffs.deprecated_schemas,
+        );
         diff_field_single(from_trace.since(), to_trace.since(), &mut diffs.since);
 
         let from_flat = from_trace.flatten();
@@ -389,6 +399,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             hollow_batches: diff_hollow_batches,
             spine_batches: diff_spine_batches,
             merges: diff_merges,
+            deprecated_schemas: diff_deprecated_schemas,
         } = diff;
         if self.seqno == diff_seqno_to {
             return Ok(());
@@ -421,6 +432,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             writers,
             schemas,
             trace,
+            deprecated_schemas,
         } = &mut self.collections;
 
         apply_diffs_map("rollups", diff_rollups, rollups)?;
@@ -429,6 +441,11 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         apply_diffs_map("critical_readers", diff_critical_readers, critical_readers)?;
         apply_diffs_map("writers", diff_writers, writers)?;
         apply_diffs_map("schemas", diff_schemas, schemas)?;
+        apply_diffs_map(
+            "deprecated_schemas",
+            diff_deprecated_schemas,
+            deprecated_schemas,
+        )?;
 
         let structure_unchanged = diff_hollow_batches.is_empty()
             && diff_spine_batches.is_empty()
