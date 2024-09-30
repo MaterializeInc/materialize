@@ -881,7 +881,7 @@ def workflow_test_github_17510(c: Composition) -> None:
             ! SELECT * FROM constant_sums;
             contains:constant folding encountered reduce on collection with non-positive multiplicities
 
-            # The following statement verifies that the behavior introduced in PR database-issues#6122
+            # The following statement verifies that the behavior introduced in PR materialize#6122
             # is now rectified, i.e., instead of wrapping to a negative number, we produce
             # an error upon seeing invalid multiplicities.
             ! SELECT SUM(data8) FROM data;
