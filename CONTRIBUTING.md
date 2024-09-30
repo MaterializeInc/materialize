@@ -17,8 +17,9 @@ Materialize is written entirely in Rust. Rust API documentation is hosted at
 <https://dev.materialize.com/api/rust/>.
 
 If you're interested in contributing to Materialize, please [create a Github
-discussion](https://github.com/MaterializeInc/materialize/discussions/new/choose)
-describing the work you're planning to pick up.
+discussion](https://github.com/MaterializeInc/materialize/discussions/new?category=contribute-to-materialize)
+describing the work you're planning to pick up. Prospective code contributors might
+find the [good for external contributors tag](https://github.com/MaterializeInc/materialize/discussions/categories/contribute-to-materialize?discussions_q=is%3Aopen+category%3A%22Contribute+to+Materialize%22+label%3A%22D-good+for+external+contributors%22) useful.
 
 If you start working on a contribution before hearing back from a Materialize
 engineer, there is a risk that we may not be able to accept your changes. The
