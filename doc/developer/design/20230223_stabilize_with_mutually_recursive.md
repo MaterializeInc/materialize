@@ -1,7 +1,7 @@
 - Feature name: Stabilize `WITH MUTUALLY RECURSIVE`
 - Associated:
   MaterializeInc/database-issues#3264 (first iteration),
-  MaterializeInc/database-issues#6172 (current epic).
+  MaterializeInc/database-issues#4922 (current epic).
 
 # Summary
 [Summary]: #summary
@@ -323,7 +323,7 @@ Once we have anonymized query logging, we can get some deper insights which woul
 
 ---
 
-Within the scope of MaterializeInc/database-issues#6172 we only provided the _basic case_ for most non-trivial transforms.
+Within the scope of MaterializeInc/database-issues#4922 we only provided the _basic case_ for most non-trivial transforms.
 Issues marked in [the above table](#mir-transformations) with _solution = basic_ represent opportunities for improvement.
 
 ---

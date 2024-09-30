@@ -409,7 +409,7 @@ where
 
                         // If we did not have enough values to stitch together, then we do not
                         // generate an output row. Not outputting here corresponds to the semantics
-                        // of an equi-join on the key, similarly to the proposal in PR database-issues#6173.
+                        // of an equi-join on the key, similarly to the proposal in PR materialize#17013.
                         //
                         // Note that we also do not want to have anything left over to stich. If we
                         // do, then we also have an error, reported elsewhere, and would violate

@@ -824,7 +824,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("database-issues#8281: infinity to decimal")
 
         if "invalid regular expression flag: n" in mz_error_msg:
-            return YesIgnore("database-issues#9725: regex n flag")
+            return YesIgnore("database-issues#8409: regex n flag")
 
         if "aggregate functions are not allowed in table function" in mz_error_msg:
             return YesIgnore(
@@ -1118,7 +1118,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             ),
             True,
         ):
-            return YesIgnore("database-issues#9721: return type of floor and ceil")
+            return YesIgnore("database-issues#8407: return type of floor and ceil")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
