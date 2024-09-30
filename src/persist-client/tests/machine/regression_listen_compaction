@@ -11,6 +11,12 @@
 # Listen would emit a batch, then the batch would get compacted, then the Listen
 # would emit the entire merged batch, which double emitted the first batch.
 
+# Enable schema registry so the seqnos are stable
+dyncfg
+persist_schema_register true
+----
+ok
+
 # Write a batch and emit it from a Listen
 write-batch output=b0 lower=0 upper=2
 one 1 1
