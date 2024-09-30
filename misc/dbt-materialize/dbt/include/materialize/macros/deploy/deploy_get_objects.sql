@@ -16,10 +16,10 @@
 {% macro deploy_get_objects(dry_run=False) %}
     {% set clusters = {} %}
     {% set schemas = {} %}
-    {% set excluded_clusters_sinks = {} %}
-    {% set excluded_schemas_sinks = {} %}
-    {% set checked_clusters = {} %}
-    {% set checked_schemas = {} %}
+    {% set sink_clusters = {} %}
+    {% set sink_schemas = {} %}
+    {% set mixed_clusters = {} %}
+    {% set mixed_schemas = {} %}
 
     {# Get clusters and schemas to exclude from project variables #}
     {% set deployment_vars = var('deployment', {}).get(target.name, {}) %}
@@ -32,6 +32,7 @@
 
     {# Flatten exclude_clusters and exclude_schemas #}
     {% set flattened_exclude_clusters = [] %}
+    {% set flattened_exclude_schemas = [] %}
     {% for item in exclude_clusters %}
         {% if item is string %}
             {% do flattened_exclude_clusters.append(item) %}
@@ -39,8 +40,6 @@
             {% do flattened_exclude_clusters.extend(item) %}
         {% endif %}
     {% endfor %}
-
-    {% set flattened_exclude_schemas = [] %}
     {% for item in exclude_schemas %}
         {% if item is string %}
             {% do flattened_exclude_schemas.append(item) %}
@@ -55,58 +54,81 @@
         {{ log("DRY RUN: Excluded schemas from deployment: " ~ flattened_exclude_schemas, info=True) }}
     {% endif %}
 
-    {# Add cluster and schema from the current target #}
-    {% if target.cluster and target.cluster not in flattened_exclude_clusters and target.cluster not in checked_clusters %}
-        {% do checked_clusters.update({target.cluster: true}) %}
-        {% if not cluster_contains_sinks(target.cluster) %}
-            {% do clusters.update({target.cluster: true}) %}
-        {% else %}
-            {% do excluded_clusters_sinks.update({target.cluster: true}) %}
-        {% endif %}
-    {% endif %}
+    {# Add default cluster from profiles.yml if not excluded #}
+    {% set default_cluster = target.cluster %}
+    {% set default_schema = target.schema %}
 
-    {% if target.schema and target.schema not in flattened_exclude_schemas and target.schema not in checked_schemas %}
-        {% do checked_schemas.update({target.schema: true}) %}
-        {% if not schema_contains_sinks(target.schema) %}
-            {% do schemas.update({target.schema: true}) %}
-        {% else %}
-            {% do excluded_schemas_sinks.update({target.schema: true}) %}
-        {% endif %}
-    {% endif %}
-
-    {# Add clusters and schemas from models, seeds, and tests #}
+    {# Analyze dbt model graph #}
     {% for node in graph.nodes.values() %}
         {% if node.resource_type in ['model', 'seed', 'test'] %}
-            {% set node_cluster = node.config.get('cluster', target.cluster) %}
-            {% if node_cluster and node_cluster not in flattened_exclude_clusters and node_cluster not in checked_clusters %}
-                {% do checked_clusters.update({node_cluster: true}) %}
-                {% if not cluster_contains_sinks(node_cluster) %}
-                    {% do clusters.update({node_cluster: true}) %}
-                {% else %}
-                    {% do excluded_clusters_sinks.update({node_cluster: true}) %}
-                {% endif %}
-            {% endif %}
+            {% set node_cluster = node.config.get('cluster', default_cluster) %}
+            {% set node_schema = node.schema %}
+            {% set is_sink = node.config.materialized == 'sink' %}
 
-            {% if node.schema and node.schema not in flattened_exclude_schemas and node.schema not in checked_schemas %}
-                {% do checked_schemas.update({node.schema: true}) %}
-                {% if not schema_contains_sinks(node.schema) %}
-                    {% do schemas.update({node.schema: true}) %}
-                {% else %}
-                    {% do excluded_schemas_sinks.update({node.schema: true}) %}
+            {% if is_sink %}
+                {% do sink_clusters.update({node_cluster: true}) %}
+                {% do sink_schemas.update({node_schema: true}) %}
+                {% if node_cluster in clusters %}
+                    {% do mixed_clusters.update({node_cluster: true}) %}
+                {% endif %}
+                {% if node_schema in schemas %}
+                    {% do mixed_schemas.update({node_schema: true}) %}
+                {% endif %}
+            {% else %}
+                {% if node_cluster and node_cluster not in flattened_exclude_clusters %}
+                    {% do clusters.update({node_cluster: true}) %}
+                    {% if node_cluster in sink_clusters %}
+                        {% do mixed_clusters.update({node_cluster: true}) %}
+                    {% endif %}
+                {% endif %}
+                {% if node_schema and node_schema not in flattened_exclude_schemas %}
+                    {% do schemas.update({node_schema: true}) %}
+                    {% if node_schema in sink_schemas %}
+                        {% do mixed_schemas.update({node_schema: true}) %}
+                    {% endif %}
                 {% endif %}
             {% endif %}
         {% endif %}
     {% endfor %}
 
-    {% set cluster_list = clusters.keys() | list %}
-    {% set schema_list = schemas.keys() | list %}
-
-    {% if dry_run %}
-        {{ log("DRY RUN: Excluded clusters containing sinks: " ~ excluded_clusters_sinks.keys() | list, info=True) }}
-        {{ log("DRY RUN: Excluded schemas containing sinks: " ~ excluded_schemas_sinks.keys() | list, info=True) }}
-        {{ log("DRY RUN: Final cluster list: " ~ cluster_list, info=True) }}
-        {{ log("DRY RUN: Final schema list: " ~ schema_list, info=True) }}
+    {# Check for mixed clusters and schemas #}
+    {% if mixed_clusters %}
+        {% set error_message %}
+Error: The following clusters contain both sinks and other models:
+{{ mixed_clusters.keys() | join(", ") }}
+Sinks must be in dedicated clusters separate from other models.
+        {% endset %}
+        {{ exceptions.raise_compiler_error(error_message) }}
     {% endif %}
 
-    {% do return({'clusters': cluster_list, 'schemas': schema_list}) %}
+    {% if mixed_schemas %}
+        {% set error_message %}
+Error: The following schemas contain both sinks and other models:
+{{ mixed_schemas.keys() | join(", ") }}
+Sinks must be in dedicated schemas separate from other models.
+        {% endset %}
+        {{ exceptions.raise_compiler_error(error_message) }}
+    {% endif %}
+
+    {# Remove sink clusters and schemas from deployment lists #}
+    {% for cluster in sink_clusters %}
+        {% do clusters.pop(cluster, None) %}
+    {% endfor %}
+    {% for schema in sink_schemas %}
+        {% do schemas.pop(schema, None) %}
+    {% endfor %}
+
+    {% set final_clusters = clusters.keys() | list %}
+    {% set final_schemas = schemas.keys() | list %}
+
+    {% if dry_run %}
+        {{ log("DRY RUN: Default cluster from profiles.yml: " ~ default_cluster, info=True) }}
+        {{ log("DRY RUN: Default schema from profiles.yml: " ~ default_schema, info=True) }}
+        {{ log("DRY RUN: Clusters containing sinks (excluded from deployment): " ~ sink_clusters.keys() | list, info=True) }}
+        {{ log("DRY RUN: Schemas containing sinks (excluded from deployment): " ~ sink_schemas.keys() | list, info=True) }}
+        {{ log("DRY RUN: Final cluster list for deployment: " ~ final_clusters, info=True) }}
+        {{ log("DRY RUN: Final schema list for deployment: " ~ final_schemas, info=True) }}
+    {% endif %}
+
+    {% do return({'clusters': final_clusters, 'schemas': final_schemas}) %}
 {% endmacro %}
