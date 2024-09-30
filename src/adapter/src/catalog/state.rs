@@ -40,8 +40,8 @@ use mz_controller::clusters::{
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
-use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
+use mz_ore::soft_assert_no_log;
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
@@ -930,9 +930,21 @@ impl CatalogState {
                 let raw_expr = materialized_view.expr;
                 let optimized_expr = optimizer.optimize(raw_expr.clone())?;
                 let mut typ = optimized_expr.typ();
+
+                // We've observed the nullability of columns changing between releases for
+                // Materialized Views, which makes registering the schema with Persist difficult
+                // because this change is not necessarily forward compatible. Because of that we
+                // make all columns nullable except those explicity marked with NON NULL
+                // assertions.
+                //
+                // TODO(database-issues#8594)
+                for typ in &mut typ.column_types {
+                    typ.nullable = true;
+                }
                 for &i in &materialized_view.non_null_assertions {
                     typ.column_types[i].nullable = false;
                 }
+
                 let desc = RelationDesc::new(typ, materialized_view.column_names);
 
                 let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);

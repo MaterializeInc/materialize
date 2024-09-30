@@ -21,6 +21,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
+use mz_repr::RelationDesc;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
@@ -611,6 +612,23 @@ impl Coordinator {
             create_sql = stmt.to_ast_string_stable();
         }
 
+        // We've observed the nullability of columns changing between releases for Materialized
+        // Views, which makes registering the schema with Persist difficult because this change is
+        // not necessarily forward compatible. Because of that we make all columns nullable except
+        // those explicity marked with NON NULL assertions.
+        //
+        // TODO(database-issues#8594)
+        let columns = global_lir_plan
+            .desc()
+            .iter()
+            .enumerate()
+            .map(|(idx, (name, typ))| {
+                let mut typ = typ.clone();
+                typ.nullable = !non_null_assertions.contains(&idx);
+                (name, typ)
+            });
+        let desc = RelationDesc::from_names_and_types(columns);
+
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -625,7 +643,7 @@ impl Coordinator {
                     create_sql,
                     raw_expr: raw_expr.into(),
                     optimized_expr: local_mir_plan.expr().into(),
-                    desc: global_lir_plan.desc().clone(),
+                    desc,
                     resolved_ids,
                     cluster_id,
                     non_null_assertions,
