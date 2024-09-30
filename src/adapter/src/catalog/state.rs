@@ -40,8 +40,8 @@ use mz_controller::clusters::{
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
-use mz_ore::str::StrExt;
 use mz_ore::soft_assert_no_log;
+use mz_ore::str::StrExt;
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
