@@ -3584,7 +3584,7 @@ impl<'a> Parser<'a> {
         self.expect_keywords(&[CONTINUAL, TASK])?;
 
         // TODO(ct): Multiple outputs.
-        let name = self.parse_item_name()?;
+        let name = RawItemName::Name(self.parse_item_name()?);
         self.expect_token(&Token::LParen)?;
         let columns = self.parse_comma_separated(|parser| {
             // TODO(ct): NOT NULL, etc.
@@ -8641,6 +8641,7 @@ impl<'a> Parser<'a> {
                 DATABASE,
                 SCHEMA,
                 FUNCTION,
+                CONTINUAL,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -8668,6 +8669,13 @@ impl<'a> Parser<'a> {
                 DATABASE => ObjectType::Database,
                 SCHEMA => ObjectType::Schema,
                 FUNCTION => ObjectType::Func,
+                CONTINUAL => {
+                    if let Err(e) = self.expect_keyword(TASK) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::ContinualTask
+                }
                 _ => unreachable!(),
             },
         )

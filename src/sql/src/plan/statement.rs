@@ -731,6 +731,7 @@ impl<'a> StatementContext<'a> {
         match name {
             ResolvedItemName::Item { id, .. } => Ok(self.get_item(id)),
             ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
+            ResolvedItemName::ContinualTask { .. } => sql_bail!("non-user item"),
             ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }
     }

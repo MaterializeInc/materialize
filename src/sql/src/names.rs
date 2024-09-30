@@ -429,6 +429,10 @@ pub enum ResolvedItemName {
         id: LocalId,
         name: String,
     },
+    ContinualTask {
+        id: LocalId,
+        name: PartialItemName,
+    },
     Error,
 }
 
@@ -437,6 +441,7 @@ impl ResolvedItemName {
         match self {
             ResolvedItemName::Item { full_name, .. } => full_name.to_string(),
             ResolvedItemName::Cte { name, .. } => name.clone(),
+            ResolvedItemName::ContinualTask { name, .. } => name.to_string(),
             ResolvedItemName::Error => "error in name resolution".to_string(),
         }
     }
@@ -488,6 +493,9 @@ impl AstDisplay for ResolvedItemName {
                 }
             }
             ResolvedItemName::Cte { name, .. } => f.write_node(&Ident::new_unchecked(name)),
+            ResolvedItemName::ContinualTask { name, .. } => {
+                f.write_str(&name);
+            }
             ResolvedItemName::Error => {}
         }
     }
@@ -1033,6 +1041,9 @@ impl TryFrom<ResolvedObjectName> for ObjectId {
             ResolvedObjectName::Item(name) => match name {
                 ResolvedItemName::Item { id, .. } => Ok(ObjectId::Item(id)),
                 ResolvedItemName::Cte { .. } => Err(anyhow!("CTE does not correspond to object")),
+                ResolvedItemName::ContinualTask { .. } => {
+                    Err(anyhow!("ContinualTask does not correspond to object"))
+                }
                 ResolvedItemName::Error => Err(anyhow!("error in name resolution")),
             },
         }
@@ -1218,6 +1229,7 @@ struct ItemResolutionConfig {
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,
     ctes: BTreeMap<String, LocalId>,
+    continual_task: Option<(PartialItemName, LocalId)>,
     status: Result<(), PlanError>,
     ids: BTreeSet<GlobalId>,
 }
@@ -1227,6 +1239,7 @@ impl<'a> NameResolver<'a> {
         NameResolver {
             catalog,
             ctes: BTreeMap::new(),
+            continual_task: None,
             status: Ok(()),
             ids: BTreeSet::new(),
         }
@@ -1379,6 +1392,14 @@ impl<'a> NameResolver<'a> {
                     return ResolvedItemName::Cte {
                         id: *id,
                         name: norm_name,
+                    };
+                }
+            }
+            if let Some((ct_name, ct_id)) = self.continual_task.as_ref() {
+                if *ct_name == raw_name {
+                    return ResolvedItemName::ContinualTask {
+                        id: *ct_id,
+                        name: raw_name,
                     };
                 }
             }
@@ -1594,10 +1615,21 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         &mut self,
         stmt: CreateContinualTaskStatement<Raw>,
     ) -> CreateContinualTaskStatement<Aug> {
-        // TODO(ct): Insert a fake CTE so that using the name of the continual
-        // task in the inserts and deletes resolves.
-        let cte_name = normalize::ident(stmt.name.0.last().expect("TODO(ct)").clone());
-        self.ctes.insert(cte_name, LocalId::new(0));
+        // Insert a LocalId so that using the name of the continual task in the
+        // inserts and deletes resolves.
+        match normalize::unresolved_item_name(stmt.name.name().clone()) {
+            Ok(local_name) => {
+                assert!(self.continual_task.is_none());
+                // TODO: Assign LocalIds more robustly (e.g. something like a
+                // `self.next_local_id` field).
+                self.continual_task = Some((local_name, LocalId::new(0)));
+            }
+            Err(err) => {
+                if self.status.is_ok() {
+                    self.status = Err(err);
+                }
+            }
+        };
         mz_sql_parser::ast::fold::fold_create_continual_task_statement(self, stmt)
     }
 
@@ -1674,7 +1706,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     column: ResolvedColumnReference::Column { name, index },
                 }
             }
-            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => ast::ColumnName {
+            ResolvedItemName::Cte { .. }
+            | ResolvedItemName::ContinualTask { .. }
+            | ResolvedItemName::Error => ast::ColumnName {
                 relation: ResolvedItemName::Error,
                 column: ResolvedColumnReference::Error,
             },
@@ -1831,7 +1865,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                                 Err(PlanError::InvalidSecret(Box::new(item_name.clone())));
                         }
                     }
-                    ResolvedItemName::Cte { .. } => {
+                    ResolvedItemName::Cte { .. } | ResolvedItemName::ContinualTask { .. } => {
                         self.status = Err(PlanError::InvalidSecret(Box::new(item_name.clone())));
                     }
                     ResolvedItemName::Error => {}
@@ -1842,7 +1876,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let item_name = self.fold_item_name(obj);
                 match &item_name {
                     ResolvedItemName::Item { .. } => {}
-                    ResolvedItemName::Cte { .. } => {
+                    ResolvedItemName::Cte { .. } | ResolvedItemName::ContinualTask { .. } => {
                         self.status = Err(PlanError::InvalidObject(Box::new(item_name.clone())));
                     }
                     ResolvedItemName::Error => {}

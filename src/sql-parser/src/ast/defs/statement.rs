@@ -1398,7 +1398,7 @@ impl_display_t!(CreateMaterializedViewStatement);
 /// `CREATE CONTINUAL TASK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateContinualTaskStatement<T: AstInfo> {
-    pub name: UnresolvedItemName,
+    pub name: T::ItemName,
     pub columns: Vec<CteMutRecColumnDef<T>>,
     pub in_cluster: Option<T::ClusterName>,
 
@@ -3207,7 +3207,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Privileges { .. } => "PRIVILEGES",
             ShowObjectType::DefaultPrivileges { .. } => "DEFAULT PRIVILEGES",
             ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
-            ShowObjectType::ContinualTask { .. } => "CONTINUAL TASK",
+            ShowObjectType::ContinualTask { .. } => "CONTINUAL TASKS",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {

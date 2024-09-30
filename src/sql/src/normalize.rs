@@ -423,8 +423,8 @@ pub fn create_statement(
             stmts,
             in_cluster: _,
         }) => {
-            *name = allocate_name(name)?;
             let mut normalizer = QueryNormalizer::new();
+            normalizer.visit_item_name_mut(name);
             normalizer.visit_item_name_mut(input);
             for stmt in stmts {
                 match stmt {

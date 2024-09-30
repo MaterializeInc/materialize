@@ -16,14 +16,18 @@ use mz_compute_types::sinks::{
     ComputeSinkConnection, ContinualTaskConnection, PersistSinkConnection,
 };
 use mz_expr::visit::Visit;
-use mz_expr::{Id, LocalId};
+use mz_expr::Id;
+use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::GlobalId;
-use mz_sql::names::ResolvedIds;
+use mz_sql::ast::{ContinualTaskStmt, RawItemName};
+use mz_sql::names::{FullItemName, PartialItemName, ResolvedIds};
 use mz_sql::plan::{self, HirRelationExpr};
 use mz_sql::session::metadata::SessionMetadata;
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::Statement;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 
 use crate::catalog;
@@ -46,6 +50,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::CreateContinualTaskPlan {
             name,
+            placeholder_id,
             desc,
             input_id,
             continual_task:
@@ -60,27 +65,15 @@ impl Coordinator {
                     as_of: _,
                 },
         } = plan;
-
-        // Collect optimizer parameters.
-        let compute_instance = self
-            .instance_snapshot(cluster_id)
-            .expect("compute instance does not exist");
-
-        let debug_name = self.catalog().resolve_full_name(&name, None).to_string();
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
-            .override_from(&self.catalog.get_cluster(cluster_id).config.features());
-
-        let view_id = self.allocate_transient_id();
-        let sink_id = self.catalog_mut().allocate_user_id().await?;
-
         // Put a placeholder in the catalog so the optimizer can find something
         // for the sink_id.
+        let sink_id = self.catalog_mut().allocate_user_id().await?;
         let bootstrap_catalog = ContinualTaskCatalogBootstrap {
             delegate: self.owned_catalog().as_optimizer_catalog(),
             sink_id,
             entry: CatalogEntry {
                 item: CatalogItem::Table(Table {
-                    create_sql: Some(create_sql.clone()),
+                    create_sql: None,
                     desc: desc.clone(),
                     conn_id: None,
                     resolved_ids: resolved_ids.clone(),
@@ -100,7 +93,29 @@ impl Coordinator {
             },
         };
 
+        // First thing, assign the id and then rewrite `create_sql` and `expr`
+        // to use it.
+        let full_name = bootstrap_catalog.resolve_full_name(&name, Some(session.conn_id()));
+        let create_sql = replace_full_name(&create_sql, &full_name);
+        let placeholder_id = placeholder_id.expect("set during initial creation");
+        expr.visit_mut_post(&mut |expr| match expr {
+            HirRelationExpr::Get { id, .. } if *id == Id::Local(placeholder_id) => {
+                *id = Id::Global(sink_id);
+            }
+            _ => {}
+        })?;
+
+        // Collect optimizer parameters.
+        let compute_instance = self
+            .instance_snapshot(cluster_id)
+            .expect("compute instance does not exist");
+
+        let debug_name = self.catalog().resolve_full_name(&name, None).to_string();
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&self.catalog.get_cluster(cluster_id).config.features());
+
         // Build an optimizer for this CONTINUAL TASK.
+        let view_id = self.allocate_transient_id();
         let mut optimizer = optimize::materialized_view::Optimizer::new(
             Arc::new(bootstrap_catalog),
             compute_instance,
@@ -113,15 +128,6 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
         );
-
-        // Replace our placeholder fake ctes with the real output id, now that
-        // we have it.
-        expr.visit_mut_post(&mut |expr| match expr {
-            HirRelationExpr::Get { id, .. } if *id == Id::Local(LocalId::new(0)) => {
-                *id = Id::Global(sink_id);
-            }
-            _ => {}
-        })?;
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
         let raw_expr = expr.clone();
@@ -242,4 +248,27 @@ impl OptimizerCatalog for ContinualTaskCatalogBootstrap {
     ) -> Box<dyn Iterator<Item = (GlobalId, &mz_catalog::memory::objects::Index)> + '_> {
         self.delegate.get_indexes_on(id, cluster)
     }
+}
+
+fn replace_full_name(create_sql: &str, ct_name: &FullItemName) -> String {
+    let f =
+        |x: &mut RawItemName| *x = RawItemName::Name(PartialItemName::from(ct_name.clone()).into());
+
+    let mut ast = mz_sql_parser::parser::parse_statements(create_sql)
+        .expect("non-system items must be parseable")
+        .into_element()
+        .ast;
+    match &mut ast {
+        Statement::CreateContinualTask(stmt) => {
+            f(&mut stmt.name);
+            for stmt in &mut stmt.stmts {
+                match stmt {
+                    ContinualTaskStmt::Delete(stmt) => f(&mut stmt.table_name),
+                    ContinualTaskStmt::Insert(stmt) => f(&mut stmt.table_name),
+                }
+            }
+        }
+        _ => unreachable!("should be CREATE CONTINUAL TASK statement"),
+    }
+    ast.to_ast_string_stable()
 }

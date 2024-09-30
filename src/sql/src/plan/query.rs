@@ -6240,6 +6240,17 @@ impl<'a> QueryContext<'a> {
 
                 Ok((expr, scope))
             }
+            ResolvedItemName::ContinualTask { id, name } => {
+                let cte = self.ctes.get(&id).unwrap();
+                let expr = HirRelationExpr::Get {
+                    id: Id::Local(id),
+                    typ: cte.desc.typ().clone(),
+                };
+
+                let scope = Scope::from_source(Some(name), cte.desc.iter_names());
+
+                Ok((expr, scope))
+            }
             ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }
     }

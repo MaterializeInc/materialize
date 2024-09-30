@@ -22,7 +22,7 @@ use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_
 use mz_controller_types::{
     is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
 };
-use mz_expr::{CollectionPlan, LocalId, UnmaterializableFunc};
+use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
@@ -150,10 +150,9 @@ use crate::plan::{
     TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
     WebhookHeaders, WebhookValidation,
 };
-use crate::session::vars::{self, ENABLE_CREATE_CONTINUAL_TASK};
 use crate::session::vars::{
-    ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS, ENABLE_KAFKA_SINK_PARTITION_BY,
-    ENABLE_REFRESH_EVERY_MVS,
+    self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_CREATE_CONTINUAL_TASK, ENABLE_KAFKA_SINK_HEADERS,
+    ENABLE_KAFKA_SINK_PARTITION_BY, ENABLE_REFRESH_EVERY_MVS,
 };
 use crate::{names, parse};
 
@@ -1016,7 +1015,9 @@ pub fn plan_create_source(
         Some(name) => match name {
             DeferredItemName::Named(name) => match name {
                 ResolvedItemName::Item { id, .. } => *id,
-                ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
+                ResolvedItemName::Cte { .. }
+                | ResolvedItemName::ContinualTask { .. }
+                | ResolvedItemName::Error => {
                     sql_bail!("[internal error] invalid target id")
                 }
             },
@@ -2734,8 +2735,6 @@ pub fn plan_create_continual_task(
     let create_sql =
         normalize::create_statement(scx, Statement::CreateContinualTask(stmt.clone()))?;
 
-    let partial_name = normalize::unresolved_item_name(stmt.name)?;
-    let name = scx.allocate_qualified_name(partial_name.clone())?;
     let desc = {
         let mut desc_columns = Vec::with_capacity(stmt.columns.capacity());
         for col in stmt.columns.iter() {
@@ -2752,17 +2751,24 @@ pub fn plan_create_continual_task(
     let input = scx.get_item_by_resolved_name(&stmt.input)?;
 
     let mut qcx = QueryContext::root(scx, QueryLifetime::MaterializedView);
-    qcx.ctes.insert(
-        LocalId::new(0),
-        CteDesc {
-            name: name.item.clone(),
-            desc: desc.clone(),
-        },
-    );
+    let ct_name = stmt.name;
+    let placeholder_id = match &ct_name {
+        ResolvedItemName::ContinualTask { id, name } => {
+            qcx.ctes.insert(
+                *id,
+                CteDesc {
+                    name: name.item.clone(),
+                    desc: desc.clone(),
+                },
+            );
+            Some(*id)
+        }
+        _ => None,
+    };
 
     let mut exprs = Vec::new();
     for stmt in &stmt.stmts {
-        let query = continual_task_query(&name, stmt).ok_or_else(|| sql_err!("TODO(ct)"))?;
+        let query = continual_task_query(&ct_name, stmt).ok_or_else(|| sql_err!("TODO(ct)"))?;
         let query::PlannedRootQuery {
             mut expr,
             desc: desc_query,
@@ -2800,19 +2806,29 @@ pub fn plan_create_continual_task(
     }
 
     // Check for an object in the catalog with this same name
-    let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialItemName::from(full_name.clone());
-    // For PostgreSQL compatibility, we need to prevent creating this when there
-    // is an existing object *or* type of the same name.
-    if let Ok(item) = scx.catalog.resolve_item_or_type(&partial_name) {
-        return Err(PlanError::ItemAlreadyExists {
-            name: full_name.to_string(),
-            item_type: item.item_type(),
-        });
-    }
+    let name = match &ct_name {
+        ResolvedItemName::Item { id, .. } => scx.catalog.get_item(id).name().clone(),
+        ResolvedItemName::ContinualTask { name, .. } => {
+            let name = scx.allocate_qualified_name(name.clone())?;
+            let full_name = scx.catalog.resolve_full_name(&name);
+            let partial_name = PartialItemName::from(full_name.clone());
+            // For PostgreSQL compatibility, we need to prevent creating this when there
+            // is an existing object *or* type of the same name.
+            if let Ok(item) = scx.catalog.resolve_item_or_type(&partial_name) {
+                return Err(PlanError::ItemAlreadyExists {
+                    name: full_name.to_string(),
+                    item_type: item.item_type(),
+                });
+            }
+            name
+        }
+        ResolvedItemName::Cte { .. } => unreachable!("name should not resolve to a CTE"),
+        ResolvedItemName::Error => unreachable!("error should be returned in name resolution"),
+    };
 
     Ok(Plan::CreateContinualTask(CreateContinualTaskPlan {
         name,
+        placeholder_id,
         desc,
         input_id: input.id(),
         continual_task: MaterializedView {
@@ -2829,7 +2845,7 @@ pub fn plan_create_continual_task(
 }
 
 fn continual_task_query<'a>(
-    ct_name: &QualifiedItemName,
+    ct_name: &ResolvedItemName,
     stmt: &'a ast::ContinualTaskStmt<Aug>,
 ) -> Option<ast::Query<Aug>> {
     match stmt {
@@ -2859,11 +2875,7 @@ fn continual_task_query<'a>(
             // Construct a `SELECT *` with the `DELETE` selection as a `WHERE`.
             let from = ast::TableWithJoins {
                 relation: ast::TableFactor::Table {
-                    // TODO(ct): Huge hack.
-                    name: ResolvedItemName::Cte {
-                        id: LocalId::new(0),
-                        name: ct_name.item.clone(),
-                    },
+                    name: ct_name.clone(),
                     alias: alias.clone(),
                 },
                 joins: Vec::new(),

@@ -602,6 +602,7 @@ fn generate_rbac_requirements(
         },
         Plan::CreateContinualTask(plan::CreateContinualTaskPlan {
             name,
+            placeholder_id: _,
             desc: _,
             input_id: _,
             continual_task,
