@@ -1243,7 +1243,7 @@ impl SystemVars {
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
             &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
             &KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES,
-            &KEEP_N_REPLICA_STATUS_HISTORY_ENTRIES,
+            &REPLICA_STATUS_HISTORY_RETENTION_WINDOW,
             &ARRANGEMENT_EXERT_PROPORTIONALITY,
             &ENABLE_STORAGE_SHARD_FINALIZATION,
             &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
@@ -2038,8 +2038,8 @@ impl SystemVars {
         *self.expect_value(&KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES)
     }
 
-    pub fn keep_n_replica_status_history_entries(&self) -> usize {
-        *self.expect_value(&KEEP_N_REPLICA_STATUS_HISTORY_ENTRIES)
+    pub fn replica_status_history_retention_window(&self) -> Duration {
+        *self.expect_value(&REPLICA_STATUS_HISTORY_RETENTION_WINDOW)
     }
 
     /// Returns the `arrangement_exert_proportionality` configuration parameter.

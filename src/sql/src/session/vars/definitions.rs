@@ -26,6 +26,7 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ident;
+use mz_storage_types::parameters::REPLICA_STATUS_HISTORY_RETENTION_WINDOW_DEFAULT;
 use mz_storage_types::parameters::{
     DEFAULT_PG_SOURCE_CONNECT_TIMEOUT, DEFAULT_PG_SOURCE_TCP_CONFIGURE_SERVER,
     DEFAULT_PG_SOURCE_TCP_KEEPALIVES_IDLE, DEFAULT_PG_SOURCE_TCP_KEEPALIVES_INTERVAL,
@@ -1436,11 +1437,11 @@ pub static KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES: VarDefinition = VarDefinit
     false,
 );
 
-/// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_replica_status_history_entries`].
-pub static KEEP_N_REPLICA_STATUS_HISTORY_ENTRIES: VarDefinition = VarDefinition::new(
-    "keep_n_replica_status_history_entries",
-    value!(usize; 5),
-    "On reboot, truncate all but the last n entries per ID in the mz_cluster_replica_status_history \
+/// Controls [`mz_storage_types::parameters::StorageParameters::replica_status_history_retention_window`].
+pub static REPLICA_STATUS_HISTORY_RETENTION_WINDOW: VarDefinition = VarDefinition::new(
+    "replica_status_history_retention_window",
+    value!(Duration; REPLICA_STATUS_HISTORY_RETENTION_WINDOW_DEFAULT),
+    "On reboot, truncate up all entries past the retention window in the mz_cluster_replica_status_history \
         collection (Materialize).",
     false,
 );

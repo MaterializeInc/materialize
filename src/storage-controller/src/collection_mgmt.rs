@@ -107,7 +107,7 @@ use tracing::{debug, error, info};
 use crate::{
     collection_mgmt, collection_status, privatelink_status_history_desc,
     replica_status_history_desc, snapshot, snapshot_statistics, statistics, StatusHistoryDesc,
-    StorageError,
+    StatusHistoryRetentionPolicy, StorageError,
 };
 
 // Default rate at which we advance the uppers of managed collections.
@@ -1246,6 +1246,7 @@ async fn prepare_append_only_introspection_collection<T>(
                 IntrospectionType::PrivatelinkConnectionStatusHistory,
                 write_handle,
                 privatelink_status_history_desc(&parameters),
+                now.clone(),
                 &storage_collections,
                 &txns_read,
                 &persist,
@@ -1258,6 +1259,7 @@ async fn prepare_append_only_introspection_collection<T>(
                 IntrospectionType::ReplicaStatusHistory,
                 write_handle,
                 replica_status_history_desc(&parameters),
+                now.clone(),
                 &storage_collections,
                 &txns_read,
                 &persist,
@@ -1386,8 +1388,7 @@ where
         .map_err(|e| anyhow!("appending retractions: {e:?}"))
 }
 
-/// Effectively truncates the status history shard except for the most
-/// recent updates from each key.
+/// Effectively truncates the status history shard based on its retention policy.
 ///
 /// NOTE: The history collections are really append-only collections, but
 /// every-now-and-then we want to retract old updates so that the collection
@@ -1401,6 +1402,7 @@ pub(crate) async fn partially_truncate_status_history<T, K>(
     introspection_type: IntrospectionType,
     write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
     status_history_desc: StatusHistoryDesc<K>,
+    now: NowFn,
     storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     txns_read: &TxnsRead<T>,
     persist: &Arc<PersistClientCache>,
@@ -1424,12 +1426,6 @@ where
         _ => return BTreeMap::new(),
     };
 
-    // BTreeMap to track the earliest events for each key.
-    let mut last_n_entries_per_key: BTreeMap<
-        K,
-        BinaryHeap<Reverse<(CheckedTimestamp<DateTime<Utc>>, Row)>>,
-    > = BTreeMap::new();
-
     // BTreeMap to keep track of the row with the latest timestamp for each key.
     let mut latest_row_per_key: BTreeMap<K, (CheckedTimestamp<DateTime<Utc>>, Row)> =
         BTreeMap::new();
@@ -1439,46 +1435,77 @@ where
 
     let mut deletions = vec![];
 
-    for (row, diff) in rows {
-        let datums = row.unpack();
-        let key = (status_history_desc.extract_key)(&datums);
-        let timestamp = (status_history_desc.extract_time)(&datums);
+    let mut handle_row = {
+        let latest_row_per_key = &mut latest_row_per_key;
+        move |row: &Row, diff| {
+            let datums = row.unpack();
+            let key = (status_history_desc.extract_key)(&datums);
+            let timestamp = (status_history_desc.extract_time)(&datums);
 
-        // Duplicate rows ARE possible if many status changes happen in VERY quick succession,
-        // so we go ahead and handle them.
-        assert!(
-            diff > 0,
-            "only know how to operate over consolidated data with diffs > 0, \
-                found diff {diff} for object {key:?} in {introspection_type:?}",
-        );
+            assert!(
+                diff > 0,
+                "only know how to operate over consolidated data with diffs > 0, \
+                    found diff {diff} for object {key:?} in {introspection_type:?}",
+            );
 
-        // Keep track of the timestamp of the latest row per key.
-        match latest_row_per_key.get(&key) {
-            Some(existing) if &existing.0 > &timestamp => {}
-            _ => {
-                latest_row_per_key.insert(key.clone(), (timestamp, row.clone()));
+            // Keep track of the timestamp of the latest row per key.
+            match latest_row_per_key.get(&key) {
+                Some(existing) if &existing.0 > &timestamp => {}
+                _ => {
+                    latest_row_per_key.insert(key.clone(), (timestamp, row.clone()));
+                }
+            };
+            (key, timestamp)
+        }
+    };
+
+    match status_history_desc.retention_policy {
+        StatusHistoryRetentionPolicy::LastN(n) => {
+            // BTreeMap to track the earliest events for each key.
+            let mut last_n_entries_per_key: BTreeMap<
+                K,
+                BinaryHeap<Reverse<(CheckedTimestamp<DateTime<Utc>>, Row)>>,
+            > = BTreeMap::new();
+
+            for (row, diff) in rows {
+                let (key, timestamp) = handle_row(&row, diff);
+
+                // Duplicate rows ARE possible if many status changes happen in VERY quick succession,
+                // so we handle duplicated rows separately.
+                let entries = last_n_entries_per_key.entry(key).or_default();
+                for _ in 0..diff {
+                    // We CAN have multiple statuses (most likely Starting and Running) at the exact same
+                    // millisecond, depending on how the `health_operator` is scheduled.
+                    //
+                    // Note that these will be arbitrarily ordered, so a Starting event might
+                    // survive and a Running one won't. The next restart will remove the other,
+                    // so we don't bother being careful about it.
+                    //
+                    // TODO(guswynn): unpack these into health-status objects and use
+                    // their `Ord` impl.
+                    entries.push(Reverse((timestamp, row.clone())));
+
+                    // Retain some number of entries, using pop to mark the oldest entries for
+                    // deletion.
+                    while entries.len() > n {
+                        if let Some(Reverse((_, r))) = entries.pop() {
+                            deletions.push(r);
+                        }
+                    }
+                }
             }
         }
+        StatusHistoryRetentionPolicy::TimeWindow(time_window) => {
+            // Get the lower bound of our retention window
+            let now = mz_ore::now::to_datetime(now());
+            let keep_since = now - time_window;
 
-        // Consider duplicated rows separately.
-        let entries = last_n_entries_per_key.entry(key).or_default();
-        for _ in 0..diff {
-            // We CAN have multiple statuses (most likely Starting and Running) at the exact same
-            // millisecond, depending on how the `health_operator` is scheduled.
-            //
-            // Note that these will be arbitrarily ordered, so a Starting event might
-            // survive and a Running one won't. The next restart will remove the other,
-            // so we don't bother being careful about it.
-            //
-            // TODO(guswynn): unpack these into health-status objects and use
-            // their `Ord` impl.
-            entries.push(Reverse((timestamp, row.clone())));
+            // Mark any row outside the retention window for deletion
+            for (row, diff) in rows {
+                let (_, timestamp) = handle_row(&row, diff);
 
-            // Retain some number of entries, using pop to mark the oldest entries for
-            // deletion.
-            while entries.len() > status_history_desc.keep_n {
-                if let Some(Reverse((_, r))) = entries.pop() {
-                    deletions.push(r);
+                if *timestamp < keep_since {
+                    deletions.push(row);
                 }
             }
         }
@@ -1512,7 +1539,7 @@ where
         }
         Err(err) => {
             // This is fine, it just means the upper moved because
-            // of continual upper advancement or because seomeone
+            // of continual upper advancement or because someone
             // already appended some more retractions/updates.
             //
             // NOTE: We might want to attempt these partial
