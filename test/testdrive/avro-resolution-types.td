@@ -32,14 +32,16 @@ $ kafka-ingest format=avro topic=resolution-int2double schema=${int-col} timesta
 > CREATE SOURCE resolution_int2double
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-int2double-${testdrive.seed}')
+
+> CREATE TABLE resolution_int2double_tbl FROM SOURCE resolution_int2double (REFERENCE "testdrive-resolution-int2double-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 $ kafka-ingest format=avro topic=resolution-int2double schema=${double-col} timestamp=2
 {"f1": 234.456}
 
-! SELECT * FROM resolution_int2double
+! SELECT * FROM resolution_int2double_tbl
 contains:Writer schema has type `Double`, but reader schema has type `Int` for field `schema_int_double.f1`
 
-! SELECT * FROM resolution_int2double
+! SELECT * FROM resolution_int2double_tbl
 contains:failed to resolve Avro schema (id =

@@ -23,9 +23,10 @@ $ set-arg-default single-replica-cluster=quickstart
 
 $ kafka-create-topic topic=noexist partitions=1
 
-! CREATE SOURCE noexist
+> CREATE SOURCE noexist
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-noexist-${testdrive.seed}')
+! CREATE TABLE noexist_tbl FROM SOURCE noexist (REFERENCE "testdrive-noexist-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 contains:No value schema found
@@ -159,10 +160,12 @@ $ kafka-ingest format=avro topic=data key-format=avro key-schema=${valid-key-sch
 > CREATE SOURCE data_v1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE data_v1_tbl FROM SOURCE data_v1 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM data_v1
+> SELECT * FROM data_v1_tbl
 a
 ---
 1
@@ -173,16 +176,18 @@ $ kafka-ingest format=avro topic=data key-format=avro key-schema=${valid-key-sch
 > CREATE SOURCE data_v2
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE data_v2_tbl FROM SOURCE data_v2 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM data_v1
+> SELECT * FROM data_v1_tbl
 a
 ---
 1
 2
 
-> SELECT * FROM data_v2
+> SELECT * FROM data_v2_tbl
 a b
 ----
 1 42
@@ -196,10 +201,12 @@ a b
 # > CREATE SOURCE data_v3
 #   IN CLUSTER ${arg.single-replica-cluster}
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+# > CREATE TABLE data_v3_tbl FROM SOURCE data_v3 (REFERENCE "testdrive-data-${testdrive.seed}")
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   ENVELOPE DEBEZIUM
 
-# > SELECT * FROM data_v3
+# > SELECT * FROM data_v3_tbl
 # a b
 # ----
 # 1 42
@@ -211,7 +218,7 @@ a b
 # # key information (and optimizing by transforming
 # # a reduce on a primary key to a map)
 
-# > SELECT a, count(*) FROM data_v3
+# > SELECT a, count(*) FROM data_v3_tbl
 #   GROUP BY a
 # a count
 # -------
@@ -224,11 +231,13 @@ a b
 # > CREATE SOURCE data_v4
 #   IN CLUSTER ${arg.single-replica-cluster}
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+# > CREATE TABLE data_v4_tbl FROM SOURCE data_v4 (REFERENCE "testdrive-data-${testdrive.seed}")
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   ENVELOPE DEBEZIUM
 #   WITH (IGNORE KEYS)
 
-# > SELECT a, count(*) FROM data_v4
+# > SELECT a, count(*) FROM data_v4_tbl
 #   GROUP BY a
 # a count
 # -------

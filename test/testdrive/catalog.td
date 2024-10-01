@@ -325,12 +325,14 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 
 > CREATE SOURCE source_data
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}');
+
+> CREATE TABLE source_data_tbl FROM SOURCE source_data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 
 > CREATE SINK snk
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM source_data
+  FROM source_data_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-catalog-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
@@ -349,6 +351,7 @@ kafka_conn  connection        ""
 mv          materialized-view ""
 source_data source            ""
 source_data_progress source   ""
+source_data_tbl table         ""
 snk         sink              ""
 
 > SELECT DISTINCT(TYPE) FROM mz_objects
@@ -375,6 +378,7 @@ pass_secret secret      ""
 snk         sink        ""
 source_data source      ""
 source_data_progress source  ""
+source_data_tbl table   ""
 tbl         table       ""
 v1          view        ""
 v2          view        ""

@@ -33,23 +33,17 @@ $ kafka-create-topic topic=t0
 ! CREATE SOURCE missing_topic
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=1, TOPIC 'missing_topic')
-  FORMAT TEXT
-  INCLUDE OFFSET
 contains:Topic does not exist
 
 ! CREATE SOURCE pick_one
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=1, START OFFSET=[1], TOPIC 'testdrive-t0-${testdrive.seed}')
-  FORMAT TEXT
-  INCLUDE OFFSET
 contains:cannot specify START TIMESTAMP and START OFFSET at same time
 
 
 ! CREATE SOURCE not_a_number
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP="not_a_number", TOPIC 'testdrive-t0-${testdrive.seed}')
-  FORMAT TEXT
-  INCLUDE OFFSET
 contains:invalid START TIMESTAMP: cannot use value as number
 
 #
@@ -77,6 +71,8 @@ grape:grape
 > CREATE SOURCE append_time_offset_0
   IN CLUSTER append_time_offset_0_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=0, TOPIC 'testdrive-t1-${testdrive.seed}')
+
+> CREATE TABLE append_time_offset_0_tbl FROM SOURCE append_time_offset_0 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
 
@@ -88,6 +84,8 @@ grape:grape
       START TIMESTAMP=1,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
+
+> CREATE TABLE append_time_offset_1_tbl FROM SOURCE append_time_offset_1 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
 
@@ -99,6 +97,8 @@ grape:grape
       START TIMESTAMP=2,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
+
+> CREATE TABLE append_time_offset_2_tbl FROM SOURCE append_time_offset_2 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
 
@@ -110,6 +110,8 @@ grape:grape
       START TIMESTAMP=3,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
+
+> CREATE TABLE append_time_offset_3_tbl FROM SOURCE append_time_offset_3 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
 
@@ -121,6 +123,8 @@ grape:grape
       START TIMESTAMP=4,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
+
+> CREATE TABLE append_time_offset_4_tbl FROM SOURCE append_time_offset_4 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
 
@@ -132,10 +136,12 @@ grape:grape
       START TIMESTAMP=5,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
+
+> CREATE TABLE append_time_offset_5_tbl FROM SOURCE append_time_offset_5 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
 
-> SELECT * FROM append_time_offset_0
+> SELECT * FROM append_time_offset_0_tbl
 text      offset
 -------------------
 apple     0
@@ -146,7 +152,7 @@ eggfruit  2
 fig       3
 grape     0
 
-> SELECT * FROM append_time_offset_1
+> SELECT * FROM append_time_offset_1_tbl
 text      offset
 -------------------
 apple     0
@@ -157,7 +163,7 @@ eggfruit  2
 fig       3
 grape     0
 
-> SELECT * FROM append_time_offset_2
+> SELECT * FROM append_time_offset_2_tbl
 text      offset
 -------------------
 cherry    0
@@ -166,18 +172,18 @@ eggfruit  2
 fig       3
 grape     0
 
-> SELECT * FROM append_time_offset_3
+> SELECT * FROM append_time_offset_3_tbl
 text      offset
 -------------------
 fig       3
 grape     0
 
-> SELECT * FROM append_time_offset_4
+> SELECT * FROM append_time_offset_4_tbl
 text      offset
 -------------------
 grape     0
 
-> SELECT * FROM append_time_offset_5
+> SELECT * FROM append_time_offset_5_tbl
 text      offset
 -------------------
 
@@ -188,7 +194,7 @@ hazelnut:hazelnut
 
 $ set-sql-timeout duration=60s
 
-> SELECT * FROM append_time_offset_5
+> SELECT * FROM append_time_offset_5_tbl
 text      offset
 -------------------
 hazelnut  0
@@ -226,6 +232,8 @@ grape:grape
       TOPIC 'testdrive-t2-${testdrive.seed}',
       TOPIC METADATA REFRESH INTERVAL '10ms'
   )
+
+> CREATE TABLE upsert_time_offset_0_tbl FROM SOURCE upsert_time_offset_0 (REFERENCE "testdrive-t2-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
@@ -238,6 +246,8 @@ grape:grape
       TOPIC 'testdrive-t2-${testdrive.seed}',
       TOPIC METADATA REFRESH INTERVAL '10ms'
   )
+
+> CREATE TABLE upsert_time_offset_1_tbl FROM SOURCE upsert_time_offset_1 (REFERENCE "testdrive-t2-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
@@ -250,6 +260,8 @@ grape:grape
       TOPIC 'testdrive-t2-${testdrive.seed}',
       TOPIC METADATA REFRESH INTERVAL '10ms'
   )
+
+> CREATE TABLE upsert_time_offset_2_tbl FROM SOURCE upsert_time_offset_2 (REFERENCE "testdrive-t2-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
@@ -262,6 +274,8 @@ grape:grape
       TOPIC 'testdrive-t2-${testdrive.seed}',
       TOPIC METADATA REFRESH INTERVAL '10ms'
   )
+
+> CREATE TABLE upsert_time_offset_3_tbl FROM SOURCE upsert_time_offset_3 (REFERENCE "testdrive-t2-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
@@ -274,6 +288,8 @@ grape:grape
       TOPIC 'testdrive-t2-${testdrive.seed}',
       TOPIC METADATA REFRESH INTERVAL '10ms'
   )
+
+> CREATE TABLE upsert_time_offset_4_tbl FROM SOURCE upsert_time_offset_4 (REFERENCE "testdrive-t2-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
@@ -286,11 +302,13 @@ grape:grape
       TOPIC 'testdrive-t2-${testdrive.seed}',
       TOPIC METADATA REFRESH INTERVAL '10ms'
   )
+
+> CREATE TABLE upsert_time_offset_5_tbl FROM SOURCE upsert_time_offset_5 (REFERENCE "testdrive-t2-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> SELECT * FROM upsert_time_offset_0
+> SELECT * FROM upsert_time_offset_0_tbl
 key       text      offset
 -----------------------------
 banana    banana    1
@@ -299,7 +317,7 @@ eggfruit  eggfruit  2
 fig       fig       4
 grape     grape     0
 
-> SELECT * FROM upsert_time_offset_1
+> SELECT * FROM upsert_time_offset_1_tbl
 key       text      offset
 -----------------------------
 banana    banana    1
@@ -308,7 +326,7 @@ eggfruit  eggfruit  2
 fig       fig       4
 grape     grape     0
 
-> SELECT * FROM upsert_time_offset_2
+> SELECT * FROM upsert_time_offset_2_tbl
 key       text      offset
 -----------------------------
 date      date      1
@@ -316,18 +334,18 @@ eggfruit  eggfruit  2
 fig       fig       4
 grape     grape     0
 
-> SELECT * FROM upsert_time_offset_3
+> SELECT * FROM upsert_time_offset_3_tbl
 key       text      offset
 -----------------------------
 fig       fig       4
 grape     grape     0
 
-> SELECT * FROM upsert_time_offset_4
+> SELECT * FROM upsert_time_offset_4_tbl
 key       text      offset
 -----------------------------
 grape     grape     0
 
-> SELECT * FROM upsert_time_offset_5
+> SELECT * FROM upsert_time_offset_5_tbl
 key       text      offset
 -----------------------------
 
@@ -339,7 +357,7 @@ hazelnut:hazelnut
 # It takes a while for new partitions to be consumed...
 $ set-sql-timeout duration=60s
 
-> SELECT * FROM upsert_time_offset_5
+> SELECT * FROM upsert_time_offset_5_tbl
 key       text      offset
 -----------------------------
 hazelnut  hazelnut  0
@@ -368,6 +386,8 @@ cherry
 > CREATE SOURCE relative_time_offset_30_years_ago
   IN CLUSTER relative_time_offset_30_years_ago_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-946100000000, TOPIC 'testdrive-t3-${testdrive.seed}')
+
+> CREATE TABLE relative_time_offset_30_years_ago_tbl FROM SOURCE relative_time_offset_30_years_ago (REFERENCE "testdrive-t3-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
 
@@ -375,16 +395,18 @@ cherry
 > CREATE SOURCE relative_time_offset_today
   IN CLUSTER relative_time_offset_today_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-1, TOPIC 'testdrive-t3-${testdrive.seed}')
+
+> CREATE TABLE relative_time_offset_today_tbl FROM SOURCE relative_time_offset_today (REFERENCE "testdrive-t3-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
 
-> SELECT * FROM relative_time_offset_30_years_ago
+> SELECT * FROM relative_time_offset_30_years_ago_tbl
 text      offset
 -------------------
 banana    1
 cherry    2
 
-> SELECT * FROM relative_time_offset_today
+> SELECT * FROM relative_time_offset_today_tbl
 text      offset
 -------------------
 cherry    2
@@ -403,6 +425,8 @@ pie
 > CREATE SOURCE verify_no_fetch
   IN CLUSTER verify_no_fetch_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-1, TOPIC 'testdrive-t4-${testdrive.seed}')
+
+> CREATE TABLE verify_no_fetch_tbl FROM SOURCE verify_no_fetch (REFERENCE "testdrive-t4-${testdrive.seed}")
   FORMAT TEXT
   INCLUDE OFFSET
 
@@ -482,10 +506,12 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE SOURCE upsert_time_skip
   IN CLUSTER upsert_time_skip_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=6, TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+
+> CREATE TABLE upsert_time_skip_tbl FROM SOURCE upsert_time_skip (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM upsert_time_skip
+> SELECT * FROM upsert_time_skip_tbl
 id creature
 -----------
 4  chicken

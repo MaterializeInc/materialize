@@ -24,6 +24,8 @@ $ kafka-create-topic topic=none-topic partitions=1
 > CREATE SOURCE none_source
   IN CLUSTER none_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-none-topic-${testdrive.seed}')
+
+> CREATE TABLE none_source_tbl FROM SOURCE none_source (REFERENCE "testdrive-none-topic-${testdrive.seed}")
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   INCLUDE KEY
@@ -33,6 +35,8 @@ $ kafka-create-topic topic=none-topic partitions=1
 > CREATE SOURCE none_source_no_key
   IN CLUSTER none_source_no_key_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-none-topic-${testdrive.seed}')
+
+> CREATE TABLE none_source_no_key_tbl FROM SOURCE none_source_no_key (REFERENCE "testdrive-none-topic-${testdrive.seed}")
   FORMAT TEXT
   ENVELOPE NONE
 
@@ -120,6 +124,8 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE SOURCE debezium_source
   IN CLUSTER debezium_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+
+> CREATE TABLE debezium_source_tbl FROM SOURCE debezium_source (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
@@ -149,23 +155,31 @@ $ kafka-ingest format=avro topic=upsert-topic key-format=avro key-schema=${keysc
 > CREATE SOURCE upsert_source
   IN CLUSTER upsert_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-topic-${testdrive.seed}')
+
+> CREATE TABLE upsert_source_tbl FROM SOURCE upsert_source (REFERENCE "testdrive-upsert-topic-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
-> SELECT envelope_type FROM mz_sources WHERE name = 'none_source'
-none
+> CREATE TABLE table_with_other_format_and_envelope FROM SOURCE upsert_source (REFERENCE "testdrive-upsert-topic-${testdrive.seed}")
+  FORMAT TEXT
+  ENVELOPE NONE
 
-> SELECT envelope_type FROM mz_sources WHERE name = 'debezium_source'
-debezium
-
-> SELECT envelope_type FROM mz_sources WHERE name = 'upsert_source'
-upsert
-
-> SELECT key_format, value_format FROM mz_sources WHERE name = 'none_source'
-text text
-
-> SELECT key_format, value_format FROM mz_sources WHERE name = 'none_source_no_key'
-<null> text
-
-> SELECT key_format, value_format FROM mz_sources WHERE name = 'debezium_source'
-avro avro
+# TODO: database-issues#8613
+#
+# > SELECT envelope_type FROM mz_sources WHERE name = 'none_source'
+# none
+#
+# > SELECT envelope_type FROM mz_sources WHERE name = 'debezium_source'
+# debezium
+#
+# > SELECT envelope_type FROM mz_sources WHERE name = 'upsert_source'
+# upsert
+#
+# > SELECT key_format, value_format FROM mz_sources WHERE name = 'none_source'
+# text text
+#
+# > SELECT key_format, value_format FROM mz_sources WHERE name = 'none_source_no_key'
+# <null> text
+#
+# > SELECT key_format, value_format FROM mz_sources WHERE name = 'debezium_source'
+# avro avro

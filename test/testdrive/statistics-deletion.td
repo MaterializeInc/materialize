@@ -47,6 +47,8 @@ one:two
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE upsert_size_tbl FROM SOURCE upsert_size (REFERENCE "testdrive-upsert-${testdrive.seed}")
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
@@ -56,6 +58,8 @@ one:two
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE upsert_cluster_tbl FROM SOURCE upsert_cluster (REFERENCE "testdrive-upsert-${testdrive.seed}")
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT

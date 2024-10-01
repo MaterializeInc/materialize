@@ -21,20 +21,19 @@ $ kafka-create-topic topic=headers_src
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-! CREATE SOURCE headers_src
+> CREATE SOURCE headers_src
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-headers_src-${testdrive.seed}')
+
+! CREATE TABLE headers_src_tbl FROM SOURCE headers_src (REFERENCE "testdrive-headers_src-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
   ENVELOPE MATERIALIZE
 contains:INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)
 
-! CREATE SOURCE headers_src
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC
-  'testdrive-headers_src-${testdrive.seed}')
+! CREATE TABLE headers_src_tbl FROM SOURCE headers_src (REFERENCE "testdrive-headers_src-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS

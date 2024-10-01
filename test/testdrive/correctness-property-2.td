@@ -49,17 +49,19 @@ $ kafka-ingest format=avro topic=correctness-data key-format=avro key-schema=${k
 > CREATE SOURCE correctness_data
   IN CLUSTER storage
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-correctness-data-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE UPSERT
   WITH (RETAIN HISTORY = FOR '365000 days');
 
+> CREATE TABLE correctness_data_tbl FROM SOURCE correctness_data (REFERENCE "testdrive-correctness-data-${testdrive.seed}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT;
+
 # Prime tokio-postgres with the missing OIDs.
-> SELECT mz_now(), * FROM correctness_data WHERE false AS OF AT LEAST 0
+> SELECT mz_now(), * FROM correctness_data_tbl WHERE false AS OF AT LEAST 0
 
 # Grab a cursor at timestamp 0
 > BEGIN
 
-> DECLARE c CURSOR FOR SELECT mz_now(), * FROM correctness_data AS OF 0
+> DECLARE c CURSOR FOR SELECT mz_now(), * FROM correctness_data_tbl AS OF 0
 
 # Start ingestion by adding a replica to the cluster. We must do this from a
 # different connection to not disturbe the transaction we're in.

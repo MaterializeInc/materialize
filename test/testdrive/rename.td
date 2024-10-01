@@ -36,19 +36,21 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 > CREATE SOURCE mz_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE mz_data_tbl FROM SOURCE mz_data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
-> CREATE DEFAULT INDEX ON mz_data
+> CREATE DEFAULT INDEX ON mz_data_tbl
 
 > CREATE SINK sink1
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM mz_data
+  FROM mz_data_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
 > CREATE VIEW mz_view AS
-    SELECT * FROM mz_data
+    SELECT * FROM mz_data_tbl
 
 > CREATE DEFAULT INDEX ON mz_view
 
@@ -61,12 +63,12 @@ mz_view_primary_idx mz_view     <VARIABLE_OUTPUT>   {a,b}  ""
     SELECT * FROM mz_view;
 
 > CREATE VIEW byzantine_view AS
-    SELECT mz_data.a, mz_view.b FROM mz_data JOIN mz_view ON mz_data.a = mz_view.a;
+    SELECT mz_data_tbl.a, mz_view.b FROM mz_data_tbl JOIN mz_view ON mz_data_tbl.a = mz_view.a;
 
 > CREATE VIEW oppositional_view AS
     SELECT * FROM mz_view WHERE b = '
     an adversarial string
-    "materialize"."public"."mz_data"
+    "materialize"."public"."mz_data_tbl"
     ';
 
 > CREATE VIEW public_objects AS
@@ -79,11 +81,12 @@ mz_view_primary_idx mz_view     <VARIABLE_OUTPUT>   {a,b}  ""
 name
 -----
 mz_data
-mz_data_primary_idx
+mz_data_tbl
+mz_data_tbl_primary_idx
 mz_data_progress
 
 # Test that data can be selected from the source before renaming.
-> SELECT * FROM mz_data
+> SELECT * FROM mz_data_tbl
 a  b
 ------
 1  dog
@@ -99,16 +102,26 @@ exact:mz_data is a source not an index
 > SELECT name FROM public_objects WHERE name LIKE 'mz_data%';
 name
 -----
-mz_data_primary_idx
+mz_data_tbl_primary_idx
+mz_data_tbl
+mz_data_progress
+
+> ALTER TABLE mz_data_tbl RENAME TO renamed_mz_data_tbl;
+
+> SELECT name FROM public_objects WHERE name LIKE 'mz_data%';
+name
+-----
+mz_data_tbl_primary_idx
 mz_data_progress
 
 > SELECT name FROM public_objects WHERE name LIKE 'renamed_mz_data%';
 name
 -----
 renamed_mz_data
+renamed_mz_data_tbl
 
 # Test that data can be selected from the source after renaming.
-> SELECT * FROM renamed_mz_data
+> SELECT * FROM renamed_mz_data_tbl
 a  b
 ------
 1  dog
@@ -117,9 +130,9 @@ a  b
 # the new name. This previously tripped an assertion that asserted that a source
 # descriptor never changed; it is in fact okay for the name of a source to
 # change.
-> DROP INDEX mz_data_primary_idx
-> CREATE DEFAULT INDEX ON renamed_mz_data
-> SELECT * FROM renamed_mz_data
+> DROP INDEX mz_data_tbl_primary_idx
+> CREATE DEFAULT INDEX ON renamed_mz_data_tbl
+> SELECT * FROM renamed_mz_data_tbl
 a  b
 ------
 1  dog
@@ -218,7 +231,7 @@ renamed_mz_view    ""
 > SHOW CREATE VIEW renamed_mz_view
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"renamed_mz_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_data\""
+materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"renamed_mz_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_data_tbl\""
 
 # Item's indexes are properly re-attributed
 > SHOW INDEXES ON renamed_mz_view
@@ -240,19 +253,19 @@ materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"de
 > SHOW CREATE SINK renamed_sink
 name                            create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"public\".\"renamed_mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM WITH (PARTITION STRATEGY = 'v0')"
+materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"public\".\"renamed_mz_data_tbl\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM WITH (PARTITION STRATEGY = 'v0')"
 
 # Simple dependencies with both fully qualified and unqualified item references are renamed
 > SHOW CREATE VIEW byzantine_view
 name                              create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.byzantine_view "CREATE VIEW \"materialize\".\"public\".\"byzantine_view\" AS SELECT \"renamed_mz_data\".\"a\", \"renamed_mz_view\".\"b\" FROM \"materialize\".\"public\".\"renamed_mz_data\" JOIN \"materialize\".\"public\".\"renamed_mz_view\" ON \"renamed_mz_data\".\"a\" = \"renamed_mz_view\".\"a\""
+materialize.public.byzantine_view "CREATE VIEW \"materialize\".\"public\".\"byzantine_view\" AS SELECT \"renamed_mz_data_tbl\".\"a\", \"renamed_mz_view\".\"b\" FROM \"materialize\".\"public\".\"renamed_mz_data_tbl\" JOIN \"materialize\".\"public\".\"renamed_mz_view\" ON \"renamed_mz_data_tbl\".\"a\" = \"renamed_mz_view\".\"a\""
 
 # Strings containing old item name are not modified
 > SHOW CREATE VIEW oppositional_view
 name                                 create_sql
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.oppositional_view "CREATE VIEW \"materialize\".\"public\".\"oppositional_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\" WHERE \"b\" = '\n  an adversarial string\n  \"materialize\".\"public\".\"mz_data\"\n  '"
+materialize.public.oppositional_view "CREATE VIEW \"materialize\".\"public\".\"oppositional_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\" WHERE \"b\" = '\n  an adversarial string\n  \"materialize\".\"public\".\"mz_data_tbl\"\n  '"
 
 # 🔬 Name collisions
 
@@ -811,21 +824,24 @@ materialize.public.count "CREATE VIEW \"materialize\".\"public\".\"count\" AS SE
 > CREATE TABLE j (b int)
 
 > SHOW TABLES
-name  comment
--------------
-j     ""
+name                   comment
+-------------------------------
+j              ""
+renamed_mz_data_tbl    ""
 
 > ALTER TABLE j RENAME TO renamed_j
 
 > SHOW TABLES
-name       comment
-------------------
-renamed_j  ""
+name                   comment
+-------------------------------
+renamed_j              ""
+renamed_mz_data_tbl    ""
 
 > SELECT name FROM mz_tables WHERE id like 'u%';
 name
 ------
 renamed_j
+renamed_mz_data_tbl
 
 # Test that after renaming a materialized object it is possible to create
 # another object with the original name. This used to fail because the index
@@ -848,13 +864,15 @@ renamed_j
 > CREATE SOURCE mz_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION public.kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE mz_data_tbl FROM SOURCE mz_data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
 > CREATE DEFAULT INDEX ON mz_data
 
 > CREATE SINK sink1
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM mz_data
+  FROM mz_data_tbl
   INTO KAFKA CONNECTION public.kafka_conn (TOPIC 'testdrive-snk1-rename-schema-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION public.csr_conn
   ENVELOPE DEBEZIUM
@@ -866,12 +884,12 @@ renamed_j
 > SHOW CREATE SOURCE to_be_renamed.mz_data;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.to_be_renamed.mz_data  "CREATE SOURCE \"materialize\".\"to_be_renamed\".\"mz_data\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-${testdrive.seed}') FORMAT AVRO USING SCHEMA '{   \"name\": \"row\",   \"type\": \"record\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"string\"}   ] }' EXPOSE PROGRESS AS \"materialize\".\"to_be_renamed\".\"mz_data_progress\""
+materialize.to_be_renamed.mz_data "CREATE SOURCE \"materialize\".\"to_be_renamed\".\"mz_data\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-${testdrive.seed}') EXPOSE PROGRESS AS \"materialize\".\"to_be_renamed\".\"mz_data_progress\""
 
 > SHOW CREATE SINK to_be_renamed.sink1;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.to_be_renamed.sink1    "CREATE SINK \"materialize\".\"to_be_renamed\".\"sink1\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"to_be_renamed\".\"mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM WITH (PARTITION STRATEGY = 'v0')"
+materialize.to_be_renamed.sink1    "CREATE SINK \"materialize\".\"to_be_renamed\".\"sink1\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"to_be_renamed\".\"mz_data_tbl\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM WITH (PARTITION STRATEGY = 'v0')"
 # Make sure the create_sql got updated.
 
 > ALTER SCHEMA to_be_renamed RENAME TO foo_bar;
@@ -879,9 +897,9 @@ materialize.to_be_renamed.sink1    "CREATE SINK \"materialize\".\"to_be_renamed\
 > SHOW CREATE SOURCE foo_bar.mz_data;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.foo_bar.mz_data  "CREATE SOURCE \"materialize\".\"foo_bar\".\"mz_data\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-${testdrive.seed}') FORMAT AVRO USING SCHEMA '{   \"name\": \"row\",   \"type\": \"record\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"string\"}   ] }' EXPOSE PROGRESS AS \"materialize\".\"foo_bar\".\"mz_data_progress\""
+materialize.foo_bar.mz_data  "CREATE SOURCE \"materialize\".\"foo_bar\".\"mz_data\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-${testdrive.seed}') EXPOSE PROGRESS AS \"materialize\".\"foo_bar\".\"mz_data_progress\""
 
 > SHOW CREATE SINK foo_bar.sink1;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.foo_bar.sink1    "CREATE SINK \"materialize\".\"foo_bar\".\"sink1\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"foo_bar\".\"mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM WITH (PARTITION STRATEGY = 'v0')"
+materialize.foo_bar.sink1    "CREATE SINK \"materialize\".\"foo_bar\".\"sink1\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"foo_bar\".\"mz_data_tbl\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM WITH (PARTITION STRATEGY = 'v0')"

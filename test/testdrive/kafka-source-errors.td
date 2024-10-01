@@ -36,17 +36,24 @@ regex:Failed to resolve hostname|Broker transport failure
   );
 contains:failed to lookup address information
 
-# Check that for all tables clause is rejected
 ! CREATE SOURCE bad_definition1
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic');
+contains:Topic does not exist
+
+> CREATE SOURCE valid_source
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-thetopic-${testdrive.seed}'
+  )
+
+# Check that for all tables clause is rejected
+! CREATE TABLE bad_definition1_tbl FROM SOURCE valid_source (REFERENCE "testdrive-thetopic-${testdrive.seed}")
   FORMAT BYTES FOR ALL TABLES;
 contains: FOR ALL TABLES is only valid for multi-output sources
 
 # Check that for tables() clause is rejected
-! CREATE SOURCE bad_definition2
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic')
+! CREATE TABLE bad_definition_tbl FROM SOURCE valid_source (REFERENCE "testdrive-thetopic-${testdrive.seed}")
   FORMAT BYTES FOR TABLES (t1);
 contains: FOR TABLES (t1) is only valid for multi-output sources
 
@@ -58,8 +65,6 @@ contains: FOR TABLES (t1) is only valid for multi-output sources
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL '-30s'
   )
-  FORMAT TEXT
-  ENVELOPE NONE
 contains:cannot convert negative interval to duration
 
 ! CREATE SOURCE bad_topic_metadata_refresh_interval
@@ -68,13 +73,4 @@ contains:cannot convert negative interval to duration
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL '1hr 1ms'
   )
-  FORMAT TEXT
-  ENVELOPE NONE
 contains:TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour
-
-! CREATE SOURCE bad_topic
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'whatever')
-  FORMAT TEXT
-  ENVELOPE NONE
-contains:Topic does not exist
