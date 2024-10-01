@@ -47,11 +47,13 @@ class Kafka(Scenario):
                       URL '${testdrive.schema-registry-url}');
 
                     > CREATE SOURCE kafka
-                      FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-${testdrive.seed}')
+                      FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-${testdrive.seed}');
+
+                    > CREATE TABLE kafka_tbl FROM SOURCE kafka (REFERENCE "testdrive-kafka-${testdrive.seed}")
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE UPSERT;
 
-                    > CREATE MATERIALIZED VIEW kafka_mv AS SELECT * FROM kafka;
+                    > CREATE MATERIALIZED VIEW kafka_mv AS SELECT * FROM kafka_tbl;
 
                     > CREATE DEFAULT INDEX ON kafka_mv;
                     """
@@ -703,11 +705,13 @@ class OperationalDataMesh(Scenario):
                       URL '${testdrive.schema-registry-url}');
 
                     > CREATE SOURCE kafka_mesh
-                      FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-mesh-${testdrive.seed}')
+                      FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-mesh-${testdrive.seed}');
+
+                    > CREATE TABLE kafka_mesh_tbl FROM SOURCE kafka_mesh (REFERENCE "testdrive-kafka-mesh-${testdrive.seed}")
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE UPSERT;
 
-                    > CREATE MATERIALIZED VIEW kafka_mesh_mv AS SELECT * FROM kafka_mesh;
+                    > CREATE MATERIALIZED VIEW kafka_mesh_mv AS SELECT * FROM kafka_mesh_tbl;
 
                     > CREATE DEFAULT INDEX ON kafka_mesh_mv;
 
@@ -721,7 +725,9 @@ class OperationalDataMesh(Scenario):
                     #$ kafka-verify-topic sink=sink
 
                     > CREATE SOURCE sink_source
-                      FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink')
+                      FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink');
+
+                    > CREATE TABLE sink_source_tbl FROM SOURCE sink_source (REFERENCE "sink")
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE NONE;
                     """
