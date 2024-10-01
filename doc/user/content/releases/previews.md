@@ -26,16 +26,13 @@ Materialize support.
 
 ## Private Preview
 
-### Health Dashboard
+{{< note >}}
 
-[Materialize Console](https://console.materialize.com/) introduces an
-**Environment Overview** page under **Monitoring**. The **Environment Overview**
-page displays a health dashboard that provides the status for each cluster in
-your environment.
+If you would like to enable a private preview feature for your region(s),
+contact your Materialize support.
 
-![Image of the Health Dashboard in the Materialize Console Environment
-Overview](/images/health-dashboard.png "Health Dashboard in the  Materialize
-Console Environment Overview")
+{{</ note >}}
+
 
 ### Graceful cluster resizing
 
@@ -171,6 +168,17 @@ For more information, see:
   `retention_period`](/sql/create-source/postgres/#with_options)
 
 ## Public preview
+
+### Health Dashboard
+
+[Materialize Console](https://console.materialize.com/) introduces an
+**Environment Overview** page under **Monitoring**. The **Environment Overview**
+page displays a health dashboard that provides the status for each cluster in
+your environment.
+
+![Image of the Health Dashboard in the Materialize Console Environment
+Overview](/images/health-dashboard.png "Health Dashboard in the  Materialize
+Console Environment Overview")
 
 ### Native connectors for MySQL
 
