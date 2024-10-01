@@ -245,6 +245,10 @@ contains: CREATE SOURCE specifies DETAILS option
     tstzrange_table
   );
 
+
+! ALTER SOURCE mz_source ADD SUBSOURCE foobar;
+contains:source mz_source does not support ALTER SOURCE.
+
 > SHOW SOURCES
 array_types_table     subsource  cdc_cluster  ""
 conflict_table        subsource  cdc_cluster  ""
