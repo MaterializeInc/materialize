@@ -998,11 +998,13 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}')
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}")
   FORMAT BYTES
   ENVELOPE NONE
   /* A */
 
-> SELECT COUNT(*) = {self.n()} FROM s1
+> SELECT COUNT(*) = {self.n()} FROM s1_tbl
   /* B */
 true
 """
@@ -1043,11 +1045,13 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-upsert-${{testdrive.seed}}')
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-kafka-upsert-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
   /* A */
 
-> SELECT f1 FROM s1
+> SELECT f1 FROM s1_tbl
   /* B */
 1
 2
@@ -1087,10 +1091,12 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-upsert-unique-${{testdrive.seed}}')
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-upsert-unique-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT
 
-> SELECT COUNT(*) FROM s1;
+> SELECT COUNT(*) FROM s1_tbl;
   /* B */
 {self.n()}
 """
@@ -1133,12 +1139,14 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-${{testdrive.seed}}')
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-${{testdrive.seed}}');
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-kafka-recovery-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT;
 
 # Make sure we are fully caught up before continuing
-> SELECT COUNT(*) FROM s1;
+> SELECT COUNT(*) FROM s1_tbl;
 {self.n()}
 
 # Give time for any background tasks (e.g. compaction) to settle down
@@ -1152,7 +1160,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
             Lambda(lambda e: e.RestartMzClusterd()),
             Td(
                 f"""
-> SELECT COUNT(*) /* {self.n()} */ FROM s1;
+> SELECT COUNT(*) /* {self.n()} */ FROM s1_tbl;
   /* B */
 {self.n()}
 """
@@ -1212,13 +1220,15 @@ class KafkaRestartBig(ScenarioBig):
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${{testdrive.seed}}')
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${{testdrive.seed}}');
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-kafka-recovery-big-${{testdrive.seed}}")
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT;
 
 # Confirm that all the EOF markers generated above have been processed
-> CREATE MATERIALIZED VIEW s1_is_complete AS SELECT COUNT(*) = 256 FROM s1 WHERE key <= '\\x00000000000000ff'
+> CREATE MATERIALIZED VIEW s1_is_complete AS SELECT COUNT(*) = 256 FROM s1_tbl WHERE key <= '\\x00000000000000ff'
 
 > SELECT * FROM s1_is_complete;
 true
@@ -1283,12 +1293,14 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-scalability-${{testdrive.seed}}')
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-kafka-scalability-${{testdrive.seed}}")
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE NONE
   /* A */
 
-> CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) AS c FROM s1;
+> CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) AS c FROM s1_tbl;
 
 > SELECT c = {self.n()} FROM v1
   /* B */
@@ -1335,11 +1347,13 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 
 > CREATE SOURCE source1
   IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-input-${{testdrive.seed}}')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-input-${{testdrive.seed}}');
+
+> CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-sink-input-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
-> SELECT COUNT(*) FROM source1;
+> SELECT COUNT(*) FROM source1_tbl;
 {self.n()}
 """
         )
@@ -1356,7 +1370,7 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 
 > CREATE SINK sink1
   IN CLUSTER sink_cluster
-  FROM source1
+  FROM source1_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -1368,12 +1382,14 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
 
 > CREATE SOURCE sink1_check
   IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}');
+
+> CREATE TABLE sink1_check_tbl FROM SOURCE sink1_check (REFERENCE "testdrive-sink-output-${{testdrive.seed}}")
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
-> CREATE MATERIALIZED VIEW sink1_check_v AS SELECT COUNT(*) FROM sink1_check;
+> CREATE MATERIALIZED VIEW sink1_check_v AS SELECT COUNT(*) FROM sink1_check_tbl;
 
 > SELECT * FROM sink1_check_v
   /* B */
@@ -1408,7 +1424,8 @@ $ kafka-ingest format=avro topic=many-kafka-sources-{i} schema=${{schema}} repea
             f"""
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_sources = {self.n() * 2};
+ALTER SYSTEM SET max_sources = {self.n() * 4};
+ALTER SYSTEM SET max_tables = {self.n() * 4};
 
 > DROP OWNED BY materialize CASCADE;
 
@@ -1436,7 +1453,9 @@ ALTER SYSTEM SET max_sources = {self.n() * 2};
             f"""
 > CREATE SOURCE kafka_source{i}
   IN CLUSTER kafka_source_cluster
-  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-many-kafka-sources-{i}-${{testdrive.seed}}')
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-many-kafka-sources-{i}-${{testdrive.seed}}');
+
+> CREATE TABLE kafka_source{i}_tbl FROM SOURCE kafka_source{i} (REFERENCE "testdrive-many-kafka-sources-{i}-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE NONE;
 """
@@ -1444,7 +1463,7 @@ ALTER SYSTEM SET max_sources = {self.n() * 2};
         )
 
         check_sources = "\n".join(
-            f"> SELECT COUNT(*) = {self.COUNT_SOURCE_ENTRIES} FROM kafka_source{i};\ntrue"
+            f"> SELECT COUNT(*) = {self.COUNT_SOURCE_ENTRIES} FROM kafka_source{i}_tbl;\ntrue"
             for i in range(0, self.n())
         )
 
@@ -1862,17 +1881,20 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
 > CREATE SOURCE source{i}
   IN CLUSTER source{i}_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-startup-time-${{testdrive.seed}}')
+
+> CREATE TABLE source{i}_tbl FROM SOURCE source{i} (REFERENCE "testdrive-startup-time-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE NONE
 """
             for i in range(0, self.n())
         )
         join = " ".join(
-            f"LEFT JOIN source{i} USING (f2)" for i in range(1, (ceil(self.scale())))
+            f"LEFT JOIN source{i}_tbl USING (f2)"
+            for i in range(1, (ceil(self.scale())))
         )
 
         create_views = "\n".join(
-            f"> CREATE MATERIALIZED VIEW v{i} AS SELECT * FROM source{i} AS s {join} LIMIT {i+1}"
+            f"> CREATE MATERIALIZED VIEW v{i} AS SELECT * FROM source{i}_tbl AS s {join} LIMIT {i+1}"
             for i in range(0, self.n())
         )
 
@@ -1882,7 +1904,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
 > CREATE CLUSTER sink{i}_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 > CREATE SINK sink{i}
   IN CLUSTER sink{i}_cluster
-  FROM source{i}
+  FROM source{i}_tbl
   INTO KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
