@@ -93,18 +93,18 @@ class CreateSink(Action):
             > CREATE MATERIALIZED VIEW {self.sink.dest_view.name}
               WITH (REFRESH {refresh}) AS
               SELECT SUM(count_all)::int AS count_all, SUM(count_distinct)::int AS count_distinct, SUM(min_value)::int AS min_value, SUM(max_value)::int AS max_value FROM (
-                SELECT (after).count_all, (after).count_distinct, (after).min_value, (after).max_value FROM {self.sink.name}_source
+                SELECT (after).count_all, (after).count_distinct, (after).min_value, (after).max_value FROM {self.sink.name}_source_tbl
                 UNION ALL
-                SELECT -(before).count_all, -(before).count_distinct, -(before).min_value, -(before).max_value FROM {self.sink.name}_source
+                SELECT -(before).count_all, -(before).count_distinct, -(before).min_value, -(before).max_value FROM {self.sink.name}_source_tbl
               );
             """
             if self.sink.dest_view.expensive_aggregates
             else f"""
             > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} AS
               SELECT SUM(count_all)::int AS count_all FROM (
-                SELECT (after).count_all FROM {self.sink.name}_source
+                SELECT (after).count_all FROM {self.sink.name}_source_tbl
                 UNION ALL
-                SELECT -(before).count_all FROM {self.sink.name}_source
+                SELECT -(before).count_all FROM {self.sink.name}_source_tbl
               );
             """
         )
@@ -129,6 +129,8 @@ class CreateSink(Action):
                 > CREATE SOURCE {self.sink.name}_source
                   IN CLUSTER {self.sink.cluster_name_in}
                   FROM KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
+
+                > CREATE TABLE {self.sink.name}_source_tbl FROM SOURCE {self.sink.name}_source (REFERENCE "sink-{self.sink.name}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE NONE
             """
