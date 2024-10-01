@@ -301,7 +301,6 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,
-                    primary_source_id,
                     c,
                     description.clone(),
                     &feedback,
@@ -311,7 +310,6 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 GenericSourceConnection::Postgres(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,
-                    primary_source_id,
                     c,
                     description.clone(),
                     &feedback,
@@ -321,7 +319,6 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 GenericSourceConnection::MySql(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,
-                    primary_source_id,
                     c,
                     description.clone(),
                     &feedback,
@@ -331,7 +328,6 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 GenericSourceConnection::LoadGenerator(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,
-                    primary_source_id,
                     c,
                     description.clone(),
                     &feedback,

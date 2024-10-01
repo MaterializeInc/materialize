@@ -758,22 +758,21 @@ where
         while let Some(_event) = previous.next().await {}
 
         // Drain the input to ensure we correctly process data from before the resume upper
-        'outer: while !PartialOrder::less_equal(&resume_upper, &input_upper) {
-            input.ready().await;
-            while let Some(input_event) = input.next_sync() {
-                match input_event {
-                    AsyncEvent::Data(_cap, mut data) => {
-                        stage_input(
-                            &mut stash,
-                            &mut data,
-                            &input_upper,
-                            &resume_upper,
-                            upsert_config.shrink_upsert_unused_buffers_by_ratio,
-                        );
-                    }
-                    AsyncEvent::Progress(upper) => {
-                        input_upper = upper;
-                        continue 'outer;
+        while let Some(input_event) = input.next().await {
+            match input_event {
+                AsyncEvent::Data(_cap, mut data) => {
+                    stage_input(
+                        &mut stash,
+                        &mut data,
+                        &input_upper,
+                        &resume_upper,
+                        upsert_config.shrink_upsert_unused_buffers_by_ratio,
+                    );
+                }
+                AsyncEvent::Progress(upper) => {
+                    input_upper = upper;
+                    if PartialOrder::less_equal(&resume_upper, &input_upper) {
+                        break;
                     }
                 }
             }
