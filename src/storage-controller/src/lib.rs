@@ -2796,6 +2796,7 @@ where
                     IntrospectionType::SourceStatusHistory,
                     write_handle,
                     source_status_history_desc(&self.config.parameters),
+                    self.now.clone(),
                     &self.storage_collections,
                     &self.txns_read,
                     &self.persist,
@@ -2829,6 +2830,7 @@ where
                     IntrospectionType::SinkStatusHistory,
                     write_handle,
                     sink_status_history_desc(&self.config.parameters),
+                    self.now.clone(),
                     &self.storage_collections,
                     &self.txns_read,
                     &self.persist,
@@ -3609,9 +3611,15 @@ struct IngestionState<T: TimelyTimestamp> {
 ///
 /// Used to inform partial truncation, see [`partially_truncate_status_history`].
 struct StatusHistoryDesc<K> {
-    keep_n: usize,
+    retention_policy: StatusHistoryRetentionPolicy,
     extract_key: Box<dyn Fn(&[Datum]) -> K + Send>,
     extract_time: Box<dyn Fn(&[Datum]) -> CheckedTimestamp<DateTime<Utc>> + Send>,
+}
+enum StatusHistoryRetentionPolicy {
+    // Truncates everything but the last N updates for each key.
+    LastN(usize),
+    // Truncates everything past the time window for each key.
+    TimeWindow(Duration),
 }
 
 fn source_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<GlobalId> {
@@ -3620,7 +3628,9 @@ fn source_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<G
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
 
     StatusHistoryDesc {
-        keep_n: params.keep_n_source_status_history_entries,
+        retention_policy: StatusHistoryRetentionPolicy::LastN(
+            params.keep_n_source_status_history_entries,
+        ),
         extract_key: Box::new(move |datums| {
             GlobalId::from_str(datums[key_idx].unwrap_str()).expect("GlobalId column")
         }),
@@ -3634,7 +3644,9 @@ fn sink_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<Glo
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
 
     StatusHistoryDesc {
-        keep_n: params.keep_n_sink_status_history_entries,
+        retention_policy: StatusHistoryRetentionPolicy::LastN(
+            params.keep_n_sink_status_history_entries,
+        ),
         extract_key: Box::new(move |datums| {
             GlobalId::from_str(datums[key_idx].unwrap_str()).expect("GlobalId column")
         }),
@@ -3648,7 +3660,9 @@ fn privatelink_status_history_desc(params: &StorageParameters) -> StatusHistoryD
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
 
     StatusHistoryDesc {
-        keep_n: params.keep_n_privatelink_status_history_entries,
+        retention_policy: StatusHistoryRetentionPolicy::LastN(
+            params.keep_n_privatelink_status_history_entries,
+        ),
         extract_key: Box::new(move |datums| {
             GlobalId::from_str(datums[key_idx].unwrap_str()).expect("GlobalId column")
         }),
@@ -3663,7 +3677,9 @@ fn replica_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
 
     StatusHistoryDesc {
-        keep_n: params.keep_n_privatelink_status_history_entries,
+        retention_policy: StatusHistoryRetentionPolicy::TimeWindow(
+            params.replica_status_history_retention_window,
+        ),
         extract_key: Box::new(move |datums| {
             (
                 GlobalId::from_str(datums[replica_idx].unwrap_str()).expect("GlobalId column"),

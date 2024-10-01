@@ -18,7 +18,7 @@ import "service/src/params.proto";
 package mz_storage_types.parameters;
 
 message ProtoStorageParameters {
-    reserved 1, 2, 3, 25, 12, 16, 26, 31;
+    reserved 1, 2, 3, 25, 12, 16, 26, 31, 39;
     uint64 keep_n_source_status_history_entries = 4;
     mz_rocksdb_types.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
     bool finalize_shards = 6;
@@ -46,7 +46,7 @@ message ProtoStorageParameters {
     optional mz_proto.ProtoDuration pg_source_tcp_keepalives_interval = 36;
     optional mz_proto.ProtoDuration pg_source_tcp_user_timeout = 37;
     bool pg_source_tcp_configure_server = 38;
-    uint64 keep_n_replica_status_history_entries = 39;
+    mz_proto.ProtoDuration replica_status_history_retention_window = 40;
 
     mz_dyncfg.ConfigUpdates dyncfg_updates = 30;
 
