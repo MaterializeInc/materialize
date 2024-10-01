@@ -45,7 +45,7 @@ use thiserror::Error;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::controller::error::{
@@ -53,8 +53,8 @@ use crate::controller::error::{
 };
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
-    ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates, ReplicaId,
-    StorageCollections,
+    ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates, PeekNotification,
+    ReplicaId, StorageCollections,
 };
 use crate::logging::LogVariant;
 use crate::metrics::IntCounter;
@@ -1060,9 +1060,9 @@ where
         let mut peek_responses = Vec::new();
         let mut to_drop = Vec::new();
         for (uuid, peek) in self.peeks_targeting(id) {
-            peek_responses.push(ComputeControllerResponse::PeekResponse(
+            peek_responses.push(ComputeControllerResponse::PeekNotification(
                 uuid,
-                PeekResponse::Error(ERROR_TARGET_REPLICA_FAILED.into()),
+                PeekNotification::Error(ERROR_TARGET_REPLICA_FAILED.into()),
                 peek.otel_ctx.clone(),
             ));
             to_drop.push(uuid);
@@ -1070,7 +1070,9 @@ where
         for response in peek_responses {
             self.deliver_response(response);
         }
-        to_drop.into_iter().for_each(|uuid| self.remove_peek(uuid));
+        to_drop
+            .into_iter()
+            .for_each(|uuid| drop(self.remove_peek(uuid)));
 
         Ok(())
     }
@@ -1433,6 +1435,9 @@ where
         map_filter_project: mz_expr::SafeMfpPlan,
         mut read_hold: ReadHold<T>,
         target_replica: Option<ReplicaId>,
+        peek_response_tx: oneshot::Sender<PeekResponse>,
+        limit: Option<usize>,
+        offset: usize,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -1460,6 +1465,9 @@ where
                 otel_ctx: otel_ctx.clone(),
                 requested_at: Instant::now(),
                 _read_hold: read_hold,
+                peek_response_tx,
+                limit,
+                offset,
             },
         );
 
@@ -1480,25 +1488,29 @@ where
 
     /// Cancels an existing peek request.
     #[mz_ore::instrument(level = "debug")]
-    pub fn cancel_peek(&mut self, uuid: Uuid) {
-        let Some(peek) = self.peeks.get_mut(&uuid) else {
+    pub fn cancel_peek(&mut self, uuid: Uuid, reason: PeekResponse) {
+        // Remove the peek.
+        // This will also propagate the cancellation to the replicas.
+        let Some(peek) = self.remove_peek(uuid) else {
             tracing::warn!("did not find pending peek for {uuid}");
             return;
         };
 
-        let response = PeekResponse::Canceled;
         let duration = peek.requested_at.elapsed();
-        self.metrics.observe_peek_response(&response, duration);
+        self.metrics.observe_peek_response(&reason, duration);
+
+        let notification = PeekNotification::new(&reason, peek.offset, peek.limit);
+
+        let otel_ctx = peek.otel_ctx.clone();
+        otel_ctx.attach_as_parent();
+        let _ = peek.peek_response_tx.send(reason);
 
         // Enqueue the response to the cancellation.
-        let otel_ctx = peek.otel_ctx.clone();
-        self.deliver_response(ComputeControllerResponse::PeekResponse(
-            uuid, response, otel_ctx,
+        self.deliver_response(ComputeControllerResponse::PeekNotification(
+            uuid,
+            notification,
+            otel_ctx,
         ));
-
-        // Remove the peek.
-        // This will also propagate the cancellation to the replicas.
-        self.remove_peek(uuid);
     }
 
     /// Assigns a read policy to specific identifiers.
@@ -1671,16 +1683,17 @@ where
     ///    peek, and to allow the `ComputeCommandHistory` to reduce away the corresponding `Peek`
     ///    command.
     ///  * Remove the read hold for this peek, unblocking compaction that might have waited on it.
-    fn remove_peek(&mut self, uuid: Uuid) {
-        let Some(peek) = self.peeks.remove(&uuid) else {
-            return;
-        };
+    #[must_use]
+    fn remove_peek(&mut self, uuid: Uuid) -> Option<PendingPeek<T>> {
+        let peek = self.peeks.remove(&uuid);
 
-        // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
-        // (by dropping it), to avoid the edge case that caused database-issues#4812.
-        self.send(ComputeCommand::CancelPeek { uuid });
+        if peek.is_some() {
+            // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
+            // (by dropping it), to avoid the edge case that caused database-issues#4812.
+            self.send(ComputeCommand::CancelPeek { uuid });
+        }
 
-        drop(peek);
+        peek
     }
 
     /// Handles a response from a replica. Replica IDs are re-used across replica restarts, so we
@@ -1771,7 +1784,7 @@ where
 
         // We might not be tracking this peek anymore, because we have served a response already or
         // because it was canceled. If this is the case, we ignore the response.
-        let Some(peek) = self.peeks.get(&uuid) else {
+        let Some(peek) = self.remove_peek(uuid) else {
             return;
         };
 
@@ -1784,12 +1797,18 @@ where
         let duration = peek.requested_at.elapsed();
         self.metrics.observe_peek_response(&response, duration);
 
-        self.remove_peek(uuid);
+        let notification = PeekNotification::new(&response, peek.offset, peek.limit);
+
+        // Peek cancellations are best-effort, so we might still receive a response for a canceled
+        // peek, but the recipient is gone. Ignore errors for this case.
+        let _ = peek.peek_response_tx.send(response);
 
         // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
         // currently want the parent to be whatever the compute worker did with this peek.
-        self.deliver_response(ComputeControllerResponse::PeekResponse(
-            uuid, response, otel_ctx,
+        self.deliver_response(ComputeControllerResponse::PeekNotification(
+            uuid,
+            notification,
+            otel_ctx,
         ))
     }
 
@@ -2502,6 +2521,7 @@ impl<T: ComputeControllerTimestamp> RefreshIntrospectionState<T> {
     }
 }
 
+/// A note of an outstanding peek response.
 #[derive(Debug)]
 struct PendingPeek<T: Timestamp> {
     /// For replica-targeted peeks, this specifies the replica whose response we should pass on.
@@ -2516,6 +2536,12 @@ struct PendingPeek<T: Timestamp> {
     requested_at: Instant,
     /// The read hold installed to serve this peek.
     _read_hold: ReadHold<T>,
+    /// The channel to send peek results.
+    peek_response_tx: oneshot::Sender<PeekResponse>,
+    /// An optional limit of the peek's result size.
+    limit: Option<usize>,
+    /// The offset into the peek's result.
+    offset: usize,
 }
 
 #[derive(Debug, Clone)]

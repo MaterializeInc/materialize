@@ -32,9 +32,9 @@ use futures::future::BoxFuture;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_client::controller::{
-    ComputeController, ComputeControllerResponse, ComputeControllerTimestamp,
+    ComputeController, ComputeControllerResponse, ComputeControllerTimestamp, PeekNotification,
 };
-use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
+use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_controller_types::WatchSetId;
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
@@ -109,12 +109,12 @@ pub struct ControllerConfig {
 /// Responses that [`Controller`] can produce.
 #[derive(Debug)]
 pub enum ControllerResponse<T = mz_repr::Timestamp> {
-    /// The worker's response to a specified (by connection id) peek.
+    /// Notification of a worker's response to a specified (by connection id) peek.
     ///
     /// Additionally, an `OpenTelemetryContext` to forward trace information
     /// back into coord. This allows coord traces to be children of work
     /// done in compute!
-    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
+    PeekNotification(Uuid, PeekNotification, OpenTelemetryContext),
     /// The worker's next response to a specified subscribe.
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
     /// The worker's next response to a specified copy to.
@@ -472,8 +472,8 @@ where
         let response = self.compute.process(&mut *self.storage);
 
         let response = response.and_then(|r| match r {
-            ComputeControllerResponse::PeekResponse(uuid, peek, otel_ctx) => {
-                Some(ControllerResponse::PeekResponse(uuid, peek, otel_ctx))
+            ComputeControllerResponse::PeekNotification(uuid, peek, otel_ctx) => {
+                Some(ControllerResponse::PeekNotification(uuid, peek, otel_ctx))
             }
             ComputeControllerResponse::SubscribeResponse(id, tail) => {
                 Some(ControllerResponse::SubscribeResponse(id, tail))

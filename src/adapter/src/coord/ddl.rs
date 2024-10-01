@@ -627,18 +627,18 @@ impl Coordinator {
             if !peeks_to_drop.is_empty() {
                 for (dropped_name, uuid) in peeks_to_drop {
                     if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
+                        // Client may have left.
+                        let cancel_reason = PeekResponse::Error(format!(
+                            "query could not complete because {dropped_name} was dropped"
+                        ));
                         self.controller
                             .compute
-                            .cancel_peek(pending_peek.cluster_id, uuid)
+                            .cancel_peek(pending_peek.cluster_id, uuid, cancel_reason)
                             .unwrap_or_terminate("unable to cancel peek");
                         self.retire_execution(
                             StatementEndedExecutionReason::Canceled,
                             pending_peek.ctx_extra,
                         );
-                        // Client may have left.
-                        let _ = pending_peek.sender.send(PeekResponse::Error(format!(
-                            "query could not complete because {dropped_name} was dropped"
-                        )));
                     }
                 }
             }

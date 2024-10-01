@@ -43,6 +43,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::ComputeInstanceId;
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -93,8 +94,8 @@ impl ComputeControllerTimestamp for mz_repr::Timestamp {}
 /// Responses from the compute controller.
 #[derive(Debug)]
 pub enum ComputeControllerResponse<T> {
-    /// See [`crate::protocol::response::ComputeResponse::PeekResponse`].
-    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
+    /// See [`PeekNotification`].
+    PeekNotification(Uuid, PeekNotification, OpenTelemetryContext),
     /// See [`crate::protocol::response::ComputeResponse::SubscribeResponse`].
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
     /// The response from a dataflow containing an `CopyToS3Oneshot` sink.
@@ -118,6 +119,34 @@ pub enum ComputeControllerResponse<T> {
         /// The new upper frontier of the identified compute collection.
         upper: Antichain<T>,
     },
+}
+
+/// Notification and summary of a received and forwarded [`crate::protocol::response::ComputeResponse::PeekResponse`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum PeekNotification {
+    /// Returned rows of a successful peek.
+    Success {
+        /// Number of rows in the returned peek result.
+        rows: u64,
+    },
+    /// Error of an unsuccessful peek, including the reason for the error.
+    Error(String),
+    /// The peek was canceled.
+    Canceled,
+}
+
+impl PeekNotification {
+    /// Construct a new [`PeekNotification`] from a [`PeekResponse`]. The `offset` and `limit`
+    /// parameters are used to calculate the number of rows in the peek result.
+    fn new(peek_response: &PeekResponse, offset: usize, limit: Option<usize>) -> Self {
+        match peek_response {
+            PeekResponse::Rows(rows) => Self::Success {
+                rows: u64::cast_from(rows.count(offset, limit)),
+            },
+            PeekResponse::Error(err) => Self::Error(err.clone()),
+            PeekResponse::Canceled => Self::Canceled,
+        }
+    }
 }
 
 /// Replica configuration
@@ -830,6 +859,9 @@ where
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
+        peek_response_tx: oneshot::Sender<PeekResponse>,
+        limit: Option<usize>,
+        offset: usize,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -864,6 +896,9 @@ where
                 map_filter_project,
                 read_hold,
                 target_replica,
+                peek_response_tx,
+                limit,
+                offset,
             )
             .expect("validated")
         });
@@ -884,9 +919,10 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         uuid: Uuid,
+        reason: PeekResponse,
     ) -> Result<(), InstanceMissing> {
         self.instance(instance_id)?
-            .call(move |i| i.cancel_peek(uuid));
+            .call(move |i| i.cancel_peek(uuid, reason));
         Ok(())
     }
 
