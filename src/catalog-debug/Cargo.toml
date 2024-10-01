@@ -23,7 +23,6 @@ mz-storage-types = { path = "../storage-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-tls-util = { path = "../tls-util" }
 mz-repr = { path = "../repr" }
-mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 serde = "1.0.152"
