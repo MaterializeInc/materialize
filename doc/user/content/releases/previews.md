@@ -53,18 +53,6 @@ to physical time.
 For more information, see [Real-time
 recency](/get-started/isolation-level/#real-time-recency).
 
-### Native connectors for MySQL
-
-Materialize provides native connectors for MySQL as a source.
-
-For more information, see:
-
-- [Ingest data: MySQL](/ingest-data/mysql/)
-
-- [Create Source: MySQL](/sql/create-source/mysql/)
-
-- [Create Connection: MySQL](/sql/create-connection/#mysql)
-
 ### Support Amazon S3 as a sink
 
 Materialize supports exporting results to Amazon S3.
@@ -197,6 +185,18 @@ For more information, see:
   `retention_period`](/sql/create-source/postgres/#with_options)
 
 ## Public preview
+
+### Native connectors for MySQL
+
+Materialize provides native connectors for MySQL as a source.
+
+For more information, see:
+
+- [Ingest data: MySQL](/ingest-data/mysql/)
+
+- [Create Source: MySQL](/sql/create-source/mysql/)
+
+- [Create Connection: MySQL](/sql/create-connection/#mysql)
 
 ### Various mz_internal tables
 
