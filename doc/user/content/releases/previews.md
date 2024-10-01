@@ -57,7 +57,11 @@ recency](/get-started/isolation-level/#real-time-recency).
 
 Materialize supports exporting results to Amazon S3.
 
-For more information, see [Serve results: Amazon S3](/serve-results/s3/).
+For more information, see:
+
+- [Serve results: Amazon S3](/serve-results/s3/).
+
+- [Copy to Amazon S3](/sql/copy-to/#copy-to-s3).
 
 ### Support Snowflake as a sink
 
@@ -91,14 +95,6 @@ For more information, see:
 
 - [`CREATE CLUSTER`](/sql/create-cluster).
 - [`ALTER CLUSTER`](/sql/alter-cluster).
-
-
-### Copy to Amazon S3
-
-Materialize adds support for Amazon S3 to the [`COPY TO`](/sql/copy-to/)
-command.
-
-For more information, see [Copy to Amazon S3](/sql/copy-to/#copy-to-s3)
 
 ### COMMENT ON
 
@@ -194,7 +190,7 @@ Materialize supports the use of an AWS Connection to perform:
 
 - IAM authentication with an Amazon MSK cluster.
 
-- Bulk exports to Amazon S3 [(Private Preview)](#copy-to-amazon-s3).
+- Bulk exports to Amazon S3 [(Private Preview)](#support-amazon-s3-as-a-sink).
 
 For more information, see [`CREATE Connection:
 AWS`](/sql/create-connection/#aws).
@@ -246,4 +242,4 @@ The features listed below are in preview but enabled by default.
 Materialize provides an interactive WebSocket API endpoint. This feature is
 enabled by default.
 
-For more information, see [Websocket](/integrations/websocket-api/).
+For more information, see [Websocket API](/integrations/websocket-api/).
