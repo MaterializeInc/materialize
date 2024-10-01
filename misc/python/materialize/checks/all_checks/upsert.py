@@ -32,10 +32,12 @@ class UpsertInsert(Check):
 
                 > CREATE SOURCE upsert_insert
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-insert-${testdrive.seed}')
+
+                > CREATE TABLE upsert_insert_tbl FROM SOURCE upsert_insert (REFERENCE "testdrive-upsert-insert-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW upsert_insert_view AS SELECT COUNT(DISTINCT key1 || ' ' || f1) FROM upsert_insert;
+                > CREATE MATERIALIZED VIEW upsert_insert_view AS SELECT COUNT(DISTINCT key1 || ' ' || f1) FROM upsert_insert_tbl;
                 """
             )
         )
@@ -59,7 +61,7 @@ class UpsertInsert(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT COUNT(*), COUNT(DISTINCT key1), COUNT(DISTINCT f1) FROM upsert_insert
+                > SELECT COUNT(*), COUNT(DISTINCT key1), COUNT(DISTINCT f1) FROM upsert_insert_tbl
                 10000 10000 10000
 
                 > SELECT * FROM upsert_insert_view;
@@ -82,10 +84,12 @@ class UpsertUpdate(Check):
 
                 > CREATE SOURCE upsert_update
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-update-${testdrive.seed}')
+
+                > CREATE TABLE upsert_update_tbl FROM SOURCE upsert_update (REFERENCE "testdrive-upsert-update-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW upsert_update_view AS SELECT LEFT(f1, 1), COUNT(*) AS c1, COUNT(DISTINCT key1) AS c2, COUNT(DISTINCT f1) AS c3 FROM upsert_update GROUP BY LEFT(f1, 1);
+                > CREATE MATERIALIZED VIEW upsert_update_view AS SELECT LEFT(f1, 1), COUNT(*) AS c1, COUNT(DISTINCT key1) AS c2, COUNT(DISTINCT f1) AS c3 FROM upsert_update_tbl GROUP BY LEFT(f1, 1);
                 """
             )
         )
@@ -129,10 +133,12 @@ class UpsertDelete(Check):
 
                 > CREATE SOURCE upsert_delete
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-delete-${testdrive.seed}')
+
+                > CREATE TABLE upsert_delete_tbl FROM SOURCE upsert_delete (REFERENCE "testdrive-upsert-delete-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW upsert_delete_view AS SELECT COUNT(*), MIN(key1), MAX(key1) FROM upsert_delete;
+                > CREATE MATERIALIZED VIEW upsert_delete_view AS SELECT COUNT(*), MIN(key1), MAX(key1) FROM upsert_delete_tbl;
                 """
             )
         )

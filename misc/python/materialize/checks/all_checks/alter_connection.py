@@ -71,7 +71,9 @@ class AlterConnectionSshChangeBase(Check):
                   TO KAFKA (SECURITY PROTOCOL = "plaintext", BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.DROP_SSH, SshChange.CHANGE_SSH_HOST} else ''});
 
                 > CREATE SOURCE alter_connection_source_{i}a
-                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-{i}a-${{testdrive.seed}}')
+                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-{i}a-${{testdrive.seed}}');
+
+                > CREATE TABLE alter_connection_source_{i}a_tbl FROM SOURCE alter_connection_source_{i}a (REFERENCE "testdrive-alter-connection-{i}a-${{testdrive.seed}}")
                   FORMAT TEXT
                   ENVELOPE NONE;
 
@@ -120,7 +122,9 @@ class AlterConnectionSshChangeBase(Check):
                   TO KAFKA (SECURITY PROTOCOL = "plaintext", BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.DROP_SSH, SshChange.CHANGE_SSH_HOST} else ''});
 
                 > CREATE SOURCE alter_connection_source_{i}b
-                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}b (TOPIC 'testdrive-alter-connection-{i}b-${{testdrive.seed}}')
+                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}b (TOPIC 'testdrive-alter-connection-{i}b-${{testdrive.seed}}');
+
+                > CREATE TABLE alter_connection_source_{i}b_tbl FROM SOURCE alter_connection_source_{i}b (REFERENCE "testdrive-alter-connection-{i}b-${{testdrive.seed}}")
                   FORMAT TEXT
                   ENVELOPE NONE;
 
@@ -160,22 +164,25 @@ class AlterConnectionSshChangeBase(Check):
                 > SELECT count(regexp_match(create_sql, 'USING SSH TUNNEL')) > 0 FROM (SHOW CREATE CONNECTION kafka_conn_alter_connection_{i}a);
                 {'true' if self.ssh_change in {SshChange.ADD_SSH, SshChange.CHANGE_SSH_HOST} else 'false'}
 
-                > SELECT * FROM alter_connection_source_{i}a;
+                > SELECT * FROM alter_connection_source_{i}a_tbl;
                 one
                 two
                 three
                 four
 
-                > SELECT * FROM alter_connection_source_{i}b;
+                > SELECT * FROM alter_connection_source_{i}b_tbl;
                 ten
                 twenty
                 thirty
                 fourty
 
+                > DROP TABLE IF EXISTS alter_connection_sink_source_{i}_tbl
                 > DROP SOURCE IF EXISTS alter_connection_sink_source_{i}
 
                 > CREATE SOURCE alter_connection_sink_source_{i}
-                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-sink-{i}-${{testdrive.seed}}')
+                  FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-sink-{i}-${{testdrive.seed}}');
+
+                > CREATE TABLE alter_connection_sink_source_{i}_tbl FROM SOURCE alter_connection_sink_source_{i} (REFERENCE "testdrive-alter-connection-sink-{i}-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE;
 
@@ -194,7 +201,7 @@ class AlterConnectionSshChangeBase(Check):
 
                 # Source based on sink topic has ingested data; data must be text-formatted because records are not
                 # supported in testdrive
-                > SELECT before::text, after::text FROM alter_connection_sink_source_{i};
+                > SELECT before::text, after::text FROM alter_connection_sink_source_{i}_tbl;
                 <null> (1)
                 <null> (2)
                 <null> (3)

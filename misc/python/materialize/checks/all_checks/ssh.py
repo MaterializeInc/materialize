@@ -165,7 +165,9 @@ class SshKafka(Check):
                   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh1
-                  FROM KAFKA CONNECTION kafka_conn_ssh1 (TOPIC 'testdrive-ssh1-${testdrive.seed}')
+                  FROM KAFKA CONNECTION kafka_conn_ssh1 (TOPIC 'testdrive-ssh1-${testdrive.seed}');
+
+                > CREATE TABLE ssh1_tbl FROM SOURCE ssh1 (REFERENCE "testdrive-ssh1-${testdrive.seed}")
                   FORMAT TEXT
                   ENVELOPE NONE;
                 """
@@ -183,7 +185,9 @@ class SshKafka(Check):
                   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh2
-                  FROM KAFKA CONNECTION kafka_conn_ssh2 (TOPIC 'testdrive-ssh2-${testdrive.seed}')
+                  FROM KAFKA CONNECTION kafka_conn_ssh2 (TOPIC 'testdrive-ssh2-${testdrive.seed}');
+
+                > CREATE TABLE ssh2_tbl FROM SOURCE ssh2 (REFERENCE "testdrive-ssh2-${testdrive.seed}")
                   FORMAT TEXT
                   ENVELOPE NONE;
 
@@ -200,7 +204,9 @@ class SshKafka(Check):
                   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh3
-                  FROM KAFKA CONNECTION kafka_conn_ssh3 (TOPIC 'testdrive-ssh3-${testdrive.seed}')
+                  FROM KAFKA CONNECTION kafka_conn_ssh3 (TOPIC 'testdrive-ssh3-${testdrive.seed}');
+
+                > CREATE TABLE ssh3_tbl FROM SOURCE ssh3 (REFERENCE "testdrive-ssh3-${testdrive.seed}")
                   FORMAT TEXT
                   ENVELOPE NONE;
 
@@ -220,16 +226,16 @@ class SshKafka(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT * FROM ssh1;
+                > SELECT * FROM ssh1_tbl;
                 one
                 two
                 three
 
-                > SELECT * FROM ssh2;
+                > SELECT * FROM ssh2_tbl;
                 two
                 three
 
-                > SELECT * FROM ssh3;
+                > SELECT * FROM ssh3_tbl;
                 three
            """
             )

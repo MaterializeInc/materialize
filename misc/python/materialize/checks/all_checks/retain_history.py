@@ -317,6 +317,8 @@ class RetainHistoryOnKafkaSource(Check):
 
                 > CREATE SOURCE retain_history_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-retain-history-${{testdrive.seed}}')
+
+                > CREATE TABLE retain_history_source_tbl FROM SOURCE retain_history_source (REFERENCE "testdrive-retain-history-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
                   WITH (RETAIN HISTORY FOR '{RETAIN_HISTORY_DURATION}')
@@ -383,49 +385,49 @@ class RetainHistoryOnKafkaSource(Check):
                 $ set-from-sql var=time7
                 SELECT t::STRING FROM time_for_source WHERE time_index = 7
 
-                > SELECT * FROM retain_history_source AS OF '${time0}'::TIMESTAMP; -- time0 (nothing exists)
+                > SELECT * FROM retain_history_source_tbl AS OF '${time0}'::TIMESTAMP; -- time0 (nothing exists)
                 K0 A0
                 K1 A1
                 K2 A2
                 K3 A3
                 K4 A4
 
-                > SELECT * FROM retain_history_source AS OF '${time1}'::TIMESTAMP; -- time1 (topic created)
+                > SELECT * FROM retain_history_source_tbl AS OF '${time1}'::TIMESTAMP; -- time1 (topic created)
                 K0 A0
                 K1 A1
                 K2 A2
                 K3 A3
                 K4 A4
 
-                > SELECT * FROM retain_history_source AS OF '${time2}'::TIMESTAMP; -- time2 (added data to topic)
+                > SELECT * FROM retain_history_source_tbl AS OF '${time2}'::TIMESTAMP; -- time2 (added data to topic)
                 K0 A0
                 K1 A1
                 K2 A2
                 K3 A3
                 K4 A4
 
-                > SELECT * FROM retain_history_source AS OF '${time3}'::TIMESTAMP; -- time3 (further added data to topic)
+                > SELECT * FROM retain_history_source_tbl AS OF '${time3}'::TIMESTAMP; -- time3 (further added data to topic)
                 K0 A0
                 K1 A1
                 K2 A2
                 K3 A3
                 K4 A4
 
-                > SELECT * FROM retain_history_source AS OF '${time4}'::TIMESTAMP; -- time4 (created source)
+                > SELECT * FROM retain_history_source_tbl AS OF '${time4}'::TIMESTAMP; -- time4 (created source)
                 K0 A0
                 K1 A1
                 K2 A2
                 K3 A3
                 K4 A4
 
-                > SELECT * FROM retain_history_source AS OF '${time5}'::TIMESTAMP; -- time5 (updated data in topic in manipulate#1)
+                > SELECT * FROM retain_history_source_tbl AS OF '${time5}'::TIMESTAMP; -- time5 (updated data in topic in manipulate#1)
                 K0 B0
                 K1 B1
                 K2 A2
                 K3 A3
                 K4 A4
 
-                > SELECT * FROM retain_history_source AS OF '${time6}'::TIMESTAMP; -- time6 (updated data in topic in manipulate#2)
+                > SELECT * FROM retain_history_source_tbl AS OF '${time6}'::TIMESTAMP; -- time6 (updated data in topic in manipulate#2)
                 K0 C0
                 K1 C1
                 K2 C2
@@ -433,7 +435,7 @@ class RetainHistoryOnKafkaSource(Check):
                 K4 C4
                 K5 C5
 
-                > SELECT * FROM retain_history_source AS OF '${time7}'::TIMESTAMP; -- time7 (updated data in topic again in manipulate#2)
+                > SELECT * FROM retain_history_source_tbl AS OF '${time7}'::TIMESTAMP; -- time7 (updated data in topic again in manipulate#2)
                 K0 D0
                 K1 C1
                 K2 C2
@@ -441,7 +443,7 @@ class RetainHistoryOnKafkaSource(Check):
                 K4 C4
                 K5 C5
 
-                > SELECT * FROM retain_history_source;
+                > SELECT * FROM retain_history_source_tbl;
                 K0 D0
                 K1 C1
                 K2 C2
