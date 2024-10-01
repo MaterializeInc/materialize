@@ -37,21 +37,23 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > CREATE SOURCE s1
               FROM KAFKA CONNECTION kafka
-              (TOPIC 'testdrive-crash-${testdrive.seed}')
+              (TOPIC 'testdrive-crash-${testdrive.seed}');
+
+            > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-crash-${testdrive.seed}")
               FORMAT BYTES
               ENVELOPE NONE;
 
             $ kafka-ingest format=bytes topic=crash
             CDE
 
-            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1 UNION ALL SELECT COUNT(*) FROM s1;
+            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1 UNION ALL SELECT COUNT(*) FROM s1_tbl;
 
             $ kafka-ingest format=bytes topic=crash
             DEF
 
             > CREATE DEFAULT INDEX ON v1;
 
-            > SELECT COUNT(*) > 0 FROM s1;
+            > SELECT COUNT(*) > 0 FROM s1_tbl;
             true
             """
         ),
@@ -71,7 +73,7 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
             > SELECT COUNT(*) FROM t1;
             3
 
-            > SELECT COUNT(*) FROM s1;
+            > SELECT COUNT(*) FROM s1_tbl;
             3
 
             > SELECT * FROM v1;

@@ -28,11 +28,13 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
         f"""
             > CREATE SOURCE source{i}
               IN CLUSTER storage_shared_fate
-              FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-${{testdrive.seed}}')
+              FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-${{testdrive.seed}}');
+
+            > CREATE TABLE source{i}_tbl FROM SOURCE source{i} (REFERENCE "testdrive-storage-shared-fate-${{testdrive.seed}}")
               FORMAT BYTES
               ENVELOPE NONE;
 
-            > CREATE MATERIALIZED VIEW v{i} AS SELECT COUNT(*) FROM source{i};
+            > CREATE MATERIALIZED VIEW v{i} AS SELECT COUNT(*) FROM source{i}_tbl;
 
             > CREATE TABLE t{i} (f1 INTEGER);
 
@@ -50,7 +52,9 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > CREATE SOURCE sink{i}_check
               IN CLUSTER storage_shared_fate
-              FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-sink{i}-${{testdrive.seed}}')
+              FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-sink{i}-${{testdrive.seed}}');
+
+            > CREATE TABLE sink{i}_check_tbl FROM SOURCE sink{i}_check (REFERENCE "testdrive-storage-shared-fate-sink{i}-${{testdrive.seed}}")
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
     """
@@ -59,10 +63,10 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
     check_counts = "\n".join(
         f"""
-            > SELECT COUNT(*) FROM source{i};
+            > SELECT COUNT(*) FROM source{i}_tbl;
             2000
 
-            > SELECT COUNT(*) FROM sink{i}_check;
+            > SELECT COUNT(*) FROM sink{i}_check_tbl;
             1000
     """
         for i in range(NUM_SOURCES)
@@ -101,13 +105,13 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
         f"""
             > INSERT INTO t{i} SELECT 234000 + generate_series FROM generate_series(1, 1000);
 
-            > SELECT COUNT(*) FROM source{i};
+            > SELECT COUNT(*) FROM source{i}_tbl;
             3000
 
             > SELECT * FROM v{i};
             3000
 
-            > SELECT COUNT(*) FROM sink{i}_check;
+            > SELECT COUNT(*) FROM sink{i}_check_tbl;
             2000
     """
         for i in range(NUM_SOURCES)

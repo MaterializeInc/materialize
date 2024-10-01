@@ -34,13 +34,15 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
             > CREATE SOURCE source1
               IN CLUSTER testdrive_no_reset_disk_cluster1
               FROM KAFKA CONNECTION kafka
-              (TOPIC 'testdrive-test-${testdrive.seed}')
+              (TOPIC 'testdrive-test-${testdrive.seed}');
+
+            > CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-test-${testdrive.seed}")
               KEY FORMAT TEXT
               VALUE FORMAT TEXT
               ENVELOPE UPSERT;
 
 
-            > SELECT * FROM source1;
+            > SELECT * FROM source1_tbl;
             key           text
             ------------------
             key1          val1
@@ -49,7 +51,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
             $ kafka-ingest key-format=bytes format=bytes topic=test
             key1:val3
 
-            > SELECT * FROM source1;
+            > SELECT * FROM source1_tbl;
             key           text
             ------------------
             key1          val3
@@ -105,13 +107,15 @@ def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
             > CREATE SOURCE source1
               IN CLUSTER disk_cluster2
               FROM KAFKA CONNECTION kafka
-              (TOPIC 'testdrive-test-${testdrive.seed}')
+              (TOPIC 'testdrive-test-${testdrive.seed}');
+
+            > CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-test-${testdrive.seed}")
               KEY FORMAT TEXT
               VALUE FORMAT TEXT
               ENVELOPE UPSERT;
 
 
-            > SELECT * FROM source1;
+            > SELECT * FROM source1_tbl;
             key           text
             ------------------
             key1          val1
@@ -120,7 +124,7 @@ def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
             $ kafka-ingest key-format=bytes format=bytes topic=test
             key1:val3
 
-            > SELECT * FROM source1;
+            > SELECT * FROM source1_tbl;
             key           text
             ------------------
             key1          val3
@@ -173,13 +177,15 @@ def test_no_disk_replica(mz: MaterializeApplication) -> None:
             > CREATE SOURCE no_disk_source1
               IN CLUSTER no_disk_cluster1
               FROM KAFKA CONNECTION kafka
-              (TOPIC 'testdrive-test-no-disk-${testdrive.seed}')
+              (TOPIC 'testdrive-test-no-disk-${testdrive.seed}');
+
+            > CREATE TABLE no_disk_source1_tbl FROM SOURCE no_disk_source1 (REFERENCE "testdrive-test-no-disk-${testdrive.seed}")
               KEY FORMAT TEXT
               VALUE FORMAT TEXT
               ENVELOPE UPSERT;
 
 
-            > SELECT * FROM no_disk_source1;
+            > SELECT * FROM no_disk_source1_tbl;
             key           text
             ------------------
             key1          val1
@@ -188,7 +194,7 @@ def test_no_disk_replica(mz: MaterializeApplication) -> None:
             $ kafka-ingest key-format=bytes format=bytes topic=test-no-disk
             key1:val3
 
-            > SELECT * FROM no_disk_source1;
+            > SELECT * FROM no_disk_source1_tbl;
             key           text
             ------------------
             key1          val3
