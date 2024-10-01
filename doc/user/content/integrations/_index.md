@@ -110,7 +110,7 @@ Debezium has an extensive ecosystem of connectors, but each database has its own
 | MongoDB _(via Debezium)_    | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                                                                                                                                                                                                                                                                                                                                           | [](#notify) |
 | SQL Server _(via Debezium)_ | {{< supportLevel alpha >}}       | Supported with known limitations. See the [SQL Server CDC guide](/integrations/cdc-sql-server/) for a step-by-step breakdown of the integration.                                                                                                                                                                                                                                                             | [](#notify) |
 
-👋 _Is there another database you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration._
+👋 _Is there another database you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)._
 
 ## Object storage services
 
