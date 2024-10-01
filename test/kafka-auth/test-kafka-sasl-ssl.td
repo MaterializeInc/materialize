@@ -115,9 +115,11 @@ contains:Invalid CA certificate
 
 > CREATE SOURCE text_data_plain FROM KAFKA CONNECTION kafka_plain (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data_plain
+> CREATE TABLE text_data_plain_tbl FROM SOURCE text_data_plain (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+
+> SELECT * FROM text_data_plain_tbl
 banana
 
 > CREATE CONNECTION kafka_scram_sha_256 TO KAFKA (
@@ -130,9 +132,11 @@ banana
 
 > CREATE SOURCE text_data_scram_sha_256 FROM KAFKA CONNECTION kafka_scram_sha_256 (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data_scram_sha_256
+> CREATE TABLE text_data_scram_sha_256_tbl FROM SOURCE text_data_scram_sha_256 (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+
+> SELECT * FROM text_data_scram_sha_256_tbl
 banana
 
 > CREATE CONNECTION kafka_scram_sha_512 TO KAFKA (
@@ -145,9 +149,11 @@ banana
 
 > CREATE SOURCE text_data_scram_sha_512 FROM KAFKA CONNECTION kafka_scram_sha_512 (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data_scram_sha_256
+> CREATE TABLE text_data_scram_sha_512_tbl FROM SOURCE text_data_scram_sha_512 (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+
+> SELECT * FROM text_data_scram_sha_256_tbl
 banana
 
 # ==> Test with an SSH tunnel. <==
@@ -162,9 +168,11 @@ banana
 
 > CREATE SOURCE text_data_ssh_plain FROM KAFKA CONNECTION kafka_ssh_plain (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data_ssh_plain
+> CREATE TABLE text_data_ssh_plain_tbl FROM SOURCE text_data_ssh_plain (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+
+> SELECT * FROM text_data_ssh_plain_tbl
 banana
 
 > CREATE CONNECTION kafka_ssh_scram_sha_256 TO KAFKA (
@@ -177,9 +185,11 @@ banana
 
 > CREATE SOURCE text_data_ssh_scram_sha_256 FROM KAFKA CONNECTION kafka_ssh_scram_sha_256 (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data_ssh_scram_sha_256
+> CREATE TABLE text_data_ssh_scram_sha_256_tbl FROM SOURCE text_data_ssh_scram_sha_256 (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+
+> SELECT * FROM text_data_ssh_scram_sha_256_tbl
 banana
 
 > CREATE CONNECTION kafka_ssh_scram_sha_512 TO KAFKA (
@@ -192,7 +202,9 @@ banana
 
 > CREATE SOURCE text_data_ssh_scram_sha_512 FROM KAFKA CONNECTION kafka_ssh_scram_sha_512 (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data_ssh_scram_sha_512
+> CREATE TABLE text_data_ssh_scram_sha_512_tbl FROM SOURCE text_data_ssh_scram_sha_512 (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+
+> SELECT * FROM text_data_ssh_scram_sha_512_tbl
 banana

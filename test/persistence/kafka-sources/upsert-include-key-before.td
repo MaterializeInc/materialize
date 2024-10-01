@@ -41,10 +41,12 @@ $ kafka-ingest format=avro topic=include-key key-format=avro key-schema=${keysch
 
 > CREATE SOURCE include_key
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-include-key-${testdrive.seed}')
+
+> CREATE TABLE include_key_tbl FROM SOURCE include_key (REFERENCE "testdrive-include-key-${testdrive.seed}")
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE KEY AS named
   ENVELOPE UPSERT
 
-> SELECT COUNT(*) FROM include_key;
+> SELECT COUNT(*) FROM include_key_tbl;
 10000

@@ -39,12 +39,16 @@ $ schema-registry-wait topic=postgres.public.concurrent_delete2
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE concurrent_delete1
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_delete1')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_delete1');
+
+> CREATE TABLE concurrent_delete1_tbl FROM SOURCE concurrent_delete1 (REFERENCE "postgres.public.concurrent_delete1")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 > CREATE SOURCE concurrent_delete2
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_delete2')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_delete2');
+
+> CREATE TABLE concurrent_delete2_tbl FROM SOURCE concurrent_delete2 (REFERENCE "postgres.public.concurrent_delete2")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -68,12 +72,12 @@ $ postgres-execute connection=conn2
 DELETE FROM concurrent_delete1 WHERE f1 = 5;
 COMMIT;
 
-> SELECT * FROM concurrent_delete1;
+> SELECT * FROM concurrent_delete1_tbl;
 1
 3
 4
 
-> SELECT * FROM concurrent_delete2;
+> SELECT * FROM concurrent_delete2_tbl;
 1
 2
 5

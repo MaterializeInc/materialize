@@ -41,6 +41,8 @@ one
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL '1s'
   )
+
+> CREATE TABLE fixed_text_tbl FROM SOURCE fixed_text (REFERENCE "testdrive-thetopic-${testdrive.seed}")
   FORMAT TEXT
   ENVELOPE NONE
 
@@ -49,10 +51,12 @@ one
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL '1s'
   )
+
+> CREATE TABLE dynamic_text_tbl FROM SOURCE dynamic_text (REFERENCE "testdrive-thetopic-${testdrive.seed}")
   FORMAT TEXT
   ENVELOPE NONE
 
-> SELECT * FROM fixed_text
+> SELECT * FROM fixed_text_tbl
 text
 ----
 one
@@ -61,13 +65,13 @@ $ kafka-ingest topic=thetopic format=bytes
 two
 
 # Ensure both types of tunnels work
-> SELECT * FROM fixed_text
+> SELECT * FROM fixed_text_tbl
 text
 ----
 one
 two
 
-> SELECT * FROM dynamic_text
+> SELECT * FROM dynamic_text_tbl
 text
 ----
 one
@@ -95,10 +99,12 @@ $ kafka-ingest format=avro topic=avroavro schema=${schema}
 > CREATE SOURCE fixed_plus_csr
   IN CLUSTER sc
   FROM KAFKA CONNECTION kafka_conn_using (TOPIC 'testdrive-avroavro-${testdrive.seed}')
+
+> CREATE TABLE fixed_plus_csr_tbl FROM SOURCE fixed_plus_csr (REFERENCE "testdrive-avroavro-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-> SELECT * FROM fixed_plus_csr
+> SELECT * FROM fixed_plus_csr_tbl
 f1    f2
 ----------
 fish  1000
@@ -107,10 +113,12 @@ fish  1000
 > CREATE SOURCE dynamic_plus_csr
   IN CLUSTER sc
   FROM KAFKA CONNECTION kafka_conn_dynamic (TOPIC 'testdrive-avroavro-${testdrive.seed}')
+
+> CREATE TABLE dynamic_plus_csr_tbl FROM SOURCE dynamic_plus_csr (REFERENCE "testdrive-avroavro-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-> SELECT * FROM dynamic_plus_csr
+> SELECT * FROM dynamic_plus_csr_tbl
 f1    f2
 ----------
 fish  1000

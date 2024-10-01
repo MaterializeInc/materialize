@@ -26,7 +26,9 @@ $ schema-registry-wait topic=postgres.public.update_pk_values
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE update_pk_values
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.update_pk_values')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.update_pk_values');
+
+> CREATE TABLE update_pk_values_tbl FROM SOURCE update_pk_values (REFERENCE "postgres.public.update_pk_values")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -50,7 +52,7 @@ $ postgres-execute connection=conn2
 INSERT INTO update_pk_values VALUES (5, 50);
 COMMIT;
 
-> SELECT * FROM update_pk_values;
+> SELECT * FROM update_pk_values_tbl;
 4  40
 5  50
 11 20

@@ -27,15 +27,17 @@ INSERT INTO temporal_types VALUES ('2011-11-11', '11:11:11.123456', '2011-11-11 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE temporal_types
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.temporal_types')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.temporal_types');
+
+> CREATE TABLE temporal_types_tbl FROM SOURCE temporal_types (REFERENCE "postgres.public.temporal_types")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM temporal_types;
+> SELECT * FROM temporal_types_tbl;
 2011-11-11 11:11:11.123456 "2011-11-11 11:11:11.123456"
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 UPDATE temporal_types SET date_col = '2012-12-12', time_col = '12:12:12.234567', timestamp_col = '2012-12-12 12:12:12.234567';
 
-> SELECT * FROM temporal_types;
+> SELECT * FROM temporal_types_tbl;
 2012-12-12 12:12:12.234567 "2012-12-12 12:12:12.234567"
