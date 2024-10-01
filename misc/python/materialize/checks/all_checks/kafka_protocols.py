@@ -87,23 +87,33 @@ class KafkaProtocols(Check):
 
                 > CREATE SOURCE kafka_plaintext_1 FROM KAFKA CONNECTION kafka_plaintext (
                     TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_plaintext_1_tbl FROM SOURCE kafka_plaintext_1 (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}") FORMAT TEXT
 
                 > CREATE SOURCE kafka_ssl_1 FROM KAFKA CONNECTION kafka_ssl (
                     TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_ssl_1_tbl FROM SOURCE kafka_ssl_1 (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}") FORMAT TEXT
 
                 > CREATE SOURCE kafka_scram_sha_512_1 FROM KAFKA CONNECTION kafka_scram_sha_512 (
                     TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_scram_sha_512_1_tbl FROM SOURCE kafka_scram_sha_512_1 (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}") FORMAT TEXT
 
                 > CREATE SOURCE kafka_ssl_scram_sha_512_1 FROM KAFKA CONNECTION kafka_ssl_scram_sha_512 (
                     TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_ssl_scram_sha_512_1_tbl FROM SOURCE kafka_ssl_scram_sha_512_1 (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}") FORMAT TEXT
 
                 > CREATE SOURCE kafka_sasl_1 FROM KAFKA CONNECTION kafka_sasl (
                     TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_sasl_1_tbl FROM SOURCE kafka_sasl_1 (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}") FORMAT TEXT
                 """
             )
         )
@@ -115,23 +125,33 @@ class KafkaProtocols(Check):
                 """
                 > CREATE SOURCE kafka_plaintext_2 FROM KAFKA CONNECTION kafka_plaintext (
                     TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_plaintext_2_tbl FROM SOURCE kafka_plaintext_2 (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}") FORMAT TEXT
 
                 > CREATE SOURCE kafka_ssl_2 FROM KAFKA CONNECTION kafka_ssl (
                     TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_ssl_2_tbl FROM SOURCE kafka_ssl_2 (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}") FORMAT TEXT
 
                 > CREATE SOURCE kafka_scram_sha_512_2 FROM KAFKA CONNECTION kafka_scram_sha_512 (
                     TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_scram_sha_512_2_tbl FROM SOURCE kafka_scram_sha_512_2 (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}") FORMAT TEXT
 
                 > CREATE SOURCE kafka_ssl_scram_sha_512_2 FROM KAFKA CONNECTION kafka_ssl_scram_sha_512 (
                     TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_ssl_scram_sha_512_2_tbl FROM SOURCE kafka_ssl_scram_sha_512_2 (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}") FORMAT TEXT
 
                 > CREATE SOURCE kafka_sasl_2 FROM KAFKA CONNECTION kafka_sasl (
                     TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_sasl_2_tbl FROM SOURCE kafka_sasl_2 (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}") FORMAT TEXT
 
                 $ kafka-ingest topic=kafka-protocols-1 format=bytes
                 two
@@ -145,23 +165,33 @@ class KafkaProtocols(Check):
                 """
                 > CREATE SOURCE kafka_plaintext_3 FROM KAFKA CONNECTION kafka_plaintext (
                     TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_plaintext_3_tbl FROM SOURCE kafka_plaintext_3 (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}") FORMAT TEXT
 
                 > CREATE SOURCE kafka_ssl_3 FROM KAFKA CONNECTION kafka_ssl (
                     TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_ssl_3_tbl FROM SOURCE kafka_ssl_3 (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}") FORMAT TEXT
 
                 > CREATE SOURCE kafka_scram_sha_512_3 FROM KAFKA CONNECTION kafka_scram_sha_512 (
                     TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_scram_sha_512_3_tbl FROM SOURCE kafka_scram_sha_512_3 (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}") FORMAT TEXT
 
                 > CREATE SOURCE kafka_ssl_scram_sha_512_3 FROM KAFKA CONNECTION kafka_ssl_scram_sha_512 (
                     TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_ssl_scram_sha_512_3_tbl FROM SOURCE kafka_ssl_scram_sha_512_3 (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}") FORMAT TEXT
 
                 > CREATE SOURCE kafka_sasl_3 FROM KAFKA CONNECTION kafka_sasl (
                     TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
-                  ) FORMAT TEXT
+                  )
+
+                > CREATE TABLE kafka_sasl_3_tbl FROM SOURCE kafka_sasl_3 (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}") FORMAT TEXT
 
                 $ kafka-ingest topic=kafka-protocols-1 format=bytes
                 three
@@ -179,77 +209,77 @@ class KafkaProtocols(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT * FROM kafka_plaintext_1
+                > SELECT * FROM kafka_plaintext_1_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_ssl_1
+                > SELECT * FROM kafka_ssl_1_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_scram_sha_512_1
+                > SELECT * FROM kafka_scram_sha_512_1_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_ssl_scram_sha_512_1
+                > SELECT * FROM kafka_ssl_scram_sha_512_1_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_sasl_1
+                > SELECT * FROM kafka_sasl_1_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_plaintext_2
+                > SELECT * FROM kafka_plaintext_2_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_ssl_2
+                > SELECT * FROM kafka_ssl_2_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_scram_sha_512_2
+                > SELECT * FROM kafka_scram_sha_512_2_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_ssl_scram_sha_512_2
+                > SELECT * FROM kafka_ssl_scram_sha_512_2_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_sasl_2
+                > SELECT * FROM kafka_sasl_2_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_plaintext_3
+                > SELECT * FROM kafka_plaintext_3_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_ssl_3
+                > SELECT * FROM kafka_ssl_3_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_scram_sha_512_3
+                > SELECT * FROM kafka_scram_sha_512_3_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_ssl_scram_sha_512_3
+                > SELECT * FROM kafka_ssl_scram_sha_512_3_tbl
                 one
                 two
                 three
 
-                > SELECT * FROM kafka_sasl_3
+                > SELECT * FROM kafka_sasl_3_tbl
                 one
                 two
                 three

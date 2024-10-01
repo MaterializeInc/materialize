@@ -67,10 +67,12 @@ class SinkUpsert(Check):
 
                 > CREATE SOURCE sink_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-source-${testdrive.seed}')
+
+                > CREATE TABLE sink_source_tbl FROM SOURCE sink_source (REFERENCE "testdrive-sink-source-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW sink_source_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM sink_source GROUP BY LEFT(key1, 2), LEFT(f1, 1);
+                > CREATE MATERIALIZED VIEW sink_source_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM sink_source_tbl GROUP BY LEFT(key1, 2), LEFT(f1, 1);
 
                 > CREATE SINK sink_sink1 FROM sink_source_view
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink1')
@@ -144,25 +146,31 @@ class SinkUpsert(Check):
 
                 > CREATE SOURCE sink_view1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink1')
+
+                > CREATE TABLE sink_view1_tbl FROM SOURCE sink_view1 (REFERENCE "sink-sink1")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 > CREATE SOURCE sink_view2
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink2')
+
+                > CREATE TABLE sink_view2_tbl FROM SOURCE sink_view2 (REFERENCE "sink-sink2")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 > CREATE SOURCE sink_view3
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink3')
+
+                > CREATE TABLE sink_view3_tbl FROM SOURCE sink_view3 (REFERENCE "sink-sink3")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 # Validate the sink by aggregating all the 'before' and 'after' records using SQL
                 > SELECT l_v, l_k, SUM(c)
                   FROM (
-                    SELECT (after).l_v, (after).l_k, (after).c FROM sink_view1
+                    SELECT (after).l_v, (after).l_k, (after).c FROM sink_view1_tbl
                     UNION ALL
-                    SELECT (before).l_v, (before).l_k, -(before).c FROM sink_view1
+                    SELECT (before).l_v, (before).l_k, -(before).c FROM sink_view1_tbl
                   ) GROUP BY l_v, l_k
                   HAVING SUM(c) > 0;
                 B I2 1000
@@ -172,9 +180,9 @@ class SinkUpsert(Check):
 
                 > SELECT l_v, l_k, SUM(c)
                   FROM (
-                    SELECT (after).l_v, (after).l_k, (after).c FROM sink_view2
+                    SELECT (after).l_v, (after).l_k, (after).c FROM sink_view2_tbl
                     UNION ALL
-                    SELECT (before).l_v, (before).l_k, -(before).c FROM sink_view2
+                    SELECT (before).l_v, (before).l_k, -(before).c FROM sink_view2_tbl
                   ) GROUP BY l_v, l_k
                   HAVING SUM(c) > 0;
                 B I2 1000
@@ -184,9 +192,9 @@ class SinkUpsert(Check):
 
                 > SELECT l_v, l_k, SUM(c)
                   FROM (
-                    SELECT (after).l_v, (after).l_k, (after).c FROM sink_view3
+                    SELECT (after).l_v, (after).l_k, (after).c FROM sink_view3_tbl
                     UNION ALL
-                    SELECT (before).l_v, (before).l_k, -(before).c FROM sink_view3
+                    SELECT (before).l_v, (before).l_k, -(before).c FROM sink_view3_tbl
                   ) GROUP BY l_v, l_k
                   HAVING SUM(c) > 0;
                 B I2 1000
@@ -257,6 +265,8 @@ class SinkTables(Check):
                 # We check the contents of the sink topics by re-ingesting them.
                 > CREATE SOURCE sink_large_transaction_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}')
+
+                > CREATE TABLE sink_large_transaction_source_tbl FROM SOURCE sink_large_transaction_source (REFERENCE "testdrive-sink-large-transaction-sink-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -264,23 +274,23 @@ class SinkTables(Check):
                   AS
                   SELECT COUNT(*) AS c1 , COUNT(f1) AS c2, COUNT(DISTINCT f1) AS c3 , MIN(f1), MAX(f1)
                   FROM (
-                    SELECT (before).f1, (before).f2 FROM sink_large_transaction_source
+                    SELECT (before).f1, (before).f2 FROM sink_large_transaction_source_tbl
                   )
 
                 > CREATE MATERIALIZED VIEW sink_large_transaction_view3
                   AS
                   SELECT COUNT(*) AS c1 , COUNT(f1) AS c2, COUNT(DISTINCT f1) AS c3 , MIN(f1), MAX(f1)
                   FROM (
-                    SELECT (after).f1, (after).f2 FROM sink_large_transaction_source
+                    SELECT (after).f1, (after).f2 FROM sink_large_transaction_source_tbl
                   )
 
                 > CREATE MATERIALIZED VIEW sink_large_transaction_view4
                   AS
                   SELECT LEFT(f2, 1), SUM(c)
                   FROM (
-                    SELECT (after).f2, COUNT(*) AS c FROM sink_large_transaction_source GROUP BY (after).f2
+                    SELECT (after).f2, COUNT(*) AS c FROM sink_large_transaction_source_tbl GROUP BY (after).f2
                     UNION ALL
-                    SELECT (before).f2, -COUNT(*) AS c  FROM sink_large_transaction_source GROUP BY (before).f2
+                    SELECT (before).f2, -COUNT(*) AS c  FROM sink_large_transaction_source_tbl GROUP BY (before).f2
                   )
                   GROUP BY f2
 
@@ -330,10 +340,12 @@ class SinkNullDefaults(Check):
 
                 > CREATE SOURCE sink_source_null
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-source-null-${testdrive.seed}')
+
+                > CREATE TABLE sink_source_null_tbl FROM SOURCE sink_source_null (REFERENCE "testdrive-sink-source-null-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW sink_source_null_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v1, f2 / 100 AS l_v2, COUNT(*) AS c FROM sink_source_null GROUP BY LEFT(key1, 2), LEFT(f1, 1), f2 / 100;
+                > CREATE MATERIALIZED VIEW sink_source_null_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v1, f2 / 100 AS l_v2, COUNT(*) AS c FROM sink_source_null_tbl GROUP BY LEFT(key1, 2), LEFT(f1, 1), f2 / 100;
 
                 > CREATE SINK sink_sink_null1 FROM sink_source_null_view
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-null1')
@@ -437,25 +449,31 @@ class SinkNullDefaults(Check):
 
                 > CREATE SOURCE sink_view_null1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-null1')
+
+                > CREATE TABLE sink_view_null1_tbl FROM SOURCE sink_view_null1 (REFERENCE "sink-sink-null1")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 > CREATE SOURCE sink_view_null2
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-null2')
+
+                > CREATE TABLE sink_view_null2_tbl FROM SOURCE sink_view_null2 (REFERENCE "sink-sink-null2")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 > CREATE SOURCE sink_view_null3
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-null3')
+
+                > CREATE TABLE sink_view_null3_tbl FROM SOURCE sink_view_null3 (REFERENCE "sink-sink-null3")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 # Validate the sink by aggregating all the 'before' and 'after' records using SQL
                 > SELECT l_v1, l_v2, l_k, SUM(c)
                   FROM (
-                    SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_null1
+                    SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_null1_tbl
                     UNION ALL
-                    SELECT (before).l_v1, (before).l_v2, (before).l_k, -(before).c FROM sink_view_null1
+                    SELECT (before).l_v1, (before).l_v2, (before).l_k, -(before).c FROM sink_view_null1_tbl
                   ) GROUP BY l_v1, l_v2, l_k
                   HAVING SUM(c) > 0;
                 <null> 0 D3 100
@@ -483,9 +501,9 @@ class SinkNullDefaults(Check):
 
                 > SELECT l_v1, l_v2, l_k, SUM(c)
                   FROM (
-                    SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_null2
+                    SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_null2_tbl
                     UNION ALL
-                    SELECT (before).l_v1, (before).l_v2, (before).l_k, -(before).c FROM sink_view_null2
+                    SELECT (before).l_v1, (before).l_v2, (before).l_k, -(before).c FROM sink_view_null2_tbl
                   ) GROUP BY l_v1, l_v2, l_k
                   HAVING SUM(c) > 0;
                 <null> 0 D3 100
@@ -513,9 +531,9 @@ class SinkNullDefaults(Check):
 
                 > SELECT l_v1, l_v2, l_k, SUM(c)
                   FROM (
-                    SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_null3
+                    SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_null3_tbl
                     UNION ALL
-                    SELECT (before).l_v1, (before).l_v2, (before).l_k, -(before).c FROM sink_view_null3
+                    SELECT (before).l_v1, (before).l_v2, (before).l_k, -(before).c FROM sink_view_null3_tbl
                   ) GROUP BY l_v1, l_v2, l_k
                   HAVING SUM(c) > 0;
                 <null> 0 D3 100
@@ -579,10 +597,12 @@ class SinkComments(Check):
 
                 > CREATE SOURCE sink_source_comments
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-source-comments-${testdrive.seed}')
+
+                > CREATE TABLE sink_source_comments_tbl FROM SOURCE sink_source_comments (REFERENCE "testdrive-sink-source-comments-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW sink_source_comments_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v1, f2 / 100 AS l_v2, COUNT(*) AS c FROM sink_source_comments GROUP BY LEFT(key1, 2), LEFT(f1, 1), f2 / 100
+                > CREATE MATERIALIZED VIEW sink_source_comments_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v1, f2 / 100 AS l_v2, COUNT(*) AS c FROM sink_source_comments_tbl GROUP BY LEFT(key1, 2), LEFT(f1, 1), f2 / 100
 
                 > COMMENT ON MATERIALIZED VIEW sink_source_comments_view IS 'comment on view sink_source_comments_view'
 
@@ -712,25 +732,31 @@ class SinkComments(Check):
 
                 > CREATE SOURCE sink_view_comments1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-comments1')
+
+                > CREATE TABLE sink_view_comments1_tbl FROM SOURCE sink_view_comments1 (REFERENCE "sink-sink-comments1")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 > CREATE SOURCE sink_view_comments2
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-comments2')
+
+                > CREATE TABLE sink_view_comments2_tbl FROM SOURCE sink_view_comments2 (REFERENCE "sink-sink-comments2")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 > CREATE SOURCE sink_view_comments3
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-comments3')
+
+                > CREATE TABLE sink_view_comments3_tbl FROM SOURCE sink_view_comments3 (REFERENCE "sink-sink-comments3")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 # Validate the sink by aggregating all the 'before' and 'after' records using SQL
                 > SELECT l_v1, l_v2, l_k, SUM(c)
                   FROM (
-                    SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_comments1
+                    SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_comments1_tbl
                     UNION ALL
-                    SELECT (before).l_v1, (before).l_v2, (before).l_k, -(before).c FROM sink_view_comments1
+                    SELECT (before).l_v1, (before).l_v2, (before).l_k, -(before).c FROM sink_view_comments1_tbl
                   ) GROUP BY l_v1, l_v2, l_k
                   HAVING SUM(c) > 0;
                 <null> 0 D3 100
@@ -758,9 +784,9 @@ class SinkComments(Check):
 
                 > SELECT l_v1, l_v2, l_k, SUM(c)
                   FROM (
-                    SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_comments2
+                    SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_comments2_tbl
                     UNION ALL
-                    SELECT (before).l_v1, (before).l_v2, (before).l_k, -(before).c FROM sink_view_comments2
+                    SELECT (before).l_v1, (before).l_v2, (before).l_k, -(before).c FROM sink_view_comments2_tbl
                   ) GROUP BY l_v1, l_v2, l_k
                   HAVING SUM(c) > 0;
                 <null> 0 D3 100
@@ -788,9 +814,9 @@ class SinkComments(Check):
 
                 > SELECT l_v1, l_v2, l_k, SUM(c)
                   FROM (
-                    SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_comments3
+                    SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_comments3_tbl
                     UNION ALL
-                    SELECT (before).l_v1, (before).l_v2, (before).l_k, -(before).c FROM sink_view_comments3
+                    SELECT (before).l_v1, (before).l_v2, (before).l_k, -(before).c FROM sink_view_comments3_tbl
                   ) GROUP BY l_v1, l_v2, l_k
                   HAVING SUM(c) > 0;
                 <null> 0 D3 100
@@ -973,10 +999,12 @@ class AlterSink(Check):
 
                 > CREATE SOURCE sink_alter_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'alter-sink')
+
+                > CREATE TABLE sink_alter_source_tbl FROM SOURCE sink_alter_source (REFERENCE "alter-sink")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
-                > SELECT before IS NULL, (after).x, (after).y FROM sink_alter_source
+                > SELECT before IS NULL, (after).x, (after).y FROM sink_alter_source_tbl
                 true 0 a
                 true 11 bb
                 true 102 ccc
@@ -1049,10 +1077,12 @@ class AlterSinkOrder(Check):
 
                 > CREATE SOURCE sink_alter_order_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'alter-sink-order')
+
+                > CREATE TABLE sink_alter_order_source_tbl FROM SOURCE sink_alter_order_source (REFERENCE "alter-sink-order")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
-                > SELECT before IS NULL, (after).x, (after).y FROM sink_alter_order_source
+                > SELECT before IS NULL, (after).x, (after).y FROM sink_alter_order_source_tbl
                 true 0 a
                 true 1 b
                 true 2 c
@@ -1115,11 +1145,13 @@ class SinkFormat(Check):
                 # We check the contents of the sink topics by re-ingesting them.
                 > CREATE SOURCE sink_format_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-format-sink-${testdrive.seed}')
+
+                > CREATE TABLE sink_format_source_tbl FROM SOURCE sink_format_source (REFERENCE "testdrive-sink-format-sink-${testdrive.seed}")
                   KEY FORMAT TEXT
                   VALUE FORMAT JSON
                   ENVELOPE UPSERT
 
-                > SELECT key, data->>'f2', data->>'f3' FROM sink_format_source
+                > SELECT key, data->>'f2', data->>'f3' FROM sink_format_source_tbl
                 1 A 10
                 2 B 20
                 3 C 30

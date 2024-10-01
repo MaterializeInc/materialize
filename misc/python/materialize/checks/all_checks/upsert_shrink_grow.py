@@ -32,6 +32,8 @@ class ShrinkGrow:
 
                 > CREATE SOURCE upsert_update_{name}
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-update-{name}-${{testdrive.seed}}')
+
+                > CREATE TABLE upsert_update_{name}_tbl FROM SOURCE upsert_update_{name} (REFERENCE "testdrive-upsert-update-{name}-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -39,7 +41,7 @@ class ShrinkGrow:
                   SELECT LEFT(f1, 1), RIGHT(f1, 1),
                   COUNT(*) AS c1, COUNT(DISTINCT key1) AS c2, COUNT(DISTINCT f1) AS c3,
                   MIN(LENGTH(f1)) AS l1, MAX(LENGTH(f1)) AS l2
-                  FROM upsert_update_{name}
+                  FROM upsert_update_{name}_tbl
                   GROUP BY LEFT(f1, 1), RIGHT(f1, 1);
                 """
             )

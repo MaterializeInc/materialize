@@ -35,6 +35,8 @@ class AlterIndex(Check):
 
                 > CREATE SOURCE alter_index_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-index-${testdrive.seed}')
+
+                > CREATE TABLE alter_index_source_tbl FROM SOURCE alter_index_source (REFERENCE "testdrive-alter-index-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -100,7 +102,7 @@ class AlterIndex(Check):
                 D 10000 10000
                 E 10000 10000
 
-                > SELECT LEFT(f1,1), COUNT(*), COUNT(DISTINCT f1) FROM alter_index_source GROUP BY LEFT(f1,1);
+                > SELECT LEFT(f1,1), COUNT(*), COUNT(DISTINCT f1) FROM alter_index_source_tbl GROUP BY LEFT(f1,1);
                 A 10000 10000
                 B 10000 10000
                 C 10000 10000

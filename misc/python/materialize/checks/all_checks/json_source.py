@@ -35,6 +35,8 @@ class JsonSource(Check):
                 > CREATE SOURCE format_jsonA
                   IN CLUSTER single_replica_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
+
+                > CREATE TABLE format_jsonA_tbl FROM SOURCE format_jsonA (REFERENCE "testdrive-format-json-${testdrive.seed}")
                   KEY FORMAT JSON
                   VALUE FORMAT JSON
                   ENVELOPE UPSERT
@@ -42,6 +44,8 @@ class JsonSource(Check):
                 > CREATE SOURCE format_jsonB
                   IN CLUSTER single_replica_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
+
+                > CREATE TABLE format_jsonB_tbl FROM SOURCE format_jsonB (REFERENCE "testdrive-format-json-${testdrive.seed}")
                   KEY FORMAT JSON
                   VALUE FORMAT JSON
                   ENVELOPE UPSERT
@@ -70,14 +74,14 @@ class JsonSource(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT * FROM format_jsonA ORDER BY key
+                > SELECT * FROM format_jsonA_tbl ORDER BY key
                 "\\"array\\"" [1,2,3]
                 "\\"float\\"" 1.23
                 "\\"int\\"" 1
                 "\\"object\\"" "{\\"a\\":\\"b\\",\\"c\\":\\"d\\"}"
                 "\\"str\\"" "\\"hello\\""
 
-                > SELECT * FROM format_jsonB ORDER BY key
+                > SELECT * FROM format_jsonB_tbl ORDER BY key
                 "\\"array\\"" [1,2,3]
                 "\\"float\\"" 1.23
                 "\\"int\\"" 1

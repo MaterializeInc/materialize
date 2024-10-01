@@ -29,11 +29,13 @@ class UpsertManyUpdates(Check):
 
                 > CREATE SOURCE upsert_many_updates
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-many-updates-${testdrive.seed}')
+
+                > CREATE TABLE upsert_many_updates_tbl FROM SOURCE upsert_many_updates (REFERENCE "testdrive-upsert-many-updates-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_many_updates_view AS
-                  SELECT f1 FROM upsert_many_updates
+                  SELECT f1 FROM upsert_many_updates_tbl
                 """
             )
         )
@@ -75,7 +77,7 @@ class UpsertManyUpdates(Check):
         return Testdrive(
             dedent(
                 f"""
-                > SELECT * FROM upsert_many_updates
+                > SELECT * FROM upsert_many_updates_tbl
                 A {INCREMENTS*2}
                 """
             )

@@ -58,13 +58,15 @@ class UpsertEnrichValue(Check):
 
                 > CREATE SOURCE upsert_enrich_value
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-enrich-value-${{testdrive.seed}}')
+
+                > CREATE TABLE upsert_enrich_value_tbl FROM SOURCE upsert_enrich_value (REFERENCE "testdrive-upsert-enrich-value-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_enrich_value_view AS
                   SELECT LEFT(key1, 1) AS key_left, LEFT(f1, 1) AS value_left, RIGHT(f1, 1),
                   LENGTH(f1), COUNT(*), SUM(CASE WHEN f1 IS NULL THEN 1 ELSE 0 END) AS nulls, COUNT(f1) AS not_nulls
-                  FROM upsert_enrich_value
+                  FROM upsert_enrich_value_tbl
                   GROUP BY LEFT(key1, 1), f1
                 """
             )

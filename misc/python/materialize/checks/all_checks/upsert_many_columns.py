@@ -75,12 +75,14 @@ class UpsertManyValueColumns(Check):
 
                 > CREATE SOURCE upsert_many_value_columns
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-many-value-columns-${{testdrive.seed}}')
+
+                > CREATE TABLE upsert_many_value_columns_tbl FROM SOURCE upsert_many_value_columns (REFERENCE "testdrive-upsert-many-value-columns-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_many_value_columns_view AS
                   SELECT key1, f1, f1000
-                  FROM upsert_many_value_columns
+                  FROM upsert_many_value_columns_tbl
                 """
             )
         )
@@ -133,12 +135,14 @@ class UpsertManyKeyColumns(Check):
 
                 > CREATE SOURCE upsert_many_key_columns
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-many-key-columns-${{testdrive.seed}}')
+
+                > CREATE TABLE upsert_many_key_columns_tbl FROM SOURCE upsert_many_key_columns (REFERENCE "testdrive-upsert-many-key-columns-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_many_key_columns_view AS
                   SELECT key1, key1000, f1
-                  FROM upsert_many_key_columns
+                  FROM upsert_many_key_columns_tbl
                 """
             )
         )

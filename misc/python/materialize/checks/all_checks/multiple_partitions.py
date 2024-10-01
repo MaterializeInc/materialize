@@ -48,11 +48,13 @@ class MultiplePartitions(Check):
                 # the ">" testdrive parses them with the SQL parser from `main`, and the SQL for
                 # this command is version dependent.
                 $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
-                CREATE SOURCE multiple_partitions_source FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL '500ms') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
+                CREATE SOURCE multiple_partitions_source FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL '500ms');
+
+                CREATE TABLE multiple_partitions_source_tbl FROM SOURCE multiple_partitions_source (REFERENCE "testdrive-multiple-partitions-topic-${testdrive.seed}") FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
 
                 $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=2
 
-                > CREATE MATERIALIZED VIEW mv_multiple_partitions AS SELECT * FROM multiple_partitions_source;
+                > CREATE MATERIALIZED VIEW mv_multiple_partitions AS SELECT * FROM multiple_partitions_source_tbl;
                 """
             )
         )
@@ -67,7 +69,7 @@ class MultiplePartitions(Check):
                 {"key1": "B${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
 
                 # Make sure that source is up and complete
-                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
+                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source_tbl GROUP BY LEFT(f1, 1);
                 A 100
                 B 60
 
@@ -87,7 +89,7 @@ class MultiplePartitions(Check):
                 {"key1": "C${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}
 
                 # Make sure that source is up and complete
-                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
+                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source_tbl GROUP BY LEFT(f1, 1);
                 A 50
                 B 60
                 C 60
@@ -124,7 +126,7 @@ class MultiplePartitions(Check):
                 # > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
                 # running
 
-                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
+                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source_tbl GROUP BY LEFT(f1, 1);
                 A 50
                 B 60
                 C 60

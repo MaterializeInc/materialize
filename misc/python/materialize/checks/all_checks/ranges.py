@@ -59,6 +59,8 @@ class Range(Check):
 
             > CREATE SOURCE range_source
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-ranges-${testdrive.seed}')
+
+            > CREATE TABLE range_source_tbl FROM SOURCE range_source (REFERENCE "testdrive-ranges-${testdrive.seed}")
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE
             """
