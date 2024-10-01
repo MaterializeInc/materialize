@@ -800,6 +800,9 @@ pub struct StateCollections<T> {
     // - Invariant: `trace.upper` doesn't regress across state versions.
     // - Invariant: `trace` upholds its own invariants.
     pub(crate) trace: Trace<T>,
+
+    /// Schemas that were previously written with incorrect nullability.
+    pub(crate) deprecated_schemas: BTreeMap<SchemaId, EncodedSchemas>,
 }
 
 /// A key and val [Codec::Schema] encoded via [Codec::encode_schema].
@@ -1817,6 +1820,7 @@ where
                 writers: BTreeMap::new(),
                 schemas: BTreeMap::new(),
                 trace: Trace::default(),
+                deprecated_schemas: BTreeMap::new(),
             },
         };
         TypedState {
@@ -2146,6 +2150,7 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
                     writers,
                     schemas,
                     trace,
+                    deprecated_schemas,
                 },
         } = self;
         let mut s = s.serialize_struct("State", 13)?;
@@ -2160,6 +2165,7 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
         let () = s.serialize_field("critical_readers", critical_readers)?;
         let () = s.serialize_field("writers", writers)?;
         let () = s.serialize_field("schemas", schemas)?;
+        let () = s.serialize_field("deprecated_schemas", deprecated_schemas)?;
         let () = s.serialize_field("since", &trace.since().elements())?;
         let () = s.serialize_field("upper", &trace.upper().elements())?;
         let trace = trace.flatten();
@@ -2436,6 +2442,7 @@ pub(crate) mod tests {
                 ),
                 proptest::collection::btree_map(any::<WriterId>(), any_writer_state::<T>(), 0..3),
                 proptest::collection::btree_map(any::<SchemaId>(), any_encoded_schemas(), 0..3),
+                proptest::collection::btree_map(any::<SchemaId>(), any_encoded_schemas(), 0..3),
                 any_trace::<T>(num_trace_batches),
             ),
             |(
@@ -2449,6 +2456,7 @@ pub(crate) mod tests {
                 critical_readers,
                 writers,
                 schemas,
+                deprecated_schemas,
                 trace,
             )| State {
                 applier_version: semver::Version::new(1, 2, 3),
@@ -2464,6 +2472,7 @@ pub(crate) mod tests {
                     writers,
                     trace,
                     schemas,
+                    deprecated_schemas,
                 },
             },
         )

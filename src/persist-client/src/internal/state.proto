@@ -202,11 +202,15 @@ message ProtoRollup {
     map<string, ProtoLeasedReaderState> leased_readers = 8;
     map<string, ProtoCriticalReaderState> critical_readers = 13;
     map<string, ProtoWriterState> writers = 9;
-    map<uint64, ProtoEncodedSchemas> schemas = 18;
+    map<uint64, ProtoEncodedSchemas> schemas = 19;
 
     ProtoInlinedDiffs diffs = 17;
 
     // MIGRATION: We previously stored rollups as a `SeqNo -> string Key` map,
     // but now the value is a `struct HollowRollup`.
     map<uint64, string> deprecated_rollups = 12;
+    // MIGRATION: We previously registered schemas that have since changed
+    // nullability. We've made changes to stabilize the schemas and are just
+    // forgetting all of the old values.
+    map<uint64, ProtoEncodedSchemas> deprecated_schemas = 18;
 }

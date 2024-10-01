@@ -2198,6 +2198,8 @@ where
                 txns_client.dyncfgs().clone(),
                 Arc::clone(&txns_metrics),
                 txns_id,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
             )
             .await;
             persist_handles::PersistTableWriteWorker::new_txns(txns)

@@ -127,7 +127,7 @@
 //! // Open a txn shard, initializing it if necessary.
 //! let txns_id = ShardId::new();
 //! let mut txns = TxnsHandle::<String, (), u64, i64>::open(
-//!     0u64, client.clone(), dyncfgs, metrics, txns_id
+//!     0u64, client.clone(), dyncfgs, metrics, txns_id, StringSchema.into(), UnitSchema.into()
 //! ).await;
 //!
 //! // Register data shards to the txn set.

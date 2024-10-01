@@ -22,7 +22,7 @@ use std::time::Instant;
 use anyhow::Context;
 use clap::Parser;
 use futures::future::FutureExt;
-use mz_adapter::catalog::{Catalog, InitializeStateResult};
+use mz_adapter::catalog::{Catalog, CatalogState, InitializeStateResult};
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
@@ -46,12 +46,13 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
-use mz_persist_client::PersistLocation;
-use mz_repr::{Diff, Timestamp};
+use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
+use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
 use url::Url;
@@ -182,7 +183,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let organization_id = args.organization_id;
     let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
     let openable_state = persist_backed_catalog_state(
-        persist_client,
+        persist_client.clone(),
         organization_id,
         BUILD_INFO.semver_version(),
         None,
@@ -235,7 +236,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 None => Default::default(),
                 Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
             };
-            upgrade_check(openable_state, cluster_replica_sizes, start).await
+            upgrade_check(
+                openable_state,
+                cluster_replica_sizes,
+                &persist_client,
+                start,
+            )
+            .await
         }
     }
 }
@@ -500,6 +507,7 @@ async fn epoch(
 async fn upgrade_check(
     openable_state: Box<dyn OpenableDurableCatalogState>,
     cluster_replica_sizes: ClusterReplicaSizeMap,
+    persist_client: &PersistClient,
     start: Instant,
 ) -> Result<(), anyhow::Error> {
     let now = SYSTEM_TIME.clone();
@@ -528,7 +536,7 @@ async fn upgrade_check(
     // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     // Because of that we purposefully move this Future onto the heap (i.e. Box it).
     let InitializeStateResult {
-        state: _state,
+        state,
         storage_collections_to_drop: _,
         migrated_storage_collections_0dt: _,
         new_builtins: _,
@@ -568,6 +576,55 @@ async fn upgrade_check(
     .boxed()
     .await?;
     let dur = start.elapsed();
+
+    /// Checks that the latest schema from the [`CatalogState`] matches that from persist. Guards
+    /// against the schema of an object unnecessarily changing across an upgrade.
+    async fn check_persist_schema(
+        state: &CatalogState,
+        persist_client: &PersistClient,
+        gid: GlobalId,
+        shard_id: ShardId,
+    ) -> Result<(), anyhow::Error> {
+        // Schema from the Catalog.
+        let entry = state.get_entry(&gid);
+        let name = state.resolve_full_name(entry.name(), None);
+        let catalog_desc = entry.desc(&name).context("getting RelationDesc")?;
+
+        // Schema from Persist.
+        let diagnostics = Diagnostics {
+            shard_name: gid.to_string(),
+            handle_purpose: "upgrade schema check".to_string(),
+        };
+        let (_id, persist_desc, _unit) = persist_client
+            .latest_schema::<SourceData, (), Timestamp, Diff>(shard_id, diagnostics)
+            .await
+            .expect("wrong usage of Persist")
+            .ok_or_else(|| anyhow::anyhow!("schema not found for {gid}"))?;
+
+        if *catalog_desc != persist_desc {
+            anyhow::bail!(
+                "found schema mismatch for {}\ncatalog: {:?}\npersist: {:?}",
+                gid,
+                catalog_desc,
+                persist_desc
+            );
+        } else {
+            Ok(())
+        }
+    }
+
+    let shards = &state.storage_metadata().collection_metadata;
+    println!("checking shard schemas for: {shards:?}");
+
+    let mut errors = Vec::new();
+    for (gid, shard_id) in shards {
+        if let Err(e) = check_persist_schema(&state, persist_client, *gid, *shard_id).await {
+            errors.push(e);
+        }
+    }
+    if !errors.is_empty() {
+        anyhow::bail!("found schema mismatches between the catalog and Persist!\n{errors:?}");
+    }
 
     let msg = format!(
         "catalog upgrade from {} to {} would succeed in about {} ms",

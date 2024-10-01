@@ -189,7 +189,7 @@ pub enum Response<T> {
 }
 
 /// Metadata that the storage controller must know to properly handle the life
-/// cycle of creating and dropping collections.j
+/// cycle of creating and dropping collections.
 ///
 /// This data should be kept consistent with the state modified using
 /// [`StorageTxn`].

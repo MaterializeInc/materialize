@@ -16,6 +16,7 @@ use std::time::Instant;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::data_type;
 use mz_persist_types::schema::{backward_compatible, Migration, SchemaId};
@@ -401,6 +402,18 @@ impl<K: Codec, V: Codec> PartMigration<K, V> {
         }
     }
 }
+
+pub(crate) const SCHEMA_REGISTER: Config<bool> = Config::new(
+    "persist_schema_register",
+    true,
+    "register schemas with the shard when opening a read or write handle",
+);
+
+pub(crate) const SCHEMA_REQUIRE: Config<bool> = Config::new(
+    "persist_schema_require",
+    true,
+    "error if schema registration is unsuccessful when opening a read or write handle",
+);
 
 #[cfg(test)]
 mod tests {

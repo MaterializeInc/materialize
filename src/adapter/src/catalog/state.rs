@@ -930,9 +930,21 @@ impl CatalogState {
                 let raw_expr = materialized_view.expr;
                 let optimized_expr = optimizer.optimize(raw_expr.clone())?;
                 let mut typ = optimized_expr.typ();
+
+                // We've observed the nullability of columns changing between releases for
+                // Materialized Views, which makes registering the schema with Persist difficult
+                // because this change is not necessarily forward compatible. Because of that we
+                // make all columns nullable except those explicity marked with NON NULL
+                // assertions.
+                //
+                // TODO(database-issues#8594)
+                for typ in &mut typ.column_types {
+                    typ.nullable = true;
+                }
                 for &i in &materialized_view.non_null_assertions {
                     typ.column_types[i].nullable = false;
                 }
+
                 let desc = RelationDesc::new(typ, materialized_view.column_names);
 
                 let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
