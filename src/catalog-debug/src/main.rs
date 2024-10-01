@@ -37,6 +37,7 @@ use mz_catalog::durable::debug::{
 use mz_catalog::durable::{
     persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
 };
+use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::collections::HashSet;
@@ -48,7 +49,7 @@ use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
 use mz_repr::{Diff, Timestamp};
-use mz_secrets::InMemorySecretsController;
+use mz_service::secrets::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
@@ -73,15 +74,37 @@ pub struct Args {
     /// Where the persist library should perform consensus.
     #[clap(long, env = "PERSIST_CONSENSUS_URL")]
     persist_consensus_url: Url,
+    // === Cloud options. ===
+    /// An external ID to be supplied to all AWS AssumeRole operations.
+    ///
+    /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
+    #[clap(long, env = "AWS_EXTERNAL_ID", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
+
+    /// The ARN for a Materialize-controlled role to assume before assuming
+    /// a customer's requested role for an AWS connection.
+    #[clap(long, env = "AWS_CONNECTION_ROLE_ARN")]
+    aws_connection_role_arn: Option<String>,
+    // === Secrets reader options. ===
+    #[clap(flatten)]
+    secrets: SecretsReaderCliArgs,
+    // === Tracing options. ===
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
+    // === Other options. ===
+    /// An opaque identifier for the environment in which this process is
+    /// running.
+    #[clap(long, env = "ENVIRONMENT_ID")]
+    environment_id: EnvironmentId,
+
+    #[clap(long)]
+    deploy_generation: Option<u64>,
 
     #[clap(subcommand)]
     action: Action,
-
-    #[clap(flatten)]
-    tracing: TracingCliArgs,
 }
 
-#[derive(Debug, clap::Subcommand)]
+#[derive(Debug, Clone, clap::Subcommand)]
 enum Action {
     /// Dumps the catalog contents to stdout in a human-readable format.
     /// Includes JSON for each key and value that can be hand edited and
@@ -185,12 +208,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         persist_client,
         organization_id,
         BUILD_INFO.semver_version(),
-        None,
+        args.deploy_generation,
         metrics,
     )
     .await?;
 
-    match args.action {
+    match args.action.clone() {
         Action::Dump {
             ignore_large_collections,
             ignore,
@@ -235,7 +258,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 None => Default::default(),
                 Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
             };
-            upgrade_check(openable_state, cluster_replica_sizes, start).await
+            upgrade_check(args, openable_state, cluster_replica_sizes, start).await
         }
     }
 }
@@ -498,10 +521,17 @@ async fn epoch(
 }
 
 async fn upgrade_check(
+    args: Args,
     openable_state: Box<dyn OpenableDurableCatalogState>,
     cluster_replica_sizes: ClusterReplicaSizeMap,
     start: Instant,
 ) -> Result<(), anyhow::Error> {
+    let secrets_reader = args
+        .secrets
+        .load()
+        .await
+        .context("loading secrets reader")?;
+
     let now = SYSTEM_TIME.clone();
     let mut storage = openable_state
         .open_savepoint(
@@ -539,7 +569,7 @@ async fn upgrade_check(
             unsafe_mode: true,
             all_features: false,
             build_info: &BUILD_INFO,
-            environment_id: EnvironmentId::for_tests(),
+            environment_id: args.environment_id.clone(),
             now,
             boot_ts,
             skip_migrations: false,
@@ -556,9 +586,14 @@ async fn upgrade_check(
             aws_principal_context: None,
             aws_privatelink_availability_zones: None,
             http_host_name: None,
-            connection_context: ConnectionContext::for_tests(Arc::new(
-                InMemorySecretsController::new(),
-            )),
+            connection_context: ConnectionContext::from_cli_args(
+                args.environment_id.to_string(),
+                &args.tracing.startup_log_filter,
+                args.aws_external_id_prefix,
+                args.aws_connection_role_arn,
+                secrets_reader,
+                None,
+            ),
             active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0, 0))),
             builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
         },
