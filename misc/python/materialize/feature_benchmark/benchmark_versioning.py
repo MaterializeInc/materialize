@@ -23,11 +23,11 @@ SHA256_OF_FRAMEWORK: dict[str, str] = {
 
 # Consider increasing the scenario's class #version() if changes are expected to impact results!
 SHA256_BY_SCENARIO_FILE: dict[str, str] = {
-    "benchmark_main.py": "a898f6d8990476422ef99a6f156a36571d52fab9b10414664d32c023ad591357",
-    "concurrency.py": "2e9c149c136b83b3853abc923a1adbdaf55a998ab4557712f8424c8b16f2adb1",
+    "benchmark_main.py": "118eecbce1e0adafcae68750d6b6ee2412b8b51f7f5897824393af6cfa0c0c3a",
+    "concurrency.py": "9c7d40ee2402b0aec399126cc79685039934301f80bd925d7a5d00157ad7d06f",
     "customer.py": "d1e72837a342c3ebf1f4a32ec583b1b78a78644cdba495030a6df45ebbffe703",
     "optbench.py": "b78682659b2f6f405e158643e50e4d68481174b9353af19907719c21f573a7a1",
     "scale.py": "c4c8749d166e4df34e0b0e92220434fdb508c5c2ac56eb80c07043be0048dded",
     "skew.py": "bf60802205fc51ebf94fb008bbdb6b2ccce3c9ed88a6188fa7f090f2c84b120f",
-    "subscribe.py": "66b6ba61daed10a0e78291f6251e62dcb41f206228028bc0cbd0d738ad76252b",
+    "subscribe.py": "457734e97c1c6cc761636d38bf53544144567564615d2cf5654d28e058f7ca99",
 }
