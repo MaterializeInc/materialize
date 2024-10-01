@@ -1919,6 +1919,8 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                        IN CLUSTER single_replica_cluster
                        FROM KAFKA CONNECTION kafka_conn (TOPIC
                        'testdrive-instance-size-${{testdrive.seed}}')
+
+                     > CREATE TABLE s_{cluster_name}_tbl FROM SOURCE s_{cluster_name} (REFERENCE "testdrive-instance-size-${{testdrive.seed}}")
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE NONE
                  """
@@ -1937,7 +1939,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                      > SELECT c1 FROM v_{cluster_name};
                      10000
 
-                     > SELECT COUNT(*) FROM s_{cluster_name}
+                     > SELECT COUNT(*) FROM s_{cluster_name}_tbl
                      10000
                  """
                 )
