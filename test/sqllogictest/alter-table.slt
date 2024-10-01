@@ -285,6 +285,15 @@ SELECT * FROM v4 ORDER BY a ASC;
 6  2020-01-01␠00:00:00
 7  1000-01-01␠00:00:00
 
+query IIITTT
+SELECT v2.a, v3.a, v4.a, v2.b, v3.b, v4.c FROM v2 JOIN v3 ON v2.a = v3.a JOIN v4 ON v2.a = v4.a;
+----
+2  2  2  later  later  NULL
+4  4  4  later  later  NULL
+5  5  5  world  world  NULL
+6  6  6  later  later  2020-01-01␠00:00:00
+7  7  7  bar  bar  1000-01-01␠00:00:00
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_alter_table_add_column = false;
 ----

@@ -211,7 +211,7 @@ impl<'a> DataflowBuilder<'a> {
                 let entry = self.catalog.get_entry(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
-                        let table_desc = table.desc.at_version(*version);
+                        let table_desc = table.desc.at_version(RelationVersionSelector::Latest);
                         dataflow.import_source(*id, table_desc.typ().clone(), monotonic);
                     }
                     CatalogItem::Source(source) => {

@@ -6226,16 +6226,32 @@ impl<'a> QueryContext<'a> {
                 ..
             } => {
                 let name = full_name.into();
-                let item = self.scx.get_item(&id).at_version(version);
-                let desc = item
+                let item = self
+                    .scx
+                    .get_item(&id)
+                    .at_version(RelationVersionSelector::Latest);
+                let full_desc = item
                     .desc(&self.scx.catalog.resolve_full_name(item.name()))?
                     .clone();
                 let expr = HirRelationExpr::Get {
                     id: Id::Global(item.id()),
-                    typ: desc.typ().clone(),
+                    typ: full_desc.typ().clone(),
                 };
 
-                let scope = Scope::from_source(Some(name), desc.iter_names().cloned());
+                let versioned_item = self.scx.get_item(&id).at_version(version);
+                let versioned_desc = versioned_item
+                    .desc(&self.scx.catalog.resolve_full_name(item.name()))?
+                    .clone();
+                let expr = HirRelationExpr::Project {
+                    input: Box::new(expr),
+                    outputs: versioned_desc
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, _)| idx)
+                        .collect(),
+                };
+
+                let scope = Scope::from_source(Some(name), versioned_desc.iter_names().cloned());
 
                 Ok((expr, scope))
             }
