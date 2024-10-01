@@ -406,9 +406,9 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
         return int(num_files)
 
     scenarios = [
-        ("drop-source.td", "DROP SOURCE dropped_upsert", False),
+        ("drop-source.td", "DROP SOURCE dropped_upsert CASCADE", False),
         ("drop-cluster-cascade.td", "DROP CLUSTER c1 CASCADE", True),
-        ("drop-source-in-cluster.td", "DROP SOURCE dropped_upsert", False),
+        ("drop-source-in-cluster.td", "DROP SOURCE dropped_upsert CASCADE", False),
     ]
 
     for testdrive_file, drop_stmt, cluster_dropped in scenarios:

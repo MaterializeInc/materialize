@@ -27,7 +27,7 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
 
-> SELECT COUNT(*) FROM exactly_once;
+> SELECT COUNT(*) FROM exactly_once_tbl;
 10
 
 # We expect just the 6 new messages, having consumed the older ones in xactly-once-sink-before.td

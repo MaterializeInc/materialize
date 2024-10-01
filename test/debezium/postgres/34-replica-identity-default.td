@@ -26,11 +26,13 @@ $ schema-registry-wait topic=postgres.public.replica_identity_default
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE replica_identity_default
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.replica_identity_default')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.replica_identity_default');
+
+> CREATE TABLE replica_identity_default_tbl FROM SOURCE replica_identity_default (REFERENCE "postgres.public.replica_identity_default")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM replica_identity_default
+> SELECT * FROM replica_identity_default_tbl
 1 1 1
 2 2 2
 3 3 3
@@ -43,10 +45,10 @@ DELETE FROM replica_identity_default WHERE f1 = 3;
 UPDATE replica_identity_default SET f1 = 5 WHERE f1 = 4;
 
 # [btv] This succeeds now, due to upsert semantics.
-# ! SELECT * FROM replica_identity_default;
+# ! SELECT * FROM replica_identity_default_tbl;
 # contains:Invalid data in source, saw retractions
 
-> SELECT * FROM replica_identity_default
+> SELECT * FROM replica_identity_default_tbl
 1 5 1
 2 2 5
 5 4 4

@@ -26,11 +26,13 @@ INSERT INTO alter_drop_primary_key VALUES (123);
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE alter_drop_primary_key
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_drop_primary_key')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_drop_primary_key');
+
+> CREATE TABLE alter_drop_primary_key_tbl FROM SOURCE alter_drop_primary_key (REFERENCE "postgres.public.alter_drop_primary_key")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_drop_primary_key;
+> SELECT * FROM alter_drop_primary_key_tbl;
 123
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -38,8 +40,8 @@ CREATE SEQUENCE pk_sequence;
 ALTER TABLE alter_drop_primary_key DROP CONSTRAINT alter_drop_primary_key_pkey;
 INSERT INTO alter_drop_primary_key VALUES (123);
 
-> SELECT COUNT(*) FROM alter_drop_primary_key;
+> SELECT COUNT(*) FROM alter_drop_primary_key_tbl;
 2
 
-> SELECT DISTINCT f1 FROM alter_drop_primary_key;
+> SELECT DISTINCT f1 FROM alter_drop_primary_key_tbl;
 123

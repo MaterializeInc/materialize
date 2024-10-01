@@ -46,10 +46,12 @@ $ kafka-ingest format=avro topic=partition-change key-format=avro key-schema=${k
     TOPIC 'testdrive-partition-change-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL = '100ms'
   )
+
+> CREATE TABLE partition_change_tbl FROM SOURCE partition_change (REFERENCE "testdrive-partition-change-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
-> SELECT COUNT(*) > 0 FROM partition_change;
+> SELECT COUNT(*) > 0 FROM partition_change_tbl;
 true
 
 $ kafka-add-partitions topic=partition-change total-partitions=10
