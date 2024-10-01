@@ -109,11 +109,13 @@ class Identifiers(Check):
             > CREATE CONNECTION IF NOT EXISTS {dq(self.ident["csr_conn"])} FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
             > CREATE SOURCE {dq(self.ident["source"])}
               IN CLUSTER identifiers
-              FROM KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'testdrive-sink-source-ident-${{testdrive.seed}}')
+              FROM KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'testdrive-sink-source-ident-${{testdrive.seed}}');
+
+            > CREATE TABLE {dq(self.ident["source"] + "_tbl")} FROM SOURCE {dq(self.ident["source"])} (REFERENCE "testdrive-sink-source-ident-${{testdrive.seed}}")
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(self.ident["csr_conn"])}
               ENVELOPE UPSERT;
             > CREATE MATERIALIZED VIEW {dq(self.ident["source_view"])} IN CLUSTER {self._default_cluster()} AS
-              SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM {dq(self.ident["source"])} GROUP BY LEFT(key1, 2), LEFT(f1, 1);
+              SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM {dq(self.ident["source"] + "_tbl")} GROUP BY LEFT(key1, 2), LEFT(f1, 1);
             > CREATE SINK {dq(self.ident["schema"])}.{dq(self.ident["sink0"])}
               IN CLUSTER identifiers
               FROM {dq(self.ident["source_view"])}

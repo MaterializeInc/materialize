@@ -57,6 +57,8 @@ class KafkaFormats(Check):
                 > CREATE SOURCE format_bytes1
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
+
+                > CREATE TABLE format_bytes1_tbl FROM SOURCE format_bytes1 (REFERENCE "testdrive-format-bytes-${testdrive.seed}")
                   KEY FORMAT BYTES
                   VALUE FORMAT BYTES
                   ENVELOPE UPSERT
@@ -64,6 +66,8 @@ class KafkaFormats(Check):
                 > CREATE SOURCE format_text1
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
+
+                > CREATE TABLE format_text1_tbl FROM SOURCE format_text1 (REFERENCE "testdrive-format-bytes-${testdrive.seed}")
                   KEY FORMAT TEXT
                   VALUE FORMAT TEXT
                   ENVELOPE UPSERT
@@ -85,6 +89,8 @@ class KafkaFormats(Check):
                 > CREATE SOURCE format_protobuf1
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-protobuf-${testdrive.seed}')
+
+                > CREATE TABLE format_protobuf1_tbl FROM SOURCE format_protobuf1 (REFERENCE "testdrive-format-protobuf-${testdrive.seed}")
                   KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
                   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
                   INCLUDE KEY
@@ -103,6 +109,8 @@ class KafkaFormats(Check):
                 > CREATE SOURCE format_bytes2
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
+
+                > CREATE TABLE format_bytes2_tbl FROM SOURCE format_bytes2 (REFERENCE "testdrive-format-bytes-${testdrive.seed}")
                   KEY FORMAT BYTES
                   VALUE FORMAT BYTES
                   ENVELOPE UPSERT
@@ -110,6 +118,8 @@ class KafkaFormats(Check):
                 > CREATE SOURCE format_text2
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
+
+                > CREATE TABLE format_text2_tbl FROM SOURCE format_text2 (REFERENCE "testdrive-format-bytes-${testdrive.seed}")
                   KEY FORMAT TEXT
                   VALUE FORMAT TEXT
                   ENVELOPE UPSERT
@@ -131,6 +141,8 @@ class KafkaFormats(Check):
                 > CREATE SOURCE format_protobuf2
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-protobuf-${testdrive.seed}')
+
+                > CREATE TABLE format_protobuf2_tbl FROM SOURCE format_protobuf2 (REFERENCE "testdrive-format-protobuf-${testdrive.seed}")
                   KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
                   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
                   INCLUDE KEY
@@ -160,10 +172,10 @@ class KafkaFormats(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT COUNT(*) FROM format_bytes1
+                > SELECT COUNT(*) FROM format_bytes1_tbl
                 3
 
-                > SELECT * FROM format_text1
+                > SELECT * FROM format_text1_tbl
                 key1A,key1B value1A,value1B
                 key2A,key2B value2A,value2B
                 key3A,key3B value3A,value3B
@@ -178,12 +190,12 @@ class KafkaFormats(Check):
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
 
-                > SELECT * FROM format_protobuf1
+                > SELECT * FROM format_protobuf1_tbl
                 key1A key1B value1A value1B
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
 
-                > SELECT * FROM format_text2
+                > SELECT * FROM format_text2_tbl
                 key1A,key1B value1A,value1B
                 key2A,key2B value2A,value2B
                 key3A,key3B value3A,value3B
@@ -198,7 +210,7 @@ class KafkaFormats(Check):
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
 
-                > SELECT * FROM format_protobuf2
+                > SELECT * FROM format_protobuf2_tbl
                 key1A key1B value1A value1B
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
@@ -206,7 +218,7 @@ class KafkaFormats(Check):
                 $ set-regex match=testdrive-format-bytes-\\d+ replacement=<TOPIC>
 
                 > SHOW CREATE SOURCE format_bytes1;
-                materialize.public.format_bytes1 "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_bytes1\\" IN CLUSTER \\"kafka_formats\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = '<TOPIC>') KEY FORMAT BYTES VALUE FORMAT BYTES ENVELOPE UPSERT EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_bytes1_progress\\""
+                materialize.public.format_bytes1 "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_bytes1\\" IN CLUSTER \\"kafka_formats\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = '<TOPIC>') EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_bytes1_progress\\""
                 """
             )
         )

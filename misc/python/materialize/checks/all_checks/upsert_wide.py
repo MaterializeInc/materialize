@@ -33,13 +33,15 @@ class UpsertWideValue(Check):
 
                 > CREATE SOURCE upsert_wide_value
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-wide-value-${{testdrive.seed}}')
+
+                > CREATE TABLE upsert_wide_value_tbl FROM SOURCE upsert_wide_value (REFERENCE "testdrive-upsert-wide-value-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_wide_value_view AS
                   SELECT LEFT(f1, 1), RIGHT(f1, 1),
                   LENGTH(f1)
-                  FROM upsert_wide_value
+                  FROM upsert_wide_value_tbl
                 """
             )
         )
@@ -102,13 +104,15 @@ class UpsertWideKey(Check):
 
                 > CREATE SOURCE upsert_wide_key
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-wide-key-${{testdrive.seed}}')
+
+                > CREATE TABLE upsert_wide_key_tbl FROM SOURCE upsert_wide_key (REFERENCE "testdrive-upsert-wide-key-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_wide_key_view AS
                   SELECT LEFT(key1, 1), RIGHT(key1, 1),
                   LENGTH(key1), f1
-                  FROM upsert_wide_key
+                  FROM upsert_wide_key_tbl
                 """
             )
         )

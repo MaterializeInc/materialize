@@ -29,12 +29,14 @@ class UpsertManyRows(Check):
 
                 > CREATE SOURCE upsert_many_rows
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-many-rows-${testdrive.seed}')
+
+                > CREATE TABLE upsert_many_rows_tbl FROM SOURCE upsert_many_rows (REFERENCE "testdrive-upsert-many-rows-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_many_rows_view AS
                   SELECT f1, COUNT(*) AS count_rows, COUNT(DISTINCT key1) AS count_keys
-                  FROM upsert_many_rows
+                  FROM upsert_many_rows_tbl
                   GROUP BY f1
                 """
             )

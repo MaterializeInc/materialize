@@ -39,13 +39,15 @@ class RenameSource(Check):
 
                 > CREATE SOURCE rename_source1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rename-source-${testdrive.seed}')
+
+                > CREATE TABLE rename_source1_tbl FROM SOURCE rename_source1 (REFERENCE "testdrive-rename-source-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "B"}
 
-                > CREATE MATERIALIZED VIEW rename_source_view AS SELECT DISTINCT f1 FROM rename_source1;
+                > CREATE MATERIALIZED VIEW rename_source_view AS SELECT DISTINCT f1 FROM rename_source1_tbl;
 
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "C"}
@@ -84,7 +86,7 @@ class RenameSource(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT * FROM rename_source3;
+                > SELECT * FROM rename_source1_tbl;
                 A
                 B
                 C
