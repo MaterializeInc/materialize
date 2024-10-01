@@ -109,6 +109,7 @@ SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'view' OR type = 'm
 mz_system=r/mz_system
 mz_monitor=r/mz_system
 mz_support=r/mz_system
+mz_analytics=r/mz_system
 materialize=r/materialize
 mz_monitor_redacted=r/mz_system
 
@@ -4738,11 +4739,13 @@ mz_system,mz_monitor,materialize,mz_internal,mz_optimizer_notices,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_activity_log_thinned,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_prepared_statement_history,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_thinned,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history,SELECT,NO,YES
@@ -4750,13 +4753,16 @@ mz_system,mz_monitor,materialize,mz_internal,mz_statement_lifecycle_history,SELE
 mz_system,mz_support,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-COMPLETE 41
+COMPLETE 46
 
 simple conn=mz_system,user=mz_system
 SELECT COUNT(*) >= 166 FROM information_schema.table_privileges WHERE grantee = 'PUBLIC'
@@ -4808,11 +4814,13 @@ mz_system,mz_monitor,materialize,mz_internal,mz_optimizer_notices,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_activity_log_thinned,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_prepared_statement_history,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_thinned,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history,SELECT,NO,YES
@@ -4820,13 +4828,16 @@ mz_system,mz_monitor,materialize,mz_internal,mz_statement_lifecycle_history,SELE
 mz_system,mz_support,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_sql_text_redacted,SELECT,NO,YES
 mz_system,mz_monitor,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_recent_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_analytics,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
 mz_system,mz_monitor_redacted,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-COMPLETE 41
+COMPLETE 46
 
 simple conn=mz_system,user=mz_system
 SELECT COUNT(*) >= 166 FROM information_schema.role_table_grants WHERE grantee = 'PUBLIC'

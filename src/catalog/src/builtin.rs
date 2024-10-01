@@ -1746,6 +1746,12 @@ const SUPPORT_SELECT: MzAclItem = MzAclItem {
     acl_mode: AclMode::SELECT,
 };
 
+const ANALYTICS_SELECT: MzAclItem = MzAclItem {
+    grantee: MZ_ANALYTICS_ROLE_ID,
+    grantor: MZ_SYSTEM_ROLE_ID,
+    acl_mode: AclMode::SELECT,
+};
+
 const MONITOR_SELECT: MzAclItem = MzAclItem {
     grantee: MZ_MONITOR_ROLE_ID,
     grantor: MZ_SYSTEM_ROLE_ID,
@@ -2912,7 +2918,7 @@ cluster_name, database_name, search_path, transaction_isolation, execution_times
 transient_index_id, mz_version, began_at, finished_at, finished_status,
 rows_returned, execution_strategy
 FROM mz_internal.mz_statement_execution_history",
-    access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
+    access: vec![SUPPORT_SELECT, ANALYTICS_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
 }
 });
 
@@ -2943,7 +2949,12 @@ pub static MZ_SQL_TEXT_REDACTED: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     oid: oid::VIEW_MZ_SQL_TEXT_REDACTED_OID,
     column_defs: None,
     sql: "SELECT sql_hash, redacted_sql FROM mz_internal.mz_sql_text",
-    access: vec![MONITOR_SELECT, MONITOR_REDACTED_SELECT, SUPPORT_SELECT],
+    access: vec![
+        MONITOR_SELECT,
+        MONITOR_REDACTED_SELECT,
+        SUPPORT_SELECT,
+        ANALYTICS_SELECT,
+    ],
 });
 
 pub static MZ_RECENT_SQL_TEXT: LazyLock<BuiltinView> = LazyLock::new(|| {
@@ -2967,7 +2978,12 @@ pub static MZ_RECENT_SQL_TEXT_REDACTED: LazyLock<BuiltinView> = LazyLock::new(||
     oid: oid::VIEW_MZ_RECENT_SQL_TEXT_REDACTED_OID,
     column_defs: None,
     sql: "SELECT sql_hash, redacted_sql FROM mz_internal.mz_recent_sql_text",
-    access: vec![MONITOR_SELECT, MONITOR_REDACTED_SELECT, SUPPORT_SELECT],
+    access: vec![
+        MONITOR_SELECT,
+        MONITOR_REDACTED_SELECT,
+        SUPPORT_SELECT,
+        ANALYTICS_SELECT,
+    ],
 });
 
 pub static MZ_RECENT_SQL_TEXT_IND: LazyLock<BuiltinIndex> = LazyLock::new(|| BuiltinIndex {
@@ -3053,7 +3069,7 @@ pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: LazyLock<BuiltinView> = LazyLock::ne
 FROM mz_internal.mz_recent_activity_log_thinned mralt,
      mz_internal.mz_recent_sql_text mrst
 WHERE mralt.sql_hash = mrst.sql_hash",
-    access: vec![MONITOR_SELECT, MONITOR_REDACTED_SELECT, SUPPORT_SELECT],
+    access: vec![MONITOR_SELECT, MONITOR_REDACTED_SELECT, SUPPORT_SELECT, ANALYTICS_SELECT],
 }
 });
 
@@ -3075,7 +3091,12 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: LazyLock<BuiltinSource> =
         // TODO[btv]: Maybe this should be public instead of
         // `MONITOR_REDACTED`, but since that would be a backwards-compatible
         // chagne, we probably don't need to worry about it now.
-        access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
+        access: vec![
+            SUPPORT_SELECT,
+            ANALYTICS_SELECT,
+            MONITOR_REDACTED_SELECT,
+            MONITOR_SELECT,
+        ],
     });
 
 pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
