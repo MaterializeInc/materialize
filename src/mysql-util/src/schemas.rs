@@ -72,6 +72,12 @@ impl FromRow for InfoSchema {
     }
 }
 
+impl InfoSchema {
+    pub fn name(self) -> String {
+        self.column_name
+    }
+}
+
 /// A representation of the raw schema info for a table from MySQL
 #[derive(Debug, Clone)]
 pub struct MySqlTableSchema {

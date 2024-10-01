@@ -164,6 +164,7 @@ pub enum PlanError {
         name: UnresolvedItemName,
         target_names: Vec<UnresolvedItemName>,
     },
+    NoTablesFoundForSchemas(Vec<String>),
     InvalidProtobufSchema {
         cause: protobuf_native::OperationFailedError,
     },
@@ -350,6 +351,10 @@ impl PlanError {
             Self::InvalidPartitionByEnvelopeDebezium { .. } => Some(
                 "When using ENVELOPE DEBEZIUM, only columns in the key can be referenced in the PARTITION BY expression.".to_string()
             ),
+            Self::NoTablesFoundForSchemas(schemas) => Some(format!(
+                "missing schemas: {}",
+                itertools::join(schemas.iter(), ", ")
+            )),
             _ => None,
         }
     }
@@ -605,6 +610,9 @@ impl fmt::Display for PlanError {
                 target_names: _,
             } => {
                 write!(f, "multiple subsources refer to table {}", name)
+            },
+            Self::NoTablesFoundForSchemas(schemas) => {
+                write!(f, "no tables found in referenced schemas: {}", schemas.join(", "))
             },
             Self::InvalidProtobufSchema { .. } => {
                 write!(f, "invalid protobuf schema")

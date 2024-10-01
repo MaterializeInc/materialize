@@ -440,6 +440,7 @@ impl Coordinator {
         progress_stmt: CreateSubsourceStatement<Aug>,
         mut source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
+        available_source_references: SourceReferences,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         let mut create_source_plans = Vec::with_capacity(subsources.len() + 2);
 
@@ -502,8 +503,7 @@ impl Coordinator {
             source_id,
             plan: source_plan,
             resolved_ids: resolved_ids.clone(),
-            // TODO(roshan): Populate this based on the results of purification
-            available_source_references: None,
+            available_source_references: Some(available_source_references),
         });
 
         // 3. Finally, plan all the subsources
