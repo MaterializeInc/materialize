@@ -6797,7 +6797,6 @@ ORDER BY 1, 2"#,
     access: vec![PUBLIC_SELECT],
 });
 
-// TODO(ct): Index this like the other show commands.
 pub static MZ_SHOW_CONTINUAL_TASKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_show_continual_tasks",
     schema: MZ_INTERNAL_SCHEMA,

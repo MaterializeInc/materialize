@@ -712,6 +712,9 @@ pub struct CreateMaterializedViewPlan {
 #[derive(Debug, Clone)]
 pub struct CreateContinualTaskPlan {
     pub name: QualifiedItemName,
+    // During initial creation, the `LocalId` placeholder for this CT in
+    // `continual_task.expr`. None on restart.
+    pub placeholder_id: Option<mz_expr::LocalId>,
     pub desc: RelationDesc,
     // TODO(ct): Multiple inputs.
     pub input_id: GlobalId,

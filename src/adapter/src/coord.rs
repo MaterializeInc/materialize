@@ -2490,6 +2490,15 @@ impl Coordinator {
                         };
                         Some((id, collection_desc))
                     }
+                    CatalogItem::ContinualTask(ct) => {
+                        let collection_desc = CollectionDescription {
+                            desc: ct.desc.clone(),
+                            data_source: DataSource::Other(DataSourceOther::Compute),
+                            since: ct.initial_as_of.clone(),
+                            status_collection_id: None,
+                        };
+                        Some((id, collection_desc))
+                    }
                     _ => None,
                 }
             })
@@ -2634,6 +2643,63 @@ impl Coordinator {
                         // MIR ⇒ MIR optimization (global)
                         let global_mir_plan =
                             optimizer.optimize(mv.optimized_expr.as_ref().clone())?;
+                        let optimized_plan = global_mir_plan.df_desc().clone();
+
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+                        (optimized_plan, global_lir_plan)
+                    };
+
+                    let (physical_plan, metainfo) = global_lir_plan.unapply();
+                    let metainfo = {
+                        // Pre-allocate a vector of transient GlobalIds for each notice.
+                        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+                            .take(metainfo.optimizer_notices.len())
+                            .collect::<Vec<_>>();
+                        // Return a metainfo with rendered notices.
+                        self.catalog()
+                            .render_notices(metainfo, notice_ids, Some(entry.id()))
+                    };
+
+                    let catalog = self.catalog_mut();
+                    catalog.set_optimized_plan(id, optimized_plan);
+                    catalog.set_physical_plan(id, physical_plan);
+                    catalog.set_dataflow_metainfo(id, metainfo);
+
+                    compute_instance.insert_collection(id);
+                }
+                CatalogItem::ContinualTask(ct) => {
+                    // Collect optimizer parameters.
+                    let compute_instance =
+                        instance_snapshots.entry(ct.cluster_id).or_insert_with(|| {
+                            self.instance_snapshot(ct.cluster_id)
+                                .expect("compute instance exists")
+                        });
+                    let internal_view_id = self.allocate_transient_id();
+                    let debug_name = self
+                        .catalog()
+                        .resolve_full_name(entry.name(), None)
+                        .to_string();
+
+                    let (optimized_plan, global_lir_plan) = {
+                        let mut optimizer = optimize::materialized_view::Optimizer::new(
+                            self.owned_catalog().as_optimizer_catalog(),
+                            compute_instance.clone(),
+                            entry.id(),
+                            internal_view_id,
+                            ct.desc.iter_names().cloned().collect(),
+                            Vec::new(),
+                            None,
+                            debug_name,
+                            optimizer_config.clone(),
+                            self.optimizer_metrics(),
+                        );
+
+                        // MIR ⇒ MIR optimization (global)
+                        let local_mir_plan =
+                            optimizer.catch_unwind_optimize(ct.raw_expr.as_ref().clone())?;
+                        let global_mir_plan = optimizer.optimize(local_mir_plan)?;
                         let optimized_plan = global_mir_plan.df_desc().clone();
 
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)

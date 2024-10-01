@@ -22,15 +22,49 @@ CREATE CONTINUAL TASK ct (key INT) ON INPUT input AS (
     INSERT INTO ct SELECT * FROM input;
 )
 
+# Comments and SHOW
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_comment TO true;
 ----
 COMPLETE 0
 
 statement ok
-COMMENT ON CONTINUAL TASK ct is 'foo'
+COMMENT ON CONTINUAL TASK ct IS 'foo'
 
 query TTT
 SHOW CONTINUAL TASKS;
 ----
 ct  quickstart  foo
+
+# Creating in other databases/schemas
+statement ok
+CREATE SCHEMA x
+
+statement ok
+CREATE DATABASE y
+
+statement ok
+CREATE SCHEMA y.z
+
+statement ok
+CREATE CONTINUAL TASK x.ct (key INT) ON INPUT input AS (
+    INSERT INTO x.ct SELECT * FROM input;
+)
+
+statement ok
+CREATE CONTINUAL TASK y.z.ct (key INT) ON INPUT input AS (
+    INSERT INTO y.z.ct SELECT * FROM input;
+)
+
+statement ok
+INSERT INTO input VALUES (1);
+
+query T
+SELECT * FROM x.ct;
+----
+1
+
+query T
+SELECT * FROM y.z.ct;
+----
+1
