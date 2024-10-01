@@ -8,7 +8,7 @@ menu:
     identifier: "mysql-amazon-aurora"
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 This page shows you how to stream data from [Amazon Aurora MySQL](https://aws.amazon.com/rds/aurora/)
 to Materialize using the [MySQL source](/sql/create-source/mysql/).

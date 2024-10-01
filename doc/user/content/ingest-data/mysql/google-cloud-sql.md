@@ -8,7 +8,7 @@ menu:
     identifier: "mysql-google-cloudsql"
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 This page shows you how to stream data from [Google Cloud SQL for MySQL](https://cloud.google.com/sql/MySQL)
 to Materialize using the[MySQL source](/sql/create-source/mysql/).
