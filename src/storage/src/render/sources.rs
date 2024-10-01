@@ -61,7 +61,6 @@ pub(crate) type OutputIndex = usize;
 pub fn render_source<'g, G, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     dataflow_debug_name: &String,
-    _primary_source_id: GlobalId,
     connection: C,
     description: IngestionDescription<CollectionMetadata>,
     resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
