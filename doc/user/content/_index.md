@@ -19,7 +19,12 @@ transform, deliver, and act on fast-changing data.
 - [Materialize Emulator](/get-started/install-materialize-emulator/). The
 Materialize Emulator is an all-in-one Docker image available on Docker Hub,
 offering the fastest way to get hands-on experience with Materialize in a local
-environment. For more information, see [Materialize Emulator](/get-started/install-materialize-emulator/).
+environment. For more information, see [Materialize
+Emulator](/get-started/install-materialize-emulator/).
+
+- [Release Notes/Changelogs](/releases/)
+
+- [Private/Public Previews](/releases/previews/)
 
 {{</ callout >}}
 
