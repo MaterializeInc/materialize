@@ -30,6 +30,7 @@ use mz_ore::str::StrExt;
 use mz_ore::{assert_none, soft_panic_or_log};
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
+use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
 use mz_repr::{strconv, RelationDesc, RelationVersionSelector, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -50,7 +51,7 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::connections::Connection;
+use mz_storage_types::connections::{Connection, PostgresConnection};
 use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::load_generator::{
     LoadGeneratorOutput, LOAD_GENERATOR_DATABASE_NAME,
@@ -58,7 +59,7 @@ use mz_storage_types::sources::load_generator::{
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    ExternalCatalogReference, GenericSourceConnection, SourceConnection,
+    ExternalCatalogReference, GenericSourceConnection, PostgresSourceConnection, SourceConnection,
     SourceExportStatementDetails, SourceReferenceResolver,
 };
 use prost::Message;
@@ -1174,12 +1175,18 @@ async fn purify_alter_source(
 
     // Validate this is a source that can be altered.
     match desc.connection {
-        GenericSourceConnection::Postgres(_) => {}
+        GenericSourceConnection::Postgres(PostgresSourceConnection {
+            connection:
+                PostgresConnection {
+                    flavor: PostgresFlavor::Vanilla,
+                    ..
+                },
+            ..
+        }) => {}
         GenericSourceConnection::MySql(_) => {}
         _ => sql_bail!(
-            "{} is a {} source, which does not support ALTER SOURCE.",
+            "source {} does not support ALTER SOURCE.",
             scx.catalog.minimal_qualification(source_name),
-            connection_name,
         ),
     };
 
