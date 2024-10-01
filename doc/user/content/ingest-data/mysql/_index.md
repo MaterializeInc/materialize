@@ -13,7 +13,7 @@ menu:
 
 Materialize provides native support for MySQL (5.7+) as a source.
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 
 {{< multilinkbox >}}
