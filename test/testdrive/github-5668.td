@@ -93,10 +93,12 @@ $ nop
 # > CREATE SOURCE pg_dbz
 #   IN CLUSTER ${arg.single-replica-cluster}
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}')
+
+# > CREATE TABLE pg_dbz_tbl FROM SOURCE pg_dbz (REFERENCE "testdrive-pg-dbz-data-${testdrive.seed}")
 #   FORMAT AVRO USING SCHEMA '${pg-dbz-schema}'
 #   ENVELOPE DEBEZIUM
 
-# > SELECT * FROM pg_dbz
+# > SELECT * FROM pg_dbz_tbl
 # val
 # ---
 # baz

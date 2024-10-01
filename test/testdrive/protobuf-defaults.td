@@ -43,9 +43,11 @@ $ kafka-ingest topic=defaults format=protobuf descriptor-file=defaults.pb messag
 > CREATE SOURCE defaults
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-defaults-${testdrive.seed}')
+
+> CREATE TABLE defaults_tbl FROM SOURCE defaults (REFERENCE "testdrive-defaults-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.Defaults' USING SCHEMA '${defaults-schema}'
 
-> SELECT * FROM defaults
+> SELECT * FROM defaults_tbl
 bool  int32  int64  float  double  bytes  string enum
 ----
 true  42     42     42     42      aaa    bbb    ENUM1

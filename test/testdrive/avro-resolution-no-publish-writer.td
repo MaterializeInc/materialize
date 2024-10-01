@@ -35,6 +35,8 @@ GRANT CREATE, USAGE ON SCHEMA public TO materialize
 > CREATE SOURCE resolution_no_publish_writer
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-no-publish-writer-${testdrive.seed}')
+
+> CREATE TABLE resolution_no_publish_writer_tbl FROM SOURCE resolution_no_publish_writer (REFERENCE "testdrive-resolution-no-publish-writer-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
@@ -43,5 +45,5 @@ GRANT CREATE, USAGE ON SCHEMA public TO materialize
 $ kafka-ingest format=bytes topic=resolution-no-publish-writer timestamp=1
 \\x00\x00\x00\x00\x01\xf6\x01
 
-! SELECT * FROM resolution_no_publish_writer;
+! SELECT * FROM resolution_no_publish_writer_tbl;
 contains:to resolve

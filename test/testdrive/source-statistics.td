@@ -71,13 +71,15 @@ goofus,gallant
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
 # Adding a select here so that the ingests after this
 # triggers lookup from the upsert state
-> SELECT key, f1, f2 FROM upsert
+> SELECT key, f1, f2 FROM upsert_tbl
 key           f1      f2
 ------------------------
 fish          fish    1000
@@ -150,7 +152,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 # Test upsert
 
-# Note that we always count 9 messages received, but can see as low as 3 updates.
+# Note that we always count 9 messages received (18 with source tables), but can see as low as 3 updates.
 # This is because there are 3 active keys, as all the messages could be received in 1 second.
 # There could also be up to 11 updates, as updates cause inserts and deletes
 # (5 initial inserts, 2 deletes, and 2 updates). In total 3 records should be present in upsert state.
@@ -170,7 +172,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 9 true true true true 3 true
+upsert true 18 true true true true 3 true
 
 # While we can't control how batching works above, we can ensure that this new, later update
 # causes 1 more messages to be received, which is 1 update, a delete.
@@ -206,7 +208,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
+upsert true 20 "${updates-committed}" "${updates-committed}" true true 2
 
 # check pre-aggregated view
 > SELECT s.name,
@@ -221,7 +223,7 @@ upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
-upsert true 10 "${updates-committed}" "${updates-committed}" true true 2 true
+upsert true 20 "${updates-committed}" "${updates-committed}" true true 2 true
 
 > DROP SOURCE upsert CASCADE
 

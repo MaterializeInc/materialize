@@ -209,8 +209,6 @@ GRANT CREATECLUSTER ON SYSTEM TO materialize;
 ! CREATE SOURCE s
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE NONE
 contains:permission denied for SCHEMA "materialize.public"
 
 $ postgres-execute connection=mz_system
@@ -219,8 +217,6 @@ GRANT USAGE ON SCHEMA materialize.public TO materialize;
 ! CREATE SOURCE s
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE NONE
 contains:permission denied for CONNECTION "materialize.public.kafka_conn"
 
 $ postgres-execute connection=mz_system
@@ -229,18 +225,6 @@ GRANT USAGE ON CONNECTION kafka_conn TO materialize;
 ! CREATE SOURCE s
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE NONE
-contains:permission denied for CONNECTION "materialize.public.csr_conn"
-
-$ postgres-execute connection=mz_system
-GRANT USAGE ON CONNECTION csr_conn TO materialize;
-
-! CREATE SOURCE s
-  IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE NONE
 contains:permission denied for SCHEMA "materialize.public"
 
 $ postgres-execute connection=mz_system
@@ -249,5 +233,15 @@ GRANT CREATE ON SCHEMA materialize.public TO materialize;
 > CREATE SOURCE s
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
+
+! CREATE TABLE s_tbl FROM SOURCE s (REFERENCE "testdrive-rbac-${testdrive.seed}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+contains:permission denied for CONNECTION "materialize.public.csr_conn"
+
+$ postgres-execute connection=mz_system
+GRANT USAGE ON CONNECTION csr_conn TO materialize;
+
+> CREATE TABLE s_tbl FROM SOURCE s (REFERENCE "testdrive-rbac-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE

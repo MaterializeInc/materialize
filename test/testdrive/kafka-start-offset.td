@@ -23,6 +23,4 @@ $ kafka-create-topic topic=t0 partitions=1
       TOPIC 'testdrive-t0-${testdrive.seed}',
       START OFFSET (100, 100)
     )
-  FORMAT TEXT
-  INCLUDE OFFSET
 exact:START OFFSET specified more partitions (2) than topic (testdrive-t0-${testdrive.seed}) contains (1)

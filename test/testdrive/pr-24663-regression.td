@@ -108,10 +108,12 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
 > CREATE SOURCE dbz_no_before
   IN CLUSTER dbz_no_before_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbz-no-before-${testdrive.seed}')
+
+> CREATE TABLE dbz_no_before_tbl FROM SOURCE dbz_no_before (REFERENCE "testdrive-dbz-no-before-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SELECT count(*) FROM dbz_no_before
+> SELECT count(*) FROM dbz_no_before_tbl
 0
 
 > SELECT
@@ -128,7 +130,7 @@ true true 0
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=1
 {"id": 1} {"after": {"row": {"id": 1, "creature": "mudskipper"}}, "op": "c", "source": {"file": "binlog1", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT * FROM dbz_no_before
+> SELECT * FROM dbz_no_before_tbl
 id creature
 -------------
 1  mudskipper
@@ -147,7 +149,7 @@ true true 1
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=1
 {"id": 1} {"after": null, "op": "c", "source": {"file": "binlog3", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT count(*) FROM dbz_no_before
+> SELECT count(*) FROM dbz_no_before_tbl
 0
 
 # A tombstone is left behind

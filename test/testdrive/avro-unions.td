@@ -35,9 +35,11 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 > CREATE SOURCE unions
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE unions_tbl FROM SOURCE unions (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
-> SHOW COLUMNS FROM unions
+> SHOW COLUMNS FROM unions_tbl
 name       nullable  type    comment
 ------------------------------------
 a          false     bigint  ""
@@ -47,7 +49,7 @@ c2         true      text    ""
 d1         true      bigint  ""
 d2         true      text    ""
 
-> SELECT * FROM unions
+> SELECT * FROM unions_tbl
 a   b       c1      c2     d1      d2
 ------------------------------------------
 1   <null>  <null>  <null>  <null>  d

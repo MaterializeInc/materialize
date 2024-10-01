@@ -27,14 +27,20 @@ $ kafka-create-topic topic=input-system
 > CREATE SOURCE source_system
   IN CLUSTER source_system_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
+
+> CREATE TABLE source_system_tbl
+  FROM SOURCE source_system (REFERENCE "testdrive-input-system-${testdrive.seed}")
   FORMAT BYTES
 
 > CREATE CLUSTER source_system_user_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE source_system_user
   IN CLUSTER source_system_user_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
-  FORMAT BYTES
   WITH (TIMELINE '${testdrive.seed}-timelines')
+
+> CREATE TABLE source_system_user_tbl
+  FROM SOURCE source_system_user (REFERENCE "testdrive-input-system-${testdrive.seed}")
+  FORMAT BYTES
 
 $ set schema=[
   {
@@ -129,32 +135,37 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
 > CREATE SOURCE source_cdcv2
   IN CLUSTER source_cdcv2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
+
+> CREATE TABLE source_cdcv2_tbl FROM SOURCE source_cdcv2 (REFERENCE "testdrive-input-cdcv2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
 
 ! CREATE SOURCE source_cdcv2_system
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE MATERIALIZE
   WITH (TIMELINE 'mz_foo')
 contains:unacceptable timeline name "mz_foo"
 
 > CREATE CLUSTER source_cdcv2_system_cluster SIZE '${arg.default-storage-size}';
+
 > CREATE SOURCE source_cdcv2_system
-  IN CLUSTER source_cdcv2_system_cluster
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
+  WITH (TIMELINE 'mz_epoch_ms')
+> CREATE TABLE source_cdcv2_system_tbl FROM SOURCE source_cdcv2_system (REFERENCE "testdrive-input-cdcv2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
-  WITH (TIMELINE 'mz_epoch_ms')
 
 > CREATE CLUSTER source_cdcv2_user_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE source_cdcv2_user
   IN CLUSTER source_cdcv2_user_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
+  WITH (TIMELINE '${testdrive.seed}-timelines')
+
+> CREATE TABLE source_cdcv2_user_tbl
+  FROM SOURCE source_cdcv2_user (REFERENCE "testdrive-input-cdcv2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
-  WITH (TIMELINE '${testdrive.seed}-timelines')
 
 > CREATE TABLE input_table (a bigint);
 
@@ -162,7 +173,7 @@ contains:unacceptable timeline name "mz_foo"
 
 > CREATE MATERIALIZED VIEW input_values_mview AS VALUES (1), (2), (3);
 
-! CREATE MATERIALIZED VIEW must_fail (a, b, c) AS SELECT * FROM source_system, source_cdcv2;
+! CREATE MATERIALIZED VIEW must_fail (a, b, c) AS SELECT * FROM source_system, source_cdcv2_tbl;
 contains:multiple timelines within one dataflow are not supported
 
 # Verify that user timelines don't allow things to be joinable with their non-user versions.
@@ -174,7 +185,7 @@ contains:multiple timelines within one dataflow are not supported
 > CREATE VIEW values_values_view (a, b) AS SELECT * FROM input_values_view, input_values_mview LIMIT 0;
 > CREATE VIEW values_system_view AS SELECT * FROM input_values_view, source_system;
 > CREATE VIEW values_system_user_view AS SELECT * FROM input_values_view, source_system_user;
-> CREATE VIEW values_cdcv2_view AS SELECT * FROM input_values_view, source_cdcv2;
+> CREATE VIEW values_cdcv2_view AS SELECT * FROM input_values_view, source_cdcv2_tbl;
 > CREATE VIEW values_mz_catalog_view (a, b, c, d, e, f, g, h, i, j, k)
   AS SELECT mz_relations.id, mz_relations.oid, mz_relations.schema_id, mz_relations.name, mz_relations.type, input_values_view.column1, mz_views.id, mz_views.oid, mz_views.schema_id, mz_views.name, mz_views.definition
   FROM mz_relations, input_values_view, mz_views;
@@ -191,33 +202,37 @@ contains:multiple timelines within one dataflow are not supported
 
 # System things should be joinable only with system sources.
 ! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l)
-  AS SELECT mz_relations.id, mz_relations.oid, mz_relations.schema_id, mz_relations.name, mz_relations.type, mz_views.id, mz_views.oid, mz_views.schema_id, mz_views.name, mz_views.definition, source_cdcv2.id, source_cdcv2.price
-  FROM mz_relations, mz_views, source_cdcv2;
+  AS SELECT mz_relations.id, mz_relations.oid, mz_relations.schema_id, mz_relations.name, mz_relations.type, mz_views.id, mz_views.oid, mz_views.schema_id, mz_views.name, mz_views.definition, source_cdcv2_tbl.id, source_cdcv2_tbl.price
+  FROM mz_relations, mz_views, source_cdcv2_tbl;
 contains:multiple timelines within one dataflow are not supported
 > CREATE VIEW various_system_no_cdcv2 (a, b, c, d, e, f, g, h, i, j, k)
-  AS SELECT mz_relations.id, mz_relations.oid, mz_relations.schema_id, mz_relations.name, mz_relations.type, mz_views.id, mz_views.oid, mz_views.schema_id, mz_views.name, mz_views.definition, source_system.data
-  FROM mz_relations, mz_views, source_system;
+  AS SELECT mz_relations.id, mz_relations.oid, mz_relations.schema_id, mz_relations.name, mz_relations.type, mz_views.id, mz_views.oid, mz_views.schema_id, mz_views.name, mz_views.definition, source_system_tbl.data
+  FROM mz_relations, mz_views, source_system_tbl;
 
 > CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k)
   AS SELECT mz_relations.id, mz_relations.oid, mz_relations.schema_id, mz_relations.name, mz_relations.type, mz_views.id, mz_views.oid, mz_views.schema_id, mz_views.name, mz_views.definition, input_table.a
   FROM mz_relations, mz_views, input_table;
 
 # EXPLAIN should complain too.
-! EXPLAIN SELECT * FROM source_system, source_cdcv2;
+! EXPLAIN SELECT * FROM source_system_tbl, source_cdcv2_tbl;
 contains:multiple timelines within one dataflow are not supported
 
+# TODO: database-issues#8693
 # Can join user-specified timelines.
-> CREATE MATERIALIZED VIEW source_system_cdcv2_user (a, b, c) AS SELECT * FROM source_system_user, source_cdcv2_user;
+# > CREATE MATERIALIZED VIEW source_system_cdcv2_user (a, b, c)
+#   AS SELECT * FROM source_system_user_tbl, source_cdcv2_user_tbl;
 
 # CDCv2 can only be joined with system time stuff if specified
-> CREATE MATERIALIZED VIEW source_cdcv2_table_system AS SELECT * FROM source_cdcv2_system, input_table;
-! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_cdcv2, input_table;
+# TODO: database-issues#8693
+# > CREATE MATERIALIZED VIEW source_cdcv2_table_system
+#     AS SELECT * FROM source_cdcv2_system_tbl, input_table;
+! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_cdcv2_tbl, input_table;
 contains:multiple timelines within one dataflow are not supported
 
 # Verify that if the transaction starts on some timeline (epoch ms here),
 # things outside that are not there due to timedomain reasons.
 > BEGIN;
 > SELECT * FROM input_table;
-! SELECT * FROM source_cdcv2;
+! SELECT * FROM source_cdcv2_tbl;
 contains:Transactions can only reference objects in the same timedomain
 > ROLLBACK;

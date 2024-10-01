@@ -50,9 +50,11 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=1
 > CREATE SOURCE t1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-top1-${testdrive.seed}')
+  WITH (TIMESTAMP INTERVAL '500ms')
+
+> CREATE TABLE t1_tbl FROM SOURCE t1 (REFERENCE "testdrive-top1-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
-  WITH (TIMESTAMP INTERVAL '500ms')
 
 > DROP SOURCE quick_counter CASCADE
 > DROP SOURCE slow_counter CASCADE

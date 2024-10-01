@@ -20,29 +20,33 @@ $ kafka-ingest topic=static format=bytes
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE SOURCE indexed (c)
+> CREATE SOURCE indexed
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-static-${testdrive.seed}')
+
+> CREATE TABLE indexed_tbl (c) FROM SOURCE indexed (REFERENCE "testdrive-static-${testdrive.seed}")
   FORMAT TEXT
 
-> CREATE DEFAULT INDEX ON indexed
+> CREATE DEFAULT INDEX ON indexed_tbl
 
-> CREATE SOURCE unindexed (c)
+> CREATE SOURCE unindexed
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-static-${testdrive.seed}')
+
+> CREATE TABLE unindexed_tbl (c) FROM SOURCE unindexed (REFERENCE "testdrive-static-${testdrive.seed}")
   FORMAT TEXT
 
-> CREATE VIEW v_unindexed AS SELECT count(*) FROM unindexed
+> CREATE VIEW v_unindexed AS SELECT count(*) FROM unindexed_tbl
 
 # A SELECT from the materialized source should succeed outside a transaction.
-> SELECT c FROM indexed ORDER BY c
+> SELECT c FROM indexed_tbl ORDER BY c
 1
 2
 4
 
-> SELECT c FROM unindexed
+> SELECT c FROM unindexed_tbl
 1
 2
 4
@@ -54,12 +58,12 @@ $ kafka-ingest topic=static format=bytes
 
 # A SELECT from the materialized source in a transaction should succeed
 # even though a non-materialized source is in the same time domain.
-> SELECT c FROM indexed ORDER BY c
+> SELECT c FROM indexed_tbl ORDER BY c
 1
 2
 4
 
-> SELECT c FROM unindexed
+> SELECT c FROM unindexed_tbl
 1
 2
 4
@@ -69,7 +73,7 @@ $ kafka-ingest topic=static format=bytes
 # The unindexed view should be the same.
 > BEGIN
 
-> SELECT c FROM indexed ORDER BY c
+> SELECT c FROM indexed_tbl ORDER BY c
 1
 2
 4
@@ -81,7 +85,7 @@ $ kafka-ingest topic=static format=bytes
 
 # Ensure that other optionally indexed things (views) are correctly
 # included in the timedomain.
-> CREATE VIEW v AS SELECT COUNT(*) FROM indexed
+> CREATE VIEW v AS SELECT COUNT(*) FROM indexed_tbl
 
 # Wait until there are results.
 > SELECT * FROM v
@@ -89,7 +93,7 @@ $ kafka-ingest topic=static format=bytes
 
 > BEGIN
 
-> SELECT c FROM indexed ORDER BY c
+> SELECT c FROM indexed_tbl ORDER BY c
 1
 2
 4
@@ -108,7 +112,7 @@ $ kafka-ingest topic=static format=bytes
 
 > BEGIN
 
-> SELECT c FROM indexed ORDER BY c
+> SELECT c FROM indexed_tbl ORDER BY c
 1
 2
 4

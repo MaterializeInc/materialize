@@ -49,11 +49,13 @@ $ kafka-ingest format=avro topic=int2long key-format=avro key-schema=${keyschema
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-int2long-${testdrive.seed}')
+
+> CREATE TABLE int2long_tbl FROM SOURCE int2long (REFERENCE "testdrive-int2long-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 $ kafka-ingest format=avro topic=int2long key-format=avro key-schema=${keyschema-1-long-key} schema=${schema}
 {"key": 999999999999} {"nokey": "nokey1"}
 
-! SELECT * FROM int2long
+! SELECT * FROM int2long_tbl
 contains:Writer schema has type `Long`, but reader schema has type `Int` for field `Key.key`

@@ -31,12 +31,14 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
 > SET CLUSTER TO mz_catalog_server
-> SHOW INDEXES ON data
+> SHOW INDEXES ON data_tbl
 
-> SHOW INDEXES ON data
+> SHOW INDEXES ON data_tbl
 name    on  cluster  key  comment
 --------------------------------------------------------------------------
 
@@ -45,19 +47,33 @@ name    on  cluster  key  comment
 # Sources can have default indexes added
 > CREATE DEFAULT INDEX ON data
 
+> CREATE DEFAULT INDEX ON data_tbl
+
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON data
 name                on      cluster             key    comment
 -------------------------------------------------------------------------------------------
-data_primary_idx    data    <VARIABLE_OUTPUT>   {a,b}  ""
+data_primary_idx    data    <VARIABLE_OUTPUT>   {value}  ""
+
+> SET CLUSTER TO mz_catalog_server
+> SHOW INDEXES ON data_tbl
+name                    on      cluster             key    comment
+-------------------------------------------------------------------------------------------
+data_tbl_primary_idx    data_tbl    <VARIABLE_OUTPUT>   {a,b}  ""
 
 > SET CLUSTER TO quickstart
 
-> SELECT index_position FROM mz_index_columns WHERE index_id LIKE '%u%'
+> SELECT index_position FROM mz_index_columns WHERE index_id = (SELECT id FROM mz_indexes WHERE name = 'data_primary_idx')
+index_position
+--------------
+1
+
+> SELECT index_position FROM mz_index_columns WHERE index_id = (SELECT id FROM mz_indexes WHERE name = 'data_tbl_primary_idx')
 index_position
 --------------
 1
 2
+
 
 > SELECT position, name FROM mz_columns where id LIKE '%u%';
 position         name
@@ -66,9 +82,10 @@ position         name
 1                partition
 2                b
 2                offset
+1                value
 
 # Views do not have indexes automatically created
-> CREATE VIEW data_view as SELECT * from data
+> CREATE VIEW data_view as SELECT * from data_tbl
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON data_view
@@ -89,7 +106,7 @@ data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}   ""
 
 # Materialized views do not have indexes automatically created
 > CREATE MATERIALIZED VIEW matv AS
-  SELECT b, sum(a) FROM data GROUP BY b
+  SELECT b, sum(a) FROM data_tbl GROUP BY b
 
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES ON matv
