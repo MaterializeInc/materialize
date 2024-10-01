@@ -18,7 +18,7 @@ SELECT
 $ kafka-ingest format=bytes topic=autospill key-format=bytes key-terminator=:
 fish:AREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISH
 
-> SELECT count(*) from autospill;
+> SELECT count(*) from autospill_tbl;
 3
 
 > SELECT
@@ -49,7 +49,7 @@ fish:
 bird:
 animal:
 
-> SELECT count(*) from autospill;
+> SELECT count(*) from autospill_tbl;
 0
 
 # records_indexed should be zero.

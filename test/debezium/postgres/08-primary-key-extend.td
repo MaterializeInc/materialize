@@ -28,11 +28,13 @@ INSERT INTO alter_extend_primary_key VALUES (123, 234), (345, 456);
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE alter_extend_primary_key
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_extend_primary_key')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_extend_primary_key');
+
+> CREATE TABLE alter_extend_primary_key_tbl FROM SOURCE alter_extend_primary_key (REFERENCE "postgres.public.alter_extend_primary_key")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_extend_primary_key;
+> SELECT * FROM alter_extend_primary_key_tbl;
 123 234
 345 456
 
@@ -42,6 +44,6 @@ INSERT INTO alter_extend_primary_key VALUES (123, 567);
 DELETE FROM alter_extend_primary_key WHERE f1 = 345;
 
 # The updates after the ALTER TABLE are not replicated as replication has stopped
-> SELECT * FROM alter_extend_primary_key;
+> SELECT * FROM alter_extend_primary_key_tbl;
 123 234
 345 456

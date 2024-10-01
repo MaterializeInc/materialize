@@ -26,7 +26,9 @@ $ schema-registry-wait topic=postgres.public.concurrent_update
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE concurrent_update
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_update')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_update');
+
+> CREATE TABLE concurrent_update_tbl FROM SOURCE concurrent_update (REFERENCE "postgres.public.concurrent_update")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -50,6 +52,6 @@ $ postgres-execute connection=conn2
 UPDATE concurrent_update SET f1 = f1 * 10 WHERE f1 = 31;
 COMMIT;
 
-> SELECT f1, f2 FROM concurrent_update;
+> SELECT f1, f2 FROM concurrent_update_tbl;
 42 r1
 310 r2

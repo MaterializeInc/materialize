@@ -21,6 +21,8 @@ $ kafka-create-topic topic=upsert
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE kept_upsert_tbl FROM SOURCE kept_upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
@@ -29,6 +31,8 @@ $ kafka-create-topic topic=upsert
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE dropped_upsert_tbl FROM SOURCE dropped_upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
@@ -37,8 +41,8 @@ fish:fish
 bird:goose
 animal:whale
 
-> SELECT count(*) from dropped_upsert;
+> SELECT count(*) from dropped_upsert_tbl;
 3
 
-> SELECT count(*) from dropped_upsert;
+> SELECT count(*) from dropped_upsert_tbl;
 3

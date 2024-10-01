@@ -27,11 +27,13 @@ INSERT INTO alter_add_column_primary_key VALUES (123);
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE alter_add_column_primary_key
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_add_column_primary_key')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_add_column_primary_key');
+
+> CREATE TABLE alter_add_column_primary_key_tbl FROM SOURCE alter_add_column_primary_key (REFERENCE "postgres.public.alter_add_column_primary_key")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_add_column_primary_key;
+> SELECT * FROM alter_add_column_primary_key_tbl;
 123
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -42,5 +44,5 @@ INSERT INTO alter_add_column_primary_key VALUES (123,2);
 UPDATE alter_add_column_primary_key SET f1 = f1 * 10 WHERE pk_column = 1;
 UPDATE alter_add_column_primary_key SET f1 = f1 * 100 WHERE pk_column = 2;
 
-> SELECT * FROM alter_add_column_primary_key;
+> SELECT * FROM alter_add_column_primary_key_tbl;
 123

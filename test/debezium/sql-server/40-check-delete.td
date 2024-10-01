@@ -16,7 +16,9 @@ $ schema-registry-wait topic=sql-server.test.dbo.delete_table_pk
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE delete_table_pk
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.delete_table_pk')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.delete_table_pk');
+
+> CREATE TABLE delete_table_pk_tbl FROM SOURCE delete_table_pk (REFERENCE "sql-server.test.dbo.delete_table_pk")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -24,7 +26,9 @@ $ schema-registry-wait topic=sql-server.test.dbo.delete_table_pk
 # $ schema-registry-wait topic=sql-server.dbo.delete_table_nopk
 
 # > CREATE SOURCE delete_table_nopk
-#   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.delete_table_nopk')
+#   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.delete_table_nopk');
+
+# > CREATE TABLE delete_table_nopk_tbl FROM SOURCE delete_table_nopk (REFERENCE "sql-server.dbo.delete_table_nopk")
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   ENVELOPE DEBEZIUM;
 
@@ -36,8 +40,8 @@ USE test;
 DELETE FROM delete_table_pk WHERE key_col = 'key1';
 # DELETE FROM delete_table_nopk WHERE key_col = 'key2';
 
-> SELECT * FROM delete_table_pk;
+> SELECT * FROM delete_table_pk_tbl;
 key2 value2
 
-# > SELECT * FROM delete_table_nopk;
+# > SELECT * FROM delete_table_nopk_tbl;
 # key1 value1

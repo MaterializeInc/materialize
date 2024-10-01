@@ -33,6 +33,8 @@ one
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL '1s'
   )
+
+> CREATE TABLE non_ssh_tbl FROM SOURCE non_ssh (REFERENCE "testdrive-thetopic-${testdrive.seed}")
   FORMAT TEXT
   ENVELOPE NONE
 
@@ -45,13 +47,13 @@ one
 
 > CREATE SINK sink_fixed
   IN CLUSTER sc
-  FROM non_ssh
+  FROM non_ssh_tbl
   INTO KAFKA CONNECTION kafka_conn_using (TOPIC 'sink_fixed-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
 
 > CREATE SINK sink_dynamic
   IN CLUSTER sc
-  FROM non_ssh
+  FROM non_ssh_tbl
   INTO KAFKA CONNECTION kafka_conn_dynamic (TOPIC 'sink_dynamic-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
 

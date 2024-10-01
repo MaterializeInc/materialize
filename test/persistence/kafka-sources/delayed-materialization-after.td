@@ -33,14 +33,14 @@ $ set schema={
 $ kafka-ingest format=avro topic=delayed-materialization key-format=avro key-schema=${keyschema} schema=${schema} repeat=${count}
 {"f1": "a${kafka-ingest.iteration}"} {"f2": "a${kafka-ingest.iteration}"}
 
-> CREATE DEFAULT INDEX ON materialized_via_create_index_after_restart;
+> CREATE DEFAULT INDEX ON materialized_via_create_index_after_restart_tbl;
 
-> CREATE MATERIALIZED VIEW materialized_via_create_materialized_view_after_restart_view AS SELECT COUNT(*) AS f1 FROM materialized_via_create_materialized_view_after_restart;
+> CREATE MATERIALIZED VIEW materialized_via_create_materialized_view_after_restart_view AS SELECT COUNT(*) AS f1 FROM materialized_via_create_materialized_view_after_restart_tbl;
 
-> SELECT COUNT(*) FROM materialized_via_create_index_before_restart;
+> SELECT COUNT(*) FROM materialized_via_create_index_before_restart_tbl;
 "${count}"
 
-> SELECT COUNT(*) FROM materialized_via_create_index_after_restart;
+> SELECT COUNT(*) FROM materialized_via_create_index_after_restart_tbl;
 "${count}"
 
 > SELECT f1 FROM materialized_via_create_materialized_view_before_restart_view;

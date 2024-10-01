@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT COUNT(*) FROM envelope_none_text;
+> SELECT COUNT(*) FROM envelope_none_text_tbl;
 10000
 
-> SELECT COUNT(*) FROM envelope_none_bytes;
+> SELECT COUNT(*) FROM envelope_none_bytes_tbl;
 10000
 
 $ kafka-ingest topic=envelope-none-bytes format=bytes repeat=5000
@@ -21,8 +21,8 @@ $ kafka-ingest topic=envelope-none-text format=bytes repeat=5000
 ABC
 XYZ
 
-> SELECT COUNT(*), COUNT(DISTINCT data) FROM envelope_none_bytes;
+> SELECT COUNT(*), COUNT(DISTINCT data) FROM envelope_none_bytes_tbl;
 20000 2
 
-> SELECT COUNT(*), COUNT(DISTINCT "text") FROM envelope_none_text;
+> SELECT COUNT(*), COUNT(DISTINCT "text") FROM envelope_none_text_tbl;
 20000 2

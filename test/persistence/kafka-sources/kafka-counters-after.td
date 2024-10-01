@@ -27,5 +27,5 @@ $ kafka-ingest format=avro topic=kafka-counters key-format=avro key-schema=${key
 {"f1": "-1"} {"f2": "-1"}
 
 
-> SELECT COUNT(*) FROM kafka_counters;
+> SELECT COUNT(*) FROM kafka_counters_tbl;
 10001

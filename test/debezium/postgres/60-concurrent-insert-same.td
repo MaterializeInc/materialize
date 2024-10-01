@@ -25,7 +25,9 @@ $ schema-registry-wait topic=postgres.public.insert_same_table
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE insert_same_table
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.insert_same_table')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.insert_same_table');
+
+> CREATE TABLE insert_same_table_tbl FROM SOURCE insert_same_table (REFERENCE "postgres.public.insert_same_table")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -49,7 +51,7 @@ $ postgres-execute connection=conn2
 INSERT INTO insert_same_table VALUES (4);
 COMMIT;
 
-> SELECT * FROM insert_same_table;
+> SELECT * FROM insert_same_table_tbl;
 0
 1
 2

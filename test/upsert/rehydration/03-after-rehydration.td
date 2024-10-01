@@ -25,7 +25,7 @@ $ set schema={
     }
 
 # Ensure we rehydrate properly
-> SELECT * from upsert
+> SELECT * from upsert_tbl
 key           f1       f2
 ---------------------------
 fish          fish     1001
@@ -58,7 +58,7 @@ SELECT
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "longerfish", "f2": 9000}
 
-> SELECT * from upsert
+> SELECT * from upsert_tbl
 key           f1                  f2
 --------------------------------------
 fish          longerfish          9000
@@ -107,7 +107,7 @@ true 3
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"}
 
-> SELECT * from upsert
+> SELECT * from upsert_tbl
 key           f1                  f2
 --------------------------------------
 birdmore      geese               56

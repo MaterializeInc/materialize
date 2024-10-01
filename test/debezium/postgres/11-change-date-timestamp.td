@@ -25,11 +25,13 @@ $ schema-registry-wait topic=postgres.public.alter_change_date_timestamp
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE alter_change_date_timestamp
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_change_date_timestamp')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_change_date_timestamp');
+
+> CREATE TABLE alter_change_date_timestamp_tbl FROM SOURCE alter_change_date_timestamp (REFERENCE "postgres.public.alter_change_date_timestamp")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT f1 FROM alter_change_date_timestamp;
+> SELECT f1 FROM alter_change_date_timestamp_tbl;
 2011-11-11
 2012-12-12
 
@@ -39,5 +41,5 @@ INSERT INTO alter_change_date_timestamp VALUES ('2011-11-11 11:11:11', 2);
 UPDATE alter_change_date_timestamp SET f1 = '2012-12-12 12:12:12' WHERE f1 = '2012-12-12';
 DELETE FROM alter_change_date_timestamp WHERE f1 = '2011-11-11';
 
-! SELECT * FROM alter_change_date_timestamp;
+! SELECT * FROM alter_change_date_timestamp_tbl;
 contains:Failed to match writer union variant `TimestampMicro` against any variant in the reader for field `postgres.public.alter_change_date_timestamp.Value.f1`

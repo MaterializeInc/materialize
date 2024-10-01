@@ -53,11 +53,15 @@ contains:ssl.ca.pem failed: not in PEM format?
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
-> CREATE SOURCE text_data (a) FROM KAFKA CONNECTION kafka (
+> CREATE SOURCE text_data FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data
+> CREATE TABLE text_data_tbl (a)
+  FROM SOURCE text_data (REFERENCE "testdrive-text-data-${testdrive.seed}")
+  FORMAT TEXT
+
+> SELECT * FROM text_data_tbl
 banana
 
 # ==> Test with an SSH tunnel. <==
@@ -69,9 +73,11 @@ banana
 
 > CREATE SOURCE text_data_ssh FROM KAFKA CONNECTION kafka_ssh (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data_ssh
+> CREATE TABLE text_data_ssh_tbl FROM SOURCE text_data_ssh (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+
+> SELECT * FROM text_data_ssh_tbl
 banana
 
 # ALTER CONNECTION
@@ -194,6 +200,6 @@ papaya
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data_ssh';
 running
 
-> SELECT * FROM text_data
+> SELECT * FROM text_data_tbl
 banana
 papaya

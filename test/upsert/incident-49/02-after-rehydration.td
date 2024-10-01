@@ -27,5 +27,5 @@ $ set schema={
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "random", "f2": 3}
 
-> SELECT f2 from upsert
+> SELECT f2 from upsert_tbl
 3

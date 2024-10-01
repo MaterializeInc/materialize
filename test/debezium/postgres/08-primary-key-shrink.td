@@ -28,11 +28,13 @@ INSERT INTO alter_shrink_primary_key VALUES (123,234),(345,456);
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE alter_shrink_primary_key
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_shrink_primary_key')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_shrink_primary_key');
+
+> CREATE TABLE alter_shrink_primary_key_tbl FROM SOURCE alter_shrink_primary_key (REFERENCE "postgres.public.alter_shrink_primary_key")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_shrink_primary_key;
+> SELECT * FROM alter_shrink_primary_key_tbl;
 123 234
 345 456
 
@@ -41,6 +43,6 @@ ALTER TABLE alter_shrink_primary_key DROP COLUMN f2, ADD PRIMARY KEY (f1);
 INSERT INTO alter_shrink_primary_key VALUES (567);
 DELETE FROM alter_shrink_primary_key WHERE f1 = 123;
 
-> SELECT * FROM alter_shrink_primary_key;
+> SELECT * FROM alter_shrink_primary_key_tbl;
 345
 567

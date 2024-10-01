@@ -55,10 +55,12 @@ ALTER SYSTEM SET enable_disk_cluster_replicas = true
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION c_conn
   ENVELOPE UPSERT
 
-> SELECT * from upsert
+> SELECT * from upsert_tbl
 key           f1       f2
 ---------------------------
 fish          fish     1000
