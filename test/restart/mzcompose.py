@@ -570,10 +570,12 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
 
             > CREATE SOURCE kafka_source
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-status-history-${testdrive.seed}')
+
+            > CREATE TABLE kafka_source_tbl FROM SOURCE kafka_source (REFERENCE "testdrive-status-history-${testdrive.seed}")
               FORMAT TEXT
 
             > CREATE SINK kafka_sink
-              FROM kafka_source
+              FROM kafka_source_tbl
               INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM
@@ -614,14 +616,14 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
     c.up("materialized")
 
     # Verify that we have fewer events now
-    # 7 because the truncation default is 5, and the restarted
+    # 13 resp. because the truncation default is 5, and the restarted
     # objects produce a new starting and running event.
     c.testdrive(
         service="testdrive_no_reset",
         input=dedent(
             """
             > SELECT COUNT(*) FROM mz_internal.mz_source_status_history
-            7
+            13
 
             > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
             7
