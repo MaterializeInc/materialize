@@ -9,7 +9,7 @@
 
 use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::convert::AsRef;
+use std::convert::{AsRef, Infallible};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -151,48 +151,10 @@ impl<H: Digest> Hasher for DigestHasher<H> {
     }
 }
 
-use std::convert::Infallible;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 
 use self::types::ValueMetadata;
-
-/// This leaf operator drops `token` after the input reaches the `resume_upper`.
-/// This is useful to take coordinated actions across all workers, after the `upsert`
-/// operator has rehydrated.
-pub fn rehydration_finished<G, T>(
-    scope: G,
-    source_config: &crate::source::RawSourceCreationConfig,
-    // A token that we can drop to signal we are finished rehydrating.
-    token: impl std::any::Any + 'static,
-    resume_upper: Antichain<T>,
-    input: &Stream<G, Infallible>,
-) where
-    G: Scope<Timestamp = T>,
-    T: Timestamp,
-{
-    let worker_id = source_config.worker_id;
-    let id = source_config.id;
-    let mut builder = AsyncOperatorBuilder::new(format!("rehydration_finished({id}"), scope);
-    let mut input = builder.new_disconnected_input(input, Pipeline);
-
-    builder.build(move |_capabilities| async move {
-        let mut input_upper = Antichain::from_elem(Timestamp::minimum());
-        // Ensure this operator finishes if the resume upper is `[0]`
-        while !PartialOrder::less_equal(&resume_upper, &input_upper) {
-            let Some(event) = input.next().await else {
-                break;
-            };
-            if let AsyncEvent::Progress(upper) = event {
-                input_upper = upper;
-            }
-        }
-        tracing::info!(
-            "timely-{worker_id} upsert source {id} has downgraded past the resume upper ({resume_upper:?}) across all workers",
-        );
-        drop(token);
-    });
-}
 
 /// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
 /// and the collection of the previous output of this operator.
@@ -213,6 +175,7 @@ pub(crate) fn upsert<G: Scope, FromTime>(
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, Infallible>,
     PressOnDropButton,
 )
 where
@@ -227,7 +190,7 @@ where
 
     // If we are configured to delay raw sources till we rehydrate, we do so. Otherwise, skip
     // this, to prevent unnecessary work.
-    let wait_for_input_resumption =
+    let delay_sources_past_rehydration =
         dyncfgs::DELAY_SOURCES_PAST_REHYDRATION.get(storage_configuration.config_set());
     let rocksdb_cleanup_tries =
         dyncfgs::STORAGE_ROCKSDB_CLEANUP_TRIES.get(storage_configuration.config_set());
@@ -246,7 +209,7 @@ where
         dyncfgs::STORAGE_ROCKSDB_USE_MERGE_OPERATOR.get(storage_configuration.config_set());
 
     let upsert_config = UpsertConfig {
-        wait_for_input_resumption,
+        delay_sources_past_rehydration,
         shrink_upsert_unused_buffers_by_ratio: storage_configuration
             .parameters
             .shrink_upsert_unused_buffers_by_ratio,
@@ -617,9 +580,8 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
 // Created a struct to hold the configs for upserts.
 // So that new configs don't require a new method parameter.
 struct UpsertConfig {
-    // Whether or not to wait for the `input` to reach the `resumption_frontier`
-    // before we finalize `rehydration`.
-    wait_for_input_resumption: bool,
+    // Whether or not to delay upstream source operators while we rehydrate.
+    delay_sources_past_rehydration: bool,
     shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
@@ -638,6 +600,7 @@ fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, Infallible>,
     PressOnDropButton,
 )
 where
@@ -665,6 +628,11 @@ where
         Some((UpsertKey::from_value(value.as_ref(), &key_indices), value))
     });
     let (mut output_handle, output) = builder.new_output();
+
+    // An output that just reports progress of the snapshot consolidation process upstream to the
+    // persist source to ensure that backpressure is applied
+    let (_snapshot_handle, snapshot_stream) =
+        builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
     let (mut health_output, health_stream) = builder.new_output();
     let mut input = builder.new_input_for(
         &input.inner,
@@ -680,7 +648,7 @@ where
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
     let shutdown_button = builder.build(move |caps| async move {
-        let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
+        let [mut output_cap, mut snapshot_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
 
         // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
         // (as required for `consolidate_snapshot_chunk`), with slightly more efficient serialization
@@ -701,53 +669,28 @@ where
 
         let mut error_emitter = (&mut health_output, &health_cap);
 
-        while !PartialOrder::less_equal(&resume_upper, &snapshot_upper)
-            || (upsert_config.wait_for_input_resumption
-                && !PartialOrder::less_equal(&resume_upper, &input_upper))
-        {
-            let previous_event = tokio::select! {
-                // Note that these are both cancel-safe. The reason we drain the `input` is to
-                // ensure the `output_frontier` (and therefore flow control on `previous`) make
-                // progress.
-                Some(previous_event) = previous.next(), if !PartialOrder::less_equal(
-                    &resume_upper,
-                    &snapshot_upper,
-                ) => {
-                    previous_event
-                }
-                Some(input_event) = input.next() => {
-                    match input_event {
-                        AsyncEvent::Data(_cap, mut data) => {
-                            stage_input(
-                                &mut stash,
-                                &mut data,
-                                &input_upper,
-                                &resume_upper,
-                                upsert_config.shrink_upsert_unused_buffers_by_ratio
-                            );
-                        }
-                        AsyncEvent::Progress(upper) => {
-                            input_upper = upper;
-                        }
-                    }
-                    continue;
-                }
-            };
-            match previous_event {
-                AsyncEvent::Data(_cap, data) => {
-                    events.extend(data.into_iter().filter_map(|((key, value), ts, diff)| {
-                        if !resume_upper.less_equal(&ts) {
-                            Some((key, value, diff))
-                        } else {
-                            None
-                        }
-                    }))
-                }
-                AsyncEvent::Progress(upper) => snapshot_upper = upper,
-            };
-            while let Some(event) = previous.next().now_or_never() {
+        let permit = if upsert_config.delay_sources_past_rehydration {
+            // Grab the busy signal to avoid the upstream operators from doing any work
+            // while we are rehydrating.
+            Some(source_config.busy_signal.acquire().await)
+        } else {
+            None
+        };
+
+        tracing::info!(
+            ?resume_upper,
+            ?snapshot_upper,
+            "timely-{} upsert source {} starting rehydration",
+            source_config.worker_id,
+            source_config.id
+        );
+        // Read and consolidate the snapshot from the 'previous' input until it
+        // reaches the `resume_upper`.
+        while !PartialOrder::less_equal(&resume_upper, &snapshot_upper) {
+            previous.ready().await;
+            while let Some(event) = previous.next_sync() {
                 match event {
-                    Some(AsyncEvent::Data(_cap, data)) => {
+                    AsyncEvent::Data(_cap, data) => {
                         events.extend(data.into_iter().filter_map(|((key, value), ts, diff)| {
                             if !resume_upper.less_equal(&ts) {
                                 Some((key, value, diff))
@@ -756,12 +699,10 @@ where
                             }
                         }))
                     }
-                    Some(AsyncEvent::Progress(upper)) => snapshot_upper = upper,
-                    None => {
-                        snapshot_upper = Antichain::new();
-                        break;
+                    AsyncEvent::Progress(upper) => {
+                        snapshot_upper = upper;
                     }
-                }
+                };
             }
 
             for (_, value, diff) in events.iter_mut() {
@@ -791,6 +732,7 @@ where
                         // `resume_upper`, which we ignore above. We don't want our output capability to make
                         // it further than the `resume_upper`.
                         if !resume_upper.less_equal(&ts) {
+                            snapshot_cap.downgrade(&ts);
                             output_cap.downgrade(&ts);
                         }
                     }
@@ -807,14 +749,34 @@ where
         }
 
         drop(events);
-
+        drop(permit);
         drop(previous_token);
+        drop(snapshot_cap);
         // Exchaust the previous input. It is expected to immediately reach the empty
         // antichain since we have dropped its token.
         //
-        // Note that we do not need to also process the `input` during this, as the dropped token
-        // will shutdown the `backpressure` operator
         while let Some(_event) = previous.next().await {}
+
+        // Drain the input to ensure we correctly process data from before the resume upper
+        while let Some(input_event) = input.next().await {
+            match input_event {
+                AsyncEvent::Data(_cap, mut data) => {
+                    stage_input(
+                        &mut stash,
+                        &mut data,
+                        &input_upper,
+                        &resume_upper,
+                        upsert_config.shrink_upsert_unused_buffers_by_ratio,
+                    );
+                }
+                AsyncEvent::Progress(upper) => {
+                    input_upper = upper;
+                    if PartialOrder::less_equal(&resume_upper, &input_upper) {
+                        break;
+                    }
+                }
+            }
+        }
 
         // After snapshotting, our output frontier is exactly the `resume_upper`
         if let Some(ts) = resume_upper.as_option() {
@@ -978,6 +940,7 @@ where
             Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
         }),
         health_stream,
+        snapshot_stream,
         shutdown_button.press_on_drop(),
     )
 }

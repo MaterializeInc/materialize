@@ -1555,18 +1555,6 @@ async fn purify_create_table_from_source(
             purified_export
         }
         GenericSourceConnection::LoadGenerator(load_gen_connection) => {
-            // TODO(roshan): Refactor KeyValue load generator rendering to support multiple outputs
-            if matches!(
-                load_gen_connection.load_generator,
-                mz_storage_types::sources::load_generator::LoadGenerator::KeyValue(_)
-            ) {
-                sql_bail!(
-                    "{} is a {} source, which does not support CREATE TABLE .. FROM SOURCE.",
-                    scx.catalog.minimal_qualification(qualified_source_name),
-                    connection_name
-                )
-            };
-
             let mut views = load_gen_connection.load_generator.views();
             if views.is_empty() {
                 // If there are no views then this load-generator just has a single output
