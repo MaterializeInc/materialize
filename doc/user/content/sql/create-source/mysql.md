@@ -10,7 +10,7 @@ menu:
     weight: 20
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{% create-source/intro %}}
 Materialize supports MySQL (5.7+) as a real-time data source. To connect to a
@@ -305,9 +305,31 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 
 If your MySQL server is not exposed to the public internet, you can
 [tunnel the connection](/sql/create-connection/#network-security-connections)
-through an SSH bastion host.
+through an AWS PrivateLink service or an SSH bastion host SSH bastion host.
 
 {{< tabs tabID="1" >}}
+{{< tab "AWS PrivateLink">}}
+
+```mzsql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+   SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+   AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+);
+
+CREATE CONNECTION mysql_connection TO MYSQL (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 3306,
+    USER 'root',
+    PASSWORD SECRET mysqlpass,
+    AWS PRIVATELINK privatelink_svc
+);
+```
+
+For step-by-step instructions on creating AWS PrivateLink connections and
+configuring an AWS PrivateLink service to accept connections from Materialize,
+check [this guide](/ops/network-security/privatelink/).
+
+{{< /tab >}}
 {{< tab "SSH tunnel">}}
 ```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (

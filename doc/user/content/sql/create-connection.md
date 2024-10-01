@@ -625,7 +625,7 @@ CREATE CONNECTION csr_ssh TO CONFLUENT SCHEMA REGISTRY (
 
 ### MySQL
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 A MySQL connection establishes a link to a [MySQL] server. You can use
 MySQL connections to create [sources](/sql/create-source/mysql).
@@ -669,9 +669,39 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 #### Network security {#mysql-network-security}
 
 If your MySQL server is not exposed to the public internet, you can tunnel
-the connection through an SSH bastion host.
+the connection through an AWS PrivateLink service or an SSH bastion host.
 
 {{< tabs >}}
+{{< tab "AWS PrivateLink">}}
+
+##### Connection options {#mysql-privatelink-options}
+
+Field                       | Value            | Required | Description
+----------------------------|------------------|:--------:|-----------------------------
+`AWS PRIVATELINK`           | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic should be routed.
+
+##### Example {#mysql-privatelink-example}
+
+```mzsql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+   SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+   AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+);
+
+CREATE CONNECTION mysql_connection TO MYSQL (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 3306,
+    USER 'root',
+    PASSWORD SECRET mysqlpass,
+    AWS PRIVATELINK privatelink_svc
+);
+```
+
+For step-by-step instructions on creating AWS PrivateLink connections and
+configuring an AWS PrivateLink service to accept connections from Materialize,
+check [this guide](/ops/network-security/privatelink/).
+
+{{< /tab >}}
 {{< tab "SSH tunnel">}}
 
 ##### Connection options {#mysql-ssh-options}
