@@ -92,16 +92,6 @@ For more information, see:
 - [`CREATE CLUSTER`](/sql/create-cluster).
 - [`ALTER CLUSTER`](/sql/alter-cluster).
 
-### AWS Connection for IAM authentication
-
-Materialize supports the use of an AWS Connection to perform:
-
-- IAM authentication with an Amazon MSK cluster.
-
-- Bulk exports to Amazon S3 [(Private Preview)](#copy-to-amazon-s3).
-
-For more information, see [`CREATE Connection:
-AWS`](/sql/create-connection/#aws).
 
 ### Copy to Amazon S3
 
@@ -197,6 +187,17 @@ For more information, see:
 - [Create Source: MySQL](/sql/create-source/mysql/)
 
 - [Create Connection: MySQL](/sql/create-connection/#mysql)
+
+### AWS Connection for IAM authentication
+
+Materialize supports the use of an AWS Connection to perform:
+
+- IAM authentication with an Amazon MSK cluster.
+
+- Bulk exports to Amazon S3 [(Private Preview)](#copy-to-amazon-s3).
+
+For more information, see [`CREATE Connection:
+AWS`](/sql/create-connection/#aws).
 
 ### Various mz_internal tables
 
