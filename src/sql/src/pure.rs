@@ -605,7 +605,7 @@ async fn purify_create_source(
 ) -> Result<PurifiedStatement, PlanError> {
     let CreateSourceStatement {
         name: source_name,
-        connection,
+        connection: source_connection,
         format,
         envelope,
         include_metadata,
@@ -620,7 +620,7 @@ async fn purify_create_source(
 
     let mut requested_subsource_map = BTreeMap::new();
 
-    let progress_desc = match &connection {
+    let progress_desc = match &source_connection {
         CreateSourceConnection::Kafka { .. } => {
             &mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC
         }
@@ -647,7 +647,7 @@ async fn purify_create_source(
 
     let mut format_options = SourceFormatOptions::Default;
 
-    match connection {
+    match source_connection {
         CreateSourceConnection::Kafka {
             connection,
             options: base_with_options,
@@ -760,25 +760,53 @@ async fn purify_create_source(
 
             format_options = SourceFormatOptions::Kafka { topic };
         }
-        CreateSourceConnection::Postgres {
-            connection,
-            options,
-        }
-        | CreateSourceConnection::Yugabyte {
-            connection,
-            options,
-        } => {
+        source_connection @ CreateSourceConnection::Postgres { .. }
+        | source_connection @ CreateSourceConnection::Yugabyte { .. } => {
+            let (source_flavor, connection, options) = match source_connection {
+                CreateSourceConnection::Postgres {
+                    connection,
+                    options,
+                } => (PostgresFlavor::Vanilla, connection, options),
+                CreateSourceConnection::Yugabyte {
+                    connection,
+                    options,
+                } => (PostgresFlavor::Yugabyte, connection, options),
+                _ => unreachable!(),
+            };
             let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection().map_err(PlanError::from)? {
                     Connection::Postgres(connection) => {
-                        connection.clone().into_inline_connection(&catalog)
+                        let connection = connection.clone().into_inline_connection(&catalog);
+                        if connection.flavor != source_flavor {
+                            match source_flavor {
+                                PostgresFlavor::Vanilla => {
+                                    Err(PgSourcePurificationError::NotPgConnection(
+                                        scx.catalog.resolve_full_name(item.name()),
+                                    ))
+                                }
+                                PostgresFlavor::Yugabyte => {
+                                    Err(PgSourcePurificationError::NotYugabyteConnection(
+                                        scx.catalog.resolve_full_name(item.name()),
+                                    ))
+                                }
+                            }
+                        } else {
+                            Ok(connection)
+                        }
                     }
-                    _ => Err(PgSourcePurificationError::NotPgConnection(
-                        scx.catalog.resolve_full_name(item.name()),
-                    ))?,
+                    _ => match source_flavor {
+                        PostgresFlavor::Vanilla => Err(PgSourcePurificationError::NotPgConnection(
+                            scx.catalog.resolve_full_name(item.name()),
+                        )),
+                        PostgresFlavor::Yugabyte => {
+                            Err(PgSourcePurificationError::NotYugabyteConnection(
+                                scx.catalog.resolve_full_name(item.name()),
+                            ))
+                        }
+                    },
                 }
-            };
+            }?;
             let crate::plan::statement::PgConfigOptionExtracted {
                 publication,
                 text_columns,

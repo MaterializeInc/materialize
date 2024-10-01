@@ -30,6 +30,7 @@ use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::VecExt;
+use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -627,7 +628,7 @@ pub fn plan_create_source(
         name,
         in_cluster: _,
         col_names,
-        connection,
+        connection: source_connection,
         envelope,
         if_not_exists,
         format,
@@ -663,7 +664,7 @@ pub fn plan_create_source(
         )?;
     }
 
-    if !matches!(connection, CreateSourceConnection::Kafka { .. })
+    if !matches!(source_connection, CreateSourceConnection::Kafka { .. })
         && include_metadata
             .iter()
             .any(|sic| matches!(sic, SourceIncludeMetadata::Headers { .. }))
@@ -672,14 +673,14 @@ pub fn plan_create_source(
         sql_bail!("INCLUDE HEADERS with non-Kafka sources not supported");
     }
     if !matches!(
-        connection,
+        source_connection,
         CreateSourceConnection::Kafka { .. } | CreateSourceConnection::LoadGenerator { .. }
     ) && !include_metadata.is_empty()
     {
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let external_connection = match connection {
+    let external_connection = match source_connection {
         CreateSourceConnection::Kafka {
             connection: connection_name,
             options,
@@ -807,7 +808,23 @@ pub fn plan_create_source(
             connection,
             options,
         } => {
+            let (source_flavor, flavor_name) = match source_connection {
+                CreateSourceConnection::Postgres { .. } => (PostgresFlavor::Vanilla, "PostgreSQL"),
+                CreateSourceConnection::Yugabyte { .. } => (PostgresFlavor::Yugabyte, "Yugabyte"),
+                _ => unreachable!(),
+            };
+
             let connection_item = scx.get_item_by_resolved_name(connection)?;
+            let connection_mismatch = match connection_item.connection()? {
+                Connection::Postgres(conn) => source_flavor != conn.flavor,
+                _ => true,
+            };
+            if connection_mismatch {
+                sql_bail!(
+                    "{} is not a {flavor_name} connection",
+                    scx.catalog.resolve_full_name(connection_item.name())
+                )
+            }
 
             let PgConfigOptionExtracted {
                 details,
