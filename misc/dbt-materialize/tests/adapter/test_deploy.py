@@ -893,8 +893,8 @@ class TestDeployGetObjects:
         )
         assert "DRY RUN: Final cluster list for deployment: ['test_cluster']" in output
         assert "DRY RUN: Final schema list for deployment: ['" in output
-        assert "test_cluster_dbt_deploy'" in output
-        assert "test_schema_dbt_deploy']" in output
+        assert "_test_deploy_test_schema'" in output
+        assert "_test_deploy']" in output
 
     def test_deploy_get_objects_no_exclusions(self, project, capsys):
         project_config_no_excludes = "{deployment: {default: {}}}"
@@ -916,8 +916,8 @@ class TestDeployGetObjects:
         assert "DRY RUN: Excluded schemas from deployment: []" in output
         assert "DRY RUN: Final cluster list for deployment: ['test_cluster']" in output
         assert "DRY RUN: Final schema list for deployment: ['" in output
-        assert "test_cluster_dbt_deploy'" in output
-        assert "test_schema_dbt_deploy']" in output
+        assert "_test_deploy_test_schema'" in output
+        assert "_test_deploy']" in output
 
 
 def run_with_retry(project, sql, expected_count, retries=5, delay=3, fetch="one"):
