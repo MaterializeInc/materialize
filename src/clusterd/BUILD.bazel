@@ -29,7 +29,7 @@ rust_binary(
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.118.2",
+    version = "0.118.3",
     deps = [
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
