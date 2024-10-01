@@ -75,9 +75,11 @@ $ kafka-ingest topic=basic format=protobuf descriptor-file=basic.pb message=Basi
 > CREATE SOURCE basic
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-basic-${testdrive.seed}')
+
+> CREATE TABLE basic_tbl FROM SOURCE basic (REFERENCE "testdrive-basic-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.Basic' USING SCHEMA '${basic-schema}'
 
-> SHOW COLUMNS FROM basic
+> SHOW COLUMNS FROM basic_tbl
 name       nullable  type                comment
 ------------------------------------------------
 bool       false     boolean             ""
@@ -98,7 +100,7 @@ string     false     text                ""
 enum       false     text                ""
 message    true      record              ""
 
-> SELECT bool, int32, int64, sint32, sint64, sfixed32, sfixed64, uint32, uint64, fixed32, fixed64, float, double, bytes, string, enum, message::text FROM basic
+> SELECT bool, int32, int64, sint32, sint64, sfixed32, sfixed64, uint32, uint64, fixed32, fixed64, float, double, bytes, string, enum, message::text FROM basic_tbl
 bool  int32  int64  sint32  sint64  sfixed32  sfixed64  uint32  uint64  fixed32  fixed64  float  double  bytes  string enum  message
 ----
 true  1      2      -1      -2      -3        -4        3       4       5        6        1.2    3.2     aaa    bbb    ENUM1 "(t,1,2,-1,-2,-3,-4,3,4,5,6,1.2,3.2,\"\\\\x616161\",bbb,ENUM1)"

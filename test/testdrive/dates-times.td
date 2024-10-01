@@ -57,9 +57,11 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE MATERIALIZED VIEW data_view as SELECT * from data
+> CREATE MATERIALIZED VIEW data_view as SELECT * from data_tbl
 
 > SELECT * FROM data_view
 1970-01-01 "1970-01-01 18:03:20" "1970-01-01 00:01:05"
@@ -67,7 +69,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 
 > CREATE SINK data_sink
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM data
+  FROM data_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-roundtrip-${testdrive.seed}')
   KEY (d) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

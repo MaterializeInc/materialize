@@ -54,13 +54,15 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
 > CREATE SOURCE upsert_input
   IN CLUSTER upsert_input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-avro-${testdrive.seed}')
+
+> CREATE TABLE upsert_input_tbl FROM SOURCE upsert_input (REFERENCE "testdrive-upsert-avro-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > CREATE CLUSTER upsert_input_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK upsert_input_sink
   IN CLUSTER upsert_input_sink_cluster
-  FROM upsert_input
+  FROM upsert_input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink-${testdrive.seed}')
   KEY (key1, key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
@@ -156,9 +158,11 @@ $ kafka-create-topic topic=input
 > CREATE SOURCE input
   IN CLUSTER input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
+
+> CREATE TABLE input_tbl FROM SOURCE input (REFERENCE "testdrive-input-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE MATERIALIZED VIEW input_keyed AS SELECT a, max(b) as b FROM input GROUP BY a
+> CREATE MATERIALIZED VIEW input_keyed AS SELECT a, max(b) as b FROM input_tbl GROUP BY a
 
 > CREATE CLUSTER input_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK input_sink
@@ -186,7 +190,7 @@ $ kafka-ingest format=avro topic=input schema=${schema}
 {"array":[{"data":{"a":1,"b":7},"time":3,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[4],"counts":[{"time":1,"count":2},{"time":2,"count":2}, {"time": 3, "count": 1}]}}
 
-> SELECT * FROM input;
+> SELECT * FROM input_tbl;
 a  b
 ------
 1  1
@@ -234,9 +238,11 @@ $ kafka-create-topic topic=input-with-deletions
 > CREATE SOURCE input_with_deletions
   IN CLUSTER input_with_deletions_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-with-deletions-${testdrive.seed}')
+
+> CREATE TABLE input_with_deletions_tbl FROM SOURCE input_with_deletions (REFERENCE "testdrive-input-with-deletions-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE MATERIALIZED VIEW input_with_deletions_keyed AS SELECT a, max(b) as b FROM input_with_deletions GROUP BY a
+> CREATE MATERIALIZED VIEW input_with_deletions_keyed AS SELECT a, max(b) as b FROM input_with_deletions_tbl GROUP BY a
 
 > CREATE CLUSTER input_with_deletions_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK input_with_deletions_sink
@@ -299,12 +305,14 @@ $ kafka-create-topic topic=non-keyed-input
 > CREATE SOURCE non_keyed_input
   IN CLUSTER non_keyed_input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-keyed-input-${testdrive.seed}')
+
+> CREATE TABLE non_keyed_input_tbl FROM SOURCE non_keyed_input (REFERENCE "testdrive-non-keyed-input-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE CLUSTER not_enforced_key_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK not_enforced_key
   IN CLUSTER not_enforced_key_cluster
-  FROM non_keyed_input
+  FROM non_keyed_input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'not-enforced-sink-${testdrive.seed}') KEY (a) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
@@ -337,7 +345,7 @@ $ kafka-verify-data headers=materialize-timestamp format=avro topic=not-enforced
 
 ! CREATE SINK invalid_key
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM input
+  FROM input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
@@ -351,7 +359,7 @@ contains:upsert key could not be validated as unique
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 contains:upsert key could not be validated as unique
 
-> CREATE MATERIALIZED VIEW input_keyed_ab AS SELECT a, b FROM input GROUP BY a, b
+> CREATE MATERIALIZED VIEW input_keyed_ab AS SELECT a, b FROM input_tbl GROUP BY a, b
 
 ! CREATE SINK invalid_sub_key
   IN CLUSTER ${arg.single-replica-cluster}
@@ -371,7 +379,7 @@ contains:upsert key could not be validated as unique
 
 ! CREATE SINK invalid_key_from_upsert_input
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM upsert_input
+  FROM upsert_input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-sink-${testdrive.seed}')
   KEY (key1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
@@ -379,7 +387,7 @@ contains:upsert key could not be validated as unique
 
 ! CREATE SINK invalid_key_from_upsert_input
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM upsert_input
+  FROM upsert_input_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-sink-${testdrive.seed}')
   KEY (key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT

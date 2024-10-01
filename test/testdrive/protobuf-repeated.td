@@ -50,9 +50,11 @@ $ kafka-ingest topic=repeated format=protobuf descriptor-file=repeated.pb messag
 > CREATE SOURCE repeated
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-repeated-${testdrive.seed}')
+
+> CREATE TABLE repeated_tbl FROM SOURCE repeated (REFERENCE "testdrive-repeated-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.Repeated' USING SCHEMA '${repeated-schema}'
 
-> SHOW COLUMNS FROM repeated
+> SHOW COLUMNS FROM repeated_tbl
 name       nullable  type  comment
 ----------------------------------
 bool       false     list  ""
@@ -65,7 +67,7 @@ string     false     list  ""
 enum       false     list  ""
 message    false     list  ""
 
-> SELECT bool::text, int32::text, int64::text, float::text, double::text, string::text, bytes::text, enum::text, message::text FROM repeated
+> SELECT bool::text, int32::text, int64::text, float::text, double::text, string::text, bytes::text, enum::text, message::text FROM repeated_tbl
 bool    int32  int64  float   double   string     bytes                enum           message
 ----
 {t,f}  {2,1}   {2,1}  {3.2,1} {3.2,1}  {bbb,aaa}  "{\"\\\\x626262\",\"\\\\x616161\"}" {ENUM1,ENUM0} "{\"(4,2)\",\"(2,4)\"}"

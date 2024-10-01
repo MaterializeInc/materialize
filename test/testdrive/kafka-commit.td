@@ -31,9 +31,11 @@ three
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}'
   )
+
+> CREATE TABLE topic_tbl FROM SOURCE topic (REFERENCE "testdrive-topic-${testdrive.seed}")
   FORMAT BYTES
 
-> SELECT * from topic
+> SELECT * from topic_tbl
 one
 two
 three
@@ -58,9 +60,11 @@ $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partiti
     TOPIC 'testdrive-topic-${testdrive.seed}',
     GROUP ID PREFIX 'OVERRIDE-'
   )
+
+> CREATE TABLE topic_tbl FROM SOURCE topic (REFERENCE "testdrive-topic-${testdrive.seed}")
   FORMAT BYTES
 
-> SELECT * from topic
+> SELECT * from topic_tbl
 one
 two
 three

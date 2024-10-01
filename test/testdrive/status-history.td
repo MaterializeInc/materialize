@@ -58,12 +58,14 @@ $ kafka-create-topic topic=status-history
 > CREATE SOURCE kafka_source
   IN CLUSTER kafka_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-status-history-${testdrive.seed}')
+
+> CREATE TABLE kafka_source_tbl FROM SOURCE kafka_source (REFERENCE "testdrive-status-history-${testdrive.seed}")
   FORMAT TEXT
 
 > CREATE CLUSTER kafka_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK kafka_sink
   IN CLUSTER kafka_sink_cluster
-  FROM kafka_source
+  FROM kafka_source_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -93,7 +95,7 @@ b
 c
 d
 
-> SELECT * FROM kafka_source ORDER BY 1;
+> SELECT * FROM kafka_source_tbl ORDER BY 1;
 a
 b
 c
@@ -125,12 +127,14 @@ $ kafka-verify-data format=avro sink=materialize.public.kafka_sink sort-messages
 > CREATE SOURCE kafka_source_2
   IN CLUSTER kafka_source_2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-status-history-${testdrive.seed}')
+
+> CREATE TABLE kafka_source_2_tbl FROM SOURCE kafka_source_2 (REFERENCE "testdrive-status-history-${testdrive.seed}")
   FORMAT TEXT
 
 > CREATE CLUSTER kafka_sink_2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK kafka_sink_2
   IN CLUSTER kafka_sink_2_cluster
-  FROM kafka_source_2
+  FROM kafka_source_2_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

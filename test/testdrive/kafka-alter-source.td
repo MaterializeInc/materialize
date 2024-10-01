@@ -20,11 +20,13 @@ one
 
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}');
+
+> CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT TEXT;
 
-> SELECT * from data
+> SELECT * from data_tbl
 one
 
-!ALTER SOURCE data ADD SUBSOURCE t;
+! ALTER SOURCE data ADD SUBSOURCE t;
 contains:source data does not support ALTER SOURCE.

@@ -36,19 +36,21 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 > CREATE SOURCE mz_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE mz_data_tbl FROM SOURCE mz_data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
 > CREATE DEFAULT INDEX ON mz_data
 
 > CREATE SINK sink1
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM mz_data
+  FROM mz_data_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
 > CREATE VIEW mz_view AS
-    SELECT * FROM mz_data
+    SELECT * FROM mz_data_tbl
 
 > CREATE DEFAULT INDEX ON mz_view
 
@@ -61,7 +63,7 @@ mz_view_primary_idx mz_view     <VARIABLE_OUTPUT>   {a,b}  ""
     SELECT * FROM mz_view;
 
 > CREATE VIEW byzantine_view AS
-    SELECT mz_data.a, mz_view.b FROM mz_data JOIN mz_view ON mz_data.a = mz_view.a;
+    SELECT mz_data.a, mz_view.b FROM mz_data_tbl JOIN mz_view ON mz_data.a = mz_view.a;
 
 > CREATE VIEW oppositional_view AS
     SELECT * FROM mz_view WHERE b = '
@@ -83,7 +85,7 @@ mz_data_primary_idx
 mz_data_progress
 
 # Test that data can be selected from the source before renaming.
-> SELECT * FROM mz_data
+> SELECT * FROM mz_data_tbl
 a  b
 ------
 1  dog
@@ -848,13 +850,15 @@ renamed_j
 > CREATE SOURCE mz_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION public.kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE mz_data_tbl FROM SOURCE mz_data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
 > CREATE DEFAULT INDEX ON mz_data
 
 > CREATE SINK sink1
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM mz_data
+  FROM mz_data_tbl
   INTO KAFKA CONNECTION public.kafka_conn (TOPIC 'testdrive-snk1-rename-schema-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION public.csr_conn
   ENVELOPE DEBEZIUM

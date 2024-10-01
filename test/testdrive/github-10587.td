@@ -86,79 +86,99 @@ $ kafka-ingest format=avro topic=multi-topic-9 schema=${schema} repeat=${count}
 > CREATE CLUSTER s0_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE s0 IN CLUSTER s0_cluster
   FROM KAFKA CONNECTION kafka_conn
-  (TOPIC 'testdrive-multi-topic-0-${testdrive.seed}')
+  (TOPIC 'testdrive-multi-topic-0-${testdrive.seed}');
+
+> CREATE TABLE s0_tbl FROM SOURCE s0 (REFERENCE "testdrive-multi-topic-0-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE CLUSTER s1_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE s1 IN CLUSTER s1_cluster
   FROM KAFKA CONNECTION kafka_conn
-  (TOPIC 'testdrive-multi-topic-1-${testdrive.seed}')
+  (TOPIC 'testdrive-multi-topic-1-${testdrive.seed}');
+
+> CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-multi-topic-1-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE CLUSTER s2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE s2 IN CLUSTER s2_cluster
   FROM KAFKA CONNECTION kafka_conn
-  (TOPIC 'testdrive-multi-topic-2-${testdrive.seed}')
+  (TOPIC 'testdrive-multi-topic-2-${testdrive.seed}');
+
+> CREATE TABLE s2_tbl FROM SOURCE s2 (REFERENCE "testdrive-multi-topic-2-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE CLUSTER s3_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE s3 IN CLUSTER s3_cluster
   FROM KAFKA CONNECTION kafka_conn
-  (TOPIC 'testdrive-multi-topic-3-${testdrive.seed}')
+  (TOPIC 'testdrive-multi-topic-3-${testdrive.seed}');
+
+> CREATE TABLE s3_tbl FROM SOURCE s3 (REFERENCE "testdrive-multi-topic-3-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE CLUSTER s4_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE s4 IN CLUSTER s4_cluster
   FROM KAFKA CONNECTION kafka_conn
-  (TOPIC 'testdrive-multi-topic-4-${testdrive.seed}')
+  (TOPIC 'testdrive-multi-topic-4-${testdrive.seed}');
+
+> CREATE TABLE s4_tbl FROM SOURCE s4 (REFERENCE "testdrive-multi-topic-4-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE CLUSTER s5_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE s5 IN CLUSTER s5_cluster
   FROM KAFKA CONNECTION kafka_conn
-  (TOPIC 'testdrive-multi-topic-5-${testdrive.seed}')
+  (TOPIC 'testdrive-multi-topic-5-${testdrive.seed}');
+
+> CREATE TABLE s5_tbl FROM SOURCE s5 (REFERENCE "testdrive-multi-topic-5-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE CLUSTER s6_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE s6 IN CLUSTER s6_cluster
   FROM KAFKA CONNECTION kafka_conn
-  (TOPIC 'testdrive-multi-topic-6-${testdrive.seed}')
+  (TOPIC 'testdrive-multi-topic-6-${testdrive.seed}');
+
+> CREATE TABLE s6_tbl FROM SOURCE s6 (REFERENCE "testdrive-multi-topic-6-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE CLUSTER s7_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE s7 IN CLUSTER s7_cluster
   FROM KAFKA CONNECTION kafka_conn
-  (TOPIC 'testdrive-multi-topic-7-${testdrive.seed}')
+  (TOPIC 'testdrive-multi-topic-7-${testdrive.seed}');
+
+> CREATE TABLE s7_tbl FROM SOURCE s7 (REFERENCE "testdrive-multi-topic-7-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE CLUSTER s8_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE s8 IN CLUSTER s8_cluster
   FROM KAFKA CONNECTION kafka_conn
-  (TOPIC 'testdrive-multi-topic-8-${testdrive.seed}')
+  (TOPIC 'testdrive-multi-topic-8-${testdrive.seed}');
+
+> CREATE TABLE s8_tbl FROM SOURCE s8 (REFERENCE "testdrive-multi-topic-8-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE CLUSTER s9_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE s9 IN CLUSTER s9_cluster
   FROM KAFKA CONNECTION kafka_conn
-  (TOPIC 'testdrive-multi-topic-9-${testdrive.seed}')
+  (TOPIC 'testdrive-multi-topic-9-${testdrive.seed}');
+
+> CREATE TABLE s9_tbl FROM SOURCE s9 (REFERENCE "testdrive-multi-topic-9-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
 > CREATE MATERIALIZED VIEW v1 AS
   SELECT SUM(f1) AS f1 FROM
   (SELECT
-    COUNT(*) AS f1 FROM s0
-      UNION ALL SELECT COUNT(*) AS f1 FROM s1
-      UNION ALL SELECT COUNT(*) AS f1 FROM s2
-      UNION ALL SELECT COUNT(*) AS f1 FROM s3
-      UNION ALL SELECT COUNT(*) AS f1 FROM s4
-      UNION ALL SELECT COUNT(*) AS f1 FROM s5
-      UNION ALL SELECT COUNT(*) AS f1 FROM s6
-      UNION ALL SELECT COUNT(*) AS f1 FROM s7
-      UNION ALL SELECT COUNT(*) AS f1 FROM s8
-      UNION ALL SELECT COUNT(*) AS f1 FROM s9);
+    COUNT(*) AS f1 FROM s0_tbl
+      UNION ALL SELECT COUNT(*) AS f1 FROM s1_tbl
+      UNION ALL SELECT COUNT(*) AS f1 FROM s2_tbl
+      UNION ALL SELECT COUNT(*) AS f1 FROM s3_tbl
+      UNION ALL SELECT COUNT(*) AS f1 FROM s4_tbl
+      UNION ALL SELECT COUNT(*) AS f1 FROM s5_tbl
+      UNION ALL SELECT COUNT(*) AS f1 FROM s6_tbl
+      UNION ALL SELECT COUNT(*) AS f1 FROM s7_tbl
+      UNION ALL SELECT COUNT(*) AS f1 FROM s8_tbl
+      UNION ALL SELECT COUNT(*) AS f1 FROM s9_tbl);
 
 # Make sure that s1 has been fully timestamped
-> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
+> SELECT COUNT(*) FROM s1_tbl AS OF AT LEAST 0;
 count
 -----
 100000
@@ -171,49 +191,49 @@ $ set-max-tries max-tries=1
 
 > SELECT mz_unsafe.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
+> SELECT COUNT(*) FROM s1_tbl AS OF AT LEAST 0;
 count
 -----
 100000
 
 > SELECT mz_unsafe.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
+> SELECT COUNT(*) FROM s1_tbl AS OF AT LEAST 0;
 count
 -----
 100000
 
 > SELECT mz_unsafe.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
+> SELECT COUNT(*) FROM s1_tbl AS OF AT LEAST 0;
 count
 -----
 100000
 
 > SELECT mz_unsafe.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
+> SELECT COUNT(*) FROM s1_tbl AS OF AT LEAST 0;
 count
 -----
 100000
 
 > SELECT mz_unsafe.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
+> SELECT COUNT(*) FROM s1_tbl AS OF AT LEAST 0;
 count
 -----
 100000
 
 > SELECT mz_unsafe.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
+> SELECT COUNT(*) FROM s1_tbl AS OF AT LEAST 0;
 count
 -----
 100000
 
 > SELECT mz_unsafe.mz_sleep(0.2);
 <null>
-> SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
+> SELECT COUNT(*) FROM s1_tbl AS OF AT LEAST 0;
 count
 -----
 100000

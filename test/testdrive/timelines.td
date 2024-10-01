@@ -27,12 +27,16 @@ $ kafka-create-topic topic=input-system
 > CREATE SOURCE source_system
   IN CLUSTER source_system_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
+
+> CREATE TABLE source_system_tbl FROM SOURCE source_system (REFERENCE "testdrive-input-system-${testdrive.seed}")
   FORMAT BYTES
 
 > CREATE CLUSTER source_system_user_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE source_system_user
   IN CLUSTER source_system_user_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
+
+> CREATE TABLE source_system_user_tbl FROM SOURCE source_system_user (REFERENCE "testdrive-input-system-${testdrive.seed}")
   FORMAT BYTES
   WITH (TIMELINE '${testdrive.seed}-timelines')
 
@@ -129,12 +133,15 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
 > CREATE SOURCE source_cdcv2
   IN CLUSTER source_cdcv2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
+
+> CREATE TABLE source_cdcv2_tbl FROM SOURCE source_cdcv2 (REFERENCE "testdrive-input-cdcv2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
 
-! CREATE SOURCE source_cdcv2_system
+> CREATE SOURCE source_cdcv2_system
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
+! CREATE TABLE source_cdcv2_system_tbl FROM SOURCE source_cdcv2_system (REFERENCE "testdrive-input-cdcv2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
   WITH (TIMELINE 'mz_foo')
@@ -144,6 +151,8 @@ contains:unacceptable timeline name "mz_foo"
 > CREATE SOURCE source_cdcv2_system
   IN CLUSTER source_cdcv2_system_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
+
+> CREATE TABLE source_cdcv2_system_tbl FROM SOURCE source_cdcv2_system (REFERENCE "testdrive-input-cdcv2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
   WITH (TIMELINE 'mz_epoch_ms')
@@ -152,6 +161,8 @@ contains:unacceptable timeline name "mz_foo"
 > CREATE SOURCE source_cdcv2_user
   IN CLUSTER source_cdcv2_user_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
+
+> CREATE TABLE source_cdcv2_user_tbl FROM SOURCE source_cdcv2_user (REFERENCE "testdrive-input-cdcv2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
   WITH (TIMELINE '${testdrive.seed}-timelines')
@@ -218,6 +229,6 @@ contains:multiple timelines within one dataflow are not supported
 # things outside that are not there due to timedomain reasons.
 > BEGIN;
 > SELECT * FROM input_table;
-! SELECT * FROM source_cdcv2;
+! SELECT * FROM source_cdcv2_tbl;
 contains:Transactions can only reference objects in the same timedomain
 > ROLLBACK;

@@ -110,9 +110,11 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> SELECT * FROM t CROSS JOIN data
+> SELECT * FROM t CROSS JOIN data_tbl
 1  a  valid1  2  1
 
 # We don't actually care about these results. We just want to ensure that
