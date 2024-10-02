@@ -1371,11 +1371,11 @@ where
                         let mut all_rows = Vec::with_capacity(batch.iter().map(|(rows, _)| rows.len()).sum());
                         let mut responders = Vec::with_capacity(batch.len());
 
-                        for (updates, responders) in batch.drain(..) {
+                        for (updates, responder) in batch.drain(..) {
                             let rows = self.process_updates(updates);
 
                             all_rows.extend(rows.map(|(row, diff)| TimestamplessUpdate { row, diff}));
-                            responders.push(responders);
+                            responders.push(responder);
                         }
 
                         if self.read_only {
