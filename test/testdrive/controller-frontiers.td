@@ -93,7 +93,7 @@ idx1
 
 > CREATE SOURCE source1
   IN CLUSTER test_source
-  FROM LOAD GENERATOR COUNTER
+  FROM LOAD GENERATOR COUNTER (UP TO 100)
 
 > SELECT
     sources.name,

@@ -89,7 +89,7 @@ true
 
 > CREATE SOURCE counter
   IN CLUSTER no_replicas
-  FROM LOAD GENERATOR COUNTER;
+  FROM LOAD GENERATOR COUNTER (UP TO 100);
 
 > CREATE SINK wedged_sink
   IN CLUSTER ${arg.single-replica-cluster}

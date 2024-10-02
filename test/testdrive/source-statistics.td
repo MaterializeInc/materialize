@@ -91,7 +91,7 @@ $ set-sql-timeout duration=2minutes
 # for sources created by previous tests.
 > CREATE SOURCE auction_house_in_source_statistics_td
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION;
+  FROM LOAD GENERATOR AUCTION (UP TO 100);
 
 > CREATE TABLE accounts FROM SOURCE auction_house_in_source_statistics_td (REFERENCE accounts);
 > CREATE TABLE auctions FROM SOURCE auction_house_in_source_statistics_td (REFERENCE auctions);

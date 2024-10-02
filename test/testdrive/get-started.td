@@ -15,7 +15,7 @@ $ set-arg-default single-replica-cluster=quickstart
 > SET cluster TO ${arg.single-replica-cluster}
 
 > CREATE SOURCE demo
-  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms')
+  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms', UP TO 1000)
 
 > CREATE TABLE accounts FROM SOURCE demo (REFERENCE accounts);
 > CREATE TABLE auctions FROM SOURCE demo (REFERENCE auctions);
