@@ -15,3 +15,6 @@ class WatermarkedObjectExists(Capability):
 
     def get_watermarks(self) -> Watermarks:
         raise NotImplementedError
+
+    def get_name_for_query(self) -> str:
+        raise NotImplementedError

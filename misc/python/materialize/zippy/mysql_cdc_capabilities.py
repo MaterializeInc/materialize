@@ -23,3 +23,6 @@ class MySqlCdcTableExists(WatermarkedObjectExists):
     def get_watermarks(self) -> Watermarks:
         assert self.mysql_table is not None
         return self.mysql_table.watermarks
+
+    def get_name_for_query(self) -> str:
+        return self.name
