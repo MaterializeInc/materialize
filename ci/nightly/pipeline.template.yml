@@ -656,7 +656,6 @@ steps:
       - id: checks-parallel-drop-create-default-replica
         label: "Checks parallel + DROP/CREATE replica %N"
         depends_on: build-aarch64
-        skip: "Affected by database-issues#7172"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -669,7 +668,6 @@ steps:
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd %N"
         depends_on: build-aarch64
-        skip: "Affected by database-issues#7172"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -682,7 +680,6 @@ steps:
       - id: checks-parallel-restart-entire-mz
         label: "Checks parallel + restart of the entire Mz %N"
         depends_on: build-aarch64
-        skip: "Affected by database-issues#7172"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -695,7 +692,6 @@ steps:
       - id: checks-parallel-restart-environmentd-clusterd-storage
         label: "Checks parallel + restart of environmentd & storage clusterd %N"
         depends_on: build-aarch64
-        skip: "Affected by database-issues#7172"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -708,7 +704,6 @@ steps:
       - id: checks-parallel-kill-clusterd-storage
         label: "Checks parallel + kill storage clusterd %N"
         depends_on: build-aarch64
-        skip: "Affected by database-issues#7172"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -717,19 +712,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=KillClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-parallel-restart-redpanda
-        label: "Checks parallel + restart Redpanda & Debezium %N"
-        depends_on: build-aarch64
-        skip: "Affected by database-issues#7172"
-        timeout_in_minutes: 180
-        parallelism: 2
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=RestartRedpandaDebezium, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart %N"

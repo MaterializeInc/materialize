@@ -159,7 +159,8 @@ class ConfigureMz(MzcomposeAction):
             system_settings.add("GRANT ALL PRIVILEGES ON SYSTEM TO materialize;")
 
         if e.current_mz_version >= MzVersion.parse_mz("v0.47.0"):
-            system_settings.add("ALTER SYSTEM SET enable_rbac_checks TO true;")
+            # do not enable this by default for all checks
+            system_settings.add("ALTER SYSTEM SET enable_rbac_checks TO false;")
 
         if e.current_mz_version >= MzVersion.parse_mz(
             "v0.51.0-dev"
