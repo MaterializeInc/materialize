@@ -28,9 +28,9 @@ use mz_catalog::builtin::{
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, ContinualTask,
-    DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, Role, Schema, Secret,
-    Sink, Source, Table, TableDataSource, Type, View,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
+    Database, DefaultPrivileges, Index, MaterializedView, Role, Schema, Secret, Sink, Source,
+    Table, TableDataSource, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -65,9 +65,9 @@ use mz_sql::names::{
     ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    CreateConnectionPlan, CreateContinualTaskPlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext,
+    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
+    Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -955,18 +955,9 @@ impl CatalogState {
                     initial_as_of,
                 })
             }
-            Plan::CreateContinualTask(CreateContinualTaskPlan {
-                desc,
-                continual_task,
-                ..
-            }) => CatalogItem::ContinualTask(ContinualTask {
-                create_sql: continual_task.create_sql,
-                raw_expr: Arc::new(continual_task.expr.clone()),
-                desc,
-                resolved_ids,
-                cluster_id: continual_task.cluster_id,
-                initial_as_of: continual_task.as_of.map(Antichain::from_elem),
-            }),
+            Plan::CreateContinualTask(plan) => CatalogItem::ContinualTask(
+                crate::continual_task::ct_item_from_plan(plan, id, resolved_ids)?,
+            ),
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
                 on: index.on,
