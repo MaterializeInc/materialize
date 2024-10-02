@@ -31,19 +31,19 @@ from materialize.mzcompose.services.mz import Mz
 REGION = "aws/us-west-2"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
 USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
-APP_PASSWORD = os.environ["MZ_CLI_APP_PASSWORD"]
+APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
 
 # The DevEx account in the Confluent Cloud is used to provide Kafka services
 KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"
 # The actual values are stored in the i2 repository
-CONFLUENT_API_KEY = os.environ["CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME"]
-CONFLUENT_API_SECRET = os.environ["CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD"]
+CONFLUENT_API_KEY = os.getenv("CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME")
+CONFLUENT_API_SECRET = os.getenv("CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD")
 
 SERVICES = [
     Mz(
         region=REGION,
         environment=ENVIRONMENT,
-        app_password=APP_PASSWORD,
+        app_password=APP_PASSWORD or "",
     ),
 ]
 
