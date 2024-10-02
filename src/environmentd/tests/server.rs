@@ -2545,20 +2545,16 @@ async fn test_leader_promotion() {
         .data_directory(tmpdir.path());
     {
         // start with a catalog with no deploy generation to match current production.
-        let server = harness.clone().start().await;
-        let client = server.connect().await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
     }
     // propose a deploy generation for the first time.
     let harness = harness.with_deploy_generation(2);
     {
         let listeners_2 = test_util::Listeners::new().await.unwrap();
         let internal_http_addr_2 = listeners_2.inner.internal_http_local_addr();
-        let config_2 = harness.clone();
-        let server_2 = mz_ore::task::spawn(|| "gen-2", async move {
-            listeners_2.serve(config_2).await.unwrap()
-        })
-        .abort_on_drop();
+        let server_2 = harness.clone().start_blocking();
 
         // make sure asking about the leader and promoting don't panic.
         let status_http_url = Url::parse(&format!(
@@ -2603,20 +2599,15 @@ async fn test_leader_promotion() {
             "{:?}",
             res.json::<serde_json::Value>().await
         );
-        let server_2 = server_2.await.unwrap();
-        let client = server_2.connect().await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
+        let mut client = server_2.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
     }
     // start with different deploy generation.
     let harness = harness.with_deploy_generation(3);
     {
         let listeners_3 = test_util::Listeners::new().await.unwrap();
         let internal_http_addr_3 = listeners_3.inner.internal_http_local_addr();
-        let config_3 = harness.clone();
-        let server_3 = mz_ore::task::spawn(|| "gen-3", async move {
-            listeners_3.serve(config_3).await.unwrap()
-        })
-        .abort_on_drop();
+        let server_3 = harness.clone().start_blocking();
         // make sure asking about the leader and promoting don't panic.
         let status_http_url = Url::parse(&format!(
             "http://{}/api/leader/status",
@@ -2656,10 +2647,8 @@ async fn test_leader_promotion() {
         let response = res.text().await.unwrap();
         assert_eq!(response, r#"{"result":"Success"}"#,);
 
-        let server_3 = server_3.await.unwrap();
-
-        let client = server_3.connect().await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
+        let mut client = server_3.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
 
         // check that we're the leader and promotion doesn't do anything
         let res = reqwest::Client::new()
