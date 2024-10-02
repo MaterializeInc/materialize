@@ -1222,6 +1222,14 @@ criteria = "safe-to-deploy"
 version = "0.2.12"
 criteria = "safe-to-deploy"
 
+[[exemptions.tokio-stream]]
+version = "0.1.16"
+criteria = "maintained-and-necessary"
+
+[[exemptions.tonic]]
+version = "0.12.3"
+criteria = "maintained-and-necessary"
+
 [[exemptions.tower]]
 version = "0.4.13"
 criteria = "safe-to-deploy"
