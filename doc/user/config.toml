@@ -156,12 +156,6 @@ identifier = "reference"
 name = "Reference"
 weight= 15
 
-[[menu.main]]
-identifier = "cs_kafka"
-name = "Kafka"
-parent = "create-source"
-url = "/sql/create-source/kafka"
-weight= 5
 
 [[menu.main]]
 identifier = "cs_redpanda"
@@ -169,12 +163,6 @@ name = "Redpanda"
 parent = "create-source"
 url = "/sql/create-source/kafka"
 weight= 10
-
-[[menu.main]]
-identifier = "csink_kafka"
-name = "Kafka"
-parent = "create-sink"
-url = "/sql/create-sink/kafka"
 
 [[menu.main]]
 identifier = "csink_redpanda"

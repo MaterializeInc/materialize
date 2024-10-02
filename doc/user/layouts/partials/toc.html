@@ -75,7 +75,11 @@
   $(window).scroll(() => {
     const scroll = $(window).scrollTop();
     const offsets = headingOffsets();
-    let activeId = scroll == 0 ? null : offsets[offsets.length - 1].id;
+    let activeId = null;
+    if (offsets.length > 0 ) {
+      activeId = scroll == 0 ? null : offsets[offsets.length - 1].id;
+    }
+
     for (let i = 0; i < offsets.length && scroll > 0 ; i++) {
       if (offsets[i].offset > scroll) {
         activeId = offsets[i].id;
