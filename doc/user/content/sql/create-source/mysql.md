@@ -1,6 +1,6 @@
 ---
 title: "CREATE SOURCE: MySQL"
-description: "Connecting Materialize to a MySQL database"
+description: "Connecting Materialize to a MySQL database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
   main:

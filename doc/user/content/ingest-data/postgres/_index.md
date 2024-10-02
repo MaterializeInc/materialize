@@ -1,33 +1,53 @@
 ---
-title: "PostgreSQL"
-description: "Connect and ingest data from PostgreSQL."
+title: "Overview"
+description: "Connecting Materialize to a PostgreSQL database for Change Data Capture (CDC)."
+disable_list: true
+menu:
+  main:
+    parent: 'postgresql'
+    weight: 1
+    identifier: 'postgresql-overview'
 ---
 
-The following section contains documentation on connecting and ingesting data
-from PostgreSQL.
+## Change Data Capture (CDC)
 
-### Native support for PostgreSQL
+Materialize supports PostgreSQL as a real-time data source. The
+[PostgreSQL source](/sql/create-source/postgres//) uses PostgreSQL's
+[replication protocol](/sql/create-source/postgres/#change-data-capture)
+to **continually ingest changes** resulting from CRUD operations in the upstream
+database. The native support for PostgreSQL Change Data Capture (CDC) in
+Materialize gives you the following benefits:
 
-Materialize provides native support for the following PostgreSQL:
+* **No additional infrastructure:** ingest PostgreSQL change data into
+    Materialize in real-time with no architectural changes or additional
+    operational overhead. In particular, you **do not need to deploy Kafka and
+    Debezium** for PostgreSQL CDC.
 
-|                          |
+* **Transactional consistency:** the PostgreSQL source ensures that transactions
+    in the upstream PostgreSQL database are respected downstream. Materialize
+    will **never show partial results** based on partially replicated
+    transactions.
+
+* **Incrementally updated materialized views:** materialized views in PostgreSQL
+    are computationally expensive and require manual refreshes. You can use
+    Materialize as a read-replica to build views on top of your PostgreSQL data
+    that are efficiently maintained and always up-to-date.
+
+## Supported versions and services
+
+{{< note >}}
+PostgreSQL-compatible database systems aren't guaranteed to work with the
+PostgreSQL source out-of-the-box. [Yugabyte](https://www.yugabyte.com/) is
+currently supported with **limitations**.
+{{< /note >}}
+
+The PostgreSQL source requires **PostgreSQL 11+**, and is compatible with most
+common PostgreSQL hosted services.
+
+| Integration guides                          |
 | ------------------------------------------- |
 | {{% ingest-data/postgres-native-support %}} |
 
-### Support via Kafka and Debezium
-
-{{< tip >}}
-
-If possible, use Materialize's [native support for
-PostgreSQL](#native-support-for-postgresql) instead.
-
-{{</ tip >}}
-
-You can use Debezium and the Kafka source to propagate Change Data Capture (CDC)
-data from PostgreSQL to Materialize.
-
-| Debezium + Kafka                            |
-| ------------------------------------------- |
-| [PostgreSQL CDC using Kafka and Debezium](/ingest-data/postgres/postgres-debezium/) |
-
-### Section contents
+If there is a hosted service or PostgreSQL distribution that is not listed above but
+you’d like to use with Materialize, please submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)
+or reach out in the Materialize [Community Slack](https://materialize.com/s/chat).
