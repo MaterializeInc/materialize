@@ -1592,21 +1592,36 @@ pub mod plan {
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
         ) -> Result<bool, EvalError> {
+            // NB: similar to the AND function, we prefer to return `false` instead of an error
+            // when we have the option. Buffer an error from evaluating our predicates and return
+            // it only if we don't exit early.
+            let mut null = false;
+            let mut err = None;
             let mut expression = 0;
             for (support, predicate) in self.mfp.predicates.iter() {
                 while self.mfp.input_arity + expression < *support {
                     datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
                     expression += 1;
                 }
-                if predicate.eval(&datums[..], arena)? != Datum::True {
-                    return Ok(false);
+                match predicate.eval(&datums[..], arena) {
+                    Ok(Datum::True) => {}
+                    Ok(Datum::Null) => {
+                        null = true;
+                    }
+                    Ok(_) => return Ok(false),
+                    Err(e) => {
+                        err = Some(match err {
+                            Some(e2) => e.min(e2),
+                            None => e,
+                        })
+                    }
                 }
             }
             while expression < self.mfp.expressions.len() {
                 datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
                 expression += 1;
             }
-            Ok(true)
+            err.map_or(Ok(!null), Err)
         }
 
         /// Returns true if evaluation could introduce an error on non-error inputs.
