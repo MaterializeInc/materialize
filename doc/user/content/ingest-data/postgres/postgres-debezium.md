@@ -361,11 +361,6 @@ cluster, use the `IN CLUSTER` clause.
 This allows you to replicate tables with `REPLICA IDENTITY DEFAULT`, `INDEX`, or
 `FULL`.
 
-#### Transaction support
-
-Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata)
-that can be used to preserve transactional boundaries downstream.
-
 ### D. Create a view on the source
 
 {{% ingest-data/ingest-data-kafka-debezium-view %}}

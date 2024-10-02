@@ -193,11 +193,6 @@ To work around this limitation, we recommend halting any updates to the tables
 marked for replication until the Debezium connector is fully configured and the
 initial snapshot for all tables has been completed.
 
-##### Transaction support
-
-Materialize does **not** support [transaction
-metadata](https://debezium.io/documentation/reference/connectors/sqlserver.html#sqlserver-transaction-metadata).https://github.com/MaterializeInc/materialize/issues/7537.
-
 ##### Supported types
 
 `DATETIMEOFFSET` columns are replicated as `text`, and

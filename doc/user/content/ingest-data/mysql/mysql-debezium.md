@@ -211,11 +211,6 @@ CREATE SOURCE kafka_repl
 By default, the source will be created in the active cluster; to use a different
 cluster, use the `IN CLUSTER` clause.
 
-#### Transaction support
-
-Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/mysql.html#mysql-transaction-metadata)
-that can be used to preserve transactional boundaries downstream.
-
 ### D. Create a view on the source
 
 {{% ingest-data/ingest-data-kafka-debezium-view %}}

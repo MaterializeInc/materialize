@@ -35,9 +35,8 @@ gives you the following benefits:
 
 {{< note >}}
 MySQL-compatible database systems aren't guaranteed to work with the MySQL
-source out-of-the-box. [MariaDB](https://mariadb.org/), [Vitess]
-(https://vitess.io/) and [PlanetScale](https://planetscale.com/) are
-currently **not supported**.
+source out-of-the-box. [MariaDB](https://mariadb.org/), [Vitess](https://vitess.io/)
+and [PlanetScale](https://planetscale.com/) are currently **not supported**.
 {{< /note >}}
 
 The MySQL source requires **MySQL 5.7+**, and is compatible with most common
