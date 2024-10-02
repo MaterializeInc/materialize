@@ -554,7 +554,7 @@ where
         Vec<(&'a Description<T>, &'a RunMeta, &'a [BatchPart<T>])>,
         usize,
     )> {
-        let ordered_runs = Self::order_runs(req);
+        let ordered_runs = Self::order_runs(req, cfg.batch.expected_order);
         let mut ordered_runs = ordered_runs.iter().peekable();
 
         let mut chunks = vec![];
@@ -623,7 +623,10 @@ where
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
     /// ```
-    fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, &RunMeta, &[BatchPart<T>])> {
+    fn order_runs(
+        req: &CompactReq<T>,
+        target_order: RunOrder,
+    ) -> Vec<(&Description<T>, &RunMeta, &[BatchPart<T>])> {
         let total_number_of_runs = req
             .inputs
             .iter()
@@ -640,7 +643,23 @@ where
 
         while let Some((desc, mut runs)) = batch_runs.pop_front() {
             if let Some((meta, run)) = runs.next() {
-                ordered_runs.push((desc, meta, run));
+                let same_order = meta.order.unwrap_or(RunOrder::Codec) == target_order;
+                if same_order {
+                    ordered_runs.push((desc, meta, run));
+                } else {
+                    // The downstream consolidation step will handle a length-N run that's not in
+                    // the desired order by splitting it up into N length-1 runs. This preserves
+                    // correctness, but it means that we may end up needing to iterate through
+                    // many more parts concurrently than expected, increasing memory use. Instead,
+                    // we break up those runs before they're grouped together to be passed to
+                    // consolidation.
+                    // The downside is that this breaks the usual property that compaction produces
+                    // fewer runs than it takes in. This should generally be resolved by future
+                    // runs of compaction.
+                    for part in run {
+                        ordered_runs.push((desc, meta, std::slice::from_ref(part)));
+                    }
+                }
                 batch_runs.push_back((desc, runs));
             }
         }
