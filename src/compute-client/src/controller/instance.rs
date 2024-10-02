@@ -1496,19 +1496,19 @@ where
             return;
         };
 
-        let duration = peek.requested_at.elapsed();
-        self.metrics.observe_peek_response(&reason, duration);
-
-        let notification = PeekNotification::new(&reason, peek.offset, peek.limit);
-
         let otel_ctx = peek.otel_ctx.clone();
         otel_ctx.attach_as_parent();
+        // Cancellations are best-effort, ignore errors.
         let _ = peek.peek_response_tx.send(reason);
+
+        let response = PeekResponse::Canceled;
+        let duration = peek.requested_at.elapsed();
+        self.metrics.observe_peek_response(&response, duration);
 
         // Enqueue the response to the cancellation.
         self.deliver_response(ComputeControllerResponse::PeekNotification(
             uuid,
-            notification,
+            PeekNotification::Canceled,
             otel_ctx,
         ));
     }
@@ -1784,7 +1784,7 @@ where
 
         // We might not be tracking this peek anymore, because we have served a response already or
         // because it was canceled. If this is the case, we ignore the response.
-        let Some(peek) = self.remove_peek(uuid) else {
+        let Some(peek) = self.peeks.get(&uuid) else {
             return;
         };
 
@@ -1793,6 +1793,8 @@ where
         if target_replica != replica_id {
             return;
         }
+
+        let peek = self.remove_peek(uuid).expect("Known to exist");
 
         let duration = peek.requested_at.elapsed();
         self.metrics.observe_peek_response(&response, duration);
