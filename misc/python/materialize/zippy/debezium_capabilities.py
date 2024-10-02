@@ -32,3 +32,6 @@ class DebeziumSourceExists(WatermarkedObjectExists):
     def get_watermarks(self) -> Watermarks:
         assert self.postgres_table is not None
         return self.postgres_table.watermarks
+
+    def get_name_for_query(self) -> str:
+        return f"{self.name}_tbl"

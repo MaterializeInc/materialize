@@ -26,3 +26,6 @@ class TableExists(WatermarkedObjectExists):
 
     def get_watermarks(self) -> Watermarks:
         return self.watermarks
+
+    def get_name_for_query(self) -> str:
+        return self.name

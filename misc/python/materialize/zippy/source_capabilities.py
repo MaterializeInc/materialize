@@ -29,3 +29,6 @@ class SourceExists(WatermarkedObjectExists):
 
     def get_watermarks(self) -> Watermarks:
         return self.topic.watermarks
+
+    def get_name_for_query(self) -> str:
+        return f"{self.name}_tbl"
