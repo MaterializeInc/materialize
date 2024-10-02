@@ -46,7 +46,7 @@ steps:
     concurrency: 1
     concurrency_group: 'parallel-benchmark-canary'
     agents:
-      queue: linux-aarch64-small
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: parallel-benchmark
