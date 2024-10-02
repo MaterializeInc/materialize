@@ -108,7 +108,7 @@ class CreateSource(Action):
                   FROM KAFKA CONNECTION {kafka_connection_name}
                   (TOPIC 'testdrive-{self.source.topic.name}-${{testdrive.seed}}')
 
-                > CREATE TABLE {self.source.name}_tbl FROM SOURCE {self.source.name} (REFERENCE "testdrive-{self.source.topic.name}-${{testdrive.seed}}")
+                > CREATE TABLE {self.source.get_name_for_query()} FROM SOURCE {self.source.name} (REFERENCE "testdrive-{self.source.topic.name}-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn
                   ENVELOPE {envelope}
                 """
