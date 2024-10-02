@@ -6,11 +6,6 @@ aliases:
   - /integrations/cdc-mysql/
   - /connect-sources/cdc-mysql/
   - /ingest-data/cdc-mysql/
-menu:
-  main:
-    parent: "mysql"
-    name: "Using Kafka and Debezium"
-    identifier: "mysql-dbz"
 ---
 
 {{< warning >}}

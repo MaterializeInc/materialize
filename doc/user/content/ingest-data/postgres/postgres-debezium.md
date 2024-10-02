@@ -4,12 +4,6 @@ description: "How to propagate Change Data Capture (CDC) data from a PostgreSQL 
 aliases:
   - /connect-sources/cdc-postgres-kafka-debezium/
   - /ingest-data/cdc-postgres-kafka-debezium/
-
-menu:
-  main:
-    parent: "postgresql"
-    name: "Using Kafka and Debezium"
-    identifier: "pg-dbz"
 ---
 
 {{< warning >}}
