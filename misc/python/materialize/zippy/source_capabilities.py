@@ -7,12 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.zippy.framework import Capability
 from materialize.zippy.kafka_capabilities import TopicExists
+from materialize.zippy.watermarked_object_capabilities import WatermarkedObjectExists
 from materialize.zippy.watermarks import Watermarks
 
 
-class SourceExists(Capability):
+class SourceExists(WatermarkedObjectExists):
     """A Kafka source exists in Materialize."""
 
     @classmethod
