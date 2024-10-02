@@ -173,7 +173,7 @@ cluster, use the `IN CLUSTER` clause.
 Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/sqlserver.html#sqlserver-transaction-metadata)
 that can be used to preserve transactional boundaries downstream. Work is in
 progress to utilize this topic to support transaction-aware processing in
-[Materialize #7537](https://github.com/MaterializeInc/materialize/issues/7537)!
+[Materialize #7537](https://github.com/MaterializeInc/database-issues/issues/2337)!
 
 ### Create a materialized view
 

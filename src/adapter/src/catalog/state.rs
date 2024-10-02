@@ -1612,7 +1612,7 @@ impl CatalogState {
         // Some relations that have previously lived in the `mz_internal` schema have been moved to
         // `mz_catalog_unstable` or `mz_introspection`. To simplify the transition for users, we
         // automatically let uses of the old schema resolve to the new ones as well.
-        // TODO(materialize#27831) remove this after sufficient time has passed
+        // TODO(database-issues#8173) remove this after sufficient time has passed
         let mz_internal_schema = SchemaSpecifier::Id(self.get_mz_internal_schema_id());
         if schemas.iter().any(|(_, spec)| *spec == mz_internal_schema) {
             for schema_id in [

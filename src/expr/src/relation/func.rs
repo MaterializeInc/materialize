@@ -1589,13 +1589,13 @@ where
             | (Rows, OffsetPreceding(..), UnboundedFollowing)
             | (Rows, OffsetFollowing(..), UnboundedFollowing) => {
                 // Unsupported. Bail in the planner.
-                // https://github.com/MaterializeInc/materialize/issues/22268
+                // https://github.com/MaterializeInc/database-issues/issues/6720
                 unreachable!()
             }
             (Range, _, _) => {
                 // Unsupported.
                 // The planner doesn't allow Range frame mode for now (except for the default
-                // frame), see https://github.com/MaterializeInc/materialize/issues/21934
+                // frame), see https://github.com/MaterializeInc/database-issues/issues/6585
                 // Note that it would be easy to handle (Range, CurrentRow, UnboundedFollowing):
                 // it would be similar to (Rows, CurrentRow, UnboundedFollowing), but would call
                 // groups_between_unbounded_preceding_current_row.
@@ -1604,7 +1604,7 @@ where
             (Groups, _, _) => {
                 // Unsupported.
                 // The planner doesn't allow Groups frame mode for now, see
-                // https://github.com/MaterializeInc/materialize/issues/21940
+                // https://github.com/MaterializeInc/database-issues/issues/6588
                 unreachable!()
             }
         }
@@ -3298,7 +3298,7 @@ impl AnalyzedRegex {
                 index: i as u32,
                 name: name.map(String::from),
                 // TODO -- we can do better.
-                // https://github.com/MaterializeInc/materialize/issues/1685
+                // https://github.com/MaterializeInc/database-issues/issues/612
                 nullable: true,
             })
             .collect();

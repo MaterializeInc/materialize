@@ -1,7 +1,7 @@
 [package]
 name = "mz-testdrive"
 description = "Integration test driver for Materialize."
-version = "0.118.1-dev.0"
+version = "0.119.0-dev.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -13,7 +13,6 @@ workspace = true
 anyhow = "1.0.66"
 async-compression = { version = "0.4.5", features = ["tokio", "gzip"] }
 async-trait = "0.1.68"
-atty = "0.2.0"
 aws-config = { version = "1.2.0", default-features = false }
 aws-credential-types = { version = "1.1.1", features = ["hardcoded-credentials"] }
 aws-sdk-sts = { version = "1.7.0", default-features = false, features = ["rt-tokio"] }

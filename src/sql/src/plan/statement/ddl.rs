@@ -22,7 +22,7 @@ use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_
 use mz_controller_types::{
     is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
 };
-use mz_expr::{CollectionPlan, LocalId, UnmaterializableFunc};
+use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
@@ -30,6 +30,7 @@ use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::VecExt;
+use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -150,10 +151,9 @@ use crate::plan::{
     TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
     WebhookHeaders, WebhookValidation,
 };
-use crate::session::vars::{self, ENABLE_CREATE_CONTINUAL_TASK};
 use crate::session::vars::{
-    ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS, ENABLE_KAFKA_SINK_PARTITION_BY,
-    ENABLE_REFRESH_EVERY_MVS,
+    self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_CREATE_CONTINUAL_TASK, ENABLE_KAFKA_SINK_HEADERS,
+    ENABLE_KAFKA_SINK_PARTITION_BY, ENABLE_REFRESH_EVERY_MVS,
 };
 use crate::{names, parse};
 
@@ -628,7 +628,7 @@ pub fn plan_create_source(
         name,
         in_cluster: _,
         col_names,
-        connection,
+        connection: source_connection,
         envelope,
         if_not_exists,
         format,
@@ -664,7 +664,7 @@ pub fn plan_create_source(
         )?;
     }
 
-    if !matches!(connection, CreateSourceConnection::Kafka { .. })
+    if !matches!(source_connection, CreateSourceConnection::Kafka { .. })
         && include_metadata
             .iter()
             .any(|sic| matches!(sic, SourceIncludeMetadata::Headers { .. }))
@@ -673,14 +673,14 @@ pub fn plan_create_source(
         sql_bail!("INCLUDE HEADERS with non-Kafka sources not supported");
     }
     if !matches!(
-        connection,
+        source_connection,
         CreateSourceConnection::Kafka { .. } | CreateSourceConnection::LoadGenerator { .. }
     ) && !include_metadata.is_empty()
     {
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let external_connection = match connection {
+    let external_connection = match source_connection {
         CreateSourceConnection::Kafka {
             connection: connection_name,
             options,
@@ -808,7 +808,23 @@ pub fn plan_create_source(
             connection,
             options,
         } => {
+            let (source_flavor, flavor_name) = match source_connection {
+                CreateSourceConnection::Postgres { .. } => (PostgresFlavor::Vanilla, "PostgreSQL"),
+                CreateSourceConnection::Yugabyte { .. } => (PostgresFlavor::Yugabyte, "Yugabyte"),
+                _ => unreachable!(),
+            };
+
             let connection_item = scx.get_item_by_resolved_name(connection)?;
+            let connection_mismatch = match connection_item.connection()? {
+                Connection::Postgres(conn) => source_flavor != conn.flavor,
+                _ => true,
+            };
+            if connection_mismatch {
+                sql_bail!(
+                    "{} is not a {flavor_name} connection",
+                    scx.catalog.resolve_full_name(connection_item.name())
+                )
+            }
 
             let PgConfigOptionExtracted {
                 details,
@@ -947,7 +963,7 @@ pub fn plan_create_source(
     // Apply user-specified key constraint
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
         // Don't remove this without addressing
-        // https://github.com/MaterializeInc/materialize/issues/15272.
+        // https://github.com/MaterializeInc/database-issues/issues/4371.
         scx.require_feature_flag(&vars::ENABLE_PRIMARY_KEY_NOT_ENFORCED)?;
 
         let key_columns = columns
@@ -1016,7 +1032,9 @@ pub fn plan_create_source(
         Some(name) => match name {
             DeferredItemName::Named(name) => match name {
                 ResolvedItemName::Item { id, .. } => *id,
-                ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
+                ResolvedItemName::Cte { .. }
+                | ResolvedItemName::ContinualTask { .. }
+                | ResolvedItemName::Error => {
                     sql_bail!("[internal error] invalid target id")
                 }
             },
@@ -2320,9 +2338,9 @@ pub fn plan_view(
     } = query::plan_root_query(scx, query.clone(), QueryLifetime::View)?;
     // We get back a trivial finishing, because `plan_root_query` applies the given finishing.
     // Note: Earlier, we were thinking to maybe persist the finishing information with the view
-    // here to help with materialize#724. However, in the meantime, there might be a better
-    // approach to solve materialize#724:
-    // https://github.com/MaterializeInc/materialize/issues/724#issuecomment-1688293709
+    // here to help with database-issues#236. However, in the meantime, there might be a better
+    // approach to solve database-issues#236:
+    // https://github.com/MaterializeInc/database-issues/issues/236#issuecomment-1688293709
     assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
@@ -2734,8 +2752,6 @@ pub fn plan_create_continual_task(
     let create_sql =
         normalize::create_statement(scx, Statement::CreateContinualTask(stmt.clone()))?;
 
-    let partial_name = normalize::unresolved_item_name(stmt.name)?;
-    let name = scx.allocate_qualified_name(partial_name.clone())?;
     let desc = {
         let mut desc_columns = Vec::with_capacity(stmt.columns.capacity());
         for col in stmt.columns.iter() {
@@ -2752,17 +2768,24 @@ pub fn plan_create_continual_task(
     let input = scx.get_item_by_resolved_name(&stmt.input)?;
 
     let mut qcx = QueryContext::root(scx, QueryLifetime::MaterializedView);
-    qcx.ctes.insert(
-        LocalId::new(0),
-        CteDesc {
-            name: name.item.clone(),
-            desc: desc.clone(),
-        },
-    );
+    let ct_name = stmt.name;
+    let placeholder_id = match &ct_name {
+        ResolvedItemName::ContinualTask { id, name } => {
+            qcx.ctes.insert(
+                *id,
+                CteDesc {
+                    name: name.item.clone(),
+                    desc: desc.clone(),
+                },
+            );
+            Some(*id)
+        }
+        _ => None,
+    };
 
     let mut exprs = Vec::new();
     for stmt in &stmt.stmts {
-        let query = continual_task_query(&name, stmt).ok_or_else(|| sql_err!("TODO(ct)"))?;
+        let query = continual_task_query(&ct_name, stmt).ok_or_else(|| sql_err!("TODO(ct)"))?;
         let query::PlannedRootQuery {
             mut expr,
             desc: desc_query,
@@ -2800,19 +2823,29 @@ pub fn plan_create_continual_task(
     }
 
     // Check for an object in the catalog with this same name
-    let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialItemName::from(full_name.clone());
-    // For PostgreSQL compatibility, we need to prevent creating this when there
-    // is an existing object *or* type of the same name.
-    if let Ok(item) = scx.catalog.resolve_item_or_type(&partial_name) {
-        return Err(PlanError::ItemAlreadyExists {
-            name: full_name.to_string(),
-            item_type: item.item_type(),
-        });
-    }
+    let name = match &ct_name {
+        ResolvedItemName::Item { id, .. } => scx.catalog.get_item(id).name().clone(),
+        ResolvedItemName::ContinualTask { name, .. } => {
+            let name = scx.allocate_qualified_name(name.clone())?;
+            let full_name = scx.catalog.resolve_full_name(&name);
+            let partial_name = PartialItemName::from(full_name.clone());
+            // For PostgreSQL compatibility, we need to prevent creating this when there
+            // is an existing object *or* type of the same name.
+            if let Ok(item) = scx.catalog.resolve_item_or_type(&partial_name) {
+                return Err(PlanError::ItemAlreadyExists {
+                    name: full_name.to_string(),
+                    item_type: item.item_type(),
+                });
+            }
+            name
+        }
+        ResolvedItemName::Cte { .. } => unreachable!("name should not resolve to a CTE"),
+        ResolvedItemName::Error => unreachable!("error should be returned in name resolution"),
+    };
 
     Ok(Plan::CreateContinualTask(CreateContinualTaskPlan {
         name,
+        placeholder_id,
         desc,
         input_id: input.id(),
         continual_task: MaterializedView {
@@ -2829,7 +2862,7 @@ pub fn plan_create_continual_task(
 }
 
 fn continual_task_query<'a>(
-    ct_name: &QualifiedItemName,
+    ct_name: &ResolvedItemName,
     stmt: &'a ast::ContinualTaskStmt<Aug>,
 ) -> Option<ast::Query<Aug>> {
     match stmt {
@@ -2859,11 +2892,7 @@ fn continual_task_query<'a>(
             // Construct a `SELECT *` with the `DELETE` selection as a `WHERE`.
             let from = ast::TableWithJoins {
                 relation: ast::TableFactor::Table {
-                    // TODO(ct): Huge hack.
-                    name: ResolvedItemName::Cte {
-                        id: LocalId::new(0),
-                        name: ct_name.item.clone(),
-                    },
+                    name: ct_name.clone(),
                     alias: alias.clone(),
                 },
                 joins: Vec::new(),
@@ -3198,7 +3227,7 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanErro
 }
 
 /// Creating this by hand instead of using generate_extracted_config! macro
-/// because the macro doesn't support parameterized enums. See <https://github.com/MaterializeInc/materialize/issues/22213>
+/// because the macro doesn't support parameterized enums. See <https://github.com/MaterializeInc/database-issues/issues/6698>
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct CsrConfigOptionExtracted {
     seen: ::std::collections::BTreeSet<CsrConfigOptionName<Aug>>,
@@ -5251,7 +5280,7 @@ fn plan_retain_history(
         // A zero duration has already been converted to `None` by `OptionalDuration` (and means
         // disable compaction), and should never occur here. Furthermore, some things actually do
         // break when this is set to real zero:
-        // https://github.com/MaterializeInc/materialize/issues/13221.
+        // https://github.com/MaterializeInc/database-issues/issues/3798.
         Some(Duration::ZERO) => Err(PlanError::InvalidOptionValue {
             option_name: "RETAIN HISTORY".to_string(),
             err: Box::new(PlanError::Unstructured(
@@ -6681,7 +6710,6 @@ pub fn plan_comment(
         }
     }
 
-    // TODO(ct): Add ::ContinualTask variant.
     let (object_id, column_pos) = match &object {
         com_ty @ CommentObjectType::Table { name }
         | com_ty @ CommentObjectType::View { name }
@@ -6691,7 +6719,8 @@ pub fn plan_comment(
         | com_ty @ CommentObjectType::Connection { name }
         | com_ty @ CommentObjectType::Source { name }
         | com_ty @ CommentObjectType::Sink { name }
-        | com_ty @ CommentObjectType::Secret { name } => {
+        | com_ty @ CommentObjectType::Secret { name }
+        | com_ty @ CommentObjectType::ContinualTask { name } => {
             let item = scx.get_item_by_resolved_name(name)?;
             match (com_ty, item.item_type()) {
                 (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
@@ -6720,6 +6749,9 @@ pub fn plan_comment(
                 }
                 (CommentObjectType::Secret { .. }, CatalogItemType::Secret) => {
                     (CommentObjectId::Secret(item.id()), None)
+                }
+                (CommentObjectType::ContinualTask { .. }, CatalogItemType::ContinualTask) => {
+                    (CommentObjectId::ContinualTask(item.id()), None)
                 }
                 (com_ty, cat_ty) => {
                     let expected_type = match com_ty {
@@ -6795,7 +6827,7 @@ pub fn plan_comment(
     // store a `usize` which would be a `Uint8`. We guard against a safe conversion here because
     // it's the easiest place to raise an error.
     //
-    // TODO(parkmycar): https://github.com/MaterializeInc/materialize/issues/22246.
+    // TODO(parkmycar): https://github.com/MaterializeInc/database-issues/issues/6711.
     if let Some(p) = column_pos {
         i32::try_from(p).map_err(|_| PlanError::TooManyColumns {
             max_num_columns: MAX_NUM_COLUMNS,

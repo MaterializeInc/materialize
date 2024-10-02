@@ -91,7 +91,8 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: zippy
             # Runs into upload size limits of Buildkite
-            args: [--scenario=PostgresCdcLarge, --actions=100000]
+            # Runs into slowness with new source syntax after a while
+            args: [--scenario=PostgresCdcLarge, --actions=50000]
 
     - id: zippy-mysql-cdc-large
       label: "Large Zippy MySqlCdc"
@@ -115,7 +116,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            # Execution times longer than 4h are apparently not feasible at this time due to materialize#17845
+            # Execution times longer than 4h are apparently not feasible at this time due to database-issues#5201
             args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=4h]
 
     - id: zippy-user-tables-large
@@ -166,7 +167,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            # TODO(def-) Increase number of actions when materialize#24250 is fixed
+            # TODO(def-) Increase number of actions when database-issues#7257 is fixed
             args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=50000, --max-execution-time=4h]
 
   - group: Benchmarks
@@ -216,7 +217,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
             args: [--max-joins=2, --runtime=6000]
-      skip: "Reenable when materialize#23451 is fixed"
+      skip: "Reenable when database-issues#7046 is fixed"
 
     - id: sqlsmith-explain-long
       label: "Longer SQLsmith explain"
@@ -228,7 +229,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
             args: [--max-joins=15, --explain-only, --runtime=6000]
-      skip: "Reenable when materialize#23451 is fixed"
+      skip: "Reenable when database-issues#7046 is fixed"
 
   - id: test-preflight-check-rollback
     label: Test with preflight check and rollback
@@ -262,8 +263,9 @@ steps:
         agents:
           # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
           # TODO(def-) Switch back to Hetzner when we have increased server limit
-          queue: linux-x86_64-small
-          # queue: hetzner-x86-64-4cpu-8gb
+          # Increased memory usage following new source syntax
+          queue: linux-x86_64
+          # queue: hetzner-x86-64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
@@ -282,6 +284,17 @@ steps:
   - group: "Postgres: other versions"
     key: postgres-versions
     steps:
+      - id: pg-cdc-16_4
+        label: "Postgres CDC w/ 16.4"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-cdc]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc
+              args: [ "--pg-version=16.4" ]
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
       - id: pg-cdc-15_6
         label: "Postgres CDC w/ 15.6"
         depends_on: build-aarch64

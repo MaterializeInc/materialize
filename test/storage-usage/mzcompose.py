@@ -102,7 +102,7 @@ database_objects = [
         expected_size=1024 * 1024,
     ),
     # Deleted/updated rows should be garbage-collected
-    # https://github.com/MaterializeInc/materialize/issues/15093
+    # https://github.com/MaterializeInc/database-issues/issues/4313
     # DatabaseObject(
     #    name="table_delete",
     #    testdrive=dedent(

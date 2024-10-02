@@ -3556,7 +3556,7 @@ impl ScalarType {
 
             ScalarType::Array(elem) => Ok(elem.array_of_self_elem_type()?),
 
-            // https://github.com/MaterializeInc/materialize/issues/7613
+            // https://github.com/MaterializeInc/database-issues/issues/2360
             t @ (ScalarType::Char { .. }
             // not sensible to put in arrays
             | ScalarType::Map { .. }

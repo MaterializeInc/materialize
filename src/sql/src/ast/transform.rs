@@ -155,7 +155,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
         | Statement::CreateWebhookSource(CreateWebhookSourceStatement { name, .. }) => {
             // The last name in an ItemName is the item name. The item name
             // does not have a fixed index.
-            // TODO: https://github.com/MaterializeInc/materialize/issues/5591
+            // TODO: https://github.com/MaterializeInc/database-issues/issues/1721
             let item_name_len = name.0.len() - 1;
             name.0[item_name_len] = Ident::new_unchecked(to_item_name);
         }
@@ -185,7 +185,7 @@ pub fn create_stmt_rename_refs(
         if item_name.0 == from_item.0 {
             // The last name in an ItemName is the item name. The item name
             // does not have a fixed index.
-            // TODO: https://github.com/MaterializeInc/materialize/issues/5591
+            // TODO: https://github.com/MaterializeInc/database-issues/issues/1721
             let item_name_len = item_name.0.len() - 1;
             item_name.0[item_name_len] = Ident::new_unchecked(to_item_name.clone());
         }

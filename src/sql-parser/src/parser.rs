@@ -544,7 +544,7 @@ impl<'a> Parser<'a> {
         // "date".
         //
         // Note: the maybe! block here does swallow valid parsing errors
-        // See <https://github.com/MaterializeInc/materialize/issues/22397> for more details
+        // See <https://github.com/MaterializeInc/incidents-and-escalations/issues/90> for more details
         maybe!(self.maybe_parse(|parser| {
             let data_type = parser.parse_data_type()?;
             if data_type.to_string().as_str() == "interval" {
@@ -763,7 +763,7 @@ impl<'a> Parser<'a> {
         let over =
             if self.peek_keyword(OVER) || self.peek_keyword(IGNORE) || self.peek_keyword(RESPECT) {
                 // TBD: support window names (`OVER mywin`) in place of inline specification
-                // https://github.com/MaterializeInc/materialize/issues/19755
+                // https://github.com/MaterializeInc/database-issues/issues/5882
 
                 let ignore_nulls = self.parse_keywords(&[IGNORE, NULLS]);
                 let respect_nulls = self.parse_keywords(&[RESPECT, NULLS]);
@@ -3584,7 +3584,7 @@ impl<'a> Parser<'a> {
         self.expect_keywords(&[CONTINUAL, TASK])?;
 
         // TODO(ct): Multiple outputs.
-        let name = self.parse_item_name()?;
+        let name = RawItemName::Name(self.parse_item_name()?);
         self.expect_token(&Token::LParen)?;
         let columns = self.parse_comma_separated(|parser| {
             // TODO(ct): NOT NULL, etc.
@@ -8641,6 +8641,7 @@ impl<'a> Parser<'a> {
                 DATABASE,
                 SCHEMA,
                 FUNCTION,
+                CONTINUAL,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -8668,6 +8669,13 @@ impl<'a> Parser<'a> {
                 DATABASE => ObjectType::Database,
                 SCHEMA => ObjectType::Schema,
                 FUNCTION => ObjectType::Func,
+                CONTINUAL => {
+                    if let Err(e) = self.expect_keyword(TASK) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::ContinualTask
+                }
                 _ => unreachable!(),
             },
         )
@@ -8796,6 +8804,7 @@ impl<'a> Parser<'a> {
                 DATABASES,
                 SCHEMAS,
                 SUBSOURCES,
+                CONTINUAL,
             ])? {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
@@ -8826,6 +8835,14 @@ impl<'a> Parser<'a> {
                 DATABASES => ObjectType::Database,
                 SCHEMAS => ObjectType::Schema,
                 SUBSOURCES => ObjectType::Subsource,
+                CONTINUAL => {
+                    if self.parse_keyword(TASKS) {
+                        ObjectType::ContinualTask
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 _ => unreachable!(),
             },
         )
@@ -9005,6 +9022,7 @@ impl<'a> Parser<'a> {
             DATABASE,
             SCHEMA,
             CLUSTER,
+            CONTINUAL,
         ])? {
             TABLE => {
                 let name = self.parse_raw_name()?;
@@ -9071,6 +9089,11 @@ impl<'a> Parser<'a> {
             COLUMN => {
                 let name = self.parse_column_name()?;
                 CommentObjectType::Column { name }
+            }
+            CONTINUAL => {
+                self.expect_keyword(TASK)?;
+                let name = self.parse_raw_name()?;
+                CommentObjectType::ContinualTask { name }
             }
             _ => unreachable!(),
         };

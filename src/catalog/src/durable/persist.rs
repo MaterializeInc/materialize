@@ -50,15 +50,15 @@ use uuid::Uuid;
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
 use crate::durable::error::FenceError;
 use crate::durable::initialize::{
-    DEPLOY_GENERATION, ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
-    SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, SYSTEM_CONFIG_SYNCED_KEY,
+    USER_VERSION_KEY, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use crate::durable::metrics::Metrics;
 use crate::durable::objects::state_update::{
     IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
     TryIntoStateUpdateKind,
 };
-use crate::durable::objects::{AuditLogKey, ConfigKey, ConfigValue, FenceToken, Snapshot};
+use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
@@ -135,10 +135,6 @@ pub(crate) enum FenceableToken {
     /// The catalog is still initializing and learning about previously written fence tokens. This
     /// state can be fenced if it encounters a larger deploy generation.
     Initializing {
-        /// A deploy generation in the legacy format. Remove after one release.
-        legacy_durable_deploy_generation: Option<u64>,
-        /// An epoch in the legacy format. Remove after one release.
-        legacy_durable_epoch: Option<Epoch>,
         /// The largest fence token durably written to the catalog, if any.
         durable_token: Option<FenceToken>,
         /// This process's deploy generation.
@@ -157,8 +153,6 @@ impl FenceableToken {
     /// Returns a new token.
     fn new(current_deploy_generation: Option<u64>) -> Self {
         Self::Initializing {
-            legacy_durable_deploy_generation: None,
-            legacy_durable_epoch: None,
             durable_token: None,
             current_deploy_generation,
         }
@@ -202,36 +196,6 @@ impl FenceableToken {
             FenceableToken::Initializing { durable_token, .. } => durable_token.clone(),
             FenceableToken::Unfenced { current_token, .. } => Some(current_token.clone()),
             FenceableToken::Fenced { current_token, .. } => Some(current_token.clone()),
-        }
-    }
-
-    /// Returns the durable deploy generation.
-    fn durable_deploy_generation(&self) -> Option<u64> {
-        match self {
-            FenceableToken::Initializing {
-                durable_token,
-                legacy_durable_deploy_generation,
-                ..
-            } => durable_token
-                .clone()
-                .map(|token| token.deploy_generation)
-                .or(legacy_durable_deploy_generation.clone()),
-            token => token.token().clone().map(|token| token.deploy_generation),
-        }
-    }
-
-    /// Returns the durable epoch.
-    fn durable_epoch(&self) -> Option<Epoch> {
-        match self {
-            FenceableToken::Initializing {
-                durable_token,
-                legacy_durable_epoch,
-                ..
-            } => durable_token
-                .clone()
-                .map(|token| token.epoch)
-                .or(legacy_durable_epoch.clone()),
-            token => token.token().clone().map(|token| token.epoch),
         }
     }
 
@@ -281,70 +245,6 @@ impl FenceableToken {
         Ok(())
     }
 
-    /// Update state when encountering a deploy generation in the legacy format.
-    ///
-    /// TODO(jkosh44) Remove after one release.
-    fn handle_legacy_delpoy_generation(&mut self, deploy_generation: u64, diff: Diff) {
-        let legacy_durable_deploy_generation = match self {
-            FenceableToken::Initializing {
-                legacy_durable_deploy_generation,
-                ..
-            } => legacy_durable_deploy_generation,
-            FenceableToken::Unfenced { current_token }
-            | FenceableToken::Fenced { current_token, .. } => {
-                assert!(deploy_generation <= current_token.deploy_generation, "saw legacy deploy generation after fencing out old versions: deploy generation: ({deploy_generation:?}, {diff:?}), {self:?}");
-                return;
-            }
-        };
-
-        match (&legacy_durable_deploy_generation, diff) {
-            (Some(current_deploy_generation), -1) => {
-                assert_eq!(*current_deploy_generation, deploy_generation);
-                *legacy_durable_deploy_generation = None;
-            }
-            (Some(current_deploy_generation), 1) => {
-                panic!("must retract deploy generation before adding new one: {current_deploy_generation:?}")
-            }
-            (None, -1) => panic!("must add deploy generation before retracting it"),
-            (None, 1) => {
-                *legacy_durable_deploy_generation = Some(deploy_generation);
-            }
-            (_, diff) => panic!("invalid diff: {diff}"),
-        }
-    }
-
-    /// Update state when encountering an epoch in the legacy format.
-    ///
-    /// TODO(jkosh44) Remove after one release.
-    fn handle_legacy_epoch(&mut self, epoch: Epoch, diff: Diff) {
-        let legacy_durable_epoch = match self {
-            FenceableToken::Initializing {
-                legacy_durable_epoch,
-                ..
-            } => legacy_durable_epoch,
-            FenceableToken::Unfenced { current_token }
-            | FenceableToken::Fenced { current_token, .. } => {
-                assert!(epoch <= current_token.epoch, "saw legacy epoch after fencing out old versions: epoch: ({epoch:?}, {diff:?}), {self:?}");
-                return;
-            }
-        };
-
-        match (&legacy_durable_epoch, diff) {
-            (Some(current_epoch), -1) => {
-                assert_eq!(*current_epoch, epoch);
-                *legacy_durable_epoch = None;
-            }
-            (Some(current_epoch), 1) => {
-                panic!("must retract epoch before adding new one: {current_epoch:?}")
-            }
-            (None, -1) => panic!("must add epoch before retracting it"),
-            (None, 1) => {
-                *legacy_durable_epoch = Some(epoch);
-            }
-            (_, diff) => panic!("invalid diff: {diff}"),
-        }
-    }
-
     /// Returns a [`FenceableToken::Unfenced`] token and the updates to the catalog required to
     /// transition to the `Unfenced` state if `self` is [`FenceableToken::Initializing`], otherwise
     /// returns `None`.
@@ -352,66 +252,26 @@ impl FenceableToken {
         &self,
         mode: Mode,
     ) -> Result<Option<(Vec<(StateUpdateKind, Diff)>, FenceableToken)>, DurableCatalogError> {
-        let (
-            legacy_durable_deploy_generation,
-            legacy_durable_epoch,
-            durable_token,
-            current_deploy_generation,
-        ) = match self {
+        let (durable_token, current_deploy_generation) = match self {
             FenceableToken::Initializing {
-                legacy_durable_deploy_generation,
-                legacy_durable_epoch,
                 durable_token,
                 current_deploy_generation,
-            } => (
-                legacy_durable_deploy_generation.clone(),
-                legacy_durable_epoch.clone(),
-                durable_token.clone(),
-                current_deploy_generation.clone(),
-            ),
+            } => (durable_token.clone(), current_deploy_generation.clone()),
             FenceableToken::Unfenced { .. } | FenceableToken::Fenced { .. } => return Ok(None),
         };
 
-        if durable_token.is_some()
-            && (legacy_durable_epoch.is_some() || legacy_durable_deploy_generation.is_some())
-        {
-            panic!("can't have both a durable fence token and a durable legacy epoch/deploy_generation; token={durable_token:?}, epoch={legacy_durable_epoch:?}, deploy_generation={legacy_durable_deploy_generation:?}");
-        }
+        let mut fence_updates = Vec::with_capacity(2);
 
-        let mut fence_updates = Vec::with_capacity(3);
-
-        if let Some(legacy_durable_epoch) = legacy_durable_epoch {
-            fence_updates.push((StateUpdateKind::Epoch(legacy_durable_epoch), -1));
-        }
-        if let Some(legacy_durable_deploy_generation) = legacy_durable_deploy_generation {
-            fence_updates.push((
-                StateUpdateKind::Config(
-                    ConfigKey {
-                        key: DEPLOY_GENERATION.to_string(),
-                    }
-                    .into_proto(),
-                    ConfigValue {
-                        value: legacy_durable_deploy_generation,
-                    }
-                    .into_proto(),
-                ),
-                -1,
-            ));
-        }
         if let Some(durable_token) = &durable_token {
             fence_updates.push((StateUpdateKind::FenceToken(durable_token.clone()), -1));
         }
 
-        let durable_token_deploy_generation =
-            durable_token.as_ref().map(|token| token.deploy_generation);
         let current_deploy_generation = current_deploy_generation
-            .or(durable_token_deploy_generation)
-            .or(legacy_durable_deploy_generation)
+            .or(durable_token.as_ref().map(|token| token.deploy_generation))
             // We cannot initialize a catalog without a deploy generation.
             .ok_or(DurableCatalogError::Uninitialized)?;
         let mut current_epoch = durable_token
             .map(|token| token.epoch)
-            .or(legacy_durable_epoch)
             .unwrap_or(MIN_EPOCH)
             .get();
         // Only writable catalogs attempt to increment the epoch.
@@ -923,9 +783,6 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::DefaultPrivilege(key, value) => {
                         apply(&mut snapshot.default_privileges, key, value, diff);
                     }
-                    StateUpdateKind::Epoch(_epoch) => {
-                        // Ignore for snapshots.
-                    }
                     StateUpdateKind::FenceToken(_token) => {
                         // Ignore for snapshots.
                     }
@@ -1031,9 +888,6 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
         {
             match (kind, update.diff) {
                 (StateUpdateKind::Config(key, value), 1) => {
-                    if key.key == DEPLOY_GENERATION {
-                        current_fence_token.handle_legacy_delpoy_generation(value.value, 1);
-                    }
                     let prev = self.configs.insert(key.key, value.value);
                     assert_eq!(
                         prev, None,
@@ -1041,9 +895,6 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
                     );
                 }
                 (StateUpdateKind::Config(key, value), -1) => {
-                    if key.key == DEPLOY_GENERATION {
-                        current_fence_token.handle_legacy_delpoy_generation(value.value, -1);
-                    }
                     let prev = self.configs.remove(&key.key);
                     assert_eq!(
                         prev,
@@ -1065,9 +916,6 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
                         Some(value.value),
                         "retraction does not match existing value"
                     );
-                }
-                (StateUpdateKind::Epoch(epoch), diff) => {
-                    current_fence_token.handle_legacy_epoch(epoch, diff);
                 }
                 (StateUpdateKind::FenceToken(fence_token), 1) => {
                     current_fence_token.maybe_fence(fence_token)?;
@@ -1519,7 +1367,8 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError> {
         self.sync_to_current_upper().await?;
         self.fenceable_token
-            .durable_deploy_generation()
+            .token()
+            .map(|token| token.deploy_generation)
             .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
     }
 
@@ -1651,20 +1500,6 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 current_fence_token.maybe_fence(token)?;
                 Ok(None)
             }
-            (StateUpdateKind::Epoch(epoch), diff) => {
-                assert!(
-                    epoch <= current_fence_token.token().expect("catalog must have token after open").epoch,
-                    "Saw legacy deploy generation update after fencing: ({epoch:?}, {diff}), current: {current_fence_token:?}"
-                );
-                Ok(None)
-            }
-            (StateUpdateKind::Config(key, value), diff) if key.key == DEPLOY_GENERATION => {
-                assert!(
-                    value.value <= current_fence_token.token().expect("catalog must have token after open").deploy_generation,
-                    "Saw legacy deploy generation update after fencing: ({key:?}, {value:?}, {diff}), current: {current_fence_token:?}"
-                );
-                Ok(None)
-            }
             (kind, diff) => Ok(Some(StateUpdate {
                 kind,
                 ts: update.ts,
@@ -1685,8 +1520,9 @@ type PersistCatalogState = PersistHandle<StateUpdateKind, CatalogStateInner>;
 impl ReadOnlyDurableCatalogState for PersistCatalogState {
     fn epoch(&self) -> Epoch {
         self.fenceable_token
-            .durable_epoch()
+            .token()
             .expect("opened catalog state must have an epoch")
+            .epoch
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1993,9 +1829,6 @@ impl Trace {
                 }
                 StateUpdateKind::FenceToken(_) => {
                     // Fence token not included in trace.
-                }
-                StateUpdateKind::Epoch(_) => {
-                    // Epoch not included in trace.
                 }
                 StateUpdateKind::IdAllocator(k, v) => {
                     trace.id_allocator.values.push(((k, v), ts, diff))

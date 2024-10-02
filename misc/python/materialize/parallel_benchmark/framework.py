@@ -364,7 +364,9 @@ class Scenario:
             thread.start()
         # Start threads and have them wait for work from a queue
         for i in range(self.conn_pool_size):
-            self.conns.put(conn_info.connect())
+            conn = conn_info.connect()
+            conn.autocommit = True
+            self.conns.put(conn)
 
     def run(
         self,

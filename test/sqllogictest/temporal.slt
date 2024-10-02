@@ -72,7 +72,7 @@ query error step mz_timestamp overflow
 select * from valid_max AS OF 0
 
 #
-# Regression test for materialize#6635
+# Regression test for database-issues#2066
 #
 statement ok
 CREATE TABLE events (
@@ -219,7 +219,7 @@ select mz_now() < '3000-01-01';
 ----
 true
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/25339
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/7560
 query B
 with v as (select mz_now() < '3000-01-01') select * from v;
 ----

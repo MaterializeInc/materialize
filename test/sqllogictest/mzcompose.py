@@ -581,7 +581,7 @@ def compileSlowSltConfig() -> SltRunConfig:
     }
     tests_without_views_and_replica = {
         # errors:
-        # https://github.com/MaterializeInc/materialize/issues/20534
+        # https://github.com/MaterializeInc/database-issues/issues/6181
         "test/sqllogictest/list.slt",
         # transactions:
         "test/sqllogictest/github-11568.slt",
@@ -599,9 +599,9 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/cluster.slt",
         # different indexes auto-created
         "test/sqllogictest/object_ownership.slt",
-        # https://github.com/MaterializeInc/materialize/issues/20110
+        # https://github.com/MaterializeInc/database-issues/issues/6011
         "test/sqllogictest/interval.slt",
-        # https://github.com/MaterializeInc/materialize/issues/20110
+        # https://github.com/MaterializeInc/database-issues/issues/6011
         "test/sqllogictest/operator.slt",
         # specific replica size tested:
         "test/sqllogictest/managed_cluster.slt",

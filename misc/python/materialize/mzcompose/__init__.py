@@ -72,6 +72,7 @@ def get_default_system_parameters(
         # Persist internals changes: advance coverage
         "persist_enable_arrow_lgalloc_noncc_sizes": "true",
         "persist_enable_s3_lgalloc_noncc_sizes": "true",
+        "persist_enable_one_alloc_per_request": "true",
         # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
@@ -111,7 +112,6 @@ def get_default_system_parameters(
         ),
         "persist_batch_columnar_format_percent": "10",
         "persist_batch_delete_enabled": "true",
-        "persist_batch_record_part_format": "true",
         "persist_batch_record_run_meta": (
             "true" if version >= MzVersion.parse_mz("v0.115.0-dev") else "false"
         ),

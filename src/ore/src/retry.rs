@@ -749,7 +749,7 @@ mod tests {
 
     #[crate::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
-    #[ignore] // TODO: Reenable when materialize#24933 is fixed
+    #[ignore] // TODO: Reenable when database-issues#7441 is fixed
     async fn test_retry_async_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()

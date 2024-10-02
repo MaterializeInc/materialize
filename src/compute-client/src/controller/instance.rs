@@ -15,8 +15,6 @@ use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use futures::stream::FuturesUnordered;
-use futures::{future, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_cluster_client::WallclockLagFn;
@@ -32,6 +30,7 @@ use mz_controller_types::dyncfgs::WALLCLOCK_LAG_REFRESH_INTERVAL;
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
+use mz_ore::channel::instrumented_unbounded_channel;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
@@ -58,6 +57,7 @@ use crate::controller::{
     StorageCollections,
 };
 use crate::logging::LogVariant;
+use crate::metrics::IntCounter;
 use crate::metrics::{InstanceMetrics, ReplicaCollectionMetrics, ReplicaMetrics, UIntGauge};
 use crate::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
@@ -187,6 +187,10 @@ where
     }
 }
 
+/// A response from a replica, composed of a replica ID, the replica's current epoch, and the
+/// compute response itself.
+pub(super) type ReplicaResponse<T> = (ReplicaId, u64, ComputeResponse<T>);
+
 /// The state we keep for a compute instance.
 pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// Build info for spawning replicas
@@ -219,7 +223,7 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     ///
     /// The entry for a peek is only removed once all replicas have responded to the peek. This is
     /// currently required to ensure all replicas have stopped reading from the peeked collection's
-    /// inputs before we allow them to compact. materialize#16641 tracks changing this so we only have to wait
+    /// inputs before we allow them to compact. database-issues#4822 tracks changing this so we only have to wait
     /// for the first peek response.
     peeks: BTreeMap<Uuid, PendingPeek<T>>,
     /// Currently in-progress subscribes.
@@ -277,6 +281,10 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     ///
     /// Received updates are applied by [`Instance::apply_read_hold_changes`].
     read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
+    /// A sender for responses from replicas.
+    replica_tx: mz_ore::channel::InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
+    /// A receiver for responses from replicas.
+    replica_rx: mz_ore::channel::InstrumentedUnboundedReceiver<ReplicaResponse<T>, IntCounter>,
 }
 
 impl<T: ComputeControllerTimestamp> Instance<T> {
@@ -389,12 +397,19 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         id: ReplicaId,
         client: ReplicaClient<T>,
         config: ReplicaConfig,
+        epoch: ClusterStartupEpoch,
     ) {
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
 
         let metrics = self.metrics.for_replica(id);
-        let mut replica =
-            ReplicaState::new(id, client, config, metrics, self.introspection_tx.clone());
+        let mut replica = ReplicaState::new(
+            id,
+            client,
+            config,
+            metrics,
+            self.introspection_tx.clone(),
+            epoch,
+        );
 
         // Add per-replica collection state.
         for (collection_id, collection) in &self.collections {
@@ -750,6 +765,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             wallclock_lag_last_refresh,
             read_holds_tx: _,
             read_holds_rx: _,
+            replica_tx: _,
+            replica_rx: _,
         } = self;
 
         fn field(
@@ -834,6 +851,10 @@ where
 
         let history = ComputeCommandHistory::new(metrics.for_history());
 
+        let send_count = metrics.response_send_count.clone();
+        let recv_count = metrics.response_recv_count.clone();
+        let (replica_tx, replica_rx) = instrumented_unbounded_channel(send_count, recv_count);
+
         Self {
             build_info,
             storage_collections: storage,
@@ -858,6 +879,8 @@ where
             wallclock_lag_last_refresh: Instant::now(),
             read_holds_tx,
             read_holds_rx,
+            replica_tx,
+            replica_rx,
         }
     }
 
@@ -878,8 +901,9 @@ where
                     Some(cmd) => cmd(&mut self),
                     None => break,
                 },
-                (replica_id, response) = Self::recv(&mut self.replicas) => {
-                    self.handle_response(response, replica_id);
+                response = self.replica_rx.recv() => match response {
+                    Some(response) => self.handle_response(response),
+                    None => unreachable!("self owns a sender side of the channel"),
                 }
             }
         }
@@ -956,43 +980,8 @@ where
 
         // Clone the command for each active replica.
         for replica in self.replicas.values_mut() {
-            // If sending the command fails, the replica requires rehydration.
-            if replica.client.send(cmd.clone()).is_err() {
-                replica.failed = true;
-            }
-        }
-    }
-
-    /// Receives the next response from the given replicas.
-    ///
-    /// This method is cancellation safe.
-    async fn recv(
-        replicas: &mut BTreeMap<ReplicaId, ReplicaState<T>>,
-    ) -> (ReplicaId, ComputeResponse<T>) {
-        loop {
-            let live_replicas = replicas.iter_mut().filter(|(_, r)| !r.failed);
-            let response = live_replicas
-                .map(|(id, replica)| async { (*id, replica.client.recv().await) })
-                .collect::<FuturesUnordered<_>>()
-                .next()
-                .await;
-
-            match response {
-                None => {
-                    // There are no live replicas left.
-                    // Block forever to communicate that no response is ready.
-                    future::pending().await
-                }
-                Some((replica_id, None)) => {
-                    // A replica has failed and requires rehydration.
-                    let replica = replicas.get_mut(&replica_id).unwrap();
-                    replica.failed = true;
-                }
-                Some((replica_id, Some(response))) => {
-                    // A replica has produced a response. Return it.
-                    return (replica_id, response);
-                }
-            }
+            // Swallow error, we'll notice because the replica task has stopped.
+            let _ = replica.client.send(cmd.clone());
         }
     }
 
@@ -1012,13 +1001,15 @@ where
         let replica_epoch = self.replica_epochs.entry(id).or_default();
         *replica_epoch += 1;
         let metrics = self.metrics.for_replica(id);
+        let epoch = ClusterStartupEpoch::new(self.envd_epoch, *replica_epoch);
         let client = ReplicaClient::spawn(
             id,
             self.build_info,
             config.clone(),
-            ClusterStartupEpoch::new(self.envd_epoch, *replica_epoch),
+            epoch,
             metrics.clone(),
             Arc::clone(&self.dyncfg),
+            self.replica_tx.clone(),
         );
 
         // Take this opportunity to clean up the history we should present.
@@ -1035,7 +1026,7 @@ where
         }
 
         // Add replica to tracked state.
-        self.add_replica_state(id, client, config);
+        self.add_replica_state(id, client, config, epoch);
 
         Ok(())
     }
@@ -1104,7 +1095,7 @@ where
     fn rehydrate_failed_replicas(&mut self) {
         let replicas = self.replicas.iter();
         let failed_replicas: Vec<_> = replicas
-            .filter_map(|(id, replica)| replica.failed.then_some(*id))
+            .filter_map(|(id, replica)| replica.client.is_failed().then_some(*id))
             .collect();
 
         for replica_id in failed_replicas {
@@ -1686,13 +1677,27 @@ where
         };
 
         // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
-        // (by dropping it), to avoid the edge case that caused materialize#16615.
+        // (by dropping it), to avoid the edge case that caused database-issues#4812.
         self.send(ComputeCommand::CancelPeek { uuid });
 
         drop(peek);
     }
 
-    fn handle_response(&mut self, response: ComputeResponse<T>, replica_id: ReplicaId) {
+    /// Handles a response from a replica. Replica IDs are re-used across replica restarts, so we
+    /// use the replica incarnation to drop stale responses.
+    fn handle_response(&mut self, (replica_id, incarnation, response): ReplicaResponse<T>) {
+        // Filter responses from non-existing or stale replicas.
+        if self
+            .replicas
+            .get(&replica_id)
+            .filter(|replica| replica.epoch.replica() == incarnation)
+            .is_none()
+        {
+            return;
+        }
+
+        // Invariant: the replica exists and has the expected incarnation.
+
         match response {
             ComputeResponse::Frontiers(id, frontiers) => {
                 self.handle_frontiers_response(id, frontiers, replica_id);
@@ -1856,7 +1861,7 @@ where
 
         // For subscribes we downgrade all replica frontiers based on write frontiers. This should
         // be fine because the input and output frontier of a subscribe track its write frontier.
-        // TODO(materialize#16274): report subscribe frontiers through `Frontiers` responses
+        // TODO(database-issues#4701): report subscribe frontiers through `Frontiers` responses
         replica_collection.update_write_frontier(write_frontier.clone());
         replica_collection.update_input_frontier(write_frontier.clone());
         replica_collection.update_output_frontier(write_frontier.clone());
@@ -2547,8 +2552,8 @@ struct ReplicaState<T: ComputeControllerTimestamp> {
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     /// Per-replica collection state.
     collections: BTreeMap<GlobalId, ReplicaCollectionState<T>>,
-    /// Whether the replica has failed and requires rehydration.
-    failed: bool,
+    /// The epoch of the replica.
+    epoch: ClusterStartupEpoch,
 }
 
 impl<T: ComputeControllerTimestamp> ReplicaState<T> {
@@ -2558,6 +2563,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         config: ReplicaConfig,
         metrics: ReplicaMetrics,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+        epoch: ClusterStartupEpoch,
     ) -> Self {
         Self {
             id,
@@ -2565,8 +2571,8 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             config,
             metrics,
             introspection_tx,
+            epoch,
             collections: Default::default(),
-            failed: false,
         }
     }
 
@@ -2643,8 +2649,8 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             config: _,
             metrics: _,
             introspection_tx: _,
+            epoch,
             collections,
-            failed,
         } = self;
 
         fn field(
@@ -2663,7 +2669,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         let map = serde_json::Map::from_iter([
             field("id", id.to_string())?,
             field("collections", collections)?,
-            field("failed", failed)?,
+            field("epoch", epoch)?,
         ]);
         Ok(serde_json::Value::Object(map))
     }

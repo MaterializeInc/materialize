@@ -409,10 +409,10 @@ Target cluster: quickstart
 EOF
 
 # WMR
-# https://github.com/MaterializeInc/materialize/issues/18175
+# https://github.com/MaterializeInc/database-issues/issues/5344
 
 # WMR -- Threshold in the loop-invariant part
-# The "Very basic" implementation from materialize#18175 should handle this.
+# The "Very basic" implementation from database-issues#5344 should handle this.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 WITH MUTUALLY RECURSIVE
@@ -458,7 +458,7 @@ EOF
 
 # WMR -- Threshold inside the cycle -- Two Thresholds, the second one should be easy to eliminate, because the result of
 # the first one is obviously non-negative.
-# The "Basic" implementation from materialize#18175 should handle this.
+# The "Basic" implementation from database-issues#5344 should handle this.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 WITH MUTUALLY RECURSIVE

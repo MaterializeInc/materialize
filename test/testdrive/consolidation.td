@@ -170,7 +170,7 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 # 6 {"before": null, "after": {"row": {"num": 5}}}
 
 # Validate that `SUBSCRIBE` is similarly consolidated.
-# This protects against regression of materialize#5421.
+# This protects against regression of database-issues#1675.
 
 > BEGIN
 > DECLARE cur CURSOR FOR SUBSCRIBE nums AS OF 3

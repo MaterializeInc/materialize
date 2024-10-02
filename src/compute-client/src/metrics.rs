@@ -31,9 +31,9 @@ use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
 
 type Counter = DeleteOnDropCounter<'static, AtomicF64, Vec<String>>;
-type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
+pub(crate) type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
 type Gauge = DeleteOnDropGauge<'static, AtomicF64, Vec<String>>;
-/// TODO(materialize#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
 type Histogram = DeleteOnDropHistogram<'static, Vec<String>>;
 
@@ -54,7 +54,8 @@ pub struct ComputeControllerMetrics {
     subscribe_count: UIntGaugeVec,
     copy_to_count: UIntGaugeVec,
     command_queue_size: UIntGaugeVec,
-    response_queue_size: UIntGaugeVec,
+    response_send_count: IntCounterVec,
+    response_recv_count: IntCounterVec,
     hydration_queue_size: UIntGaugeVec,
 
     // command history
@@ -131,10 +132,15 @@ impl ComputeControllerMetrics {
                 help: "The size of the compute command queue.",
                 var_labels: ["instance_id", "replica_id"],
             )),
-            response_queue_size: metrics_registry.register(metric!(
-                name: "mz_compute_controller_response_queue_size",
-                help: "The size of the compute response queue.",
-                var_labels: ["instance_id", "replica_id"],
+            response_send_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_response_send_count",
+                help: "The number of sends on the compute response queue.",
+                var_labels: ["instance_id"],
+            )),
+            response_recv_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_response_recv_count",
+                help: "The number of receives on the compute response queue.",
+                var_labels: ["instance_id"],
             )),
             hydration_queue_size: metrics_registry.register(metric!(
                 name: "mz_compute_controller_hydration_queue_size",
@@ -220,6 +226,12 @@ impl ComputeControllerMetrics {
             let labels = labels.iter().cloned().chain([typ.into()]).collect();
             self.peek_duration_seconds.get_delete_on_drop_metric(labels)
         });
+        let response_send_count = self
+            .response_send_count
+            .get_delete_on_drop_metric(labels.clone());
+        let response_recv_count = self
+            .response_recv_count
+            .get_delete_on_drop_metric(labels.clone());
 
         InstanceMetrics {
             instance_id,
@@ -234,6 +246,8 @@ impl ComputeControllerMetrics {
             history_dataflow_count,
             peeks_total,
             peek_duration_seconds,
+            response_send_count,
+            response_recv_count,
         }
     }
 }
@@ -264,10 +278,14 @@ pub struct InstanceMetrics {
     pub peeks_total: PeekMetrics<IntCounter>,
     /// Histogram tracking peek durations.
     pub peek_duration_seconds: PeekMetrics<Histogram>,
+    /// Gauge tracking the number of sends on the compute response queue.
+    pub response_send_count: IntCounter,
+    /// Gauge tracking the number of receives on the compute response queue.
+    pub response_recv_count: IntCounter,
 }
 
 impl InstanceMetrics {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn for_replica(&self, replica_id: ReplicaId) -> ReplicaMetrics {
         let labels = vec![self.instance_id.to_string(), replica_id.to_string()];
         let extended_labels = |extra: &str| {
@@ -307,10 +325,6 @@ impl InstanceMetrics {
             .metrics
             .command_queue_size
             .get_delete_on_drop_metric(labels.clone());
-        let response_queue_size = self
-            .metrics
-            .response_queue_size
-            .get_delete_on_drop_metric(labels.clone());
         let hydration_queue_size = self
             .metrics
             .hydration_queue_size
@@ -326,13 +340,12 @@ impl InstanceMetrics {
                 responses_total,
                 response_message_bytes_total,
                 command_queue_size,
-                response_queue_size,
                 hydration_queue_size,
             }),
         }
     }
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
         let labels = vec![self.instance_id.to_string()];
         let command_counts = CommandMetrics::build(|typ| {
@@ -382,8 +395,6 @@ pub struct ReplicaMetricsInner {
 
     /// Gauge tracking the size of the compute command queue.
     pub command_queue_size: UIntGauge,
-    /// Gauge tracking the size of the compute response queue.
-    pub response_queue_size: UIntGauge,
     /// Gauge tracking the size of the hydration queue.
     pub hydration_queue_size: UIntGauge,
 }
@@ -530,7 +541,7 @@ pub struct CommandMetrics<M> {
 }
 
 impl<M> CommandMetrics<M> {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn build<F>(build_metric: F) -> Self
     where
         F: Fn(&str) -> M,
@@ -564,7 +575,7 @@ impl<M> CommandMetrics<M> {
         f(&self.cancel_peek);
     }
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn for_command<T>(&self, command: &ComputeCommand<T>) -> &M {
         use ComputeCommand::*;
 

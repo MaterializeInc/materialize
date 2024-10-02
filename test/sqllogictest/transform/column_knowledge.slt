@@ -598,7 +598,7 @@ EOF
 statement ok
 CREATE TABLE json_table(data JSONB);
 
-# Include map prefix in the `column_types` passed to `column_knowledge::optimize` (https://github.com/MaterializeInc/materialize/issues/15570)
+# Include map prefix in the `column_types` passed to `column_knowledge::optimize` (https://github.com/MaterializeInc/database-issues/issues/4460)
 
 query T multiline
 EXPLAIN WITH(arity, types) SELECT COALESCE(field, '') FROM (SELECT data->>'field' AS field FROM json_table);
@@ -656,7 +656,7 @@ EOF
 # Same as the previous query, but with RECURSION LIMIT 1.
 # As of materialize#27389 this does not give up after the recursion limit,
 # as doing so is not necessary for equivalence propagation.
-# Issue materialize#28308 tracks tests that may not be serving their intended
+# Issue database-issues#8294 tracks tests that may not be serving their intended
 # purpose; perhaps we can remove the test if we remove the
 # column_knowledge transform.
 query T multiline

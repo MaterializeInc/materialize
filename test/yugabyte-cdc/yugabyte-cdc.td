@@ -217,6 +217,12 @@ contains:referenced tables use unsupported types
   );
 contains: CREATE SOURCE specifies DETAILS option
 
+! CREATE SOURCE mz_source
+  IN CLUSTER cdc_cluster
+  FROM POSTGRES CONNECTION yb (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
+contains:materialize.public.yb is not a POSTGRES CONNECTION
+
 #
 # Establish direct replication
 #
@@ -244,6 +250,10 @@ contains: CREATE SOURCE specifies DETAILS option
     "create",
     tstzrange_table
   );
+
+
+! ALTER SOURCE mz_source ADD SUBSOURCE foobar;
+contains:source mz_source does not support ALTER SOURCE.
 
 > SHOW SOURCES
 array_types_table     subsource  cdc_cluster  ""

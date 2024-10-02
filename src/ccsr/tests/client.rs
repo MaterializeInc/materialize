@@ -27,7 +27,7 @@ pub static SCHEMA_REGISTRY_URL: LazyLock<reqwest::Url> =
     });
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18900
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5588
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
 async fn test_client() -> Result<(), anyhow::Error> {
     let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
@@ -254,7 +254,7 @@ async fn test_client_subject_and_references() -> Result<(), anyhow::Error> {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
-#[ignore] // TODO: Reenable when materialize#22557 is fixed
+#[ignore] // TODO: Reenable when database-issues#6818 is fixed
 async fn test_client_errors() -> Result<(), anyhow::Error> {
     let invalid_schema_registry_url: reqwest::Url = "data::text/plain,Info".parse().unwrap();
     match mz_ccsr::ClientConfig::new(invalid_schema_registry_url).build() {

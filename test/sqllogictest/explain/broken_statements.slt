@@ -90,7 +90,7 @@ EXPLAIN OPTIMIZER TRACE FOR BROKEN
 CREATE MATERIALIZED VIEW mv AS
 SELECT mz_unsafe.mz_panic('forced optimizer panic');
 
-# Regression test for materialize#24398
+# Regression test for database-issues#7289
 statement error internal error: stage `optimize/global` not present
 EXPLAIN OPTIMIZED PLAN FOR BROKEN
 CREATE MATERIALIZED VIEW mv AS

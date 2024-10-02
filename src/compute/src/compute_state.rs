@@ -627,7 +627,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         for (&id, collection) in self.compute_state.collections.iter_mut() {
             // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
-            // collections (materialize#16274).
+            // collections (database-issues#4701).
             if collection.is_subscribe_or_copy {
                 continue;
             }
@@ -1480,7 +1480,7 @@ pub struct CollectionState {
     ///
     /// The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
     /// collections, so we need to be able to recognize them. This is something we would like to
-    /// change in the future (materialize#16274).
+    /// change in the future (database-issues#4701).
     pub is_subscribe_or_copy: bool,
     /// The collection's initial as-of frontier.
     ///

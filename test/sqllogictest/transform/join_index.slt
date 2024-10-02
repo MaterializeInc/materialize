@@ -245,7 +245,7 @@ statement ok
 CREATE INDEX bar_idx2 on bar(-a);
 
 # Test that when join planning uses indexes on expressions.
-# Protects against regression of materialize#4170.
+# Protects against regression of database-issues#1290.
 query T multiline
 EXPLAIN WITH(arity, join implementations)
 select foo.b, bar.b
@@ -403,7 +403,7 @@ and bar.b - foo.b = foo.a / bar.a
 statement ok
 DROP INDEX baz_idx
 
-# materialize#8002: it would be nice if this join used the indexes on bar(a+4)
+# database-issues#2449: it would be nice if this join used the indexes on bar(a+4)
 
 query T multiline
 EXPLAIN WITH(arity, join implementations)

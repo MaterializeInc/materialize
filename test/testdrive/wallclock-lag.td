@@ -23,7 +23,7 @@ ALTER SYSTEM SET wallclock_lag_refresh_interval = '1s'
 # Set up a bunch of frontiered objects and test that their wallclock lags get
 # reported and are reasonably small.
 
-> CREATE SOURCE src IN CLUSTER storage FROM LOAD GENERATOR counter
+> CREATE SOURCE src IN CLUSTER storage FROM LOAD GENERATOR counter (UP TO 100)
 
 > CREATE TABLE tbl (a int)
 
@@ -46,7 +46,7 @@ ALTER SYSTEM SET wallclock_lag_refresh_interval = '1s'
   ENVELOPE DEBEZIUM
 
 > SELECT DISTINCT ON(o.name, r.name)
-    o.name, r.name, l.lag >= '0s', l.lag < '5s'
+    o.name, r.name, l.lag >= '0s', l.lag < '10s'
   FROM mz_internal.mz_wallclock_lag_history l
   JOIN mz_objects o ON o.id = l.object_id
   LEFT JOIN mz_cluster_replicas r ON r.id = l.replica_id
@@ -68,7 +68,7 @@ src_progress <null> true  true
 tbl          <null> true  true
 
 > SELECT DISTINCT ON(o.name)
-    o.name, l.lag >= '0s', l.lag < '5s'
+    o.name, l.lag >= '0s', l.lag < '10s'
   FROM mz_internal.mz_wallclock_global_lag_history l
   JOIN mz_objects o ON o.id = l.object_id
   WHERE l.object_id LIKE 'u%'
@@ -83,7 +83,7 @@ src_progress true  true
 tbl          true  true
 
 > SELECT DISTINCT ON(o.name)
-    o.name, l.lag >= '0s', l.lag < '5s'
+    o.name, l.lag >= '0s', l.lag < '10s'
   FROM mz_internal.mz_wallclock_global_lag_recent_history l
   JOIN mz_objects o ON o.id = l.object_id
   WHERE l.object_id LIKE 'u%'

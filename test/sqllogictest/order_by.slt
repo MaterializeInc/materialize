@@ -685,7 +685,7 @@ SELECT * FROM bazv
 statement ok
 CREATE VIEW fizzorderview AS SELECT a, b FROM fizz ORDER BY a DESC, b
 
-# TODO: materialize#724 take out the rowsort and rearrange results
+# TODO: database-issues#236 take out the rowsort and rearrange results
 # when ORDER BY's persist past the view creation
 query IT rowsort
 SELECT * FROM fizzorderview
@@ -868,7 +868,7 @@ SELECT * FROM fizzlimitoffsetview2
 21758 fourteen
 12345 three
 
-# NULL should sort last by default. See materialize#5982.
+# NULL should sort last by default. See database-issues#1844.
 # NULL (default, default)
 query I
 SELECT * FROM (VALUES (NULL), (1)) ORDER BY column1
@@ -994,7 +994,7 @@ SELECT row_number() OVER (ORDER BY x NULLS LAST), x FROM t;
 4 NULL
 
 ## TopK removal when it's completely covered by the finishing.
-## See https://github.com/MaterializeInc/materialize/issues/8194
+## See https://github.com/MaterializeInc/database-issues/issues/2498
 
 statement ok
 DROP TABLE t;

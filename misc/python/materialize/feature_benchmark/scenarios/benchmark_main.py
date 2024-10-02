@@ -385,7 +385,7 @@ class ManySmallUpdates(DML):
 
 
 class UpdateMultiNoIndex(DML):
-    """Measure the time it takes to perform multiple updates over the same records in a non-indexed table. GitHub Issue materialize#11071"""
+    """Measure the time it takes to perform multiple updates over the same records in a non-indexed table. GitHub Issue database-issues#3233"""
 
     def before(self) -> Action:
         # Due to exterme variability in the results, we have no option but to drop and re-create
@@ -1610,7 +1610,7 @@ class MySqlInitialLoad(MySqlCdc):
     """Measure the time it takes to read 1M existing records from MySQL
     when creating a materialized source"""
 
-    FIXED_SCALE = True  # TODO: Remove when materialize#25323 is fixed
+    FIXED_SCALE = True  # TODO: Remove when database-issues#7556 is fixed
 
     def shared(self) -> Action:
         return TdAction(

@@ -46,7 +46,7 @@ INSERT INTO schema2.t1 SELECT * FROM schema2.t1;
   FOR ALL TABLES;
 contains:multiple subsources would be named t1
 
-# TODO: materialize#24797
+# TODO: database-issues#7397
 # ! CREATE SOURCE mz_source
 #   FROM MYSQL CONNECTION mysql_conn
 #   FOR TABLES (t1);

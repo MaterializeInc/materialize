@@ -9,7 +9,7 @@
 
 > CREATE CLUSTER sources (SIZE '1', REPLICATION FACTOR = 0);
 
-> CREATE SOURCE counter IN CLUSTER sources FROM LOAD GENERATOR COUNTER;
+> CREATE SOURCE counter IN CLUSTER sources FROM LOAD GENERATOR COUNTER (UP TO 100);
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 

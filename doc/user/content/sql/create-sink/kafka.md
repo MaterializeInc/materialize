@@ -2,6 +2,12 @@
 title: "CREATE SINK: Kafka"
 description: "Connecting Materialize to a Kafka or Redpanda broker sink"
 pagerank: 40
+menu:
+  main:
+    parent: 'create-sink'
+    identifier: csink_kafka
+    name: Kafka
+    weight: 20
 aliases:
     - /sql/create-sink/
 

@@ -4,8 +4,9 @@ description: "How Materialize is released"
 disable_list: true
 menu:
   main:
-    parent: 'about'
+    parent: releases-previews
     weight: 5
+    identifier: releases
 ---
 
 We are continually improving Materialize with new features and bug fixes. We

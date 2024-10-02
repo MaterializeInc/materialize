@@ -9,7 +9,7 @@
 
 # The presence of this query in a view tests that the transformation of
 # "pow" -> "power" is correctly planned on reboot when testdrive is run with
-# --validate-data-dir. This protects against regression of materialize#7191.
+# --validate-data-dir. This protects against regression of database-issues#2251.
 > CREATE VIEW v AS SELECT pow(2, 4)
 > SELECT * FROM v
 16

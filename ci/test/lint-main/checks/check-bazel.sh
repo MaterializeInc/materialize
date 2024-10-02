@@ -17,13 +17,15 @@ cd "$(dirname "$0")/../../../.."
 
 . misc/shlib/shlib.bash
 
-try bin/bazel gen
+if [[ ! "${MZDEV_NO_BAZEL_CHECK:-}" ]]; then
+  try bin/bazel gen
 
-# Make sure we didn't generate any changes.
-try git diff --compact-summary --exit-code -- '*/BUILD.bazel'
-if try_last_failed; then
-    echo "lint: $(red error:) discrepancies found in generated 'BUILD.bazel' files"
-    echo "lint: $(green hint:) run $(white bin/bazel gen)" >&2
+  # Make sure we didn't generate any changes.
+  try git diff --compact-summary --exit-code -- '*/BUILD.bazel'
+  if try_last_failed; then
+      echo "lint: $(red error:) discrepancies found in generated 'BUILD.bazel' files"
+      echo "lint: $(green hint:) run $(white bin/bazel gen)" >&2
+  fi
 fi
 
 try_status_report

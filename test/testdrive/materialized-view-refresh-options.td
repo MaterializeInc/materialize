@@ -269,7 +269,7 @@ ALTER SYSTEM SET enable_unstable_dependencies = true
 3
 
 # Test that MVs that advance to the empty frontier do not retain read holds on
-# their inputs. Regression test for materialize#24469.
+# their inputs. Regression test for database-issues#7308.
 
 > CREATE TABLE t4 (x int)
 > CREATE MATERIALIZED VIEW mv7 WITH (REFRESH AT CREATION) AS SELECT * FROM t4
@@ -623,7 +623,7 @@ true <null>
   WHERE mv.id = mvr.materialized_view_id AND name = 'mv1';
 8000
 
-# Negative test for `mz_hydration_statuses`, a regression test for materialize#25518.
+# Negative test for `mz_hydration_statuses`, a regression test for database-issues#7621.
 #
 # It's hard to observe the bug before the first hydration, so we make the first
 # hydration quick to just get it over with, and then we make the next hydration

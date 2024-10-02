@@ -806,6 +806,8 @@ message AuditLogEventV1 {
 
 // Wrapper of key-values used by the persist implementation to serialize the catalog.
 message StateUpdateKind {
+  reserved "Epoch";
+
   message AuditLog {
     AuditLogKey key = 1;
   }
@@ -843,10 +845,6 @@ message StateUpdateKind {
   message FenceToken {
     uint64 deploy_generation = 1;
     int64 epoch = 2;
-  }
-
-  message Epoch {
-    int64 epoch = 1;
   }
 
   message IdAlloc {
@@ -918,6 +916,8 @@ message StateUpdateKind {
   reserved "timestamp";
   reserved 22;
   reserved "persist_txn_shard";
+  reserved 8;
+  reserved "epoch";
 
   oneof kind {
     AuditLog audit_log = 1;
@@ -927,7 +927,6 @@ message StateUpdateKind {
     Config config = 5;
     Database database = 6;
     DefaultPrivileges default_privileges = 7;
-    Epoch epoch = 8;
     IdAlloc id_alloc = 9;
     ClusterIntrospectionSourceIndex cluster_introspection_source_index = 10;
     Item item = 11;

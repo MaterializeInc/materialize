@@ -1441,7 +1441,7 @@ where
                 let (id, description, metadata) = data?;
 
                 // should be replaced with real introspection
-                // (https://github.com/MaterializeInc/materialize/issues/14266)
+                // (https://github.com/MaterializeInc/database-issues/issues/4078)
                 // but for now, it's helpful to have this mapping written down
                 // somewhere
                 debug!(

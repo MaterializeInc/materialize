@@ -1,5 +1,5 @@
 ---
-title: "Ingest data from Amazon Aurora MySQL"
+title: "Ingest data from Amazon Aurora"
 description: "How to stream data from Amazon Aurora for MySQL to Materialize"
 menu:
   main:
@@ -8,7 +8,7 @@ menu:
     identifier: "mysql-amazon-aurora"
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 This page shows you how to stream data from [Amazon Aurora MySQL](https://aws.amazon.com/rds/aurora/)
 to Materialize using the [MySQL source](/sql/create-source/mysql/).
@@ -21,7 +21,9 @@ to Materialize using the [MySQL source](/sql/create-source/mysql/).
 
 {{% mysql-direct/before-you-begin %}}
 
-## Step 1. Enable GTID-based binlog replication
+## A. Configure Amazon Aurora
+
+### 1. Enable GTID-based binlog replication
 
 {{< note >}}
 GTID-based replication is supported for Amazon Aurora MySQL v2 and v3, as well
@@ -45,11 +47,17 @@ Configuration parameter          | Value  | Details
 For guidance on enabling GTID-based binlog replication in Aurora, see the
 [Amazon Aurora MySQL documentation](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/mysql-replication-gtid.html).
 
-## Step 2. Create a user for replication
+### 2. Create a user for replication
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-## Step 3. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your Aurora instance is publicly accessible, **you
+can skip this step**. For production scenarios, we recommend configuring one of
+the network security options below.
+{{< /note >}}
 
 {{< note >}}
 Support for AWS PrivateLink connections is planned for a future release.
@@ -144,7 +152,9 @@ configuration of resources for an SSH tunnel. For more details, see the
 
 {{< /tabs >}}
 
-## Step 4. (Optional) Create a cluster
+## C. Ingest data in Materialize
+
+### 1. (Optional) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your MySQL
@@ -155,7 +165,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% mysql-direct/create-a-cluster %}}
 
-## Step 5. Start ingesting data
+### 2. Start ingesting data
 
 [//]: # "TODO(morsapaes) MySQL connections support multiple SSL modes. We should
 adapt to that, rather than just state SSL MODE REQUIRED."
@@ -178,13 +188,13 @@ networking configuration, so start by selecting the relevant option.
 
 [//]: # "TODO(morsapaes) Replace these Step 6. and 7. with guidance using the
 new progress metrics in mz_source_statistics + console monitoring, when
-available(also for PostgreSQL)."
+available (also for PostgreSQL)."
 
-## Step 6. Check the ingestion status
+### 3. Monitor the ingestion status
 
 {{% mysql-direct/check-the-ingestion-status %}}
 
-## Step 7. Right-size the cluster
+### 4. Right-size the cluster
 
 {{% mysql-direct/right-size-the-cluster %}}
 

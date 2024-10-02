@@ -75,7 +75,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > COMMIT
 
 # Test that replica-targeted subscribes work when the subscribed collection
-# advances to the empty frontier. Regression test for materialize#24981.
+# advances to the empty frontier. Regression test for database-issues#7457.
 
 > DROP CLUSTER test CASCADE
 > CREATE CLUSTER test SIZE '4-4', REPLICATION FACTOR 4

@@ -114,7 +114,7 @@ def get_targeted_pg_version(parser: WorkflowArgumentParser) -> str | None:
     return pg_version
 
 
-# TODO: redesign ceased status materialize#25768
+# TODO: redesign ceased status database-issues#7687
 # Test that how subsource statuses work across a variety of scenarios
 # def workflow_statuses(c: Composition, parser: WorkflowArgumentParser) -> None:
 #     c.up("materialized", "postgres", "toxiproxy")
@@ -326,24 +326,31 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if remaining_args:
         workflow_cdc(c, parser)
     else:
+        workflows_with_internal_sharding = ["cdc"]
         # Otherwise we are running all workflows
-        for name in c.workflows:
-            # clear postgres and materialized to avoid issues with special arguments conflicting with existing state
+        sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
+            [w for w in c.workflows if w not in workflows_with_internal_sharding],
+            lambda w: w,
+        )
+        print(
+            f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
+        )
+        for name in sharded_workflows:
+            if name == "default":
+                continue
+
+            # TODO: Flaky, reenable when database-issues#7611 is fixed
+            if name == "statuses":
+                continue
+
+            # TODO: Flaky, reenable when database-issues#8447 is fixed
+            if name == "silent-connection-drop":
+                continue
+
             c.kill("postgres")
             c.rm("postgres")
             c.kill("materialized")
             c.rm("materialized")
-
-            if name == "default":
-                continue
-
-            # TODO: Flaky, reenable when materialize#25479 is fixed
-            if name == "statuses":
-                continue
-
-            # TODO: Flaky, reenable when materialize#28989 is fixed
-            if name == "silent-connection-drop":
-                continue
 
             with c.test_case(name):
                 c.workflow(name)

@@ -14,6 +14,7 @@ operational after an upgrade. See also the newer platform-checks' upgrade scenar
 
 import random
 
+from materialize import buildkite
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -78,6 +79,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
+    parallelism_index = buildkite.get_parallelism_index()
+    parallelism_count = buildkite.get_parallelism_count()
+
+    assert parallelism_count in [
+        1,
+        2,
+    ], "Special cased parallelism, only allows values 1 or 2"
+
     all_versions, tested_versions = get_all_and_latest_two_minor_mz_versions(
         use_versions_from_docs=args.versions_source == "docs"
     )
@@ -96,19 +105,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             # this may happen when versions are marked as invalid
             print("No versions to test!")
         else:
-            test_upgrade_from_version(
-                c, f"{version}", priors, filter=args.filter, zero_downtime=True
-            )
-            test_upgrade_from_version(
-                c, f"{version}", priors, filter=args.filter, zero_downtime=False
-            )
+            if parallelism_count == 1 or parallelism_index == 0:
+                test_upgrade_from_version(
+                    c, f"{version}", priors, filter=args.filter, zero_downtime=True
+                )
+            if parallelism_count == 1 or parallelism_index == 1:
+                test_upgrade_from_version(
+                    c, f"{version}", priors, filter=args.filter, zero_downtime=False
+                )
 
-    test_upgrade_from_version(
-        c, "current_source", priors=[], filter=args.filter, zero_downtime=True
-    )
-    test_upgrade_from_version(
-        c, "current_source", priors=[], filter=args.filter, zero_downtime=False
-    )
+    if parallelism_count == 1 or parallelism_index == 0:
+        test_upgrade_from_version(
+            c, "current_source", priors=[], filter=args.filter, zero_downtime=True
+        )
+    if parallelism_count == 1 or parallelism_index == 1:
+        test_upgrade_from_version(
+            c, "current_source", priors=[], filter=args.filter, zero_downtime=False
+        )
 
 
 def get_all_and_latest_two_minor_mz_versions(

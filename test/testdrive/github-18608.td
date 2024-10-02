@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test from materialize#18608, where earlier errors were erroneously
+# Regression test from database-issues#5502, where earlier errors were erroneously
 # discarded by TopK's error handling.
 
 > CREATE TABLE t0(c0 FLOAT);

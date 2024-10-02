@@ -103,7 +103,7 @@ class Connections(Generator):
 
 
 class Tables(Generator):
-    COUNT = 90  # https://github.com/MaterializeInc/materialize/issues/12773 and https://github.com/MaterializeInc/materialize/issues/26404
+    COUNT = 90  # https://github.com/MaterializeInc/materialize/issues/12773 and https://github.com/MaterializeInc/database-issues/issues/7830
 
     @classmethod
     def body(cls) -> None:
@@ -595,7 +595,7 @@ class Columns(Generator):
 
 
 class TablesCommaJoinNoCondition(Generator):
-    COUNT = 100  # https://github.com/MaterializeInc/materialize/issues/12806
+    COUNT = 100  # https://github.com/MaterializeInc/database-issues/issues/3682
 
     @classmethod
     def body(cls) -> None:
@@ -663,7 +663,7 @@ class TablesOuterJoinOn(Generator):
 class SubqueriesScalarSelectListWithCondition(Generator):
     COUNT = min(
         Generator.COUNT, 100
-    )  # https://github.com/MaterializeInc/materialize/issues/8598
+    )  # https://github.com/MaterializeInc/database-issues/issues/2626
 
     @classmethod
     def body(cls) -> None:
@@ -680,7 +680,7 @@ class SubqueriesScalarSelectListWithCondition(Generator):
 class SubqueriesScalarWhereClauseAnd(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8598
+    )  # https://github.com/MaterializeInc/database-issues/issues/2626
 
     @classmethod
     def body(cls) -> None:
@@ -696,7 +696,7 @@ class SubqueriesScalarWhereClauseAnd(Generator):
 class SubqueriesExistWhereClause(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8598
+    )  # https://github.com/MaterializeInc/database-issues/issues/2626
 
     @classmethod
     def body(cls) -> None:
@@ -712,7 +712,7 @@ class SubqueriesExistWhereClause(Generator):
 class SubqueriesInWhereClauseCorrelated(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/20557
+    )  # https://github.com/MaterializeInc/database-issues/issues/6189
 
     @classmethod
     def body(cls) -> None:
@@ -729,7 +729,7 @@ class SubqueriesInWhereClauseCorrelated(Generator):
 class SubqueriesInWhereClauseUncorrelated(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/20557
+    )  # https://github.com/MaterializeInc/database-issues/issues/6189
 
     @classmethod
     def body(cls) -> None:
@@ -745,7 +745,7 @@ class SubqueriesInWhereClauseUncorrelated(Generator):
 class SubqueriesWhereClauseOr(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8602
+    )  # https://github.com/MaterializeInc/database-issues/issues/2630
 
     @classmethod
     def body(cls) -> None:
@@ -776,7 +776,7 @@ class SubqueriesNested(Generator):
 class ViewsNested(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8598
+    )  # https://github.com/MaterializeInc/database-issues/issues/2626
 
     @classmethod
     def body(cls) -> None:
@@ -796,7 +796,7 @@ class ViewsNested(Generator):
 class ViewsMaterializedNested(Generator):
     COUNT = min(
         Generator.COUNT, 25
-    )  # https://github.com/MaterializeInc/materialize/issues/13840
+    )  # https://github.com/MaterializeInc/database-issues/issues/3958
 
     @classmethod
     def body(cls) -> None:
@@ -825,7 +825,7 @@ class ViewsMaterializedNested(Generator):
 class CTEs(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8600
+    )  # https://github.com/MaterializeInc/database-issues/issues/2628
 
     @classmethod
     def body(cls) -> None:
@@ -842,7 +842,7 @@ class CTEs(Generator):
 class NestedCTEsIndependent(Generator):
     COUNT = min(
         Generator.COUNT, 9
-    )  # https://github.com/MaterializeInc/materialize/issues/8600 and https://github.com/MaterializeInc/materialize/issues/26404
+    )  # https://github.com/MaterializeInc/database-issues/issues/2628 and https://github.com/MaterializeInc/database-issues/issues/7830
 
     @classmethod
     def body(cls) -> None:
@@ -862,7 +862,7 @@ class NestedCTEsIndependent(Generator):
 class NestedCTEsChained(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8601
+    )  # https://github.com/MaterializeInc/database-issues/issues/2629
 
     @classmethod
     def body(cls) -> None:
@@ -881,7 +881,7 @@ class NestedCTEsChained(Generator):
 class DerivedTables(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8602
+    )  # https://github.com/MaterializeInc/database-issues/issues/2630
 
     @classmethod
     def body(cls) -> None:
@@ -898,7 +898,7 @@ class DerivedTables(Generator):
 class Lateral(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8603
+    )  # https://github.com/MaterializeInc/database-issues/issues/2631
 
     @classmethod
     def body(cls) -> None:
@@ -914,7 +914,7 @@ class Lateral(Generator):
 
 class SelectExpression(Generator):
     # Stack exhaustion with COUNT=1000 due to unprotected path:
-    # https://github.com/MaterializeInc/materialize/issues/10496
+    # https://github.com/MaterializeInc/database-issues/issues/3107
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -936,7 +936,7 @@ class SelectExpression(Generator):
 
 class WhereExpression(Generator):
     # Stack exhaustion with COUNT=1000 due to unprotected path:
-    # https://github.com/MaterializeInc/materialize/issues/10496
+    # https://github.com/MaterializeInc/database-issues/issues/3107
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -953,7 +953,7 @@ class WhereExpression(Generator):
 
 
 class WhereConditionAnd(Generator):
-    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    # Stack overflow, see https://github.com/MaterializeInc/database-issues/issues/5731
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -970,7 +970,7 @@ class WhereConditionAnd(Generator):
 
 
 class WhereConditionAndSameColumn(Generator):
-    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    # Stack overflow, see https://github.com/MaterializeInc/database-issues/issues/5731
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -985,7 +985,7 @@ class WhereConditionAndSameColumn(Generator):
 
 
 class WhereConditionOr(Generator):
-    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    # Stack overflow, see https://github.com/MaterializeInc/database-issues/issues/5731
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -1002,7 +1002,7 @@ class WhereConditionOr(Generator):
 
 
 class WhereConditionOrSameColumn(Generator):
-    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    # Stack overflow, see https://github.com/MaterializeInc/database-issues/issues/5731
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -1075,7 +1075,7 @@ class Aggregates(Generator):
 
 class AggregateExpression(Generator):
     # Stack exhaustion with COUNT=1000 due to unprotected path:
-    # https://github.com/MaterializeInc/materialize/issues/10496
+    # https://github.com/MaterializeInc/database-issues/issues/3107
     COUNT = min(Generator.COUNT, 500)
 
     @classmethod
@@ -1113,7 +1113,7 @@ class GroupBy(Generator):
 class Unions(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8600
+    )  # https://github.com/MaterializeInc/database-issues/issues/2628
 
     @classmethod
     def body(cls) -> None:
@@ -1150,8 +1150,8 @@ class UnionsNested(Generator):
 class CaseWhen(Generator):
     # Originally this was working with 1000, but after moving lowering and
     # decorrelation from the `plan_~` to the `sequence_~` method we had to
-    # reduce it a bit in order to avoid overflowing the stack. See materialize#24076
-    # and materialize#24820 for the latest occurrences of this.
+    # reduce it a bit in order to avoid overflowing the stack. See database-issues#7216
+    # and database-issues#7407 for the latest occurrences of this.
     COUNT = 600
 
     @classmethod
@@ -1244,9 +1244,9 @@ class ArrayAgg(Generator):
 
 class FilterSubqueries(Generator):
     """
-    Regression test for materialize#20557.
+    Regression test for database-issues#6189.
 
-    Without the materialize#20557 fix in materialize#20702 this will cause `environmend` to OOM
+    Without the database-issues#6189 fix in materialize#20702 this will cause `environmend` to OOM
     because of excessive memory allocations in the `RedundantJoin` transform.
     """
 
@@ -1518,7 +1518,7 @@ class MySqlSources(Generator):
 
 
 class WebhookSources(Generator):
-    COUNT = 100  # TODO: Remove when materialize#29358 is fixed
+    COUNT = 100  # TODO: Remove when database-issues#8508 is fixed
 
     @classmethod
     def body(cls) -> None:

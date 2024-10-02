@@ -21,11 +21,13 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
+use itertools::Either;
 use mz_dyncfg::Config;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
 use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::columnar::{ColumnDecoder, Schema2};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -35,6 +37,7 @@ use tokio::runtime::Handle;
 use tracing::{debug_span, warn, Instrument};
 use uuid::Uuid;
 
+use crate::batch::{BLOB_TARGET_SIZE, STRUCTURED_ORDER};
 use crate::cfg::RetryParameters;
 use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart};
 use crate::internal::encoding::Schemas;
@@ -42,7 +45,7 @@ use crate::internal::machine::{ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
 use crate::internal::watch::StateWatch;
-use crate::iter::{CodecSort, Consolidator};
+use crate::iter::{CodecSort, Consolidator, StructuredSort};
 use crate::schema::SchemaCache;
 use crate::stats::{SnapshotPartStats, SnapshotPartsStats, SnapshotStats};
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
@@ -605,7 +608,7 @@ where
             .downgrade_since(&self.reader_id, outstanding_seqno, new_since, heartbeat_ts)
             .await;
 
-        // Debugging for materialize#15937.
+        // Debugging for database-issues#4590.
         if let Some(outstanding_seqno) = outstanding_seqno {
             let seqnos_held = _seqno.0.saturating_sub(outstanding_seqno.0);
             // We get just over 1 seqno-per-second on average for a shard in
@@ -904,9 +907,21 @@ pub(crate) struct UnexpiredReadHandleState {
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
 pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
-    consolidator: Consolidator<T, D>,
+    consolidator: CursorConsolidator<K, V, T, D>,
     _lease: Lease,
     read_schemas: Schemas<K, V>,
+}
+
+#[derive(Debug)]
+enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
+    Codec {
+        consolidator: Consolidator<T, D, CodecSort<T, D>>,
+    },
+    Structured {
+        consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
+        max_len: usize,
+        max_bytes: usize,
+    },
 }
 
 impl<K, V, T, D> Cursor<K, V, T, D>
@@ -920,17 +935,56 @@ where
     pub async fn next(
         &mut self,
     ) -> Option<impl Iterator<Item = ((Result<K, String>, Result<V, String>), T, D)> + '_> {
-        let iter = self
-            .consolidator
-            .next()
-            .await
-            .expect("fetching a leased part")?;
-        let iter = iter.map(|((k, v), t, d)| {
-            let key = K::decode(k, &self.read_schemas.key);
-            let val = V::decode(v, &self.read_schemas.val);
-            ((key, val), t, d)
-        });
-        Some(iter)
+        match &mut self.consolidator {
+            CursorConsolidator::Structured {
+                consolidator,
+                max_len,
+                max_bytes,
+            } => {
+                let mut iter = consolidator
+                    .next_chunk(*max_len, *max_bytes)
+                    .await
+                    .expect("fetching a leased part")?;
+                let structured = iter.get_or_make_structured::<K, V>(
+                    self.read_schemas.key.as_ref(),
+                    self.read_schemas.val.as_ref(),
+                );
+                let key_decoder = self
+                    .read_schemas
+                    .key
+                    .decoder_any(structured.key.as_ref())
+                    .expect("ok");
+                let val_decoder = self
+                    .read_schemas
+                    .val
+                    .decoder_any(structured.val.as_ref())
+                    .expect("ok");
+                let iter = (0..iter.len()).map(move |i| {
+                    let mut k = K::default();
+                    let mut v = V::default();
+                    key_decoder.decode(i, &mut k);
+                    val_decoder.decode(i, &mut v);
+                    let t = T::decode(iter.records().timestamps().value(i).to_le_bytes());
+                    let d = D::decode(iter.records().diffs().value(i).to_le_bytes());
+                    ((Ok(k), Ok(v)), t, d)
+                });
+
+                Some(Either::Left(iter))
+            }
+            CursorConsolidator::Codec { consolidator } => {
+                let iter = consolidator
+                    .next()
+                    .await
+                    .expect("fetching a leased part")?
+                    .map(|((k, v), t, d)| {
+                        let key = K::decode(k, &self.read_schemas.key);
+                        let val = V::decode(v, &self.read_schemas.val);
+                        ((key, val), t, d)
+                    });
+
+                Some(Either::Right(iter))
+            }
+        }
     }
 }
 
@@ -993,32 +1047,68 @@ where
     ) -> Result<Cursor<K, V, T, D>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
-        let mut consolidator = Consolidator::new(
-            format!("{}[as_of={:?}]", self.shard_id(), as_of.elements()),
-            self.shard_id(),
-            CodecSort::default(),
-            Arc::clone(&self.blob),
-            Arc::clone(&self.metrics),
-            Arc::clone(&self.machine.applier.shard_metrics),
-            self.metrics.read.snapshot.clone(),
-            FetchBatchFilter::Snapshot {
-                as_of: as_of.clone(),
-            },
-            self.cfg.dynamic.compaction_memory_bound_bytes(),
-        );
-
+        let context = format!("{}[as_of={:?}]", self.shard_id(), as_of.elements());
+        let filter = FetchBatchFilter::Snapshot {
+            as_of: as_of.clone(),
+        };
         let lease = self.lease_seqno();
-        for batch in batches {
-            for (meta, run) in batch.runs() {
-                consolidator.enqueue_run(
-                    &batch.desc,
-                    meta,
-                    run.into_iter()
-                        .filter(|p| should_fetch_part(p.stats()))
-                        .cloned(),
-                );
+
+        let consolidator = if STRUCTURED_ORDER.get(&self.cfg) {
+            let mut consolidator = Consolidator::new(
+                context,
+                self.shard_id(),
+                StructuredSort::new(self.read_schemas.clone()),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.metrics),
+                Arc::clone(&self.machine.applier.shard_metrics),
+                self.metrics.read.snapshot.clone(),
+                filter,
+                self.cfg.dynamic.compaction_memory_bound_bytes(),
+            );
+            for batch in batches {
+                for (meta, run) in batch.runs() {
+                    consolidator.enqueue_run(
+                        &batch.desc,
+                        meta,
+                        run.into_iter()
+                            .filter(|p| should_fetch_part(p.stats()))
+                            .cloned(),
+                    );
+                }
             }
-        }
+            CursorConsolidator::Structured {
+                consolidator,
+                // This default may end up consolidating more records than previously
+                // for cases like fast-path peeks, where only the first few entries are used.
+                // If this is a noticeable performance impact, thread the max-len in from the caller.
+                max_len: self.cfg.compaction_yield_after_n_updates,
+                max_bytes: BLOB_TARGET_SIZE.get(&self.cfg).max(1),
+            }
+        } else {
+            let mut consolidator = Consolidator::new(
+                context,
+                self.shard_id(),
+                CodecSort::default(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.metrics),
+                Arc::clone(&self.machine.applier.shard_metrics),
+                self.metrics.read.snapshot.clone(),
+                filter,
+                self.cfg.dynamic.compaction_memory_bound_bytes(),
+            );
+            for batch in batches {
+                for (meta, run) in batch.runs() {
+                    consolidator.enqueue_run(
+                        &batch.desc,
+                        meta,
+                        run.into_iter()
+                            .filter(|p| should_fetch_part(p.stats()))
+                            .cloned(),
+                    );
+                }
+            }
+            CursorConsolidator::Codec { consolidator }
+        };
 
         Ok(Cursor {
             consolidator,
@@ -1336,7 +1426,7 @@ mod tests {
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // https://github.com/MaterializeInc/materialize/issues/19983
+    #[cfg_attr(miri, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5964
     async fn seqno_leases(dyncfgs: ConfigUpdates) {
         let mut data = vec![];
         for i in 0..20 {

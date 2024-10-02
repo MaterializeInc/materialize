@@ -514,7 +514,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
     }
 
     /// The same as [Self::push_batch] but without the `FueledMergeReq`s, which
-    /// account for a surprising amount of cpu in prod. materialize#18368
+    /// account for a surprising amount of cpu in prod. database-issues#5411
     pub(crate) fn push_batch_no_merge_reqs(&mut self, batch: HollowBatch<T>) {
         self.spine.insert(batch, &mut SpineLog::Disabled);
     }
@@ -1172,7 +1172,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             // Otherwise, we'll need to introduce fake updates to move merges
             // along.
 
-            // TODO: Tracked in materialize#29459. Once we've finished deleting the legacy
+            // TODO: Tracked in database-issues#8530. Once we've finished deleting the legacy
             // spine-diff code, push an empty batch here to move things along.
             return false;
         }

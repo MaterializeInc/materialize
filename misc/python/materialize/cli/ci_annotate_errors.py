@@ -722,7 +722,7 @@ def _collect_errors_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
     for match in ERROR_RE.finditer(data):
         if IGNORE_RE.search(match.group(0)):
             continue
-        # environmentd segfaults during normal shutdown in coverage builds, see materialize#20016
+        # environmentd segfaults during normal shutdown in coverage builds, see database-issues#5980
         # Ignoring this in regular ways would still be quite spammy.
         if (
             b"environmentd" in match.group(0)

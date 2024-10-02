@@ -82,7 +82,7 @@ Figuring out how to more efficiently implement the syntax has been an ongoing
 issue. There has been some earlier design discussions on this, which are
 documented in the comments of [#5684].
 
-[#5684]: https://github.com/MaterializeInc/materialize/issues/5684
+[#5684]: https://github.com/MaterializeInc/database-issues/issues/1750
 
 ## Goals
 

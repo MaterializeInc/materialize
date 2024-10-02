@@ -286,7 +286,7 @@ SELECT sum ("QuotedCaps15951". a) FROM "QuotedCaps15951" GROUP BY b ORDER BY b
 3
 6
 
-# Regression tests for materialize#23833
+# Regression tests for database-issues#7154
 
 statement ok
 CREATE VIEW w AS WITH a AS (SELECT 1 AS x) SELECT x FROM a

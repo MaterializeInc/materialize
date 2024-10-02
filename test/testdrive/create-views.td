@@ -54,7 +54,7 @@ contains:column reference "a" is ambiguous
 > SELECT * FROM t_v_alias
 2 1
 
-# Regression for materialize#9376
+# Regression for database-issues#2869
 ! CREATE VIEW gh9376 AS SELECT 1, 2;
 contains:column "?column?" specified more than once
 

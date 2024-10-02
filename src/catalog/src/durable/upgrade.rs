@@ -92,7 +92,7 @@ macro_rules! objects {
                         fn from(value: StateUpdateKind) -> Self {
                             let kind = value.kind.expect("kind should be set");
                             // TODO: This requires that the json->proto->json roundtrips
-                            // exactly, see materialize#23908.
+                            // exactly, see database-issues#7179.
                             StateUpdateKindJson::from_serde(&kind)
                         }
                     }
@@ -181,14 +181,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v60, v61, v62, v63, v64, v65, v66);
+objects!(v60, v61, v62, v63, v64, v65, v66, v67);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 66;
+pub const CATALOG_VERSION: u64 = 67;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -206,6 +206,7 @@ mod v62_to_v63;
 mod v63_to_v64;
 mod v64_to_v65;
 mod v65_to_v66;
+mod v66_to_v67;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -290,6 +291,7 @@ async fn run_upgrade(
         63 => run_versioned_upgrade(unopened_catalog_state, version, v63_to_v64::upgrade).await,
         64 => run_versioned_upgrade(unopened_catalog_state, version, v64_to_v65::upgrade).await,
         65 => run_versioned_upgrade(unopened_catalog_state, version, v65_to_v66::upgrade).await,
+        66 => run_versioned_upgrade(unopened_catalog_state, version, v66_to_v67::upgrade).await,
 
         // Up-to-date, no migration needed!
         CATALOG_VERSION => Ok(CATALOG_VERSION),

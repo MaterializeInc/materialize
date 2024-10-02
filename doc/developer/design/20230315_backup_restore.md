@@ -1,6 +1,6 @@
 # Backup and restore
 - Feature name: backup/restore
-- Associated: [#17605](https://github.com/MaterializeInc/materialize/issues/17605)
+- Associated: [#17605](https://github.com/MaterializeInc/database-issues/issues/5119)
 
 # The Problem
 
@@ -19,7 +19,7 @@ Reasons one might want backup/restore, and whether they’re in scope for this d
 | Snapshot | A shard causes an unusual performance problem for some compute operator, and we’d like to inspect a previous state to investigate.                               | Nice to have. |
 | Operator error | An operator typos an aws CLI command, accidentally deleting blobs that are still referenced.                                                                     | Yes. (Impossible to prevent an admin from deleting data entirely, but it’s good if we can make ordinary operations less risky.) |
 
-Motivated by the above and [some other feedback](https://github.com/MaterializeInc/materialize/issues/17605), this design doc focuses on infrastructure-level backups (without no product surface area) that optimize for disaster recovery. For other possible approaches or extensions to backup/restore, see the [section on future work](#future-work).
+Motivated by the above and [some other feedback](https://github.com/MaterializeInc/database-issues/issues/5119), this design doc focuses on infrastructure-level backups (without no product surface area) that optimize for disaster recovery. For other possible approaches or extensions to backup/restore, see the [section on future work](#future-work).
 
 This means backups should be:
 - High frequency: at most one hour between restore points. (Point-in-time would be cool, but is not required.)
@@ -194,7 +194,7 @@ It seems plausible that one could reconstruct such a state by inspecting the ful
 
 One can imagine wanting a user-facing syntax for backup and restore: for example, to make an ad-hoc snapshot of a table before making changes, or to periodically back up some critical dataset.
 
-We expect this need to be served by future sources and sinks, [like a potential S3 integration](https://github.com/MaterializeInc/materialize/issues/17605#issuecomment-1432420387), instead of relying on any infrastructure-level backup.
+We expect this need to be served by future sources and sinks, [like a potential S3 integration](https://github.com/MaterializeInc/database-issues/issues/5119#issuecomment-1432420387), instead of relying on any infrastructure-level backup.
 
 # Appendix A: S3 costs
 

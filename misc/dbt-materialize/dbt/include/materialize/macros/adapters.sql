@@ -218,7 +218,7 @@
     -- Materialize does not support running multiple COMMENT ON commands in a
     -- transaction, so we work around that by forcing a transaction per comment
     -- instead
-    -- See: https://github.com/MaterializeInc/materialize/issues/22379
+    -- See: https://github.com/MaterializeInc/database-issues/issues/6759
     {% for column_name in column_dict if (column_name in existing_columns) %}
       {% set comment = column_dict[column_name]['description'] %}
       {% set quote = column_dict[column_name]['quote'] %}
@@ -290,7 +290,7 @@
     join mz_databases d on s.database_id = d.id and d.name = '{{ schema_relation.database }}'
     where o.type in ('table', 'source', 'view', 'materialized-view', 'index', 'sink')
       -- Exclude subsources and progress subsources, which aren't relevant in this
-      -- context and can bork the adapter (see materialize#20483)
+      -- context and can bork the adapter (see database-issues#6162)
       and coalesce(so.type, '') not in ('subsource', 'progress')
   {% endcall %}
   {{ return(load_result('list_relations_without_caching').table) }}

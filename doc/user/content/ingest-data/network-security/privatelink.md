@@ -10,8 +10,11 @@ menu:
     name: "AWS PrivateLink connections"
 ---
 
-Materialize can connect to a Kafka broker, a Confluent Schema Registry server or
-a PostgreSQL database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/) service.
+[//]: # "TODO(morsapaes) Add shortcode with instructions for AWS RDS MySQL"
+
+Materialize can connect to a Kafka broker, a Confluent Schema Registry server, a
+PostgreSQL database, or a MySQL database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/)
+service.
 
 In this guide, we'll cover how to create `AWS PRIVATELINK` connections
 and retrieve the AWS principal needed to configure the AWS PrivateLink service.

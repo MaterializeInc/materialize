@@ -180,7 +180,7 @@ struct SubscribeProtocol {
     ///
     /// As soon as a subscribe has encountered an error, it is poisoned: It will only return the
     /// same error in subsequent batches, until it is dropped. The subscribe protocol currently
-    /// does not support retracting errors (materialize#17781).
+    /// does not support retracting errors (database-issues#5182).
     pub poison: Option<String>,
 }
 

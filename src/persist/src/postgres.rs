@@ -194,7 +194,7 @@ impl PostgresConsensus {
         // these tombstones accumulate, scanning over the table will take increasingly and
         // prohibitively long.
         //
-        // See: https://github.com/MaterializeInc/materialize/issues/13975
+        // See: https://github.com/MaterializeInc/database-issues/issues/4001
         // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
         match client
             .batch_execute(&format!(

@@ -229,7 +229,7 @@ other_record_c    ""
 > CREATE TABLE varchar_array_list_t (a varchar_array_list_c);
 > INSERT INTO varchar_array_list_t VALUES (LIST[ARRAY['a'::varchar,'b'::varchar]]);
 
-# Enable this when closing materialize#7613
+# Enable this when closing database-issues#2360
 # > CREATE TYPE char_array_list_c AS LIST (ELEMENT TYPE = _char);
 # > CREATE TABLE char_array_list_t (a char_array_list_c);
 # > INSERT INTO char_array_list_t VALUES (LIST[ARRAY['a'::char,'b'::char]]);

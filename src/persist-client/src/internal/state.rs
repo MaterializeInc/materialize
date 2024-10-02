@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::ensure;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -15,7 +16,7 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
-use arrow::array::Array;
+use arrow::array::{make_array, Array, ArrayData};
 use arrow::datatypes::DataType;
 use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
@@ -25,10 +26,11 @@ use differential_dataflow::Hashable;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_ore::soft_panic_or_log;
 use mz_ore::vec::PartialOrdVecExt;
 use mz_persist::indexed::encoding::BatchColumnarFormat;
 use mz_persist::location::SeqNo;
-use mz_persist_types::arrow::ProtoArrayData;
+use mz_persist_types::arrow::{ArrayBound, ProtoArrayData};
 use mz_persist_types::columnar::{ColumnEncoder, Schema2};
 use mz_persist_types::schema::{backward_compatible, SchemaId};
 use mz_persist_types::{Codec, Codec64, Opaque};
@@ -264,6 +266,30 @@ impl<T> BatchPart<T> {
         }
     }
 
+    pub fn structured_key_lower(&self) -> Option<ArrayBound> {
+        let part = match self {
+            BatchPart::Hollow(part) => part,
+            BatchPart::Inline { .. } => return None,
+        };
+
+        let try_decode = |lower: &LazyProto<ProtoArrayData>| {
+            let proto = lower.decode()?;
+            let data = ArrayData::from_proto(proto)?;
+            ensure!(data.len() == 1);
+            Ok(ArrayBound::new(make_array(data), 0))
+        };
+
+        let decoded: anyhow::Result<ArrayBound> = try_decode(part.structured_key_lower.as_ref()?);
+
+        match decoded {
+            Ok(bound) => Some(bound),
+            Err(e) => {
+                soft_panic_or_log!("failed to decode bound: {e:#?}");
+                None
+            }
+        }
+    }
+
     pub fn ts_rewrite(&self) -> Option<&Antichain<T>> {
         match self {
             BatchPart::Hollow(x) => x.ts_rewrite.as_ref(),
@@ -373,9 +399,7 @@ pub struct HollowBatchPart<T> {
     /// Columnar format that this batch was written in.
     ///
     /// This is `None` if this part was written before we started writing structured
-    /// columnar data, or if the [`BATCH_RECORD_PART_FORMAT`] dyncfg is off.
-    ///
-    /// [`BATCH_RECORD_PART_FORMAT`]: crate::batch::BATCH_RECORD_PART_FORMAT
+    /// columnar data.
     pub format: Option<BatchColumnarFormat>,
     /// The schemas used to encode the data in this batch part.
     ///
@@ -1432,7 +1456,7 @@ where
 
         let existed = self.leased_readers.remove(reader_id).is_some();
         if existed {
-            // TODO(materialize#22789): Re-enable this
+            // TODO(database-issues#6885): Re-enable this
             //
             // Temporarily disabling this because we think it might be the cause
             // of the remap since bug. Specifically, a clusterd process has a
@@ -1465,7 +1489,7 @@ where
 
         let existed = self.critical_readers.remove(reader_id).is_some();
         if existed {
-            // TODO(materialize#22789): Re-enable this
+            // TODO(database-issues#6885): Re-enable this
             //
             // Temporarily disabling this because we think it might be the cause
             // of the remap since bug. Specifically, a clusterd process has a
@@ -2611,7 +2635,7 @@ pub(crate) mod tests {
             state.collections.expire_leased_reader(&reader2),
             Continue(true)
         );
-        // TODO(materialize#22789): expiry temporarily doesn't advance since
+        // TODO(database-issues#6885): expiry temporarily doesn't advance since
         // Switch this assertion back when we re-enable this.
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
@@ -2622,7 +2646,7 @@ pub(crate) mod tests {
             state.collections.expire_leased_reader(&reader3),
             Continue(true)
         );
-        // TODO(materialize#22789): expiry temporarily doesn't advance since
+        // TODO(database-issues#6885): expiry temporarily doesn't advance since
         // Switch this assertion back when we re-enable this.
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));

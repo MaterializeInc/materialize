@@ -266,7 +266,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     // For the moment, assert that it is either trivial or `None`.
                     assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
 
-                    // To avoid a memory spike during arrangement hydration (materialize#21165), need to
+                    // To avoid a memory spike during arrangement hydration (database-issues#6368), need to
                     // ensure that the first frontier we report into the dataflow is beyond the
                     // `as_of`.
                     if let Some(as_of) = dataflow.as_of.clone() {
@@ -1322,7 +1322,7 @@ where
 /// Suppress progress messages for times before the given `as_of`.
 ///
 /// This operator exists specifically to work around a memory spike we'd otherwise see when
-/// hydrating arrangements (materialize#21165). The memory spike happens because when the `arrange_core`
+/// hydrating arrangements (database-issues#6368). The memory spike happens because when the `arrange_core`
 /// operator observes a frontier advancement without data it inserts an empty batch into the spine.
 /// When it later inserts the snapshot batch into the spine, an empty batch is already there and
 /// the spine initiates a merge of these batches, which requires allocating a new batch the size of

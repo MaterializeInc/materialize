@@ -10,7 +10,7 @@
 //! Code for iterating through one or more parts, including streaming consolidation.
 
 use anyhow::anyhow;
-use arrow::array::{make_array, Array, ArrayData, AsArray};
+use arrow::array::{Array, AsArray};
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -32,7 +32,6 @@ use mz_persist::location::Blob;
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::arrow::{ArrayBound, ArrayIdx, ArrayOrd};
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::RustType;
 use semver::Version;
 use timely::progress::Timestamp;
 use tracing::{debug_span, Instrument};
@@ -490,24 +489,11 @@ where
             .into_iter()
             .map(|part| {
                 let bytes = part.encoded_size_bytes();
-                let structured_lower = match &part {
-                    BatchPart::Hollow(part) => {
-                        // Attempt to obtain the key lower, failing open if we can't obtain
-                        // it for any reason.
-                        part.structured_key_lower
-                            .as_ref()
-                            .and_then(|lazy| lazy.decode().ok())
-                            .and_then(|data| ArrayData::from_proto(data).ok())
-                            .filter(|data| data.is_empty())
-                            .map(|data| ArrayBound::new(make_array(data), 0))
-                    }
-                    BatchPart::Inline { .. } => None,
-                };
                 let c_part = ConsolidationPart::Queued {
                     data: FetchData {
                         run_meta: run_meta.clone(),
                         part_desc: desc.clone(),
-                        structured_lower,
+                        structured_lower: part.structured_key_lower(),
                         part,
                     },
                     task: None,

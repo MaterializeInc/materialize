@@ -51,7 +51,7 @@ $ kafka-verify-data format=avro sink=materialize.public.interval_data_sink sort-
 {"before": null, "after": {"row": {"interval": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]}}}
 {"before": null, "after": {"row": {"interval": [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]}}}
 
-# See materialize#9723
+# See database-issues#2957
 #> CREATE MATERIALIZED VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
 #
 #> CREATE SINK unnamed_cols_sink
@@ -65,7 +65,7 @@ $ kafka-verify-data format=avro sink=materialize.public.interval_data_sink sort-
 
 # Test that invented field names do not clash with named columns.
 
-# See materialize#9723
+# See database-issues#2957
 #> CREATE MATERIALIZED VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b2, 5 as b3;
 #
 #> CREATE SINK clashing_cols_sink
@@ -121,7 +121,7 @@ $ kafka-verify-data format=avro sink=materialize.public.time_data_sink sort-mess
 
 > CREATE MATERIALIZED VIEW json_data (a, b) AS VALUES ('{"a":1, "b":2}'::jsonb, 2)
 
-# Sinks with JSON columns should not crash - see https://github.com/MaterializeInc/materialize/issues/4722
+# Sinks with JSON columns should not crash - see https://github.com/MaterializeInc/database-issues/issues/1477
 > CREATE CLUSTER json_data_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK json_data_sink
   IN CLUSTER json_data_sink_cluster

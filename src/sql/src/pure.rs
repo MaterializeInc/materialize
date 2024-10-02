@@ -30,6 +30,7 @@ use mz_ore::str::StrExt;
 use mz_ore::{assert_none, soft_panic_or_log};
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
+use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
 use mz_repr::{strconv, RelationDesc, RelationVersionSelector, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -50,7 +51,7 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::connections::Connection;
+use mz_storage_types::connections::{Connection, PostgresConnection};
 use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::load_generator::{
     LoadGeneratorOutput, LOAD_GENERATOR_DATABASE_NAME,
@@ -58,7 +59,7 @@ use mz_storage_types::sources::load_generator::{
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    ExternalCatalogReference, GenericSourceConnection, SourceConnection,
+    ExternalCatalogReference, GenericSourceConnection, PostgresSourceConnection, SourceConnection,
     SourceExportStatementDetails, SourceReferenceResolver,
 };
 use prost::Message;
@@ -604,7 +605,7 @@ async fn purify_create_source(
 ) -> Result<PurifiedStatement, PlanError> {
     let CreateSourceStatement {
         name: source_name,
-        connection,
+        connection: source_connection,
         format,
         envelope,
         include_metadata,
@@ -619,7 +620,7 @@ async fn purify_create_source(
 
     let mut requested_subsource_map = BTreeMap::new();
 
-    let progress_desc = match &connection {
+    let progress_desc = match &source_connection {
         CreateSourceConnection::Kafka { .. } => {
             &mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC
         }
@@ -646,7 +647,7 @@ async fn purify_create_source(
 
     let mut format_options = SourceFormatOptions::Default;
 
-    match connection {
+    match source_connection {
         CreateSourceConnection::Kafka {
             connection,
             options: base_with_options,
@@ -759,25 +760,53 @@ async fn purify_create_source(
 
             format_options = SourceFormatOptions::Kafka { topic };
         }
-        CreateSourceConnection::Postgres {
-            connection,
-            options,
-        }
-        | CreateSourceConnection::Yugabyte {
-            connection,
-            options,
-        } => {
+        source_connection @ CreateSourceConnection::Postgres { .. }
+        | source_connection @ CreateSourceConnection::Yugabyte { .. } => {
+            let (source_flavor, connection, options) = match source_connection {
+                CreateSourceConnection::Postgres {
+                    connection,
+                    options,
+                } => (PostgresFlavor::Vanilla, connection, options),
+                CreateSourceConnection::Yugabyte {
+                    connection,
+                    options,
+                } => (PostgresFlavor::Yugabyte, connection, options),
+                _ => unreachable!(),
+            };
             let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection().map_err(PlanError::from)? {
                     Connection::Postgres(connection) => {
-                        connection.clone().into_inline_connection(&catalog)
+                        let connection = connection.clone().into_inline_connection(&catalog);
+                        if connection.flavor != source_flavor {
+                            match source_flavor {
+                                PostgresFlavor::Vanilla => {
+                                    Err(PgSourcePurificationError::NotPgConnection(
+                                        scx.catalog.resolve_full_name(item.name()),
+                                    ))
+                                }
+                                PostgresFlavor::Yugabyte => {
+                                    Err(PgSourcePurificationError::NotYugabyteConnection(
+                                        scx.catalog.resolve_full_name(item.name()),
+                                    ))
+                                }
+                            }
+                        } else {
+                            Ok(connection)
+                        }
                     }
-                    _ => Err(PgSourcePurificationError::NotPgConnection(
-                        scx.catalog.resolve_full_name(item.name()),
-                    ))?,
+                    _ => match source_flavor {
+                        PostgresFlavor::Vanilla => Err(PgSourcePurificationError::NotPgConnection(
+                            scx.catalog.resolve_full_name(item.name()),
+                        )),
+                        PostgresFlavor::Yugabyte => {
+                            Err(PgSourcePurificationError::NotYugabyteConnection(
+                                scx.catalog.resolve_full_name(item.name()),
+                            ))
+                        }
+                    },
                 }
-            };
+            }?;
             let crate::plan::statement::PgConfigOptionExtracted {
                 publication,
                 text_columns,
@@ -1174,12 +1203,18 @@ async fn purify_alter_source(
 
     // Validate this is a source that can be altered.
     match desc.connection {
-        GenericSourceConnection::Postgres(_) => {}
+        GenericSourceConnection::Postgres(PostgresSourceConnection {
+            connection:
+                PostgresConnection {
+                    flavor: PostgresFlavor::Vanilla,
+                    ..
+                },
+            ..
+        }) => {}
         GenericSourceConnection::MySql(_) => {}
         _ => sql_bail!(
-            "{} is a {} source, which does not support ALTER SOURCE.",
+            "source {} does not support ALTER SOURCE.",
             scx.catalog.minimal_qualification(source_name),
-            connection_name,
         ),
     };
 
@@ -1548,18 +1583,6 @@ async fn purify_create_table_from_source(
             purified_export
         }
         GenericSourceConnection::LoadGenerator(load_gen_connection) => {
-            // TODO(roshan): Refactor KeyValue load generator rendering to support multiple outputs
-            if matches!(
-                load_gen_connection.load_generator,
-                mz_storage_types::sources::load_generator::LoadGenerator::KeyValue(_)
-            ) {
-                sql_bail!(
-                    "{} is a {} source, which does not support CREATE TABLE .. FROM SOURCE.",
-                    scx.catalog.minimal_qualification(qualified_source_name),
-                    connection_name
-                )
-            };
-
             let mut views = load_gen_connection.load_generator.views();
             if views.is_empty() {
                 // If there are no views then this load-generator just has a single output
@@ -1925,7 +1948,7 @@ pub fn generate_subsource_statements(
             subsource_stmts
         }
         PurifiedExportDetails::Kafka { .. } => {
-            // TODO: as part of materialize#28430, Kafka sources will begin
+            // TODO: as part of database-issues#8322, Kafka sources will begin
             // producing data––we'll need to understand the schema
             // of the output here.
             assert!(

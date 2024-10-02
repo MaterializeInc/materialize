@@ -333,7 +333,7 @@ key    id1  id2  measurement
 (1,2)  1    2    10
 
 #
-# Regression test for materialize#20981
+# Regression test for database-issues#6319
 #
 
 # For UPSERT sources with INCLUDE KEY, we expect the queries to

@@ -342,7 +342,7 @@ true true true true true
 # monotonic inputs. The latter is when there is a possibility for memory misestimation
 # since we include monoids in the diff field.
 > CREATE CLUSTER counter_cluster SIZE = '1';
-> CREATE SOURCE counter IN CLUSTER counter_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2ms');
+> CREATE SOURCE counter IN CLUSTER counter_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2ms', UP TO 10000);
 
 > CREATE VIEW input AS
   SELECT counter % 1000 + 1 AS f1, counter % 10 + 1 AS f2

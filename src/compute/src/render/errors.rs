@@ -105,7 +105,7 @@ impl ErrorLogger {
     /// contain some sensitive customer data. We include the `message` to make it possible to match
     /// the breadcrumbs to their associated error in Sentry.
     ///
-    // TODO(materialize#18214): Rethink or justify our error logging strategy.
+    // TODO(database-issues#5362): Rethink or justify our error logging strategy.
     pub fn log(&self, message: &'static str, details: &str) {
         if !self.token.in_shutdown() {
             self.log_always(message, details);

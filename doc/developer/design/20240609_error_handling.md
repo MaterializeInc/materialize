@@ -485,7 +485,7 @@ This would be an unfortunately massive change. We'd need to audit every use of
 or become a `FlavoredGid`.
 
 [^1]: Refer to the PostgreSQL documentation for [details on the behavior of `LATERAL`][lateral-docs].
-[^2]: Unless Materialize allowed "writing at" sources ([#15903](https://github.com/MaterializeInc/materialize/issues/15903)).
+[^2]: Unless Materialize allowed "writing at" sources ([#15903](https://github.com/MaterializeInc/database-issues/issues/4579)).
 
 [product-brief]: https://www.notion.so/materialize/Bad-Data-Kills-Sources-Programmable-Errors-09a530ed8af2407f822678f630b2c333
 [lateral-docs]: https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-LATERAL
@@ -494,6 +494,6 @@ or become a `FlavoredGid`.
 [@maddyblue]: https://github.com/maddyblue
 [dlq]: https://aws.amazon.com/what-is/dead-letter-queue/
 
-[#6367]: https://github.com/MaterializeInc/materialize/issues/6367
-[#22430]: https://github.com/MaterializeInc/materialize/issues/22430
-[#27137]: https://github.com/MaterializeInc/materialize/issues/27137
+[#6367]: https://github.com/MaterializeInc/database-issues/issues/1968
+[#22430]: https://github.com/MaterializeInc/database-issues/issues/6771
+[#27137]: https://github.com/MaterializeInc/materialize/pulls/27137

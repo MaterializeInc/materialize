@@ -51,10 +51,10 @@ pub struct HydrationCheckBadTarget(pub Vec<ReplicaId>);
 /// Errors arising during compute collection lookup.
 #[derive(Error, Debug)]
 pub enum CollectionLookupError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
 }
@@ -74,10 +74,10 @@ impl From<CollectionMissing> for CollectionLookupError {
 /// Errors arising during compute replica creation.
 #[derive(Error, Debug)]
 pub enum ReplicaCreationError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("replica exists already: {0}")]
     ReplicaExists(ReplicaId),
 }
@@ -91,10 +91,10 @@ impl From<InstanceMissing> for ReplicaCreationError {
 /// Errors arising during compute replica removal.
 #[derive(Error, Debug)]
 pub enum ReplicaDropError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
 }
@@ -157,16 +157,16 @@ impl From<ReadHoldError> for DataflowCreationError {
 /// Errors arising during peek processing.
 #[derive(Error, Debug)]
 pub enum PeekError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
 }
@@ -195,10 +195,10 @@ impl From<ReadHoldError> for PeekError {
 /// Errors arising during collection updates.
 #[derive(Error, Debug)]
 pub enum CollectionUpdateError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
 }
@@ -218,13 +218,13 @@ impl From<CollectionMissing> for CollectionUpdateError {
 /// Errors arising during collection read policy assignment.
 #[derive(Error, Debug)]
 pub enum ReadPolicyError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("collection is write-only: {0}")]
     WriteOnlyCollection(GlobalId),
 }
@@ -244,7 +244,7 @@ impl From<CollectionMissing> for ReadPolicyError {
 /// Errors arising during orphan removal.
 #[derive(Error, Debug)]
 pub enum RemoveOrphansError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("orchestrator error: {0}")]
     OrchestratorError(anyhow::Error),
 }

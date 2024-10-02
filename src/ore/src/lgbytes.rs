@@ -56,6 +56,15 @@ impl<T: Copy> MetricsRegion<T> {
     fn capacity_bytes(&self) -> usize {
         self.buf.capacity() * std::mem::size_of::<T>()
     }
+
+    /// Copy all of the elements from `slice` into the [`Region`].
+    ///
+    /// # Panics
+    ///
+    /// * If the [`Region`] does not have enough capacity.
+    pub fn extend_from_slice(&mut self, slice: &[T]) {
+        self.buf.extend_from_slice(slice);
+    }
 }
 
 impl<T: Copy + PartialEq> PartialEq for MetricsRegion<T> {
@@ -269,6 +278,30 @@ impl LgBytesMetrics {
 }
 
 impl LgBytesOpMetrics {
+    /// Returns a new empty [`MetricsRegion`] to hold at least `T` elements.
+    pub fn new_region<T: Copy>(&self, capacity: usize) -> MetricsRegion<T> {
+        let start = Instant::now();
+
+        // Round the capacity up to the minimum lgalloc mmap size.
+        let capacity = std::cmp::max(capacity, 1 << lgalloc::VALID_SIZE_CLASS.start);
+        let region = match Region::new_mmap(capacity) {
+            Ok(region) => region,
+            Err(err) => {
+                if let AllocError::Disabled = err {
+                    self.mmap_disabled_count.inc()
+                } else {
+                    debug!("failed to mmap allocate: {}", err);
+                    self.mmap_error_count.inc();
+                }
+                Region::new_heap(capacity)
+            }
+        };
+        let region = self.metrics_region(region);
+        self.alloc_seconds.inc_by(start.elapsed().as_secs_f64());
+
+        region
+    }
+
     /// Attempts to copy the given buf into an lgalloc managed file-based mapped
     /// region, falling back to a heap allocation.
     pub fn try_mmap<T: AsRef<[u8]>>(&self, buf: T) -> LgBytes {

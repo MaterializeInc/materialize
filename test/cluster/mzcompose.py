@@ -255,7 +255,7 @@ def workflow_test_github_15531(c: Composition) -> None:
     """
     Test that compute command history does not leak peek commands.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/15531.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/4443.
     """
 
     c.down(destroy_volumes=True)
@@ -429,7 +429,7 @@ def workflow_test_github_15535(c: Composition) -> None:
     """
     Test that compute reconciliation does not produce empty frontiers.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/15535.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/4444.
     """
 
     c.down(destroy_volumes=True)
@@ -490,7 +490,7 @@ def workflow_test_github_15799(c: Composition) -> None:
     Test that querying introspection sources on a replica does not
     crash other replicas in the same cluster that have introspection disabled.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/15799.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/4545.
     """
 
     c.down(destroy_volumes=True)
@@ -541,7 +541,7 @@ def workflow_test_github_15930(c: Composition) -> None:
     Test that triggering reconciliation does not wedge the
     mz_compute_frontiers_per_worker introspection source.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/15930.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/4587.
     """
 
     c.down(destroy_volumes=True)
@@ -639,7 +639,7 @@ def workflow_test_github_15496(c: Composition) -> None:
     Test that a reduce collation over a source with an invalid accumulation does not
     panic, but rather logs errors, when soft assertions are turned off.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/15496.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/4433.
     """
 
     c.down(destroy_volumes=True)
@@ -718,7 +718,7 @@ def workflow_test_github_17177(c: Composition) -> None:
     emits errors to the logs when soft assertions are turned off, but also produces a clean
     query-level error.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/17177.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/4966.
     """
 
     c.down(destroy_volumes=True)
@@ -797,7 +797,7 @@ def workflow_test_github_17510(c: Composition) -> None:
     with invalid accumulations due to too many retractions in a source. Additionally,
     we verify that in these cases, an adequate error message is written to the logs.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/17510.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/5087.
     """
 
     c.down(destroy_volumes=True)
@@ -881,7 +881,7 @@ def workflow_test_github_17510(c: Composition) -> None:
             ! SELECT * FROM constant_sums;
             contains:constant folding encountered reduce on collection with non-positive multiplicities
 
-            # The following statement verifies that the behavior introduced in PR materialize#16852
+            # The following statement verifies that the behavior introduced in PR materialize#6122
             # is now rectified, i.e., instead of wrapping to a negative number, we produce
             # an error upon seeing invalid multiplicities.
             ! SELECT SUM(data8) FROM data;
@@ -935,7 +935,7 @@ def workflow_test_github_17510(c: Composition) -> None:
             > INSERT INTO base VALUES (1, 1, 1, 1), (1, 1, 1, 1), (1, 1, 1, 1);
 
             # Constant-folding behavior matches for now the rendered behavior
-            # wrt. wraparound; this can be revisited as part of materialize#17758.
+            # wrt. wraparound; this can be revisited as part of database-issues#5172.
             > SELECT * FROM constant_wrapped_sums;
             1 1 18446744073709551617
 
@@ -962,7 +962,7 @@ def workflow_test_github_17509(c: Composition) -> None:
     a clean error when an arrangement hierarchy is built, in addition to logging an error, when soft
     assertions are turned off.
 
-    This is a partial regression test for https://github.com/MaterializeInc/materialize/issues/17509.
+    This is a partial regression test for https://github.com/MaterializeInc/database-issues/issues/5086.
     The checks here are extended by opting into a smaller group size with a query hint (e.g.,
     OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)) in workflow test-github-15496. This scenario was
     initially not covered, but eventually got supported as well.
@@ -1057,7 +1057,7 @@ def workflow_test_github_19610(c: Composition) -> None:
     We introduce data that results in a multiset and compute min/max. In a monotonic one-shot
     evaluation strategy, we must consolidate and subsequently assert monotonicity.
 
-    This is a regression test for https://github.com/MaterializeInc/materialize/issues/19610, where
+    This is a regression test for https://github.com/MaterializeInc/database-issues/issues/5831, where
     we observed a performance regression caused by a correctness issue. Here, we validate that the
     underlying correctness issue has been fixed.
     """
@@ -1411,7 +1411,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
         c.run_testdrive_files("pg-snapshot-resumption/03-ensure-source-down.td")
 
         # Temporarily disabled because it is timing out.
-        # https://github.com/MaterializeInc/materialize/issues/14533
+        # https://github.com/MaterializeInc/database-issues/issues/4145
         # # clusterd should crash
         # c.run_testdrive_files("pg-snapshot-resumption/04-while-clusterd-down.td")
 
@@ -1871,7 +1871,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     )
 
     # Give the dataflows some time to make progress and get compacted.
-    # This is done to trigger the bug described in materialize#17594.
+    # This is done to trigger the bug described in database-issues#5113.
     time.sleep(10)
 
     # Restart environmentd to trigger a reconciliation.
@@ -1903,7 +1903,7 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
     Test that compute reconciliation replaces changed dataflows, as well as
     dataflows transitively depending on them.
 
-    Regression test for materialize#28961.
+    Regression test for database-issues#8444.
     """
 
     c.down(destroy_volumes=True)
@@ -2080,7 +2080,7 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
     """
     Test that dropping storage and compute objects during reconciliation works.
 
-    Regression test for materialize#28784.
+    Regression test for database-issues#8399.
     """
 
     c.down(destroy_volumes=True)
@@ -2286,7 +2286,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     """
     Test that compute materialized view's "since" timestamp is at least as large as source table's "since" timestamp.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/19151
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/5676
     """
 
     c.down(destroy_volumes=True)
@@ -2353,7 +2353,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
     """
     Test that environmentd notices when a clusterd becomes disconnected.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/20299
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/6095
     """
 
     c.down(destroy_volumes=True)
@@ -2765,8 +2765,11 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count > 0, f"got {count}"
     count = metrics.get_value("mz_compute_controller_command_queue_size")
     assert count < 10, f"got {count}"
-    count = metrics.get_value("mz_compute_controller_response_queue_size")
-    assert count < 10, f"got {count}"
+    send_count = metrics.get_value("mz_compute_controller_response_send_count")
+    assert send_count > 10, f"got {send_count}"
+    recv_count = metrics.get_value("mz_compute_controller_response_recv_count")
+    assert recv_count > 10, f"got {recv_count}"
+    assert send_count - recv_count < 10, f"got {send_count}, {recv_count}"
     count = metrics.get_value("mz_compute_controller_hydration_queue_size")
     assert count == 0, f"got {count}"
 
@@ -3047,7 +3050,7 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
 def workflow_test_concurrent_connections(c: Composition) -> None:
     """
     Run many concurrent connections, measure their p50 and p99 latency, make
-    sure materialize#21782 does not regress.
+    sure database-issues#6537 does not regress.
     """
     num_conns = 2000
     p50_limit = 10.0
@@ -3284,7 +3287,7 @@ def workflow_test_incident_70(c: Composition) -> None:
 
         for thread in threads:
             thread.start()
-            # this is because of materialize#22038
+            # this is because of database-issues#6639
             time.sleep(0.2)
 
         for thread in threads:
@@ -3324,7 +3327,7 @@ def workflow_test_github_cloud_7998(
 
 
 def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Regression test for materialize#23246."""
+    """Regression test for database-issues#7000."""
 
     c.down(destroy_volumes=True)
 
@@ -3593,9 +3596,9 @@ def workflow_test_refresh_mv_warmup(
 ) -> None:
     """
     Test REFRESH materialized view warmup behavior after envd restarts:
-    1. Regression test for https://github.com/MaterializeInc/materialize/issues/25380
+    1. Regression test for https://github.com/MaterializeInc/database-issues/issues/7574
        If an MV is past its last refresh, it shouldn't get rehydrated after a restart.
-    2. Regression test for https://github.com/MaterializeInc/materialize/issues/25279
+    2. Regression test for https://github.com/MaterializeInc/database-issues/issues/7543
        Bootstrapping should select an `as_of` for an MV dataflow in a way that allows it to warm up before its next
        refresh.
     """
@@ -4149,7 +4152,7 @@ def workflow_test_refresh_mv_restart(
 
 
 def workflow_test_github_26215(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Regression test for materialize#26215."""
+    """Regression test for database-issues#7798."""
 
     c.down(destroy_volumes=True)
 

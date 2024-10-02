@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for materialize#18708.
+# Regression test for database-issues#5536.
 
 statement ok
 CREATE TABLE t0(c0 FLOAT  DEFAULT (-1.77794611E9));

@@ -11,7 +11,7 @@
 # Test adding a primary key over an existing column
 #
 
-# TODO: Reenable when materialize#6570 is fixed
+# TODO: Reenable when database-issues#2047 is fixed
 $ skip-if
 SELECT true
 

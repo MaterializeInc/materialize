@@ -1746,6 +1746,12 @@ const SUPPORT_SELECT: MzAclItem = MzAclItem {
     acl_mode: AclMode::SELECT,
 };
 
+const ANALYTICS_SELECT: MzAclItem = MzAclItem {
+    grantee: MZ_ANALYTICS_ROLE_ID,
+    grantor: MZ_SYSTEM_ROLE_ID,
+    acl_mode: AclMode::SELECT,
+};
+
 const MONITOR_SELECT: MzAclItem = MzAclItem {
     grantee: MZ_MONITOR_ROLE_ID,
     grantor: MZ_SYSTEM_ROLE_ID,
@@ -2912,7 +2918,7 @@ cluster_name, database_name, search_path, transaction_isolation, execution_times
 transient_index_id, mz_version, began_at, finished_at, finished_status,
 rows_returned, execution_strategy
 FROM mz_internal.mz_statement_execution_history",
-    access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
+    access: vec![SUPPORT_SELECT, ANALYTICS_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
 }
 });
 
@@ -2943,7 +2949,12 @@ pub static MZ_SQL_TEXT_REDACTED: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     oid: oid::VIEW_MZ_SQL_TEXT_REDACTED_OID,
     column_defs: None,
     sql: "SELECT sql_hash, redacted_sql FROM mz_internal.mz_sql_text",
-    access: vec![MONITOR_SELECT, MONITOR_REDACTED_SELECT, SUPPORT_SELECT],
+    access: vec![
+        MONITOR_SELECT,
+        MONITOR_REDACTED_SELECT,
+        SUPPORT_SELECT,
+        ANALYTICS_SELECT,
+    ],
 });
 
 pub static MZ_RECENT_SQL_TEXT: LazyLock<BuiltinView> = LazyLock::new(|| {
@@ -2967,7 +2978,12 @@ pub static MZ_RECENT_SQL_TEXT_REDACTED: LazyLock<BuiltinView> = LazyLock::new(||
     oid: oid::VIEW_MZ_RECENT_SQL_TEXT_REDACTED_OID,
     column_defs: None,
     sql: "SELECT sql_hash, redacted_sql FROM mz_internal.mz_recent_sql_text",
-    access: vec![MONITOR_SELECT, MONITOR_REDACTED_SELECT, SUPPORT_SELECT],
+    access: vec![
+        MONITOR_SELECT,
+        MONITOR_REDACTED_SELECT,
+        SUPPORT_SELECT,
+        ANALYTICS_SELECT,
+    ],
 });
 
 pub static MZ_RECENT_SQL_TEXT_IND: LazyLock<BuiltinIndex> = LazyLock::new(|| BuiltinIndex {
@@ -3053,7 +3069,7 @@ pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: LazyLock<BuiltinView> = LazyLock::ne
 FROM mz_internal.mz_recent_activity_log_thinned mralt,
      mz_internal.mz_recent_sql_text mrst
 WHERE mralt.sql_hash = mrst.sql_hash",
-    access: vec![MONITOR_SELECT, MONITOR_REDACTED_SELECT, SUPPORT_SELECT],
+    access: vec![MONITOR_SELECT, MONITOR_REDACTED_SELECT, SUPPORT_SELECT, ANALYTICS_SELECT],
 }
 });
 
@@ -3075,7 +3091,12 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: LazyLock<BuiltinSource> =
         // TODO[btv]: Maybe this should be public instead of
         // `MONITOR_REDACTED`, but since that would be a backwards-compatible
         // chagne, we probably don't need to worry about it now.
-        access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
+        access: vec![
+            SUPPORT_SELECT,
+            ANALYTICS_SELECT,
+            MONITOR_REDACTED_SELECT,
+            MONITOR_SELECT,
+        ],
     });
 
 pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -3137,7 +3158,7 @@ SELECT
     name,
     mz_sources.type,
     occurred_at AS last_status_change_at,
-    -- TODO(parkmycar): Report status of webhook source once materialize#20036 is closed.
+    -- TODO(parkmycar): Report status of webhook source once database-issues#5986 is closed.
     CASE
             WHEN
                 mz_sources.type = 'webhook' OR
@@ -4124,7 +4145,7 @@ SELECT
     -- MZ doesn't use TOAST tables so reltoastrelid is filled with 0
     0::pg_catalog.oid AS reltoastrelid,
     EXISTS (SELECT id, oid, name, on_id, cluster_id FROM mz_catalog.mz_indexes where mz_indexes.on_id = class_objects.id) AS relhasindex,
-    -- MZ doesn't have unlogged tables and because of (https://github.com/MaterializeInc/materialize/issues/8805)
+    -- MZ doesn't have unlogged tables and because of (https://github.com/MaterializeInc/database-issues/issues/2689)
     -- temporary objects don't show up here, so relpersistence is filled with 'p' for permanent.
     -- TODO(jkosh44): update this column when issue is resolved.
     'p'::pg_catalog.\"char\" AS relpersistence,
@@ -5072,7 +5093,7 @@ HAVING pg_catalog.sum(count) != 0",
 
 pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
-        // TODO(materialize#27831): Rename this source to `mz_compute_error_counts_raw`. Currently this causes a
+        // TODO(database-issues#8173): Rename this source to `mz_compute_error_counts_raw`. Currently this causes a
         // naming conflict because the resolver stumbles over the source with the same name in
         // `mz_introspection` due to the automatic schema translation.
         name: "mz_compute_error_counts_raw_unified",
@@ -6776,7 +6797,6 @@ ORDER BY 1, 2"#,
     access: vec![PUBLIC_SELECT],
 });
 
-// TODO(ct): Index this like the other show commands.
 pub static MZ_SHOW_CONTINUAL_TASKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_show_continual_tasks",
     schema: MZ_INTERNAL_SCHEMA,
@@ -7205,7 +7225,7 @@ sources AS (
     JOIN mz_catalog.mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
 ),
--- We don't yet report sink hydration status (materialize#28459), so we do a best effort attempt here and
+-- We don't yet report sink hydration status (database-issues#8331), so we do a best effort attempt here and
 -- define a sink as hydrated when it's both "running" and has a frontier greater than the minimum.
 -- There is likely still a possibility of FPs.
 sinks AS (
@@ -7647,6 +7667,15 @@ pub const MZ_SINK_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     oid: oid::INDEX_MZ_SINK_STATUS_HISTORY_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_sink_status_history (sink_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SHOW_CONTINUAL_TASKS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_continual_tasks_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_CONTINUAL_TASKS_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_show_continual_tasks (id)",
     is_retained_metrics_object: false,
 };
 

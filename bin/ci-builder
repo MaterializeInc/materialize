@@ -243,6 +243,7 @@ case "$cmd" in
             # For cloud canary
             --env REDPANDA_CLOUD_CLIENT_ID
             --env REDPANDA_CLOUD_CLIENT_SECRET
+            --env QA_BENCHMARKING_APP_PASSWORD
         )
 
         if [[ $detach_container == "true" ]]; then

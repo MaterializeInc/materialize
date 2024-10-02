@@ -156,7 +156,7 @@ WHERE x IN (
 ----
 1 1
 
-# Same query, but inside a view. Regression test for materialize#5092.
+# Same query, but inside a view. Regression test for database-issues#1582.
 statement ok
 CREATE MATERIALIZED VIEW v AS
 SELECT * FROM squares
@@ -243,7 +243,7 @@ WITH outermost(x) AS (
 )
 SELECT * FROM outermost ORDER BY 1;
 
-# test materialize#23629
+# test database-issues#7102
 query I colnames
 WITH count AS (VALUES (9)) SELECT count(*) FROM count;
 ----

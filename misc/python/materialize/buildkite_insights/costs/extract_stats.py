@@ -51,6 +51,8 @@ aws_instance_cost = {
     "m6i.4xlarge": 0.768,
     "m6i.12xlarge": 2.304,
     "m7i.8xlarge": 1.613,
+    "r7g.8xlarge": 1.714,
+    "r8g.8xlarge": 1.885,
 }
 
 # https://www.hetzner.com/cloud/

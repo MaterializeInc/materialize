@@ -45,7 +45,7 @@ pub enum AdapterError {
         up_to: mz_repr::Timestamp,
     },
     /// Attempted to use a potentially ambiguous column reference expression with a system table.
-    // We don't allow this until https://github.com/MaterializeInc/materialize/issues/16650 is
+    // We don't allow this until https://github.com/MaterializeInc/database-issues/issues/4824 is
     // resolved because it prevents us from adding columns to system tables.
     AmbiguousSystemColumnReference,
     /// An error occurred in a catalog operation.

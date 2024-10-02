@@ -911,7 +911,7 @@ SELECT ARRAY[ARRAY[customer.first_name], ARRAY[customer.zip], ARRAY[customer.id:
 {{alice},{10003},{1}}
 {{charlie},{11217},{3}}
 
-# Regression for materialize#18144
+# Regression for database-issues#5326
 query error array_in not yet supported
 SELECT array_in('', 0, 0)
 ----
@@ -1393,7 +1393,7 @@ SELECT ARRAY[2,7] @> ARRAY[1,7,4,2,6] AS is_contained_by
 ----
 false
 
-# verify fix for issue materialize#28035
+# verify fix for issue database-issues#8223
 query T
 SELECT '{}'::TEXT[][] @> '{{a, b}, {a, A}}'::TEXT[][];
 ----

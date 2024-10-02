@@ -836,7 +836,7 @@ impl SessionVars {
     }
 }
 
-// TODO(materialize#27285) remove together with `compat_translate`
+// TODO(database-issues#8069) remove together with `compat_translate`
 pub const OLD_CATALOG_SERVER_CLUSTER: &str = "mz_introspection";
 pub const OLD_AUTO_ROUTE_CATALOG_QUERIES: &str = "auto_route_introspection_queries";
 
@@ -846,7 +846,7 @@ pub const OLD_AUTO_ROUTE_CATALOG_QUERIES: &str = "auto_route_introspection_queri
 /// This method was introduced to gracefully handle the rename of the `mz_introspection` cluster to
 /// `mz_cluster_server`. The plan is to remove it once all users have migrated to the new name. The
 /// debug logs will be helpful for checking this in production.
-// TODO(materialize#27285) remove this after sufficient time has passed
+// TODO(database-issues#8069) remove this after sufficient time has passed
 fn compat_translate<'a, 'b>(name: &'a str, input: VarInput<'b>) -> (&'a str, VarInput<'b>) {
     if name == CLUSTER.name() {
         if let Ok(value) = CLUSTER.parse(input) {
@@ -1243,7 +1243,7 @@ impl SystemVars {
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
             &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
             &KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES,
-            &KEEP_N_REPLICA_STATUS_HISTORY_ENTRIES,
+            &REPLICA_STATUS_HISTORY_RETENTION_WINDOW,
             &ARRANGEMENT_EXERT_PROPORTIONALITY,
             &ENABLE_STORAGE_SHARD_FINALIZATION,
             &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
@@ -2038,8 +2038,8 @@ impl SystemVars {
         *self.expect_value(&KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES)
     }
 
-    pub fn keep_n_replica_status_history_entries(&self) -> usize {
-        *self.expect_value(&KEEP_N_REPLICA_STATUS_HISTORY_ENTRIES)
+    pub fn replica_status_history_retention_window(&self) -> Duration {
+        *self.expect_value(&REPLICA_STATUS_HISTORY_RETENTION_WINDOW)
     }
 
     /// Returns the `arrangement_exert_proportionality` configuration parameter.

@@ -13,7 +13,7 @@
 $ skip-if
 SELECT mz_version_num() >= 4300;
 
-# This next query will fail if a bug like materialize#10234 occurs again, where a migration
+# This next query will fail if a bug like database-issues#3053 occurs again, where a migration
 # injects a `WITH` option into the wrong spot.
 
 > SHOW CREATE SOURCE data

@@ -667,9 +667,9 @@ impl Coordinator {
             // up external resources (PostgreSQL replication slots and secrets),
             // so we perform that cleanup in a background task.
             //
-            // TODO(materialize#14551): This is inherently best effort. An ill-timed crash
+            // TODO(database-issues#4154): This is inherently best effort. An ill-timed crash
             // means we'll never clean these resources up. Safer cleanup for non-Materialize resources.
-            // See <https://github.com/MaterializeInc/materialize/issues/14551>
+            // See <https://github.com/MaterializeInc/database-issues/issues/4154>
             task::spawn(|| "drop_replication_slots_and_secrets", {
                 let ssh_tunnel_manager = self.connection_context().ssh_tunnel_manager.clone();
                 let secrets_controller = Arc::clone(&self.secrets_controller);

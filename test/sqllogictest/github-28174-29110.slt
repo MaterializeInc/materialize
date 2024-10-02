@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for materialize#28174 and materialize#29110.
+# Regression test for database-issues#8261 and database-issues#8463.
 
 # The setup is based on https://github.com/MaterializeInc/RQG/blob/main/conf/mz/simple.sql
 
@@ -127,7 +127,7 @@ CREATE MATERIALIZED VIEW pk2 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t2 WHERE f1
 statement ok
 CREATE MATERIALIZED VIEW pk3 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t3 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
 
-# materialize#28174
+# database-issues#8261
 query RRRIR
 SELECT (a1.f1) AS c1, (a2.f1) AS c2, (a1.f2) AS c3, (count(a1.f2)) AS agg1, (max(a1.f1 + a1.f1)) AS agg2
 FROM
@@ -280,7 +280,7 @@ NULL
 0
 NULL
 
-# materialize#29110
+# database-issues#8463
 query RR
 SELECT
     a1.f1 AS c3,

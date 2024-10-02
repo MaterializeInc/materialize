@@ -164,9 +164,9 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     committed_upper: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     config: RawSourceCreationConfig,
     source_connection: C,
-    start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     Vec<(
+        GlobalId,
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Time>, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
         SourceExportDataConfig,
@@ -227,9 +227,7 @@ where
                 source_connection,
                 probed_upper_tx,
                 committed_upper,
-                start_signal,
             );
-
             source
                 .inner
                 .map(move |((output, result), from_time, diff)| {
@@ -276,9 +274,7 @@ where
                 source_connection,
                 probed_upper_tx,
                 committed_upper,
-                start_signal,
             );
-
             // The use of an _unbounded_ queue here is justified as it matches the unbounded
             // buffers that lie between ordinary timely operators.
             source.inner.capture_into(UnboundedTokioCapture(source_tx));
@@ -317,7 +313,6 @@ fn source_render_operator<G, C>(
     source_connection: C,
     probed_upper_tx: watch::Sender<Option<Probe<C::Time>>>,
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
-    start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
@@ -338,7 +333,7 @@ where
     });
 
     let (input_data, progress, health, stats, probes, tokens) =
-        source_connection.render(scope, config, resume_uppers, start_signal);
+        source_connection.render(scope, config, resume_uppers);
 
     // Broadcasting does more work than necessary, which would be to exchange the probes to the
     // worker that will be the one minting the bindings but we'd have to thread this information
@@ -619,6 +614,7 @@ fn reclock_operator<G, FromTime, M>(
     remap_trace_updates: Collection<G, FromTime, Diff>,
     source_metrics: Arc<SourceMetrics>,
 ) -> Vec<(
+    GlobalId,
     Collection<G, SourceOutput<FromTime>, Diff>,
     Collection<G, DataflowError, Diff>,
     SourceExportDataConfig,
@@ -866,9 +862,9 @@ where
             },
         );
 
-    let data_config_per_index = source_exports
-        .values()
-        .map(|export| (export.ingestion_output, &export.export.data_config))
+    let exports_by_index = source_exports
+        .iter()
+        .map(|(id, export)| (export.ingestion_output, (*id, &export.export.data_config)))
         .collect::<BTreeMap<_, _>>();
 
     // We use the output index from the source export to route values to its ok
@@ -876,7 +872,7 @@ where
     // source export indices can be non-contiguous, so we need to ensure we have
     // at least as many partitions as we reference.
     let partition_count = u64::cast_from(
-        data_config_per_index
+        exports_by_index
             .keys()
             .max()
             .expect("source exports must have elements")
@@ -907,9 +903,9 @@ where
             // We only want to return streams for partitions with a data config, which
             // indicates that they actually have data. The filtered streams were just
             // empty partitions for any non-continuous values in the output indexes.
-            data_config_per_index
+            exports_by_index
                 .get(&idx)
-                .map(|data_config| (ok_stream, err_stream, (*data_config).clone()))
+                .map(|export| (export.0, ok_stream, err_stream, (*export.1).clone()))
         })
         .collect()
 }
@@ -919,6 +915,7 @@ fn demux_source_exports<G, FromTime>(
     config: RawSourceCreationConfig,
     input: Collection<G, (usize, Result<SourceOutput<FromTime>, DataflowError>), Diff>,
 ) -> Vec<(
+    GlobalId,
     Collection<G, SourceOutput<FromTime>, Diff>,
     Collection<G, DataflowError, Diff>,
     SourceExportDataConfig,
@@ -987,9 +984,9 @@ where
         },
     );
 
-    let data_config_per_index = source_exports
-        .values()
-        .map(|export| (export.ingestion_output, &export.export.data_config))
+    let exports_by_index = source_exports
+        .iter()
+        .map(|(id, export)| (export.ingestion_output, (*id, &export.export.data_config)))
         .collect::<BTreeMap<_, _>>();
 
     // We use the output index from the source export to route values to its ok
@@ -997,7 +994,7 @@ where
     // source export indices can be non-contiguous, so we need to ensure we have
     // at least as many partitions as we reference.
     let partition_count = u64::cast_from(
-        data_config_per_index
+        exports_by_index
             .keys()
             .max()
             .expect("source exports must have elements")
@@ -1028,9 +1025,9 @@ where
             // We only want to return streams for partitions with a data config, which
             // indicates that they actually have data. The filtered streams were just
             // empty partitions for any non-continuous values in the output indexes.
-            data_config_per_index
+            exports_by_index
                 .get(&idx)
-                .map(|data_config| (ok_stream, err_stream, (*data_config).clone()))
+                .map(|export| (export.0, ok_stream, err_stream, (*export.1).clone()))
         })
         .collect()
 }

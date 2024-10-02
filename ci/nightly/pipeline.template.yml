@@ -656,7 +656,6 @@ steps:
       - id: checks-parallel-drop-create-default-replica
         label: "Checks parallel + DROP/CREATE replica %N"
         depends_on: build-aarch64
-        skip: "Affected by materialize#23882"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -669,7 +668,6 @@ steps:
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd %N"
         depends_on: build-aarch64
-        skip: "Affected by materialize#23882"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -682,7 +680,6 @@ steps:
       - id: checks-parallel-restart-entire-mz
         label: "Checks parallel + restart of the entire Mz %N"
         depends_on: build-aarch64
-        skip: "Affected by materialize#23882"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -695,7 +692,6 @@ steps:
       - id: checks-parallel-restart-environmentd-clusterd-storage
         label: "Checks parallel + restart of environmentd & storage clusterd %N"
         depends_on: build-aarch64
-        skip: "Affected by materialize#23882"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -708,7 +704,6 @@ steps:
       - id: checks-parallel-kill-clusterd-storage
         label: "Checks parallel + kill storage clusterd %N"
         depends_on: build-aarch64
-        skip: "Affected by materialize#23882"
         timeout_in_minutes: 180
         parallelism: 2
         agents:
@@ -717,19 +712,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=KillClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-parallel-restart-redpanda
-        label: "Checks parallel + restart Redpanda & Debezium %N"
-        depends_on: build-aarch64
-        skip: "Affected by materialize#23882"
-        timeout_in_minutes: 180
-        parallelism: 2
-        agents:
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=RestartRedpandaDebezium, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart %N"
@@ -873,7 +855,7 @@ steps:
         label: "K8s recovery: storage on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: materialize#25108 (k8s node recovery tests flaky)
+        # TODO: database-issues#7499 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -899,7 +881,7 @@ steps:
         label: "K8s recovery: compute on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: materialize#25108 (k8s node recovery tests flaky)
+        # TODO: database-issues#7499 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -925,7 +907,7 @@ steps:
         label: "K8s recovery: replicated compute on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: materialize#25108 (k8s node recovery tests flaky)
+        # TODO: database-issues#7499 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -951,7 +933,7 @@ steps:
         label: "K8s recovery: envd on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: materialize#25108 (k8s node recovery tests flaky)
+        # TODO: database-issues#7499 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1157,7 +1139,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              # TODO(def-) Increase number of joins when materialize#23451 is fixed
+              # TODO(def-) Increase number of joins when database-issues#7046 is fixed
               args: [--max-joins=1, --runtime=1500]
 
       - id: sqlsmith-explain
@@ -1169,7 +1151,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              # TODO(def-) Increase number of joins when materialize#23451 is fixed
+              # TODO(def-) Increase number of joins when database-issues#7046 is fixed
               args: [--max-joins=5, --explain-only, --runtime=1500]
 
   - group: SQLancer
@@ -1232,7 +1214,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: rqg
               args: ["simple-aggregates", "--seed=$BUILDKITE_JOB_ID"]
-        skip: "flaky until materialize#27954 is fixed"
+        skip: "flaky until database-issues#8197 is fixed"
 
       - id: rqg-db3-joins
         label: "RQG dbt3-joins workload"
@@ -1249,7 +1231,7 @@ steps:
       - id: rqg-lateral-joins
         label: "RQG lateral-joins workload"
         depends_on: build-aarch64
-        skip: "flaky until materialize#25865 is fixed"
+        skip: "flaky until database-issues#7713 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1283,7 +1265,7 @@ steps:
       - id: rqg-wmr
         label: "RQG WMR workload"
         depends_on: build-aarch64
-        skip: "flaky until materialize#24904 is fixed"
+        skip: "flaky until database-issues#7433 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -1339,7 +1321,7 @@ steps:
   - id: retain-history
     label: "Check retain history"
     depends_on: build-aarch64
-    skip: "materialize#24479"
+    skip: "database-issues#7310"
     timeout_in_minutes: 15
     agents:
       queue: hetzner-aarch64-8cpu-16gb
@@ -1440,7 +1422,7 @@ steps:
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
-        skip: "TODO(def-): Reenable when materialize#2392 is fixed"
+        skip: "TODO(def-): Reenable when database-issues#835 is fixed"
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -1600,6 +1582,16 @@ steps:
             args: [--default-size=2]
       agents:
         queue: hetzner-aarch64-16cpu-32gb
+
+  - id: backup-restore
+    label: "CRDB / Persist backup and restore"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: backup-restore
 
   - group: "Language tests"
     key: language-tests

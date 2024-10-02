@@ -290,7 +290,7 @@ INSERT INTO table_a VALUES (3);
 ! SELECT * FROM table_a;
 contains:incompatible schema change
 
-# TODO: materialize#29373 (introspection tables)
+# TODO: database-issues#8511 (introspection tables)
 # > SELECT error ~~ '%incompatible schema change%' FROM mz_internal.mz_source_statuses WHERE name = 'table_a' and type = 'table';
 # true
 

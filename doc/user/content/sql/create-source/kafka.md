@@ -2,6 +2,12 @@
 title: "CREATE SOURCE: Kafka"
 description: "Connecting Materialize to a Kafka or Redpanda broker"
 pagerank: 40
+menu:
+  main:
+    parent: 'create-source'
+    identifier: cs_kafka
+    name: Kafka
+    weight: 20
 aliases:
     - /sql/create-source/avro-kafka
     - /sql/create-source/json-kafka

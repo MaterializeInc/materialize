@@ -104,7 +104,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
 
         // TODO(jkosh44) We should not be writing to unregistered shards, but
         // we haven't checked to see if this was registered at `self.empty_to`.
-        // See https://github.com/MaterializeInc/materialize/issues/27088.
+        // See https://github.com/MaterializeInc/database-issues/issues/8022.
         while data_upper < self.empty_to {
             // It would be very bad if we accidentally filled any times <=
             // latest_write with empty updates, so defensively assert on each

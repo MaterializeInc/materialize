@@ -14,7 +14,7 @@ ALTER SYSTEM SET enable_explain_pushdown = true
 
 > CREATE CLUSTER sources (SIZE '1', REPLICATION FACTOR 0);
 
-> CREATE SOURCE counter IN CLUSTER sources FROM LOAD GENERATOR COUNTER;
+> CREATE SOURCE counter IN CLUSTER sources FROM LOAD GENERATOR COUNTER (UP TO 100);
 
 # We expect the explain to time out, so no point waiting for very long...
 $ set-sql-timeout duration=5s force=true

@@ -257,9 +257,6 @@ pub fn describe(
 /// [`crate::pure::purify_statement`] or
 /// [`crate::pure::purify_create_materialized_view_options`].
 ///
-/// TODO: sinks do not currently obey this rule, which is a bug
-/// <https://github.com/MaterializeInc/materialize/issues/20019>
-///
 /// The returned plan is tied to the state of the provided catalog. If the state
 /// of the catalog changes after planning, the validity of the plan is not
 /// guaranteed.
@@ -734,6 +731,7 @@ impl<'a> StatementContext<'a> {
         match name {
             ResolvedItemName::Item { id, .. } => Ok(self.get_item(id)),
             ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
+            ResolvedItemName::ContinualTask { .. } => sql_bail!("non-user item"),
             ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }
     }
@@ -771,7 +769,7 @@ impl<'a> StatementContext<'a> {
         // it. This should be safe enough because our types are wide enough
         // to support the maximum possible precision.
         //
-        // See: https://github.com/MaterializeInc/materialize/issues/10837
+        // See: https://github.com/MaterializeInc/database-issues/issues/3179
         match &mut ty {
             mz_pgrepr::Type::Interval { constraints } => *constraints = None,
             mz_pgrepr::Type::Time { precision } => *precision = None,

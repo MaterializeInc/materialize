@@ -28,7 +28,7 @@ class ErrorMessageNormalizer:
         normalized_message = normalized_message.replace("Evaluation error: ", "")
 
         # This will replace ln, log, and log10 mentions with log
-        # see https://github.com/MaterializeInc/materialize/issues/19815
+        # see https://github.com/MaterializeInc/database-issues/issues/5902
         normalized_message = re.sub(
             "(?<=function )(ln|log|log10)(?= is not defined for zero)",
             "log",
@@ -45,10 +45,10 @@ class ErrorMessageNormalizer:
             or (re.search(r"operator does not exist: .*?record", normalized_message))
             or "CAST does not support casting from record" in normalized_message
         ):
-            # tracked with https://github.com/MaterializeInc/materialize/issues/28129
+            # tracked with https://github.com/MaterializeInc/database-issues/issues/8243
             normalized_message = normalized_message.replace("?", "")
 
-        # strip error message details (see materialize#29661, materialize#19822, materialize#23497)
+        # strip error message details (see materialize#29661, materialize#19822, database-issues#7061)
         normalized_message = re.sub(r" \(.*?\.\)", "", normalized_message)
 
         return normalized_message

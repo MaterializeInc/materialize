@@ -82,6 +82,7 @@ message ProtoStorageCommand {
         ProtoCreateSources create_sources = 1;
         ProtoAllowCompaction allow_compaction = 2;
         google.protobuf.Empty initialization_complete = 3;
+        google.protobuf.Empty allow_writes = 7;
         ProtoRunSinks run_sinks = 4;
         mz_storage_types.parameters.ProtoStorageParameters update_configuration = 5;
     }

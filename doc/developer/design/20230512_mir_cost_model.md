@@ -1,13 +1,13 @@
 - Feature name: MIR cost model
 - Associated:
-  * https://github.com/MaterializeInc/materialize/issues/17883
-  * https://github.com/MaterializeInc/materialize/issues/16511
-  * https://github.com/MaterializeInc/materialize/issues/15244
-  * https://github.com/MaterializeInc/materialize/issues/13140
-  * https://github.com/MaterializeInc/materialize/issues/12069
-  * https://github.com/MaterializeInc/materialize/issues/9157
-  * https://github.com/MaterializeInc/materialize/issues/14663
-  * https://github.com/MaterializeInc/materialize/issues/13046
+  * https://github.com/MaterializeInc/database-issues/issues/5216
+  * https://github.com/MaterializeInc/database-issues/issues/4781
+  * https://github.com/MaterializeInc/database-issues/issues/4364
+  * https://github.com/MaterializeInc/database-issues/issues/3779
+  * https://github.com/MaterializeInc/database-issues/issues/3511
+  * https://github.com/MaterializeInc/database-issues/issues/2804
+  * https://github.com/MaterializeInc/database-issues/issues/4188
+  * https://github.com/MaterializeInc/database-issues/issues/3754
 
 Authors: Michael Greenberg
 Created: May 5, 2023 10:25 AM
@@ -38,15 +38,15 @@ Our cost model should be *executable* and *accurate:*
 ## Goals
 
 - Reify what we learn from various benchmarks/experiments.
-    - https://github.com/MaterializeInc/materialize/issues/17883
-    - https://github.com/MaterializeInc/materialize/issues/16511
-    - https://github.com/MaterializeInc/materialize/issues/15244
-    - https://github.com/MaterializeInc/materialize/issues/13140
-    - https://github.com/MaterializeInc/materialize/issues/12069
-    - https://github.com/MaterializeInc/materialize/issues/9157
+    - https://github.com/MaterializeInc/database-issues/issues/5216
+    - https://github.com/MaterializeInc/database-issues/issues/4781
+    - https://github.com/MaterializeInc/database-issues/issues/4364
+    - https://github.com/MaterializeInc/database-issues/issues/3779
+    - https://github.com/MaterializeInc/database-issues/issues/3511
+    - https://github.com/MaterializeInc/database-issues/issues/2804
 - Offer visibility/predicability.
-    - https://github.com/MaterializeInc/materialize/issues/14663
-    - https://github.com/MaterializeInc/materialize/issues/13046
+    - https://github.com/MaterializeInc/database-issues/issues/4188
+    - https://github.com/MaterializeInc/database-issues/issues/3754
 - Open opportunities for principled/well-informed choices in the optimizer.
 
 ## Non-goals
@@ -184,4 +184,4 @@ We've identified the following early candidate clients for the cost model:
 
 5. **Broadcast selection.** Using cardinality information, choose cheap broadcasts. https://materializeinc.slack.com/archives/C02PPB50ZHS/p1685614805876319?thread_ts=1685552977.381309&cid=C02PPB50ZHS
 
-6. **OR <-> UNION decomposition.** It is possible to decompose a disjunctive `WHERE` clause into a `UNION`, and this is _sometimes_ worthwhile. https://github.com/MaterializeInc/materialize/issues/4229#issuecomment-1571767817
+6. **OR <-> UNION decomposition.** It is possible to decompose a disjunctive `WHERE` clause into a `UNION`, and this is _sometimes_ worthwhile. https://github.com/MaterializeInc/database-issues/issues/1312#issuecomment-1571767817

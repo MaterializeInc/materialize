@@ -139,12 +139,12 @@ class Action:
                     "query could not complete",
                     "cached plan must not change result type",
                     "violates not-null constraint",
-                    "unknown catalog item",  # Expected, see materialize#20381
+                    "unknown catalog item",  # Expected, see database-issues#6124
                     "was concurrently dropped",  # role was dropped
                     "unknown cluster",  # cluster was dropped
                     "unknown schema",  # schema was dropped
                     "the transaction's active cluster has been dropped",  # cluster was dropped
-                    "was removed",  # dependency was removed, started with moving optimization off main thread, see materialize#24367
+                    "was removed",  # dependency was removed, started with moving optimization off main thread, see database-issues#7285
                     "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
                     "object state changed while transaction was in progress",
                 ]
@@ -186,7 +186,7 @@ class Action:
                 ]
             )
         if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            # Expected, see materialize#20465
+            # Expected, see database-issues#6156
             result.extend(["unknown catalog item", "unknown schema"])
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
@@ -200,7 +200,7 @@ class FetchAction(Action):
         result = super().errors_to_ignore(exe)
         result.extend(
             [
-                "is not of expected type",  # TODO(def-) Remove when materialize#26549 is fixed
+                "is not of expected type",  # TODO(def-) Remove when database-issues#7857 is fixed
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -215,7 +215,7 @@ class FetchAction(Action):
     def run(self, exe: Executor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
         # Unsupported via this API
-        # See https://github.com/MaterializeInc/materialize/issues/20474
+        # See https://github.com/MaterializeInc/database-issues/issues/6159
         (
             exe.rollback(http=Http.NO)
             if self.rng.choice([True, False])
@@ -767,7 +767,7 @@ class RenameSinkAction(Action):
 class AlterKafkaSinkFromAction(Action):
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
-            # Does not work reliably with kills, see materialize#28870
+            # Does not work reliably with kills, see database-issues#8421
             return False
         with exe.db.lock:
             if not exe.db.kafka_sinks:
@@ -791,7 +791,7 @@ class AlterKafkaSinkFromAction(Action):
                 ]
             else:
                 # multi column formats require at least as many columns as before
-                # columns also have to be of the same type, see materialize#28726
+                # columns also have to be of the same type, see database-issues#8385
                 objs = [
                     o
                     for o in exe.db.db_objects_without_views()
@@ -1020,7 +1020,6 @@ class FlipFlagsAction(Action):
             "75",
             "100",
         ]
-        self.flags_with_values["persist_batch_record_part_format"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_record_run_meta"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_order"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
@@ -1041,7 +1040,7 @@ class FlipFlagsAction(Action):
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
 
-        # TODO: Remove when materialize#28576 is fixed
+        # TODO: Remove when database-issues#8352 is fixed
         if exe.db.scenario == Scenario.ZeroDowntimeDeploy and flag_name.startswith(
             "persist_use_critical_since_"
         ):
@@ -1182,7 +1181,7 @@ class DropRoleAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see materialize#20465
+                # expected, see database-issues#6156
                 if (
                     exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown role" not in e.msg
@@ -1234,7 +1233,7 @@ class DropClusterAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see materialize#20465
+                # expected, see database-issues#6156
                 if (
                     exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown cluster" not in e.msg
@@ -1369,7 +1368,7 @@ class DropClusterReplicaAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see materialize#20465
+                # expected, see database-issues#6156
                 if (
                     exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "has no CLUSTER REPLICA named" not in e.msg
@@ -1398,7 +1397,7 @@ class GrantPrivilegesAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see materialize#20465
+                # expected, see database-issues#6156
                 if (
                     exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown role" not in e.msg
@@ -1427,7 +1426,7 @@ class RevokePrivilegesAction(Action):
             try:
                 exe.execute(query, http=Http.RANDOM)
             except QueryError as e:
-                # expected, see materialize#20465
+                # expected, see database-issues#6156
                 if (
                     exe.db.scenario not in (Scenario.Kill, Scenario.ZeroDowntimeDeploy)
                     or "unknown role" not in e.msg
@@ -1579,7 +1578,7 @@ class CancelAction(Action):
             extra_info=f"Canceling {worker}",
             http=Http.RANDOM,
         )
-        # Sleep less often to work around materialize#22228 / materialize#2392
+        # Sleep less often to work around materialize#22228 / database-issues#835
         time.sleep(self.rng.uniform(1, 10))
         return True
 
@@ -1861,7 +1860,7 @@ class CreateMySqlSourceAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Reenable when materialize#22770 is fixed
+        # TODO: Reenable when database-issues#6881 is fixed
         if exe.db.scenario == Scenario.BackupRestore:
             return False
 
@@ -1933,7 +1932,7 @@ class CreatePostgresSourceAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Reenable when materialize#22770 is fixed
+        # TODO: Reenable when database-issues#6881 is fixed
         if exe.db.scenario == Scenario.BackupRestore:
             return False
 
@@ -2113,7 +2112,7 @@ class HttpPostAction(Action):
                 ):
                     raise
             except QueryError as e:
-                # expected, see materialize#20465
+                # expected, see database-issues#6156
                 if exe.db.scenario not in (
                     Scenario.Kill,
                     Scenario.ZeroDowntimeDeploy,
@@ -2227,7 +2226,7 @@ ddl_action_list = ActionList(
         (DropKafkaSinkAction, 4),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
-        # TODO: Reenable when materialize#28108 is fixed
+        # TODO: Reenable when database-issues#8237 is fixed
         # (CreateMySqlSourceAction, 4),
         # (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
@@ -2245,7 +2244,7 @@ ddl_action_list = ActionList(
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
         (FlipFlagsAction, 2),
-        # TODO: Reenable when materialize#28962 is fixed
+        # TODO: Reenable when database-issues#8445 is fixed
         # (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],

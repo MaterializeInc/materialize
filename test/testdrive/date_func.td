@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Argument to EXTRACT not checked for correctness, NULL returned if invalid materialize#5521
+# Argument to EXTRACT not checked for correctness, NULL returned if invalid database-issues#1701
 # expr: propagate errors when reducing date_{part,trunc} materialize#5700
 #
 

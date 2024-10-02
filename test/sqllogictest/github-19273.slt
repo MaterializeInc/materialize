@@ -7,14 +7,37 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for materialize#19273 and materialize#19283.
+# Regression test for database-issues#5717 and database-issues#5722.
 
-# The query from materialize#19273.
+# The query from database-issues#5717.
 
 statement ok
 CREATE SOURCE tpch
-              FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001)
-              FOR ALL TABLES;
+              FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001);
+
+statement ok
+CREATE TABLE customer FROM SOURCE tpch (REFERENCE customer);
+
+statement ok
+CREATE TABLE lineitem FROM SOURCE tpch (REFERENCE lineitem);
+
+statement ok
+CREATE TABLE nation FROM SOURCE tpch (REFERENCE nation);
+
+statement ok
+CREATE TABLE orders FROM SOURCE tpch (REFERENCE orders);
+
+statement ok
+CREATE TABLE part FROM SOURCE tpch (REFERENCE part);
+
+statement ok
+CREATE TABLE partsupp FROM SOURCE tpch (REFERENCE partsupp);
+
+statement ok
+CREATE TABLE region FROM SOURCE tpch (REFERENCE region);
+
+statement ok
+CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
 
 statement ok
 select
@@ -40,7 +63,7 @@ from
 where subq_0."c5" > subq_0."c5"
 limit 21;
 
-# The query from materialize#19283.
+# The query from database-issues#5722.
 
 statement ok
 CREATE TABLE t (a int, b int);

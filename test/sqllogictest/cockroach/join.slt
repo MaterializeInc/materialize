@@ -1011,7 +1011,7 @@ SELECT * FROM l RIGHT OUTER JOIN r USING (a) WHERE a = 4
 4
 
 
-# Regression tests for mixed-type equality columns (materialize#22514).
+# Regression tests for mixed-type equality columns (database-issues#6807).
 statement ok
 CREATE TABLE foo (
   a INT,

@@ -712,6 +712,9 @@ pub struct CreateMaterializedViewPlan {
 #[derive(Debug, Clone)]
 pub struct CreateContinualTaskPlan {
     pub name: QualifiedItemName,
+    // During initial creation, the `LocalId` placeholder for this CT in
+    // `continual_task.expr`. None on restart.
+    pub placeholder_id: Option<mz_expr::LocalId>,
     pub desc: RelationDesc,
     // TODO(ct): Multiple inputs.
     pub input_id: GlobalId,
@@ -1326,7 +1329,7 @@ pub struct CommentPlan {
     pub object_id: CommentObjectId,
     /// A sub-component of the object that this comment is associated with, e.g. a column.
     ///
-    /// TODO(parkmycar): <https://github.com/MaterializeInc/materialize/issues/22246>.
+    /// TODO(parkmycar): <https://github.com/MaterializeInc/database-issues/issues/6711>.
     pub sub_component: Option<usize>,
     /// The comment itself. If `None` that indicates we should clear the existing comment.
     pub comment: Option<String>,

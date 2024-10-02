@@ -12,7 +12,7 @@ $ set-arg-default single-replica-cluster=quickstart
 # Test support for Avro sources without using the Confluent Schema Registry.
 
 # This test is broken.
-# See: https://github.com/MaterializeInc/materialize/issues/13629
+# See: https://github.com/MaterializeInc/database-issues/issues/3892
 
 $ set schema={
     "type": "record",

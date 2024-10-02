@@ -11,11 +11,11 @@
 > DROP CLUSTER IF EXISTS cluster2 CASCADE;
 > CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE '1'));
 > CREATE CLUSTER cluster2 REPLICAS (replica1 (SIZE '1'));
-> CREATE SOURCE src IN CLUSTER cluster1 FROM LOAD GENERATOR counter;
+> CREATE SOURCE src IN CLUSTER cluster1 FROM LOAD GENERATOR counter (UP TO 100);
 > CREATE MATERIALIZED VIEW mv IN CLUSTER cluster2 AS SELECT * FROM src;
 > SET cluster = cluster2;
 
-# Prevent us from getting stuck, see materialize#28328
+# Prevent us from getting stuck, see database-issues#8300
 > SELECT min(counter) FROM src
 1
 > SELECT min(counter) FROM mv

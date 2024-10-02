@@ -346,6 +346,9 @@ pub trait StorageController: Debug {
     /// capabilties.
     fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)>;
 
+    /// Returns the IDs of all active ingestions for the given storage instance.
+    fn active_ingestions(&self, instance_id: StorageInstanceId) -> &BTreeSet<GlobalId>;
+
     /// Checks whether a collection exists under the given `GlobalId`. Returns
     /// an error if the collection does not exist.
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>>;

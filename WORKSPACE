@@ -171,14 +171,14 @@ filegroup(
 
 DARWIN_SYSROOT_VERSION = "14.5"
 
-DARWIN_SYSROOT_INTEGRITY = "sha256-k8OxF+DSVq0L1dy1S9TPqhFxDHF/bT32Ust3a1ldat8="
+DARWIN_SYSROOT_INTEGRITY = "sha256-JCleYWOca1Z/B4Li1iwDKGEP/IkWWgKqXoygtJXyNTU="
 
 http_archive(
     name = "sysroot_darwin_universal",
     build_file_content = _SYSROOT_DARWIN_BUILD_FILE,
     integrity = DARWIN_SYSROOT_INTEGRITY,
-    strip_prefix = "MacOSX{0}.sdk".format(DARWIN_SYSROOT_VERSION),
-    urls = ["https://github.com/MaterializeInc/toolchains/releases/download/macos-sysroot-sdk-{0}/MacOSX{0}.sdk.tar.zst".format(DARWIN_SYSROOT_VERSION)],
+    strip_prefix = "MacOSX{0}.sdk-min".format(DARWIN_SYSROOT_VERSION),
+    urls = ["https://github.com/MaterializeInc/toolchains/releases/download/macos-sysroot-sdk-{0}-1/MacOSX{0}.sdk-min.tar.zst".format(DARWIN_SYSROOT_VERSION)],
 )
 
 _LINUX_SYSROOT_BUILD_FILE = """
@@ -307,9 +307,9 @@ c_repositories()
 # Rules for building Rust crates, and several convienence macros for building all transitive
 # dependencies.
 
-RULES_RUST_VERSION = "0.49.3"
+RULES_RUST_VERSION = "0.51.0"
 
-RULES_RUST_INTEGRITY = "sha256-3QBrdyIdWeTRQSB8DnrfEbH7YNFEC4/KA7+SVheTKmA="
+RULES_RUST_INTEGRITY = ""
 
 maybe(
     http_archive,

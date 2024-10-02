@@ -65,7 +65,7 @@ pub struct StorageParameters {
     pub keep_n_source_status_history_entries: usize,
     pub keep_n_sink_status_history_entries: usize,
     pub keep_n_privatelink_status_history_entries: usize,
-    pub keep_n_replica_status_history_entries: usize,
+    pub replica_status_history_retention_window: Duration,
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
     pub upsert_rocksdb_tuning_config: mz_rocksdb_types::RocksDBTuningParameters,
     /// Whether or not to allow shard finalization to occur. Note that this will
@@ -112,6 +112,8 @@ pub struct StorageParameters {
 pub const STATISTICS_INTERVAL_DEFAULT: Duration = Duration::from_secs(60);
 pub const STATISTICS_COLLECTION_INTERVAL_DEFAULT: Duration = Duration::from_secs(10);
 pub const STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT: Duration = Duration::from_secs(1);
+pub const REPLICA_STATUS_HISTORY_RETENTION_WINDOW_DEFAULT: Duration =
+    Duration::from_secs(30 * 24 * 60 * 60); // 30 days
 
 // Implement `Default` manually, so that the default can match the
 // LD default. This is not strictly necessary, but improves clarity.
@@ -131,7 +133,8 @@ impl Default for StorageParameters {
             keep_n_source_status_history_entries: Default::default(),
             keep_n_sink_status_history_entries: Default::default(),
             keep_n_privatelink_status_history_entries: Default::default(),
-            keep_n_replica_status_history_entries: Default::default(),
+            replica_status_history_retention_window:
+                REPLICA_STATUS_HISTORY_RETENTION_WINDOW_DEFAULT,
             upsert_rocksdb_tuning_config: Default::default(),
             finalize_shards: Default::default(),
             tracing: Default::default(),
@@ -236,7 +239,7 @@ impl StorageParameters {
             keep_n_source_status_history_entries,
             keep_n_sink_status_history_entries,
             keep_n_privatelink_status_history_entries,
-            keep_n_replica_status_history_entries,
+            replica_status_history_retention_window,
             upsert_rocksdb_tuning_config,
             finalize_shards,
             tracing,
@@ -266,7 +269,7 @@ impl StorageParameters {
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
         self.keep_n_privatelink_status_history_entries = keep_n_privatelink_status_history_entries;
-        self.keep_n_replica_status_history_entries = keep_n_replica_status_history_entries;
+        self.replica_status_history_retention_window = replica_status_history_retention_window;
         self.upsert_rocksdb_tuning_config = upsert_rocksdb_tuning_config;
         self.finalize_shards = finalize_shards;
         self.tracing.update(tracing);
@@ -317,8 +320,8 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             keep_n_privatelink_status_history_entries: u64::cast_from(
                 self.keep_n_privatelink_status_history_entries,
             ),
-            keep_n_replica_status_history_entries: u64::cast_from(
-                self.keep_n_replica_status_history_entries,
+            replica_status_history_retention_window: Some(
+                self.replica_status_history_retention_window.into_proto(),
             ),
             upsert_rocksdb_tuning_config: Some(self.upsert_rocksdb_tuning_config.into_proto()),
             finalize_shards: self.finalize_shards,
@@ -373,9 +376,11 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             keep_n_privatelink_status_history_entries: usize::cast_from(
                 proto.keep_n_privatelink_status_history_entries,
             ),
-            keep_n_replica_status_history_entries: usize::cast_from(
-                proto.keep_n_replica_status_history_entries,
-            ),
+            replica_status_history_retention_window: proto
+                .replica_status_history_retention_window
+                .into_rust_if_some(
+                    "ProtoStorageParameters::replica_status_history_retention_window",
+                )?,
             upsert_rocksdb_tuning_config: proto
                 .upsert_rocksdb_tuning_config
                 .into_rust_if_some("ProtoStorageParameters::upsert_rocksdb_tuning_config")?,

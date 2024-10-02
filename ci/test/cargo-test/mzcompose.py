@@ -64,7 +64,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
     c.up("zookeeper", "kafka", "schema-registry", "postgres", "cockroach", "minio")
     # Heads up: this intentionally runs on the host rather than in a Docker
-    # image. See materialize#13010.
+    # image. See database-issues#3739.
     postgres_url = (
         f"postgres://postgres:postgres@localhost:{c.default_port('postgres')}"
     )
