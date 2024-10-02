@@ -958,6 +958,10 @@ pub struct Connection {
 #[derive(Debug, Clone, Serialize)]
 pub struct ContinualTask {
     pub create_sql: String,
+    /// ContinualTasks are self-referential. We make this work by using a
+    /// placeholder `LocalId` for the CT itself through name resolution and
+    /// planning. Then we fill in the real `GlobalId` before constructing this
+    /// catalog item.
     pub raw_expr: Arc<HirRelationExpr>,
     pub desc: RelationDesc,
     pub resolved_ids: ResolvedIds,

@@ -791,14 +791,19 @@ impl CatalogState {
     }
 
     /// Parses the given SQL string into a pair of [`CatalogItem`].
-    pub(crate) fn deserialize_item(&self, create_sql: &str) -> Result<CatalogItem, AdapterError> {
-        self.parse_item(create_sql, None, false, None)
+    pub(crate) fn deserialize_item(
+        &self,
+        id: GlobalId,
+        create_sql: &str,
+    ) -> Result<CatalogItem, AdapterError> {
+        self.parse_item(id, create_sql, None, false, None)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
     #[mz_ore::instrument]
     pub(crate) fn parse_item(
         &self,
+        id: GlobalId,
         create_sql: &str,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
