@@ -110,10 +110,9 @@ use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
 use crate::{
-    collection_mgmt, privatelink_status_history_desc,
-    replica_status_history_desc, sink_status_history_desc,  snapshot, snapshot_statistics,
-    source_status_history_desc,statistics, StatusHistoryDesc,
-    StatusHistoryRetentionPolicy, StorageError,
+    collection_mgmt, privatelink_status_history_desc, replica_status_history_desc,
+    sink_status_history_desc, snapshot, snapshot_statistics, source_status_history_desc,
+    statistics, StatusHistoryDesc, StatusHistoryRetentionPolicy, StorageError,
 };
 
 // Default rate at which we advance the uppers of managed collections.
@@ -1036,7 +1035,7 @@ where
 /// A task that writes to an append only collection and continuously bumps the upper for the specified
 /// collection.
 ///
-/// For status history collections, this task can deduplicate redundant [`Status`]s.
+/// For status history collections, this task can deduplicate redundant [`Statuses`](Status).
 struct AppendOnlyWriteTask<T>
 where
     T: Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
@@ -1047,7 +1046,7 @@ where
     read_only: bool,
     now: NowFn,
     user_batch_duration_ms: Arc<AtomicU64>,
-    /// Receiver for write commands. These change our desired state.
+    /// Receiver for write commands.
     rx: mpsc::UnboundedReceiver<(
         Vec<AppendOnlyUpdate>,
         oneshot::Sender<Result<(), StorageError<T>>>,
@@ -1372,11 +1371,11 @@ where
                         let mut all_rows = Vec::with_capacity(batch.iter().map(|(rows, _)| rows.len()).sum());
                         let mut responders = Vec::with_capacity(batch.len());
 
-                        for (updates, reponders) in batch.drain(..) {
+                        for (updates, responders) in batch.drain(..) {
                             let rows = self.process_updates(updates);
 
                             all_rows.extend(rows.map(|(row, diff)| TimestamplessUpdate { row, diff}));
-                            responders.push(reponders);
+                            responders.push(responders);
                         }
 
                         if self.read_only {
