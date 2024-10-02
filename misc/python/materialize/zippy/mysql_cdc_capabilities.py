@@ -8,12 +8,12 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.zippy.framework import Capability
 from materialize.zippy.mysql_capabilities import MySqlTableExists
+from materialize.zippy.watermarked_object_capabilities import WatermarkedObjectExists
 from materialize.zippy.watermarks import Watermarks
 
 
-class MySqlCdcTableExists(Capability):
+class MySqlCdcTableExists(WatermarkedObjectExists):
     """A MySQL CDC table exists in Materialize."""
 
     def __init__(self, name: str, mysql_table: MySqlTableExists | None = None) -> None:

@@ -26,7 +26,8 @@ from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
 from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.storaged_capabilities import StoragedRunning
 from materialize.zippy.table_capabilities import TableExists
-from materialize.zippy.view_capabilities import ViewExists, WatermarkedObjects
+from materialize.zippy.view_capabilities import ViewExists
+from materialize.zippy.watermarked_object_capabilities import WatermarkedObjectExists
 
 
 class CreateViewParameterized(ActionFactory):
@@ -57,7 +58,7 @@ class CreateViewParameterized(ActionFactory):
             ViewExists, self.max_views
         )
         if new_view_name:
-            potential_inputs: WatermarkedObjects = []
+            potential_inputs: list[WatermarkedObjectExists] = []
             for source_capability in [
                 SourceExists,
                 TableExists,
