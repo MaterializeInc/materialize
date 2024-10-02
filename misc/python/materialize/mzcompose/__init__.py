@@ -115,6 +115,12 @@ def get_default_system_parameters(
         "persist_batch_record_run_meta": (
             "true" if version >= MzVersion.parse_mz("v0.115.0-dev") else "false"
         ),
+        "persist_batch_structured_order": (
+            "true" if version >= MzVersion.parse_mz("v0.119.0-dev") else "false"
+        ),
+        "persist_batch_structured_key_lower_len": (
+            "256" if version >= MzVersion.parse_mz("v0.117.0-dev") else "0"
+        ),
         "persist_catalog_force_compaction_fuel": "1024",
         "persist_catalog_force_compaction_wait": "1s",
         "persist_fast_path_limit": "1000",

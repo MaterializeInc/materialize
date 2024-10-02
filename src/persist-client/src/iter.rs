@@ -25,6 +25,7 @@ use differential_dataflow::trace::Description;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use itertools::Itertools;
+use mz_ore::iter::IteratorExt;
 use mz_ore::task::JoinHandle;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use mz_persist::indexed::encoding::BlobTraceUpdates;
@@ -111,8 +112,16 @@ fn interleave_updates<T: Codec64, D: Codec64>(
     let keys = interleave(|u| u.records().keys()).as_binary().clone();
     let vals = interleave(|u| u.records().vals()).as_binary().clone();
     let records = ColumnarRecords::new(keys, vals, timestamps.into(), diffs.into());
-    let keep_ext = updates.iter().all(|e| e.structured().is_some());
-    if keep_ext {
+    let has_ext = updates.iter().all(|e| e.structured().is_some());
+    // The structured impl will migrate structured data using the write schemas, but we don't have
+    // those available here. Instead, drop the structured data on the floor; if we need it, it will
+    // be re-created from our codec data later in the pipeline.
+    let types_match = updates
+        .iter()
+        .flat_map(|e| e.structured())
+        .map(|e| (e.key.data_type(), e.val.data_type()))
+        .all_equal();
+    if has_ext && types_match {
         let key = interleave(|u| &u.structured().unwrap().key);
         let val = interleave(|u| &u.structured().unwrap().val);
         BlobTraceUpdates::Both(records, ColumnarRecordsStructuredExt { key, val })
