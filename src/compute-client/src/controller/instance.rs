@@ -1070,9 +1070,15 @@ where
         for response in peek_responses {
             self.deliver_response(response);
         }
-        to_drop
+        for peek in to_drop
             .into_iter()
-            .for_each(|uuid| drop(self.remove_peek(uuid)));
+            .filter_map(|uuid| self.remove_peek(uuid))
+        {
+            // Error delivery is best-effort, so ignore send failures.
+            let _ = peek
+                .peek_response_tx
+                .send(PeekResponse::Error(ERROR_TARGET_REPLICA_FAILED.into()));
+        }
 
         Ok(())
     }
