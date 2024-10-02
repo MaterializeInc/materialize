@@ -33,7 +33,7 @@ use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
-use mz_storage_types::sources::{SourceDesc, SourceExportDetails};
+use mz_storage_types::sources::{SourceDesc, SourceExportDataConfig, SourceExportDetails};
 use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -623,7 +623,12 @@ pub trait CatalogItem {
     /// ingestion it is an export of, as well as the item it exports.
     fn source_export_details(
         &self,
-    ) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)>;
+    ) -> Option<(
+        GlobalId,
+        &UnresolvedItemName,
+        &SourceExportDetails,
+        &SourceExportDataConfig<ReferencedConnection>,
+    )>;
 
     /// Reports whether this catalog item is a progress source.
     fn is_progress_source(&self) -> bool;
