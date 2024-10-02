@@ -36,7 +36,7 @@ contains: unsupported scale factor -1
 
 > CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR .01)
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR .01, UP TO 100)
 
 > CREATE TABLE customer FROM SOURCE gen (REFERENCE customer);
 > CREATE TABLE lineitem FROM SOURCE gen (REFERENCE lineitem);

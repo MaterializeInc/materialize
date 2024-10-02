@@ -21,7 +21,7 @@ SELECT true
 > CREATE SOURCE auction_house
   IN CLUSTER quickstart_tutorial
   FROM LOAD GENERATOR AUCTION
-  (TICK INTERVAL '0.05s')
+  (TICK INTERVAL '0.05s', UP TO 1000)
 
 > CREATE TABLE accounts FROM SOURCE auction_house (REFERENCE accounts);
 > CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);

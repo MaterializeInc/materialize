@@ -31,7 +31,7 @@ ALTER SYSTEM SET max_clusters = 15
 
 > CREATE SOURCE src
   IN CLUSTER source
-  FROM LOAD GENERATOR counter
+  FROM LOAD GENERATOR counter (UP TO 100)
 
 > CREATE TABLE tbl (a int)
 

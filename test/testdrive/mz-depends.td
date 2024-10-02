@@ -18,7 +18,7 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 
 > CREATE SOURCE with_subsources
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION;
+  FROM LOAD GENERATOR AUCTION (UP TO 100);
 
 > CREATE TABLE accounts FROM SOURCE with_subsources (REFERENCE accounts);
 > CREATE TABLE auctions FROM SOURCE with_subsources (REFERENCE auctions);

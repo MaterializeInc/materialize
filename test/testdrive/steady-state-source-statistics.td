@@ -67,7 +67,7 @@ goofus,gallant
 
 > CREATE SOURCE counter
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER;
+  FROM LOAD GENERATOR COUNTER (UP TO 100);
 
 # Adding a select here so that the ingests after this
 # triggers lookup from the upsert state

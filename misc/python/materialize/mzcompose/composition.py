@@ -928,14 +928,14 @@ class Composition:
             SELECT name, status, error, details
             FROM mz_internal.mz_source_statuses
             WHERE NOT(
-                status IN ('running', 'starting') OR
+                status IN ('running', 'starting', 'paused') OR
                 (type = 'progress' AND status = 'created')
             )
             AND {exclusion_clause}
             """
         )
         for name, status, error, details in results:
-            return f"Source {name} is expected to be running/created, but is {status}, error: {error}, details: {details}"
+            return f"Source {name} is expected to be running/created/paused, but is {status}, error: {error}, details: {details}"
 
         results = self.sql_query(
             f"""

@@ -11,7 +11,7 @@ $ set-arg-default single-replica-cluster=quickstart
 
 > CREATE SOURCE tpch
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1);
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1, UP TO 1000);
 
 > CREATE TABLE customer FROM SOURCE tpch (REFERENCE customer);
 > CREATE TABLE lineitem FROM SOURCE tpch (REFERENCE lineitem);

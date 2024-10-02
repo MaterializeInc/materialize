@@ -23,7 +23,7 @@ ALTER SYSTEM SET wallclock_lag_refresh_interval = '1s'
 # Set up a bunch of frontiered objects and test that their wallclock lags get
 # reported and are reasonably small.
 
-> CREATE SOURCE src IN CLUSTER storage FROM LOAD GENERATOR counter
+> CREATE SOURCE src IN CLUSTER storage FROM LOAD GENERATOR counter (UP TO 100)
 
 > CREATE TABLE tbl (a int)
 

@@ -63,8 +63,8 @@ one:two
 > CREATE SCHEMA subsources_size;
 > CREATE SCHEMA subsources_cluster;
 > CREATE CLUSTER subsource_size_s_cluster SIZE '2';
-> CREATE SOURCE subsources_size.s IN CLUSTER subsource_size_s_cluster FROM LOAD GENERATOR AUCTION;
-> CREATE SOURCE subsources_cluster.s IN CLUSTER cluster1 FROM LOAD GENERATOR AUCTION;
+> CREATE SOURCE subsources_size.s IN CLUSTER subsource_size_s_cluster FROM LOAD GENERATOR AUCTION (UP TO 100);
+> CREATE SOURCE subsources_cluster.s IN CLUSTER cluster1 FROM LOAD GENERATOR AUCTION (UP TO 100);
 
 > CREATE TABLE subsources_size.accounts FROM SOURCE subsources_size.s (REFERENCE accounts);
 > CREATE TABLE subsources_size.auctions FROM SOURCE subsources_size.s (REFERENCE auctions);
