@@ -930,6 +930,24 @@ impl Catalog {
         Ok(())
     }
 
+    pub fn item_has_transitive_refresh_schedule(&self, id: GlobalId) -> bool {
+        let test_has_transitive_refresh_schedule = |dep: GlobalId| -> bool {
+            if let Some(mv) = self.get_entry(&dep).materialized_view() {
+                return mv.refresh_schedule.is_some();
+            }
+            false
+        };
+        if test_has_transitive_refresh_schedule(id)
+            || self
+                .state()
+                .transitive_uses(id)
+                .any(test_has_transitive_refresh_schedule)
+        {
+            return true;
+        }
+        false
+    }
+
     pub(crate) fn object_dependents(
         &self,
         object_ids: &Vec<ObjectId>,

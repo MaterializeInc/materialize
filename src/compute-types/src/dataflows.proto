@@ -57,7 +57,9 @@ message ProtoDataflowDescription {
     mz_repr.antichain.ProtoU64Antichain until = 7;
     optional mz_repr.antichain.ProtoU64Antichain initial_storage_as_of = 9;
     optional mz_repr.refresh_schedule.ProtoRefreshSchedule refresh_schedule = 10;
-    bool is_timeline_epochms = 11;
+    optional mz_repr.antichain.ProtoU64Antichain transitive_upper = 11;
+    bool has_transitive_refresh_schedule = 12;
+    bool is_timeline_epochms = 13;
 
     string debug_name = 8;
 }

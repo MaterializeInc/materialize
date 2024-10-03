@@ -110,6 +110,17 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::Poll;
 
+use crate::arrangement::manager::TraceBundle;
+use crate::compute_state::ComputeState;
+use crate::expiration::expire_stream_at;
+use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::reduce::MzReduce;
+use crate::logging::compute::LogDataflowErrors;
+use crate::render::context::{
+    ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
+};
+use crate::render::continual_task::ContinualTaskCtx;
+use crate::typedefs::{ErrSpine, KeyBatcher};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -141,18 +152,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use timely::worker::Worker as TimelyWorker;
 use timely::PartialOrder;
-
-use crate::arrangement::manager::TraceBundle;
-use crate::compute_state::ComputeState;
-use crate::expiration::expire_stream_at;
-use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::extensions::reduce::MzReduce;
-use crate::logging::compute::LogDataflowErrors;
-use crate::render::context::{
-    ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
-};
-use crate::render::continual_task::ContinualTaskCtx;
-use crate::typedefs::{ErrSpine, KeyBatcher};
+use tracing::warn;
 
 pub mod context;
 pub(crate) mod continual_task;
@@ -198,19 +198,13 @@ pub fn build_compute_dataflow<A: Allocate>(
         .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
         .collect::<Vec<_>>();
 
-    let expire_at = if dataflow.is_timeline_epochms
-        && dataflow.refresh_schedule.is_none()
-        && !dataflow.is_single_time()
-    {
-        compute_state
-            .replica_expiration
-            .map(Antichain::from_elem)
-            .unwrap_or_default()
-    } else {
-        Antichain::new()
-    };
+    let expire_at = dataflow.temporal_expiration(compute_state.replica_expiration);
 
-    let until = dataflow.until.meet(&expire_at); // TODO: check that until jumps to empty frontier.
+    let until = dataflow.until.meet(&expire_at);
+
+    if !expire_at.is_empty() {
+        warn!("Enabling replica expiration at {expire_at:?}");
+    }
 
     let worker_logging = timely_worker.log_register().get("timely");
 

@@ -163,10 +163,11 @@ impl Optimize<Index> for Optimizer {
             let compute = self.compute_instance.clone();
             DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
-        let is_timeline_epochms = index
+        let mut df_desc = MirDataflowDescription::new(full_name.to_string(), 1);
+
+        df_desc.is_timeline_epochms = index
             .timeline_ctx
             .map_or(false, |ctx| ctx.is_timeline_epochms());
-        let mut df_desc = MirDataflowDescription::new(full_name.to_string(), is_timeline_epochms);
 
         df_builder.import_into_dataflow(&index.on, &mut df_desc, &self.config.features)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;

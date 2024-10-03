@@ -1732,6 +1732,14 @@ impl CatalogEntry {
         }
     }
 
+    /// Returns the inner [`MaterializedView`] if this entry is a materialized view, else `None`.
+    pub fn materialized_view(&self) -> Option<&MaterializedView> {
+        match self.item() {
+            CatalogItem::MaterializedView(mv) => Some(mv),
+            _ => None,
+        }
+    }
+
     /// Returns the inner [`Source`] if this entry is a source, else `None`.
     pub fn source(&self) -> Option<&Source> {
         match self.item() {

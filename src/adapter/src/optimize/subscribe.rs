@@ -162,6 +162,10 @@ impl GlobalLirPlan {
         let sink_desc = sink_exports.values().next().expect("valid sink");
         sink_desc
     }
+
+    pub fn df_desc(&self) -> &LirDataflowDescription {
+        &self.df_desc
+    }
 }
 
 /// Marker type for [`GlobalMirPlan`] structs representing an optimization
@@ -187,7 +191,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
             let compute = self.compute_instance.clone();
             DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
-        let mut df_desc = MirDataflowDescription::new(self.debug_name.clone(), false); // timeline will be set in `resolve`.
+        let mut df_desc = MirDataflowDescription::new(self.debug_name.clone(), 1);
         let mut df_meta = DataflowMetainfo::default();
 
         match plan {

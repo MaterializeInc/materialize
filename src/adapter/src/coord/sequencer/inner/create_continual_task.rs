@@ -90,6 +90,7 @@ impl Coordinator {
             sink_id,
             Arc::new(bootstrap_catalog),
             full_name.to_string(),
+            timeline_context,
         )?;
 
         // Timestamp selection
@@ -158,6 +159,7 @@ impl Coordinator {
         output_id: GlobalId,
         catalog: Arc<dyn OptimizerCatalog>,
         debug_name: String,
+        timeline_context: crate::TimelineContext,
     ) -> Result<
         (
             DataflowDescription<OptimizedMirRelationExpr>,
