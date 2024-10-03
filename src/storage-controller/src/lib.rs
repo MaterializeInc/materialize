@@ -653,8 +653,12 @@ where
                     // aware of read-only mode and will not attempt to write before told
                     // to do so.
                     //
-                    self.register_introspection_collection(id, *typ, write)
-                        .await?;
+                    self.register_introspection_collection(
+                        id,
+                        *typ,
+                        write,
+                        persist_client.clone(),
+                    )?;
                     self.collections.insert(id, collection_state);
                 }
                 DataSource::Webhook => {
@@ -2659,11 +2663,12 @@ where
     /// work that we have to do before we start writing to it. This
     /// preparatory work will include partial truncation or other cleanup
     /// schemes, depending on introspection type.
-    async fn register_introspection_collection(
+    fn register_introspection_collection(
         &mut self,
         id: GlobalId,
         introspection_type: IntrospectionType,
         write_handle: WriteHandle<SourceData, (), T, Diff>,
+        persist_client: PersistClient,
     ) -> Result<(), StorageError<T>> {
         tracing::info!(%id, ?introspection_type, "registering introspection collection");
 
@@ -2683,11 +2688,6 @@ where
         );
 
         let metadata = self.storage_collections.collection_metadata(id)?.clone();
-        let persist_client = self
-            .persist
-            .open(metadata.persist_location.clone())
-            .await
-            .unwrap();
 
         let read_handle_fn = move || {
             let persist_client = persist_client.clone();
