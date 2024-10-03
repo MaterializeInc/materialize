@@ -508,6 +508,16 @@ impl From<SourceReference> for durable::SourceReference {
     }
 }
 
+impl SourceReferences {
+    pub fn to_durable(self, source_id: GlobalId) -> durable::SourceReferences {
+        durable::SourceReferences {
+            source_id,
+            updated_at: self.updated_at,
+            references: self.references.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 impl From<durable::SourceReference> for SourceReference {
     fn from(source_reference: durable::SourceReference) -> SourceReference {
         SourceReference {

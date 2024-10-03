@@ -2022,6 +2022,7 @@ impl<'a> Transaction<'a> {
             introspection_sources: self.introspection_sources.pending(),
             id_allocator: self.id_allocator.pending(),
             configs: self.configs.pending(),
+            source_references: self.source_references.pending(),
             settings: self.settings.pending(),
             system_gid_mapping: self.system_gid_mapping.pending(),
             system_configurations: self.system_configurations.pending(),
@@ -2058,6 +2059,7 @@ impl<'a> Transaction<'a> {
             introspection_sources,
             id_allocator,
             configs,
+            source_references,
             settings,
             system_gid_mapping,
             system_configurations,
@@ -2082,6 +2084,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(id_allocator);
         differential_dataflow::consolidation::consolidate_updates(configs);
         differential_dataflow::consolidation::consolidate_updates(settings);
+        differential_dataflow::consolidation::consolidate_updates(source_references);
         differential_dataflow::consolidation::consolidate_updates(system_gid_mapping);
         differential_dataflow::consolidation::consolidate_updates(system_configurations);
         differential_dataflow::consolidation::consolidate_updates(default_privileges);
@@ -2275,6 +2278,11 @@ pub struct TransactionBatch {
         proto::DefaultPrivilegesValue,
         Diff,
     )>,
+    pub(crate) source_references: Vec<(
+        proto::SourceReferencesKey,
+        proto::SourceReferencesValue,
+        Diff,
+    )>,
     pub(crate) system_privileges: Vec<(
         proto::SystemPrivilegesKey,
         proto::SystemPrivilegesValue,
@@ -2306,6 +2314,7 @@ impl TransactionBatch {
             id_allocator,
             configs,
             settings,
+            source_references,
             system_gid_mapping,
             system_configurations,
             default_privileges,
@@ -2327,6 +2336,7 @@ impl TransactionBatch {
             && id_allocator.is_empty()
             && configs.is_empty()
             && settings.is_empty()
+            && source_references.is_empty()
             && system_gid_mapping.is_empty()
             && system_configurations.is_empty()
             && default_privileges.is_empty()

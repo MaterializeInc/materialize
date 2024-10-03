@@ -582,6 +582,15 @@ impl CatalogState {
                     source.create_sql.as_ref(),
                 );
 
+                // Emit available source reference table updates here
+                // so that we can retract them when a source is removed correctly.
+                if let Some(source_references) = &source.available_source_references {
+                    updates.extend(self.pack_source_references_update(
+                        &source_references.clone().to_durable(id),
+                        diff,
+                    ));
+                }
+
                 updates.extend(match &source.data_source {
                     DataSourceDesc::Ingestion { ingestion_desc, .. } => {
                         match &ingestion_desc.desc.connection {
@@ -2185,7 +2194,17 @@ impl CatalogState {
                     ),
                 ]);
                 if reference.columns.len() > 0 {
-                    packer.push_list(reference.columns.iter().map(|col| Datum::String(col)));
+                    packer
+                        .push_array(
+                            &[ArrayDimension {
+                                lower_bound: 1,
+                                length: reference.columns.len(),
+                            }],
+                            reference.columns.iter().map(|col| Datum::String(col)),
+                        )
+                        .expect(
+                            "columns is 1 dimensional, and its length is used for the array length",
+                        );
                 } else {
                     packer.push(Datum::Null);
                 }

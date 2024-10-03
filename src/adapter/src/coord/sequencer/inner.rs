@@ -334,8 +334,9 @@ impl Coordinator {
 
             // If this source contained a set of available source references, update the
             // source references catalog table.
+            let mut reference_ops = vec![];
             if let Some(references) = &available_source_references {
-                ops.push(catalog::Op::UpdateSourceReferences {
+                reference_ops.push(catalog::Op::UpdateSourceReferences {
                     source_id,
                     references: references.clone().into(),
                 });
@@ -349,6 +350,8 @@ impl Coordinator {
                 owner_id: *session.current_role_id(),
             });
             sources.push((source_id, source));
+            // These operations must be executed after the source is added to the catalog.
+            ops.extend(reference_ops);
         }
 
         Ok(CreateSourceInner {

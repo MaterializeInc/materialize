@@ -3523,11 +3523,7 @@ pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
         )
         .with_column(
             "columns",
-            ScalarType::List {
-                element_type: Box::new(ScalarType::String),
-                custom_id: None,
-            }
-            .nullable(true),
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
         )
         .finish(),
     is_retained_metrics_object: false,
