@@ -189,7 +189,6 @@ impl Context {
                             .map(|(row, diff)| (row, T::minimum(), diff))
                             .collect()
                     }),
-                    lir_id,
                 };
                 // The plan, not arranged in any way.
                 (node.as_plan(lir_id), AvailableCollections::new_raw())
@@ -263,7 +262,6 @@ impl Context {
                     id: id.clone(),
                     keys: in_keys,
                     plan,
-                    lir_id,
                 };
                 // Return the plan, and any keys if an identity `mfp`.
                 (node.as_plan(lir_id), out_keys)
@@ -289,7 +287,6 @@ impl Context {
                         id: id.clone(),
                         value: Box::new(value),
                         body: Box::new(body),
-                        lir_id,
                     }
                     .as_plan(lir_id),
                     b_keys,
@@ -335,7 +332,6 @@ impl Context {
                                         values,
                                         limits,
                                         body,
-                                        lir_id: _,
                                     },
                                 lir_id,
                             } => {
@@ -350,11 +346,9 @@ impl Context {
                                             forms,
                                             input_key,
                                             input_mfp,
-                                            lir_id: inner_lir_id,
                                         }
                                         .as_plan(inner_lir_id),
                                     ),
-                                    lir_id,
                                 }
                                 .as_plan(lir_id)
                             }
@@ -365,7 +359,6 @@ impl Context {
                                     forms,
                                     input_key,
                                     input_mfp,
-                                    lir_id,
                                 }
                                 .as_plan(lir_id)
                             }
@@ -396,7 +389,6 @@ impl Context {
                         values: lir_values,
                         limits: limits.clone(),
                         body: Box::new(body),
-                        lir_id,
                     }
                     .as_plan(lir_id),
                     b_keys,
@@ -545,7 +537,6 @@ impl Context {
                             exprs: exprs.clone(),
                             mfp_after: mfp,
                             input_key,
-                            lir_id,
                         }
                         .as_plan(lir_id),
                         AvailableCollections::new_raw(),
@@ -671,7 +662,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             input_plan,
                             PlanNode::Constant {
                                 rows: Ok(Vec::new()),
-                                lir_id,
                             }
                             .as_plan(lir_id),
                         );
@@ -684,7 +674,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     PlanNode::Join {
                         inputs: plans,
                         plan,
-                        lir_id,
                     }
                     .as_plan(lir_id),
                     AvailableCollections::new_raw(),
@@ -754,7 +743,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     PlanNode::TopK {
                         input: Box::new(input),
                         top_k_plan,
-                        lir_id,
                     }
                     .as_plan(lir_id),
                     AvailableCollections::new_raw(),
@@ -776,7 +764,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 (
                     PlanNode::Negate {
                         input: Box::new(input),
-                        lir_id,
                     }
                     .as_plan(lir_id),
                     AvailableCollections::new_raw(),
@@ -820,7 +807,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     PlanNode::Threshold {
                         input: Box::new(plan),
                         threshold_plan,
-                        lir_id,
                     }
                     .as_plan(lir_id),
                     output_keys,
@@ -853,7 +839,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     PlanNode::Union {
                         inputs: plans,
                         consolidate_output: false,
-                        lir_id,
                     }
                     .as_plan(lir_id),
                     AvailableCollections::new_raw(),
@@ -898,7 +883,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             forms: input_keys.clone(),
                             input_key,
                             input_mfp,
-                            lir_id,
                         }
                         .as_plan(lir_id),
                         input_keys,
@@ -978,7 +962,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         input: Box::new(plan),
                         mfp,
                         input_key_val: Some((key, val)),
-                        lir_id,
                     }
                     .as_plan(lir_id)
                 }
@@ -988,7 +971,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input: Box::new(plan),
                     mfp,
                     input_key_val,
-                    lir_id,
                 }
                 .as_plan(lir_id);
                 keys = AvailableCollections::new_raw();
@@ -1061,7 +1043,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 plan: reduce_plan,
                 input_key,
                 mfp_after,
-                lir_id,
             }
             .as_plan(lir_id),
             output_keys,
@@ -1077,13 +1058,16 @@ This is not expected to cause incorrect results, but could indicate a performanc
         old_collections: &AvailableCollections,
         arity: usize,
     ) -> Plan<T> {
-        if let PlanNode::ArrangeBy {
-            input,
-            mut forms,
-            input_key,
-            input_mfp,
+        if let Plan {
+            node:
+                PlanNode::ArrangeBy {
+                    input,
+                    mut forms,
+                    input_key,
+                    input_mfp,
+                },
             lir_id,
-        } = plan.node
+        } = plan
         {
             forms.raw |= collections.raw;
             forms.arranged.extend(collections.arranged);
@@ -1099,9 +1083,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 forms,
                 input_key,
                 input_mfp,
-                lir_id,
             }
-            .as_plan(plan.lir_id)
+            .as_plan(lir_id)
         } else {
             let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
                 old_collections.arbitrary_arrangement()
@@ -1118,7 +1101,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 forms: collections,
                 input_key,
                 input_mfp,
-                lir_id,
             }
             .as_plan(lir_id)
         }

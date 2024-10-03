@@ -114,7 +114,7 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
         let mut lir_ids = BTreeSet::new();
 
         while let Some(plan) = plans.pop() {
-            let lir_id = plan.lir_id();
+            let lir_id = plan.lir_id;
             if !lir_ids.insert(lir_id) {
                 return Err(format!(
                     "duplicate `LirId` in `DataflowDescription`: {lir_id}"

@@ -206,8 +206,6 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
     Constant {
         /// Explicit update triples for the collection.
         rows: Result<Vec<(Row, T, Diff)>, EvalError>,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
     /// A reference to a bound collection.
     ///
@@ -228,8 +226,6 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         keys: AvailableCollections,
         /// The actions to take when introducing the collection.
         plan: GetPlan,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
     /// Binds `value` to `id`, and then results in `body` with that binding.
     ///
@@ -246,8 +242,6 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
         body: Box<Plan<T>>,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
     /// Binds `values` to `ids`, evaluates them potentially recursively, and returns `body`.
     ///
@@ -265,8 +259,6 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
         body: Box<Plan<T>>,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
     /// Map, Filter, and Project operators.
     ///
@@ -281,8 +273,6 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// Whether the input is from an arrangement, and if so,
         /// whether we can seek to a specific value therein
         input_key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
     /// A variable number of output records for each input record.
     ///
@@ -308,8 +298,6 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// The particular arrangement of the input we expect to use,
         /// if any
         input_key: Option<Vec<MirScalarExpr>>,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
     /// A multiway relational equijoin, with fused map, filter, and projection.
     ///
@@ -325,8 +313,6 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// any map, filter, project work that we might follow the join with, but
         /// potentially pushed down into the implementation of the join.
         plan: JoinPlan,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
     /// Aggregation by key.
     Reduce {
@@ -348,8 +334,6 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// become undefined. Additionally, the MFP must be free from temporal
         /// predicates so that it can be readily evaluated.
         mfp_after: MapFilterProject,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
@@ -361,15 +345,11 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
         top_k_plan: TopKPlan,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
     /// Inverts the sign of each update.
     Negate {
         /// The input collection.
         input: Box<Plan<T>>,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
     /// Filters records that accumulate negatively.
     ///
@@ -384,8 +364,6 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
         threshold_plan: ThresholdPlan,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
     /// Adds the contents of the input collections.
     ///
@@ -398,8 +376,6 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         inputs: Vec<Plan<T>>,
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -419,8 +395,6 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         input_key: Option<Vec<MirScalarExpr>>,
         /// The MFP that must be applied to the input.
         input_mfp: MapFilterProject,
-        /// A dataflow-local identifier.
-        lir_id: LirId,
     },
 }
 
@@ -504,13 +478,6 @@ impl<T> PlanNode<T> {
     }
 }
 
-impl<T> Plan<T> {
-    /// Return this plan's `LirId`.
-    pub fn lir_id(&self) -> LirId {
-        self.lir_id
-    }
-}
-
 impl<T> PlanNode<T> {
     /// Attach an `lir_id` to a `PlanNode` to make a complete `Plan`.
     pub fn as_plan(self, lir_id: LirId) -> Plan<T> {
@@ -552,7 +519,7 @@ impl Arbitrary for Plan {
         );
         let rows = prop::result::maybe_ok(row_diff, EvalError::arbitrary());
         let constant = (rows, any::<LirId>()).prop_map(|(rows, lir_id)| {
-            PlanNode::<mz_repr::Timestamp>::Constant { rows, lir_id }.as_plan(lir_id)
+            PlanNode::<mz_repr::Timestamp>::Constant { rows }.as_plan(lir_id)
         });
 
         let get = (
@@ -566,7 +533,6 @@ impl Arbitrary for Plan {
                     id: Id::Global(id),
                     keys,
                     plan,
-                    lir_id,
                 }
                 .as_plan(lir_id)
             });
@@ -587,7 +553,6 @@ impl Arbitrary for Plan {
                             id,
                             value: value.into(),
                             body: body.into(),
-                            lir_id,
                         }
                         .as_plan(lir_id)
                     })
@@ -604,7 +569,6 @@ impl Arbitrary for Plan {
                             input: input.into(),
                             mfp,
                             input_key_val,
-                            lir_id,
                         }
                         .as_plan(lir_id)
                     })
@@ -625,7 +589,6 @@ impl Arbitrary for Plan {
                             exprs,
                             mfp_after: mfp,
                             input_key,
-                            lir_id,
                         }
                         .as_plan(lir_id)
                     })
@@ -637,12 +600,7 @@ impl Arbitrary for Plan {
                     any::<LirId>(),
                 )
                     .prop_map(|(inputs, plan, lir_id)| {
-                        PlanNode::Join {
-                            inputs,
-                            plan,
-                            lir_id,
-                        }
-                        .as_plan(lir_id)
+                        PlanNode::Join { inputs, plan }.as_plan(lir_id)
                     })
                     .boxed(),
                 //Plan::Reduce
@@ -662,7 +620,6 @@ impl Arbitrary for Plan {
                                 plan,
                                 input_key,
                                 mfp_after,
-                                lir_id,
                             }
                             .as_plan(lir_id)
                         },
@@ -674,20 +631,13 @@ impl Arbitrary for Plan {
                         PlanNode::TopK {
                             input: input.into(),
                             top_k_plan,
-                            lir_id,
                         }
                         .as_plan(lir_id)
                     })
                     .boxed(),
                 //Plan::Negate
                 (inner.clone(), any::<LirId>())
-                    .prop_map(|(x, lir_id)| {
-                        PlanNode::Negate {
-                            input: x.into(),
-                            lir_id,
-                        }
-                        .as_plan(lir_id)
-                    })
+                    .prop_map(|(x, lir_id)| PlanNode::Negate { input: x.into() }.as_plan(lir_id))
                     .boxed(),
                 //Plan::Threshold
                 (inner.clone(), any::<ThresholdPlan>(), any::<LirId>())
@@ -695,7 +645,6 @@ impl Arbitrary for Plan {
                         PlanNode::Threshold {
                             input: input.into(),
                             threshold_plan,
-                            lir_id,
                         }
                         .as_plan(lir_id)
                     })
@@ -710,7 +659,6 @@ impl Arbitrary for Plan {
                         PlanNode::Union {
                             inputs: x,
                             consolidate_output: b,
-                            lir_id,
                         }
                         .as_plan(lir_id)
                     })
@@ -729,7 +677,6 @@ impl Arbitrary for Plan {
                             forms,
                             input_key,
                             input_mfp,
-                            lir_id,
                         }
                         .as_plan(lir_id)
                     })
@@ -1061,24 +1008,18 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 impl<T> CollectionPlan for PlanNode<T> {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         match self {
-            PlanNode::Constant { rows: _, lir_id: _ } => (),
+            PlanNode::Constant { rows: _ } => (),
             PlanNode::Get {
                 id,
                 keys: _,
                 plan: _,
-                lir_id: _,
             } => match id {
                 Id::Global(id) => {
                     out.insert(*id);
                 }
                 Id::Local(_) => (),
             },
-            PlanNode::Let {
-                id: _,
-                value,
-                body,
-                lir_id: _,
-            } => {
+            PlanNode::Let { id: _, value, body } => {
                 value.depends_on_into(out);
                 body.depends_on_into(out);
             }
@@ -1087,22 +1028,16 @@ impl<T> CollectionPlan for PlanNode<T> {
                 values,
                 limits: _,
                 body,
-                lir_id: _,
             } => {
                 for value in values.iter() {
                     value.depends_on_into(out);
                 }
                 body.depends_on_into(out);
             }
-            PlanNode::Join {
-                inputs,
-                plan: _,
-                lir_id: _,
-            }
+            PlanNode::Join { inputs, plan: _ }
             | PlanNode::Union {
                 inputs,
                 consolidate_output: _,
-                lir_id: _,
             } => {
                 for input in inputs {
                     input.depends_on_into(out);
@@ -1112,7 +1047,6 @@ impl<T> CollectionPlan for PlanNode<T> {
                 input,
                 mfp: _,
                 input_key_val: _,
-                lir_id: _,
             }
             | PlanNode::FlatMap {
                 input,
@@ -1120,14 +1054,12 @@ impl<T> CollectionPlan for PlanNode<T> {
                 exprs: _,
                 mfp_after: _,
                 input_key: _,
-                lir_id: _,
             }
             | PlanNode::ArrangeBy {
                 input,
                 forms: _,
                 input_key: _,
                 input_mfp: _,
-                lir_id: _,
             }
             | PlanNode::Reduce {
                 input,
@@ -1135,18 +1067,15 @@ impl<T> CollectionPlan for PlanNode<T> {
                 plan: _,
                 input_key: _,
                 mfp_after: _,
-                lir_id: _,
             }
             | PlanNode::TopK {
                 input,
                 top_k_plan: _,
-                lir_id: _,
             }
-            | PlanNode::Negate { input, lir_id: _ }
+            | PlanNode::Negate { input }
             | PlanNode::Threshold {
                 input,
                 threshold_plan: _,
-                lir_id: _,
             } => {
                 input.depends_on_into(out);
             }

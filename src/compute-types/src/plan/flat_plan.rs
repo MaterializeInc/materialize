@@ -280,7 +280,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
         // node (a) produce a corresponding `FlatPlanNode` and (b) push the contained subplans onto
         // the work stack. We do this until no further subplans remain.
 
-        let root = plan.lir_id();
+        let root = plan.lir_id;
 
         // Stack of nodes to flatten.
         let mut todo: Vec<Plan<T>> = vec![plan];
@@ -296,31 +296,21 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
             flatten_order.push(id);
         };
 
-        while let Some(plan) = todo.pop() {
-            match plan.node {
-                PlanNode::Constant { rows, lir_id } => {
+        while let Some(Plan { node, lir_id }) = todo.pop() {
+            match node {
+                PlanNode::Constant { rows } => {
                     let node = Constant { rows };
                     insert_node(lir_id, node);
                 }
-                PlanNode::Get {
-                    id,
-                    keys,
-                    plan,
-                    lir_id,
-                } => {
+                PlanNode::Get { id, keys, plan } => {
                     let node = Get { id, keys, plan };
                     insert_node(lir_id, node);
                 }
-                PlanNode::Let {
-                    id,
-                    value,
-                    body,
-                    lir_id,
-                } => {
+                PlanNode::Let { id, value, body } => {
                     let node = Let {
                         id,
-                        value: value.lir_id(),
-                        body: body.lir_id(),
+                        value: value.lir_id,
+                        body: body.lir_id,
                     };
                     insert_node(lir_id, node);
 
@@ -331,13 +321,12 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     values,
                     limits,
                     body,
-                    lir_id,
                 } => {
                     let node = LetRec {
                         ids,
-                        values: values.iter().map(|v| v.lir_id()).collect(),
+                        values: values.iter().map(|v| v.lir_id).collect(),
                         limits,
-                        body: body.lir_id(),
+                        body: body.lir_id,
                     };
                     insert_node(lir_id, node);
 
@@ -348,10 +337,9 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     input,
                     mfp,
                     input_key_val,
-                    lir_id,
                 } => {
                     let node = Mfp {
-                        input: input.lir_id(),
+                        input: input.lir_id,
                         mfp,
                         input_key_val,
                     };
@@ -365,10 +353,9 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     exprs,
                     mfp_after,
                     input_key,
-                    lir_id,
                 } => {
                     let node = FlatMap {
-                        input: input.lir_id(),
+                        input: input.lir_id,
                         func,
                         exprs,
                         mfp_after,
@@ -378,13 +365,9 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
 
                     todo.push(*input);
                 }
-                PlanNode::Join {
-                    inputs,
-                    plan,
-                    lir_id,
-                } => {
+                PlanNode::Join { inputs, plan } => {
                     let node = Join {
-                        inputs: inputs.iter().map(|i| i.lir_id()).collect(),
+                        inputs: inputs.iter().map(|i| i.lir_id).collect(),
                         plan,
                     };
                     insert_node(lir_id, node);
@@ -397,10 +380,9 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     plan,
                     input_key,
                     mfp_after,
-                    lir_id,
                 } => {
                     let node = Reduce {
-                        input: input.lir_id(),
+                        input: input.lir_id,
                         key_val_plan,
                         plan,
                         input_key,
@@ -410,22 +392,18 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
 
                     todo.push(*input);
                 }
-                PlanNode::TopK {
-                    input,
-                    top_k_plan,
-                    lir_id,
-                } => {
+                PlanNode::TopK { input, top_k_plan } => {
                     let node = TopK {
-                        input: input.lir_id(),
+                        input: input.lir_id,
                         top_k_plan,
                     };
                     insert_node(lir_id, node);
 
                     todo.push(*input);
                 }
-                PlanNode::Negate { input, lir_id } => {
+                PlanNode::Negate { input } => {
                     let node = Negate {
-                        input: input.lir_id(),
+                        input: input.lir_id,
                     };
                     insert_node(lir_id, node);
 
@@ -434,10 +412,9 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                 PlanNode::Threshold {
                     input,
                     threshold_plan,
-                    lir_id,
                 } => {
                     let node = Threshold {
-                        input: input.lir_id(),
+                        input: input.lir_id,
                         threshold_plan,
                     };
                     insert_node(lir_id, node);
@@ -447,10 +424,9 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                 PlanNode::Union {
                     inputs,
                     consolidate_output,
-                    lir_id,
                 } => {
                     let node = Union {
-                        inputs: inputs.iter().map(|i| i.lir_id()).collect(),
+                        inputs: inputs.iter().map(|i| i.lir_id).collect(),
                         consolidate_output,
                     };
                     insert_node(lir_id, node);
@@ -462,10 +438,9 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     forms,
                     input_key,
                     input_mfp,
-                    lir_id,
                 } => {
                     let node = ArrangeBy {
-                        input: input.lir_id(),
+                        input: input.lir_id,
                         forms,
                         input_key,
                         input_mfp,
