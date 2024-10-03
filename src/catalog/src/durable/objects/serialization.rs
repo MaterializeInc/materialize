@@ -26,7 +26,7 @@ use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
@@ -528,13 +528,13 @@ impl RustType<proto::SchemaValue> for SchemaValue {
 impl RustType<proto::ItemKey> for ItemKey {
     fn into_proto(&self) -> proto::ItemKey {
         proto::ItemKey {
-            gid: Some(self.gid.into_proto()),
+            id: Some(self.id.into_proto()),
         }
     }
 
     fn from_proto(proto: proto::ItemKey) -> Result<Self, TryFromProtoError> {
         Ok(ItemKey {
-            gid: proto.gid.into_rust_if_some("ItemKey::gid")?,
+            id: proto.id.into_rust_if_some("ItemKey::id")?,
         })
     }
 }
@@ -1457,6 +1457,27 @@ impl RustType<proto::Timestamp> for Timestamp {
 
     fn from_proto(proto: proto::Timestamp) -> Result<Self, TryFromProtoError> {
         Ok(Timestamp::new(proto.internal))
+    }
+}
+
+impl RustType<proto::CatalogItemId> for CatalogItemId {
+    fn into_proto(&self) -> proto::CatalogItemId {
+        proto::CatalogItemId {
+            value: Some(match self {
+                CatalogItemId::System(x) => proto::catalog_item_id::Value::System(*x),
+                CatalogItemId::User(x) => proto::catalog_item_id::Value::User(*x),
+                CatalogItemId::Transient(x) => proto::catalog_item_id::Value::Transient(*x),
+            }),
+        }
+    }
+
+    fn from_proto(proto: proto::CatalogItemId) -> Result<Self, TryFromProtoError> {
+        match proto.value {
+            Some(proto::catalog_item_id::Value::System(x)) => Ok(CatalogItemId::System(x)),
+            Some(proto::catalog_item_id::Value::User(x)) => Ok(CatalogItemId::User(x)),
+            Some(proto::catalog_item_id::Value::Transient(x)) => Ok(CatalogItemId::Transient(x)),
+            None => Err(TryFromProtoError::missing_field("CatalogItemId::kind")),
+        }
     }
 }
 
