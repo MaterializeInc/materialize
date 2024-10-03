@@ -573,6 +573,14 @@ impl Coordinator {
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
+        // For temporal expiration checks
+        let upper = self.least_valid_write(&id_bundle);
+        let has_transitive_refresh_schedule = refresh_schedule.is_some()
+            || raw_expr
+                .depends_on()
+                .into_iter()
+                .any(|id| self.catalog.item_has_transitive_refresh_schedule(id));
+
         let read_holds_owned;
         let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
             // In some cases, for example when REFRESH is used, the preparatory
@@ -665,6 +673,9 @@ impl Coordinator {
                 df_desc.set_as_of(dataflow_as_of.clone());
                 df_desc.set_initial_as_of(initial_as_of);
                 df_desc.until = until;
+
+                df_desc.transitive_upper = Some(upper);
+                df_desc.has_transitive_refresh_schedule = has_transitive_refresh_schedule;
 
                 let storage_metadata = coord.catalog.state().storage_metadata();
 

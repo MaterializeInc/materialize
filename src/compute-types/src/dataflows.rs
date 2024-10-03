@@ -72,6 +72,10 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub refresh_schedule: Option<RefreshSchedule>,
     /// Human readable name
     pub debug_name: String,
+    /// TODO
+    pub has_transitive_refresh_schedule: bool,
+    /// TODO
+    pub transitive_upper: Option<Antichain<T>>,
     /// Whether the timeline of the dataflow is [`Timeline::EpochMilliseconds`].
     pub is_timeline_epochms: bool,
 }
@@ -109,6 +113,32 @@ impl<P: fmt::Debug, S> DataflowDescription<P, S, mz_repr::Timestamp> {
         // here (as expected) since we are going to compare two `None` values.
         as_of.try_step_forward().as_ref() == until.as_option()
     }
+
+    /// TODO
+    pub fn temporal_expiration(
+        &self,
+        expiration: Option<mz_repr::Timestamp>,
+    ) -> Antichain<mz_repr::Timestamp> {
+        if expiration.is_none() {
+            return Antichain::default();
+        }
+
+        if self.has_transitive_refresh_schedule || !self.is_timeline_epochms {
+            return Antichain::default();
+        }
+
+        let expiration = expiration.unwrap();
+        if let Some(upper) = &self.transitive_upper {
+            if upper.is_empty() {
+                return Antichain::default();
+            }
+            if !upper.less_than(&expiration) {
+                return upper.clone();
+            }
+        }
+
+        Antichain::from_elem(expiration)
+    }
 }
 
 impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
@@ -133,7 +163,7 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
 
 impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     /// Creates a new dataflow description with a human-readable name.
-    pub fn new(name: String, is_timeline_epochms: bool) -> Self {
+    pub fn new(name: String, _check: usize) -> Self {
         Self {
             source_imports: Default::default(),
             index_imports: Default::default(),
@@ -145,7 +175,9 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             initial_storage_as_of: None,
             refresh_schedule: None,
             debug_name: name,
-            is_timeline_epochms,
+            transitive_upper: None,
+            has_transitive_refresh_schedule: true, // Assume present unless explicitly checked.
+            is_timeline_epochms: false, // Assume any timeline type possible unless explicitly checked.
         }
     }
 
@@ -548,7 +580,9 @@ where
             initial_storage_as_of: self.initial_storage_as_of.clone(),
             refresh_schedule: self.refresh_schedule.clone(),
             debug_name: self.debug_name.clone(),
-            is_timeline_epochms: self.is_timeline_epochms.clone(),
+            transitive_upper: self.transitive_upper.clone(),
+            has_transitive_refresh_schedule: self.has_transitive_refresh_schedule,
+            is_timeline_epochms: self.is_timeline_epochms,
         }
     }
 }
@@ -566,6 +600,8 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, Collec
             initial_storage_as_of: self.initial_storage_as_of.into_proto(),
             refresh_schedule: self.refresh_schedule.into_proto(),
             debug_name: self.debug_name.clone(),
+            transitive_upper: self.transitive_upper.into_proto(),
+            has_transitive_refresh_schedule: self.has_transitive_refresh_schedule.into_proto(),
             is_timeline_epochms: self.is_timeline_epochms.into_proto(),
         }
     }
@@ -589,6 +625,8 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, Collec
                 .transpose()?,
             refresh_schedule: proto.refresh_schedule.into_rust()?,
             debug_name: proto.debug_name,
+            transitive_upper: proto.transitive_upper.into_rust()?,
+            has_transitive_refresh_schedule: proto.has_transitive_refresh_schedule.into_rust()?,
             is_timeline_epochms: proto.is_timeline_epochms.into_rust()?,
         })
     }
@@ -725,7 +763,6 @@ proptest::prop_compose! {
         initial_as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
         refresh_schedule_some in any::<bool>(),
         refresh_schedule in any::<RefreshSchedule>(),
-        is_timeline_epochms in any::<bool>(),
     ) -> DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
             source_imports: BTreeMap::from_iter(source_imports.into_iter()),
@@ -752,7 +789,9 @@ proptest::prop_compose! {
                 None
             },
             debug_name,
-            is_timeline_epochms,
+            has_transitive_refresh_schedule: true,
+            transitive_upper: None,
+            is_timeline_epochms: false,
         }
     }
 }

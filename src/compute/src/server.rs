@@ -324,6 +324,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                         debug_name: dataflow.debug_name.clone(),
                         initial_storage_as_of: dataflow.initial_storage_as_of.clone(),
                         refresh_schedule: dataflow.refresh_schedule.clone(),
+                        transitive_upper: dataflow.transitive_upper.clone(),
+                        has_transitive_refresh_schedule: dataflow.has_transitive_refresh_schedule,
                         is_timeline_epochms: dataflow.is_timeline_epochms,
                     })
                     .map(ComputeCommand::CreateDataflow)

@@ -422,6 +422,9 @@ impl Coordinator {
             ..
         }: CreateIndexFinish,
     ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
+        // Timestamp selection
+        let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+
         let ops = vec![catalog::Op::CreateItem {
             id: exported_index_id,
             name: name.clone(),
@@ -437,6 +440,10 @@ impl Coordinator {
             }),
             owner_id: *self.catalog().get_entry(&on).owner_id(),
         }];
+
+        // For temporal expiration checks
+        let upper = self.least_valid_write(&id_bundle);
+        let has_transitive_refresh_schedule = self.catalog.item_has_transitive_refresh_schedule(on);
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -459,9 +466,6 @@ impl Coordinator {
                     .process_dataflow_metainfo(df_meta, exported_index_id, session, notice_ids)
                     .await;
 
-                // Timestamp selection
-                let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
-
                 // We're putting in place read holds, such that ship_dataflow,
                 // below, which calls update_read_capabilities, can successfully
                 // do so. Otherwise, the since of dependencies might move along
@@ -472,6 +476,9 @@ impl Coordinator {
                 let read_holds = coord.acquire_read_holds(&id_bundle);
                 let since = coord.least_valid_read(&read_holds);
                 df_desc.set_as_of(since);
+
+                df_desc.transitive_upper = Some(upper);
+                df_desc.has_transitive_refresh_schedule = has_transitive_refresh_schedule;
 
                 coord
                     .ship_dataflow_and_notice_builtin_table_updates(

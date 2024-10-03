@@ -26,7 +26,6 @@ use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::S3UploadInfo;
-use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
@@ -224,13 +223,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         };
 
         let debug_name = format!("copy-to-{}", self.select_id);
-        let is_timeline_epochms =
-            if let TimestampContext::TimelineTimestamp { timeline, .. } = &timestamp_ctx {
-                timeline == &Timeline::EpochMilliseconds
-            } else {
-                false
-            };
-        let mut df_desc = MirDataflowDescription::new(debug_name.to_string(), is_timeline_epochms);
+        let mut df_desc = MirDataflowDescription::new(debug_name.to_string(), 0);
 
         df_builder.import_view_into_dataflow(
             &self.select_id,

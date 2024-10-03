@@ -1296,6 +1296,8 @@ where
             initial_storage_as_of: dataflow.initial_storage_as_of,
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
+            transitive_upper: dataflow.transitive_upper,
+            has_transitive_refresh_schedule: dataflow.has_transitive_refresh_schedule,
             is_timeline_epochms: dataflow.is_timeline_epochms,
         };
 
