@@ -139,7 +139,7 @@ impl OptimizerTrace {
         dataflow_metainfo: DataflowMetainfo,
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
-        insights_ctx: Option<PlanInsightsContext>,
+        insights_ctx: Option<Box<PlanInsightsContext>>,
     ) -> Result<Vec<Row>, AdapterError> {
         let collect_all = |format| {
             self.collect_all(
@@ -306,7 +306,7 @@ impl OptimizerTrace {
         row_set_finishing: Option<RowSetFinishing>,
         target_cluster: Option<&Cluster>,
         dataflow_metainfo: DataflowMetainfo,
-        insights_ctx: Option<PlanInsightsContext>,
+        insights_ctx: Option<Box<PlanInsightsContext>>,
     ) -> Result<String, AdapterError> {
         let rows = self
             .into_rows(

@@ -86,7 +86,7 @@ impl PlanInsights {
     pub async fn compute_fast_path_clusters(
         &mut self,
         humanizer: &dyn ExprHumanizer,
-        ctx: PlanInsightsContext,
+        ctx: Box<PlanInsightsContext>,
     ) {
         let session: Arc<dyn SessionMetadata + Send> = Arc::new(ctx.session);
         let tasks = ctx

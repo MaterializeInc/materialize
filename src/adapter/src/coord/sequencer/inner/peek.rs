@@ -613,7 +613,7 @@ impl Coordinator {
                             view_id: optimizer.select_id(),
                             index_id: optimizer.index_id(),
                             enable_re_optimize,
-                        });
+                        }).map(Box::new);
                             match explain_ctx {
                                 ExplainContext::Plan(explain_ctx) => {
                                     let (_, df_meta, _) = global_lir_plan.unapply();
