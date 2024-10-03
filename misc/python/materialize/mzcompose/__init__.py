@@ -128,7 +128,6 @@ def get_default_system_parameters(
             "false" if version < MzVersion.parse_mz("v0.111.0-dev") else "true"
         ),
         "persist_schema_require": "true",
-        "persist_sink_minimum_batch_updates": "128",
         "persist_stats_audit_percent": "100",
         "persist_txn_tables": "lazy",  # removed, but keep value for older versions
         "persist_use_critical_since_catalog": "true",
@@ -137,7 +136,6 @@ def get_default_system_parameters(
         "persist_part_decode_format": "row_with_validate",
         "statement_logging_default_sample_rate": "0.01",
         "statement_logging_max_sample_rate": "0.01",
-        "storage_persist_sink_minimum_batch_updates": "100",
         "storage_source_decode_fuel": "100000",
         "storage_use_reclock_v2": "true",
         "timestamp_oracle": "postgres",
