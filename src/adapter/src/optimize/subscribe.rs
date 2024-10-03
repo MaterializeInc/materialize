@@ -191,7 +191,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
             let compute = self.compute_instance.clone();
             DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
-        let mut df_desc = MirDataflowDescription::new(self.debug_name.clone(), 1);
+        let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
         let mut df_meta = DataflowMetainfo::default();
 
         match plan {

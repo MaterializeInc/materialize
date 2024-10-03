@@ -91,7 +91,7 @@ pub struct Index {
     name: QualifiedItemName,
     on: GlobalId,
     keys: Vec<mz_expr::MirScalarExpr>,
-    timeline_ctx: Option<TimelineContext>,
+    timeline_ctx: TimelineContext,
 }
 
 impl Index {
@@ -99,7 +99,7 @@ impl Index {
         name: QualifiedItemName,
         on: GlobalId,
         keys: Vec<mz_expr::MirScalarExpr>,
-        timeline_ctx: Option<TimelineContext>,
+        timeline_ctx: TimelineContext,
     ) -> Self {
         Self {
             name,
@@ -163,11 +163,9 @@ impl Optimize<Index> for Optimizer {
             let compute = self.compute_instance.clone();
             DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
-        let mut df_desc = MirDataflowDescription::new(full_name.to_string(), 1);
+        let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 
-        df_desc.is_timeline_epochms = index
-            .timeline_ctx
-            .map_or(false, |ctx| ctx.is_timeline_epochms());
+        df_desc.is_timeline_epochms = index.timeline_ctx.is_timeline_epochms();
 
         df_builder.import_into_dataflow(&index.on, &mut df_desc, &self.config.features)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
