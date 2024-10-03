@@ -18,17 +18,17 @@ to **continually ingest changes** resulting from CRUD operations in the upstream
 database. The native support for PostgreSQL Change Data Capture (CDC) in
 Materialize gives you the following benefits:
 
-* **No additional infrastructure:** ingest PostgreSQL change data into
+* **No additional infrastructure:** Ingest PostgreSQL change data into
     Materialize in real-time with no architectural changes or additional
     operational overhead. In particular, you **do not need to deploy Kafka and
     Debezium** for PostgreSQL CDC.
 
-* **Transactional consistency:** the PostgreSQL source ensures that transactions
+* **Transactional consistency:** The PostgreSQL source ensures that transactions
     in the upstream PostgreSQL database are respected downstream. Materialize
     will **never show partial results** based on partially replicated
     transactions.
 
-* **Incrementally updated materialized views:** materialized views in PostgreSQL
+* **Incrementally updated materialized views:** Materialized views in PostgreSQL
     are computationally expensive and require manual refreshes. You can use
     Materialize as a read-replica to build views on top of your PostgreSQL data
     that are efficiently maintained and always up-to-date.
