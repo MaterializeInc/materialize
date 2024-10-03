@@ -57,7 +57,7 @@ impl TryFromValue<WithOptionValue<Aug>> for Secret {
     }
 
     fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
-        let secret = catalog.get_item(&self.0);
+        let secret = catalog.get_item(&self.0.into());
         let name = ResolvedItemName::Item {
             id: self.0,
             qualifiers: secret.name().qualifiers.clone(),
@@ -103,7 +103,7 @@ impl TryFromValue<WithOptionValue<Aug>> for Object {
     }
 
     fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
-        let item = catalog.get_item(&self.0);
+        let item = catalog.get_item(&self.0.into());
         let name = ResolvedItemName::Item {
             id: self.0,
             qualifiers: item.name().qualifiers.clone(),

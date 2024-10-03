@@ -295,12 +295,13 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
     format: &mut Option<FormatSpecifier<Aug>>,
 ) -> Result<(), PlanError> {
     // Collect all objects referenced by the sink.
-    let from = catalog.get_item(&from_id);
+    let from = catalog.get_item(&from_id.into());
     let object_ids = from
         .references()
         .0
-        .iter()
-        .chain_one(&from.id())
+        .clone()
+        .into_iter()
+        .chain_one(from.id())
         .copied()
         .collect::<Vec<_>>();
 
@@ -333,8 +334,9 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
             })
             .collect::<BTreeSet<_>>();
 
+        // Adding existing comments if not already provided by user
         for object_id in &object_ids {
-            let item = catalog.get_item(object_id);
+            let item = catalog.get_item(&object_id.into());
             let full_name = catalog.resolve_full_name(item.name());
             let full_resolved_name = ResolvedItemName::Item {
                 id: *object_id,
