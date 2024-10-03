@@ -61,7 +61,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
         if let Some(metrics) = &self.metrics {
-            metrics.observe_e2e_optimization_time("view", time.elapsed());
+            metrics.observe_e2e_optimization_time("view", time.elapsed(), || format!("{expr:?}"));
         }
 
         // Return the resulting OptimizedMirRelationExpr.

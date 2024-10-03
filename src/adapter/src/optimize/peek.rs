@@ -430,7 +430,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             PeekPlan::SlowPath(_) => "peek:slow_path",
         };
         self.metrics
-            .observe_e2e_optimization_time(label, self.duration);
+            .observe_e2e_optimization_time(label, self.duration, || format!("{peek_plan:?}"));
 
         Ok(GlobalLirPlan {
             peek_plan,
