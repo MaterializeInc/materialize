@@ -9,14 +9,14 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
 package mz_repr.catalog_item_id;
 
+import "google/protobuf/empty.proto";
+
 message ProtoCatalogItemId {
-    oneof kind {
-        uint64 system = 1;
-        uint64 user = 2;
-        uint64 transient = 3;
-    }
+  oneof kind {
+    uint64 system = 1;
+    uint64 user = 2;
+    uint64 transient = 3;
+  }
 }
