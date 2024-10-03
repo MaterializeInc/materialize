@@ -50,11 +50,25 @@ To configure a custom Materialize [cluster](/sql/create-cluster), follow these s
 
 ## Known limitations
 
-When you connect to Materialize from Looker and try to test the connection, you
-might see the following error:
+When using Looker with Materialize, be aware of the following limitations:
 
-```
-Test kill: Cannot cancel queries: Query could not be found in database.
-```
+1. **Connection Test Error**: You might encounter this error when testing the connection to Materialize from Looker:
 
-This is a known issue with Looker. You can safely ignore this error.
+   ```
+   Test kill: Cannot cancel queries: Query could not be found in database.
+   ```
+
+   This is a known issue with Looker and can be safely ignored and does not impact the functionality of Looker.
+
+2. **Symmetric Aggregates**: Looker uses [symmetric aggregates](https://cloud.google.com/looker/docs/best-practices/understanding-symmetric-aggregates),a feature that relies on the `BIT` type with `SUM DISTINCT` in PostgreSQL connectors. While we haven't confirmed performance impacts in Materialize, consider the following:
+
+   - You can disable symmetric aggregates in Looker if needed. For instructions on how to do this, refer to the [Looker documentation on disabling symmetric aggregates](https://cloud.google.com/looker/docs/reference/param-explore-symmetric-aggregates#not_all_database_dialects_support_median_and_percentile_measure_types_with_symmetric_aggregates).
+   - Looker remains fully functional for visualizing Materialize data without this feature.
+
+3. **Handling Symmetric Aggregates**:
+
+   a. Test query performance with and without symmetric aggregates to determine the optimal configuration.
+
+   b. If you encounter performance issues, disable symmetric aggregates in your Looker setup using the link provided above.
+
+   c. For use cases requiring symmetric aggregates, contact Materialize support for optimization guidance.
