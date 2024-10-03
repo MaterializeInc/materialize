@@ -40,11 +40,7 @@ impl OptimizerMetrics {
         }
     }
 
-    pub fn observe_e2e_optimization_time(
-        &self,
-        object_type: &str,
-        duration: Duration,
-    ) {
+    pub fn observe_e2e_optimization_time(&self, object_type: &str, duration: Duration) {
         self.e2e_optimization_time_seconds
             .with_label_values(&[object_type])
             .observe(duration.as_secs_f64());
