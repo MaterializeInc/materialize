@@ -76,17 +76,6 @@ pub mod operators {
     pub mod shard_source;
 
     // TODO(cfg): Move this next to the use.
-    pub(crate) const PERSIST_SINK_MINIMUM_BATCH_UPDATES: Config<usize> = Config::new(
-        "persist_sink_minimum_batch_updates",
-        0,
-        "\
-    In the compute persist sink, workers with less than the minimum number of \
-    updates will flush their records to single downstream worker to be batched \
-    up there... in the hopes of grouping our updates into fewer, larger \
-    batches.",
-    );
-
-    // TODO(cfg): Move this next to the use.
     pub(crate) const STORAGE_SOURCE_DECODE_FUEL: Config<usize> = Config::new(
         "storage_source_decode_fuel",
         1_000_000,
