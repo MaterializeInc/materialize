@@ -16,4 +16,3 @@
 {{ config(materialized='source') }}
 
 FROM LOAD GENERATOR AUCTION
-FOR ALL TABLES
