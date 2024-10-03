@@ -135,10 +135,14 @@ class MonotonicTopK(Check):
                 $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=1
                 {"f1": "A"}
 
-                > CREATE SOURCE monotonic_topk_source
+                >[version<11900] CREATE SOURCE monotonic_topk_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-monotonic-topk-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
 
-                > CREATE TABLE monotonic_topk_source_tbl FROM SOURCE monotonic_topk_source (REFERENCE "testdrive-monotonic-topk-${testdrive.seed}")
+                >[version>=11900] CREATE SOURCE monotonic_topk_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-monotonic-topk-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE monotonic_topk_source FROM SOURCE monotonic_topk_source_src (REFERENCE "testdrive-monotonic-topk-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
             """
@@ -152,14 +156,14 @@ class MonotonicTopK(Check):
                 """
                 $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=2
                 {"f1": "B"}
-                > CREATE MATERIALIZED VIEW monotonic_topk_view1 AS SELECT f1, COUNT(f1) FROM monotonic_topk_source_tbl GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 2;
+                > CREATE MATERIALIZED VIEW monotonic_topk_view1 AS SELECT f1, COUNT(f1) FROM monotonic_topk_source GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 2;
                 $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=3
                 {"f1": "C"}
                 """,
                 """
                 $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=4
                 {"f1": "D"}
-                > CREATE MATERIALIZED VIEW monotonic_topk_view2 AS SELECT f1, COUNT(f1) FROM monotonic_topk_source_tbl GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 2;
+                > CREATE MATERIALIZED VIEW monotonic_topk_view2 AS SELECT f1, COUNT(f1) FROM monotonic_topk_source GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 2;
                 $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=5
                 {"f1": "E"}
                 """,
@@ -169,16 +173,16 @@ class MonotonicTopK(Check):
     def validate(self) -> Testdrive:
         return Testdrive(
             dedent(
-                f"""
+                """
                 > SHOW CREATE MATERIALIZED VIEW monotonic_topk_view1;
-                materialize.public.monotonic_topk_view1 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_topk_view1\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = ON COMMIT) AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_topk_source_tbl\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" DESC NULLS LAST LIMIT 2"
+                materialize.public.monotonic_topk_view1 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_topk_view1\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = ON COMMIT) AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_topk_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" DESC NULLS LAST LIMIT 2"
 
                 > SELECT * FROM monotonic_topk_view1;
                 E 5
                 D 4
 
                 > SHOW CREATE MATERIALIZED VIEW monotonic_topk_view2;
-                materialize.public.monotonic_topk_view2 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_topk_view2\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = ON COMMIT) AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_topk_source_tbl\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" ASC NULLS FIRST LIMIT 2"
+                materialize.public.monotonic_topk_view2 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_topk_view2\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = ON COMMIT) AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_topk_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" ASC NULLS FIRST LIMIT 2"
 
                 > SELECT * FROM monotonic_topk_view2;
                 A 1
@@ -200,10 +204,14 @@ class MonotonicTop1(Check):
                 $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=1
                 {"f1": "A"}
 
-                > CREATE SOURCE monotonic_top1_source
+                >[version<11900] CREATE SOURCE monotonic_top1_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-monotonic-top1-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
 
-                > CREATE TABLE monotonic_top1_source_tbl FROM SOURCE monotonic_top1_source (REFERENCE "testdrive-monotonic-top1-${testdrive.seed}")
+                >[version>=11900] CREATE SOURCE monotonic_top1_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-monotonic-top1-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE monotonic_top1_source FROM SOURCE monotonic_top1_source_src (REFERENCE "testdrive-monotonic-top1-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
             """
@@ -217,14 +225,14 @@ class MonotonicTop1(Check):
                 """
                 $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=2
                 {"f1": "B"}
-                > CREATE MATERIALIZED VIEW monotonic_top1_view1 AS SELECT f1, COUNT(f1) FROM monotonic_top1_source_tbl GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 1;
+                > CREATE MATERIALIZED VIEW monotonic_top1_view1 AS SELECT f1, COUNT(f1) FROM monotonic_top1_source GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 1;
                 $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=3
                 {"f1": "C"}
                 """,
                 """
                 $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=4
                 {"f1": "C"}
-                > CREATE MATERIALIZED VIEW monotonic_top1_view2 AS SELECT f1, COUNT(f1) FROM monotonic_top1_source_tbl GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 1;
+                > CREATE MATERIALIZED VIEW monotonic_top1_view2 AS SELECT f1, COUNT(f1) FROM monotonic_top1_source GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 1;
                 $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=5
                 {"f1": "D"}
                 """,
@@ -236,13 +244,13 @@ class MonotonicTop1(Check):
             dedent(
                 """
                 > SHOW CREATE MATERIALIZED VIEW monotonic_top1_view1;
-                materialize.public.monotonic_top1_view1 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_top1_view1\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = ON COMMIT) AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_top1_source_tbl\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" DESC NULLS LAST LIMIT 1"
+                materialize.public.monotonic_top1_view1 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_top1_view1\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = ON COMMIT) AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_top1_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" DESC NULLS LAST LIMIT 1"
 
                 > SELECT * FROM monotonic_top1_view1;
                 D 5
 
                 > SHOW CREATE MATERIALIZED VIEW monotonic_top1_view2;
-                materialize.public.monotonic_top1_view2 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_top1_view2\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = ON COMMIT) AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_top1_source_tbl\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" ASC NULLS FIRST LIMIT 1"
+                materialize.public.monotonic_top1_view2 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_top1_view2\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = ON COMMIT) AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_top1_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" ASC NULLS FIRST LIMIT 1"
 
                 > SELECT * FROM monotonic_top1_view2;
                 A 1

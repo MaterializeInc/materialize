@@ -33,10 +33,14 @@ class AlterIndex(Check):
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "A${kafka-ingest.iteration}"}
 
-                > CREATE SOURCE alter_index_source
+                >[version<11900] CREATE SOURCE alter_index_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-index-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
 
-                > CREATE TABLE alter_index_source_tbl FROM SOURCE alter_index_source (REFERENCE "testdrive-alter-index-${testdrive.seed}")
+                >[version>=11900] CREATE SOURCE alter_index_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-index-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE alter_index_source FROM SOURCE alter_index_source_src (REFERENCE "testdrive-alter-index-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -102,7 +106,7 @@ class AlterIndex(Check):
                 D 10000 10000
                 E 10000 10000
 
-                > SELECT LEFT(f1,1), COUNT(*), COUNT(DISTINCT f1) FROM alter_index_source_tbl GROUP BY LEFT(f1,1);
+                > SELECT LEFT(f1,1), COUNT(*), COUNT(DISTINCT f1) FROM alter_index_source GROUP BY LEFT(f1,1);
                 A 10000 10000
                 B 10000 10000
                 C 10000 10000
