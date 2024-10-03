@@ -146,7 +146,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::logging::compute::LogDataflowErrors;
+use crate::logging::compute::{ComputeEvent, LogDataflowErrors};
 use crate::render::context::{
     ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
@@ -343,7 +343,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                             let depends = object.plan.depends();
                             context
                                 .enter_region(region, Some(&depends))
-                                .render_recursive_plan(0, object.plan)
+                                .render_recursive_plan(object.id, 0, object.plan)
                                 .leave_region()
                         },
                     );
@@ -418,7 +418,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                             let depends = object.plan.depends();
                             context
                                 .enter_region(region, Some(&depends))
-                                .render_plan(object.plan)
+                                .render_plan(object.id, object.plan)
                                 .leave_region()
                         },
                     );
@@ -720,7 +720,12 @@ where
     ///
     /// The method requires that all variables conclude with a physical representation that
     /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-    pub fn render_recursive_plan(&mut self, level: usize, plan: FlatPlan) -> CollectionBundle<G> {
+    pub fn render_recursive_plan(
+        &mut self,
+        object_id: GlobalId,
+        level: usize,
+        plan: FlatPlan,
+    ) -> CollectionBundle<G> {
         if plan.is_recursive() {
             let (values, body) = plan.split_recursive();
             let ids: Vec<_> = values.iter().map(|(id, _, _)| *id).collect();
@@ -746,7 +751,7 @@ where
             }
             // Now render each of the bindings.
             for (id, value, limit) in values {
-                let bundle = self.render_recursive_plan(level + 1, value);
+                let bundle = self.render_recursive_plan(object_id, level + 1, value);
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
@@ -812,9 +817,9 @@ where
                 );
             }
 
-            self.render_recursive_plan(level, body)
+            self.render_recursive_plan(object_id, level, body)
         } else {
-            self.render_plan(plan)
+            self.render_plan(object_id, plan)
         }
     }
 }
@@ -831,7 +836,7 @@ where
     ///
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
-    pub fn render_plan(&mut self, plan: FlatPlan) -> CollectionBundle<G> {
+    pub fn render_plan(&mut self, object_id: GlobalId, plan: FlatPlan) -> CollectionBundle<G> {
         let (values, body) = plan.split_lets();
         for (id, value) in values {
             let bundle = self
@@ -840,7 +845,7 @@ where
                 .region_named(&format!("Binding({:?})", id), |region| {
                     let depends = value.depends();
                     self.enter_region(region, Some(&depends))
-                        .render_letfree_plan(value)
+                        .render_letfree_plan(object_id, value)
                         .leave_region()
                 });
             self.insert_id(Id::Local(id), bundle);
@@ -849,7 +854,7 @@ where
         self.scope.clone().region_named("Main Body", |region| {
             let depends = body.depends();
             self.enter_region(region, Some(&depends))
-                .render_letfree_plan(body)
+                .render_letfree_plan(object_id, body)
                 .leave_region()
         })
     }
@@ -857,19 +862,20 @@ where
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///
     /// The plan must _not_ contain any `Let` or `LetRec` nodes.
-    fn render_letfree_plan(&mut self, plan: FlatPlan) -> CollectionBundle<G> {
+    fn render_letfree_plan(&mut self, object_id: GlobalId, plan: FlatPlan) -> CollectionBundle<G> {
         let (mut nodes, root_id, topological_order) = plan.destruct();
 
         // Rendered collections by their `LirId`.
         let mut collections = BTreeMap::new();
 
-        for id in topological_order {
-            let node = nodes.remove(&id).unwrap();
+        for lir_id in topological_order {
+            let node = nodes.remove(&lir_id).unwrap();
             let mut bundle = self.render_plan_node(node, &collections);
 
-            self.log_operator_hydration(&mut bundle, id);
+            self.log_lir_address_mapping(object_id, lir_id, bundle.scope().addr());
+            self.log_operator_hydration(&mut bundle, lir_id);
 
-            collections.insert(id, bundle);
+            collections.insert(lir_id, bundle);
         }
 
         collections
@@ -1072,6 +1078,16 @@ where
                 let input = expect_input(input);
                 input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
             }
+        }
+    }
+
+    fn log_lir_address_mapping(&self, id: GlobalId, lir_id: LirId, address: Rc<[usize]>) {
+        if let Some(logger) = &self.compute_logger {
+            logger.log(ComputeEvent::LirAddress {
+                id,
+                lir_id,
+                address,
+            });
         }
     }
 

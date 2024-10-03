@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor};
 use differential_dataflow::Collection;
+use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Timestamp};
 use mz_timely_util::replay::MzReplay;
@@ -130,6 +131,15 @@ pub enum ComputeEvent {
     },
     /// A dataflow export was hydrated.
     Hydration { export_id: GlobalId },
+    /// An LIR operator was mapped to some particular dataflow operator.
+    LirAddress {
+        /// Identifier of the dataflow in which the LIR operator is running.
+        id: GlobalId,
+        /// The LIR identifier (local to `export_id`).
+        lir_id: LirId,
+        /// Operator address.
+        address: Rc<[usize]>,
+    },
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
@@ -214,6 +224,7 @@ pub(super) fn construct<A: Allocate + 'static>(
             demux.new_output();
         let (mut error_count_out, error_count) = demux.new_output();
         let (mut hydration_time_out, hydration_time) = demux.new_output();
+        let (mut lir_mapping_out, lir_mapping) = demux.new_output();
 
         let mut demux_state = DemuxState::new(worker2);
         let mut demux_buffer = Vec::new();
@@ -230,6 +241,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
                 let mut error_count = error_count_out.activate();
                 let mut hydration_time = hydration_time_out.activate();
+                let mut lir_mapping = lir_mapping_out.activate();
 
                 input.for_each(|cap, data| {
                     data.swap(&mut demux_buffer);
@@ -246,6 +258,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                         arrangement_heap_allocations: arrangement_heap_allocations.session(&cap),
                         error_count: error_count.session(&cap),
                         hydration_time: hydration_time.session(&cap),
+                        lir_mapping: lir_mapping.session(&cap),
                     };
 
                     for (time, logger_id, event) in demux_buffer.drain(..) {
@@ -382,6 +395,29 @@ pub(super) fn construct<A: Allocate + 'static>(
             }
         });
 
+        let mut packer = PermutedRowPacker::new(ComputeLog::LirMapping);
+        let lir_mapping = lir_mapping.as_collection().map({
+            move |datum| {
+                // we can't use `pack_slice` because we need `RowPacker::push_list`
+                packer.pack_by_index(|packer, index| match index {
+                    0 => {
+                        let mut scratch = String::new();
+                        packer.push(make_string_datum(datum.id, &mut scratch))
+                    }
+                    1 => packer.push(Datum::UInt64(datum.lir_id)),
+                    2 => packer.push_list(
+                        datum
+                            .address
+                            .iter()
+                            .copied()
+                            .map(u64::cast_from)
+                            .map(Datum::UInt64),
+                    ),
+                    _ => unreachable!("bad index {index} in lir_mapping"),
+                })
+            }
+        });
+
         use ComputeLog::*;
         let logs = [
             (DataflowCurrent, dataflow_current),
@@ -395,6 +431,7 @@ pub(super) fn construct<A: Allocate + 'static>(
             (ArrangementHeapAllocations, arrangement_heap_allocations),
             (ErrorCount, error_count),
             (HydrationTime, hydration_time),
+            (LirMapping, lir_mapping),
         ];
 
         // Build the output arrangements.
@@ -448,6 +485,8 @@ struct DemuxState<A: Allocate> {
     peek_stash: BTreeMap<Uuid, Duration>,
     /// Arrangement size stash
     arrangement_size: BTreeMap<usize, ArrangementSizeState>,
+    /// LIR -> address mapping
+    lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, Vec<usize>>>,
 }
 
 impl<A: Allocate> DemuxState<A> {
@@ -460,6 +499,7 @@ impl<A: Allocate> DemuxState<A> {
             shutdown_dataflows: Default::default(),
             peek_stash: Default::default(),
             arrangement_size: Default::default(),
+            lir_mapping: Default::default(),
         }
     }
 }
@@ -516,6 +556,7 @@ struct DemuxOutput<'a> {
     arrangement_heap_allocations: OutputSession<'a, ArrangementHeapDatum>,
     hydration_time: OutputSession<'a, HydrationTimeDatum>,
     error_count: OutputSession<'a, ErrorCountDatum>,
+    lir_mapping: OutputSession<'a, LirMappingDatum>,
 }
 
 #[derive(Clone)]
@@ -567,6 +608,13 @@ struct ErrorCountDatum {
     // per-worker error count might be negative and at the SQL level having negative multiplicities
     // is treated as an error.
     count: i64,
+}
+
+#[derive(Clone)]
+struct LirMappingDatum {
+    id: GlobalId,
+    lir_id: LirId,
+    address: Vec<usize>,
 }
 
 /// Event handler of the demux operator.
@@ -638,6 +686,11 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             DataflowShutdown { dataflow_index } => self.handle_dataflow_shutdown(dataflow_index),
             ErrorCount { export_id, diff } => self.handle_error_count(export_id, diff),
             Hydration { export_id } => self.handle_hydration(export_id),
+            LirAddress {
+                id,
+                lir_id,
+                address,
+            } => self.handle_lir_address(id, lir_id, address),
         }
     }
 
@@ -704,6 +757,18 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             time_ns: export.hydration_time_ns,
         };
         self.output.hydration_time.give((datum, ts, -1));
+
+        // Remove LIR mapping for this export.
+        if let Some(mappings) = self.state.lir_mapping.remove(&id) {
+            for (lir_id, address) in mappings {
+                let datum = LirMappingDatum {
+                    id,
+                    lir_id,
+                    address,
+                };
+                self.output.lir_mapping.give((datum, ts, -1));
+            }
+        }
     }
 
     fn handle_dataflow_dropped(&mut self, id: usize) {
@@ -949,6 +1014,32 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         self.shared_state
             .arrangement_size_activators
             .remove(&operator_id);
+    }
+
+    /// Indicate that a new LIR operator exists; record the dataflow address it maps to.
+    fn handle_lir_address(&mut self, id: GlobalId, lir_id: LirId, address: Rc<[usize]>) {
+        let address = address.to_vec();
+
+        // record the state (for the later drop)
+        self.state
+            .lir_mapping
+            .entry(id)
+            .and_modify(|id_mapping| {
+                let existing = id_mapping.insert(lir_id, address.clone());
+                if let Some(old_address) = existing {
+                    error!(%id, %lir_id, "lir mapping to {address:?} already registered as {old_address:?}");
+                }
+            })
+            .or_insert_with(|| BTreeMap::from([(lir_id, address.clone())]));
+
+        // send the datum out
+        let ts = self.ts();
+        let datum = LirMappingDatum {
+            id,
+            lir_id,
+            address,
+        };
+        self.output.lir_mapping.give((datum, ts, 1));
     }
 }
 

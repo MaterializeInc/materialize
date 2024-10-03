@@ -1953,6 +1953,14 @@ pub static MZ_ACTIVE_PEEKS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| B
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_COMPUTE_LIR_MAPPING: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
+    name: "mz_lir_mapping_per_worker",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::LOG_MZ_COMPUTE_LIR_MAPPING_OID,
+    variant: LogVariant::Compute(ComputeLog::LirMapping),
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_PEEK_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_peek_durations_histogram_raw",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -9369,6 +9377,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
         Builtin::Source(&MZ_COMPUTE_HYDRATION_TIMES),
+        Builtin::Log(&MZ_COMPUTE_LIR_MAPPING),
         Builtin::View(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::View(&MZ_COMPUTE_HYDRATION_STATUSES),
