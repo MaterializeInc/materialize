@@ -354,12 +354,15 @@ impl Coordinator {
                         schema_spec,
                         conn_id.unwrap_or(&SYSTEM_CONN_ID),
                     );
-                    let webhook_sources = schema.item_ids().filter(|id| {
-                        let item = self.catalog().get_entry(id);
-                        item.source()
-                            .map(|s| matches!(s.data_source, DataSourceDesc::Webhook { .. }))
-                            .unwrap_or(false)
-                    });
+                    let webhook_sources = schema
+                        .item_ids()
+                        .filter(|id| {
+                            let item = self.catalog().get_entry(id);
+                            item.source()
+                                .map(|s| matches!(s.data_source, DataSourceDesc::Webhook { .. }))
+                                .unwrap_or(false)
+                        })
+                        .map(GlobalId::from);
                     webhook_sources_to_restart.extend(webhook_sources);
                 }
                 catalog::Op::CreateCluster { id, .. } => {

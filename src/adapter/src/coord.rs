@@ -1884,7 +1884,7 @@ impl Coordinator {
                     || entry
                         .uses()
                         .iter()
-                        .all(|dependency_id| *dependency_id < entry.id),
+                        .all(|dependency_id| *dependency_id < entry.id.to_global_id()),
                 "entries should only use to items with lesser `GlobalId`s, but \
                 but {:?} uses {:?}",
                 entry.id,

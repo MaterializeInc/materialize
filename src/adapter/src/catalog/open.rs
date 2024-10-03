@@ -659,7 +659,7 @@ impl Catalog {
                 );
             }
 
-            ancestor_ids.insert(id, new_id);
+            ancestor_ids.insert(id, new_id.to_global_id());
 
             if entry.item().is_storage_collection() {
                 migration_metadata
@@ -685,7 +685,7 @@ impl Catalog {
                                         .get(variant)
                                         .expect("all variants have a name")
                                         .to_string(),
-                                    new_id,
+                                    new_id.to_global_id(),
                                     entry.oid(),
                                 ));
                         }
@@ -721,9 +721,10 @@ impl Catalog {
             let name = entry.name().clone();
             if id.is_user() {
                 let schema_id = name.qualifiers.schema_spec.clone().into();
-                let item_rebuilder = CatalogItemRebuilder::new(entry, new_id, &ancestor_ids);
+                let item_rebuilder =
+                    CatalogItemRebuilder::new(entry, new_id.to_global_id(), &ancestor_ids);
                 migration_metadata.user_item_create_ops.push(CreateOp {
-                    id: new_id,
+                    id: new_id.to_global_id(),
                     oid: entry.oid(),
                     schema_id,
                     name: name.item.clone(),
@@ -749,9 +750,9 @@ impl Catalog {
         visited_set.insert(id);
         let entry = state.get_entry(&id);
         for dependant in entry.used_by() {
-            if !visited_set.contains(dependant) {
+            if !visited_set.contains(&dependant.to_global_id()) {
                 let child_topological_sort =
-                    Catalog::topological_sort(state, *dependant, visited_set);
+                    Catalog::topological_sort(state, dependant.to_global_id(), visited_set);
                 sorted_entries.extend(child_topological_sort);
             }
         }
@@ -779,7 +780,13 @@ impl Catalog {
         }
 
         let mut builtin_table_updates = Vec::new();
-        txn.remove_items(&migration_metadata.user_item_drop_ops.drain(..).collect())?;
+        txn.remove_items(
+            &migration_metadata
+                .user_item_drop_ops
+                .drain(..)
+                .map(|id| id.to_item_id())
+                .collect(),
+        )?;
         txn.update_system_object_mappings(std::mem::take(
             &mut migration_metadata.migrated_system_object_mappings,
         ))?;
@@ -811,7 +818,7 @@ impl Catalog {
             let item = item_rebuilder.build(state);
             let serialized_item = item.to_serialized();
             txn.insert_item(
-                id,
+                id.to_item_id(),
                 oid,
                 schema_id,
                 &name,
@@ -923,7 +930,8 @@ fn add_new_remove_old_builtin_items_migration(
                         !builtin.runtime_alterable(),
                         "setting the runtime alterable flag on an existing object is not permitted"
                     );
-                    migrated_builtin_ids.push(system_object_mapping.unique_identifier.id);
+                    migrated_builtin_ids
+                        .push(system_object_mapping.unique_identifier.id.to_global_id());
                 }
             }
             None => {
@@ -936,7 +944,7 @@ fn add_new_remove_old_builtin_items_migration(
                     },
                     unique_identifier: SystemObjectUniqueIdentifier { id, fingerprint },
                 });
-                new_builtin_ids.push(id);
+                new_builtin_ids.push(id.to_global_id());
 
                 // Runtime-alterable system objects are durably recorded to the
                 // usual items collection, so that they can be later altered at
@@ -1066,7 +1074,7 @@ fn add_new_remove_old_builtin_introspection_source_migration(
         let new_ids = txn.allocate_system_item_ids(usize_to_u64(new_logs.len()))?;
         assert_eq!(new_logs.len(), new_ids.len());
         for (log, index_id) in new_logs.into_iter().zip(new_ids) {
-            new_indexes.push((cluster.id, log.name.to_string(), index_id));
+            new_indexes.push((cluster.id, log.name.to_string(), index_id.to_global_id()));
         }
 
         // Anything left in `introspection_source_index_ids` must have been deleted and should be

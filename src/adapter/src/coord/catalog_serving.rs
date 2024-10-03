@@ -221,7 +221,7 @@ pub fn check_cluster_restrictions(
     // Collect any items that are not allowed to be run on the catalog server cluster.
     let unallowed_dependents: SmallVec<[String; 2]> = depends_on
         .filter_map(|id| {
-            let item = catalog.get_item(&id);
+            let item = catalog.get_item(&id.to_item_id());
             let full_name = catalog.resolve_full_name(item.name());
 
             if !is_system_schema(&full_name.schema) {

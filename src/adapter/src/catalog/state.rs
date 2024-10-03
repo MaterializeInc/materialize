@@ -50,7 +50,7 @@ use mz_repr::namespaces::{
     UNSTABLE_SCHEMAS,
 };
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
 use mz_sql::catalog::{
@@ -108,7 +108,7 @@ pub struct CatalogState {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) database_by_id: BTreeMap<DatabaseId, Database>,
     #[serde(serialize_with = "skip_temp_items")]
-    pub(super) entry_by_id: BTreeMap<GlobalId, CatalogEntry>,
+    pub(super) entry_by_id: BTreeMap<CatalogItemId, CatalogEntry>,
     pub(super) ambient_schemas_by_name: BTreeMap<String, SchemaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
@@ -145,7 +145,7 @@ pub struct CatalogState {
 }
 
 fn skip_temp_items<S>(
-    entries: &BTreeMap<GlobalId, CatalogEntry>,
+    entries: &BTreeMap<CatalogItemId, CatalogEntry>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -245,26 +245,6 @@ impl CatalogState {
 
     pub fn for_system_session(&self) -> ConnCatalog {
         self.for_sessionless_user(MZ_SYSTEM_ROLE_ID)
-    }
-
-    /// Computes the IDs of any indexes that transitively depend on this catalog
-    /// entry.
-    pub fn dependent_indexes(&self, id: GlobalId) -> Vec<GlobalId> {
-        let mut out = Vec::new();
-        self.dependent_indexes_inner(id, &mut out);
-        out
-    }
-
-    fn dependent_indexes_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
-        let entry = self.get_entry(&id);
-        match entry.item() {
-            CatalogItem::Index(_) => out.push(id),
-            _ => {
-                for id in entry.used_by() {
-                    self.dependent_indexes_inner(*id, out)
-                }
-            }
-        }
     }
 
     /// Returns an iterator over the deduplicated identifiers of all
@@ -492,7 +472,7 @@ impl CatalogState {
     /// objects.
     pub(super) fn item_dependents(
         &self,
-        item_id: GlobalId,
+        item_id: CatalogItemId,
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
         let mut dependents = Vec::new();
@@ -508,7 +488,7 @@ impl CatalogState {
             // for dropping. We have additional code in planning to create a
             // kind of special-case "CASCADE" for this dependency.
             if let Some(progress_id) = entry.progress_id() {
-                dependents.extend_from_slice(&self.item_dependents(progress_id, seen));
+                dependents.extend_from_slice(&self.item_dependents(progress_id.to_item_id(), seen));
             }
         }
         dependents
@@ -593,9 +573,10 @@ impl CatalogState {
         }
     }
 
-    pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    pub fn get_entry<T: Into<CatalogItemId>>(&self, id: T) -> &CatalogEntry {
+        let id = id.into();
         self.entry_by_id
-            .get(id)
+            .get(&id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
     }
 
@@ -604,7 +585,7 @@ impl CatalogState {
             .temporary_schemas
             .get(conn)
             .unwrap_or_else(|| panic!("catalog out of sync, missing temporary schema for {conn}"));
-        schema.items.values().copied().map(ObjectId::Item)
+        schema.items.values().copied().map(ObjectId::from)
     }
 
     /// Gets a type named `name` from exactly one of the system schemas.
@@ -671,8 +652,9 @@ impl CatalogState {
         name
     }
 
-    pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
-        self.entry_by_id.get(id)
+    pub fn try_get_entry<T: Into<CatalogItemId>>(&self, id: T) -> Option<&CatalogEntry> {
+        let id: CatalogItemId = id.into();
+        self.entry_by_id.get(&id)
     }
 
     pub(crate) fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
@@ -1062,7 +1044,7 @@ impl CatalogState {
                     .iter()
                     .filter_map(move |uses_id| match self.get_entry(uses_id).item() {
                         CatalogItem::Index(index) if index_matches(index) => {
-                            Some((*uses_id, index))
+                            Some((uses_id.to_global_id(), index))
                         }
                         _ => None,
                     })
@@ -1316,8 +1298,8 @@ impl CatalogState {
         let schema_id = &self.ambient_schemas_by_name[builtin.schema()];
         let schema = &self.ambient_schemas_by_id[schema_id];
         match builtin.catalog_item_type() {
-            CatalogItemType::Type => schema.types[builtin.name()].clone(),
-            CatalogItemType::Func => schema.functions[builtin.name()].clone(),
+            CatalogItemType::Type => schema.types[builtin.name()].to_global_id(),
+            CatalogItemType::Func => schema.functions[builtin.name()].to_global_id(),
             CatalogItemType::Table
             | CatalogItemType::Source
             | CatalogItemType::Sink
@@ -1326,7 +1308,7 @@ impl CatalogState {
             | CatalogItemType::Index
             | CatalogItemType::Secret
             | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => schema.items[builtin.name()].clone(),
+            | CatalogItemType::ContinualTask => schema.items[builtin.name()].to_global_id(),
         }
     }
 
@@ -1564,7 +1546,7 @@ impl CatalogState {
     #[allow(clippy::useless_let_if_seq)]
     pub fn resolve(
         &self,
-        get_schema_entries: fn(&Schema) -> &BTreeMap<String, GlobalId>,
+        get_schema_entries: fn(&Schema) -> &BTreeMap<String, CatalogItemId>,
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,
@@ -2059,7 +2041,7 @@ impl CatalogState {
                 DataSourceDesc::Ingestion { .. } => {
                     // For sources, look up each dependent subsource and propagate.
                     cws.entry(source_cw).or_default().insert(id);
-                    ids.extend(entry.used_by());
+                    ids.extend(entry.used_by().iter().map(|id| id.to_global_id()));
                 }
                 DataSourceDesc::IngestionExport { ingestion_id, .. } => {
                     // For subsources, look up the parent source and propagate the compaction
@@ -2083,7 +2065,7 @@ impl CatalogState {
         cws
     }
 
-    pub fn comment_id_to_global_id(id: &CommentObjectId) -> Option<GlobalId> {
+    pub fn comment_id_to_global_id(id: &CommentObjectId) -> Option<CatalogItemId> {
         match id {
             CommentObjectId::Table(id)
             | CommentObjectId::View(id)

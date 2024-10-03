@@ -1327,7 +1327,7 @@ impl Coordinator {
         let catalog = self.catalog().for_session(session);
         let mut dependent_objects: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for entry in self.catalog.entries() {
-            let id = SystemObjectId::Object(entry.id().into());
+            let id = SystemObjectId::Object(entry.item_id().into());
             if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
                 let object_description = ErrorMessageObjectDescription::from_sys_id(&id, &catalog);
                 dependent_objects
@@ -1592,7 +1592,7 @@ impl Coordinator {
                         let dependants = self
                             .controller
                             .compute
-                            .collection_reverse_dependencies(index.cluster_id, *id)
+                            .collection_reverse_dependencies(index.cluster_id, id.into())
                             .ok()
                             .into_iter()
                             .flatten()
@@ -1606,7 +1606,7 @@ impl Coordinator {
                                 !matches!(dependant_id, GlobalId::Transient(..)) &&
                                 // If the dependent object is also being dropped, then there is no
                                 // problem, so we don't want a notice.
-                                !ids_set.contains(&ObjectId::Item(*dependant_id))
+                                !ids_set.contains(&ObjectId::from(*dependant_id))
                             })
                             .flat_map(|dependant_id| {
                                 // If we are not able to find a name for this ID it probably means
@@ -1617,7 +1617,9 @@ impl Coordinator {
                             .collect_vec();
                         if !dependants.is_empty() {
                             dropped_in_use_indexes.push(DroppedInUseIndex {
-                                index_name: humanizer.humanize_id(*id).unwrap_or(id.to_string()),
+                                index_name: humanizer
+                                    .humanize_id(id.into())
+                                    .unwrap_or(id.to_string()),
                                 dependant_objects: dependants,
                             });
                         }
@@ -2347,8 +2349,8 @@ impl Coordinator {
     ) -> impl Future<Output = Result<ExecuteResponse, AdapterError>> {
         let explain_timeout = *session.vars().statement_timeout();
         let mut futures = FuturesOrdered::new();
-        for (gid, mfp) in imports {
-            let catalog_entry = self.catalog.get_entry(&gid);
+        for (id, mfp) in imports {
+            let catalog_entry = self.catalog.get_entry(id);
             let full_name = self
                 .catalog
                 .for_session(session)
@@ -2362,7 +2364,7 @@ impl Coordinator {
             let stats_future = self
                 .controller
                 .storage
-                .snapshot_parts_stats(gid, as_of.clone())
+                .snapshot_parts_stats(id, as_of.clone())
                 .await;
 
             let mz_now = mz_now.clone();
@@ -3517,9 +3519,10 @@ impl Coordinator {
 
         while let Some(id) = connections.pop_front() {
             for id in self.catalog.get_entry(&id).used_by() {
-                let entry = self.catalog.get_entry(id);
+                let id = GlobalId::from(id);
+                let entry = self.catalog.get_entry(&id);
                 match entry.item_type() {
-                    CatalogItemType::Connection => connections.push_back(*id),
+                    CatalogItemType::Connection => connections.push_back(id),
                     CatalogItemType::Source => {
                         let desc = match &entry.source().expect("known to be source").data_source {
                             DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc
@@ -3529,12 +3532,12 @@ impl Coordinator {
                             _ => unreachable!("only ingestions reference connections"),
                         };
 
-                        source_connections.insert(*id, desc.connection);
+                        source_connections.insert(id, desc.connection);
                     }
                     CatalogItemType::Sink => {
                         let export = entry.sink().expect("known to be sink");
                         sink_connections.insert(
-                            *id,
+                            id,
                             export
                                 .connection
                                 .clone()
@@ -4315,9 +4318,10 @@ impl Coordinator {
                 let dependent_index_ops = entry
                     .used_by()
                     .into_iter()
-                    .filter(|id| self.catalog().get_entry(id).is_index())
+                    .map(GlobalId::from)
+                    .filter(|id| self.catalog().get_entry(&id).is_index())
                     .map(|id| catalog::Op::UpdateOwner {
-                        id: ObjectId::Item(*id),
+                        id: ObjectId::from(id),
                         new_owner,
                     });
                 ops.extend(dependent_index_ops);
@@ -4328,7 +4332,7 @@ impl Coordinator {
                         .progress_id()
                         .into_iter()
                         .map(|id| catalog::Op::UpdateOwner {
-                            id: ObjectId::Item(id),
+                            id: ObjectId::from(id),
                             new_owner,
                         });
                 ops.extend(dependent_subsources);

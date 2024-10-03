@@ -42,7 +42,7 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::{
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType, NameReference,
@@ -80,9 +80,9 @@ struct InProgressRetractions {
     schemas: BTreeMap<SchemaKey, Schema>,
     clusters: BTreeMap<ClusterKey, Cluster>,
     items: BTreeMap<ItemKey, CatalogEntry>,
-    temp_items: BTreeMap<GlobalId, CatalogEntry>,
-    introspection_source_indexes: BTreeMap<GlobalId, CatalogEntry>,
-    system_object_mappings: BTreeMap<GlobalId, CatalogEntry>,
+    temp_items: BTreeMap<CatalogItemId, CatalogEntry>,
+    introspection_source_indexes: BTreeMap<CatalogItemId, CatalogEntry>,
+    system_object_mappings: BTreeMap<CatalogItemId, CatalogEntry>,
 }
 
 impl CatalogState {
@@ -421,7 +421,7 @@ impl CatalogState {
             StateDiff::Addition => {
                 if let Some(entry) = retractions
                     .introspection_source_indexes
-                    .remove(&introspection_source_index.index_id)
+                    .remove(&introspection_source_index.index_id.to_item_id())
                 {
                     // Introspection source indexes can only be updated through the builtin
                     // migration process, which allocates new IDs for each index.
@@ -439,7 +439,7 @@ impl CatalogState {
                 );
             }
             StateDiff::Retraction => {
-                let entry = self.drop_item(introspection_source_index.index_id);
+                let entry = self.drop_item(introspection_source_index.index_id.to_item_id());
                 retractions
                     .introspection_source_indexes
                     .insert(entry.id, entry);
@@ -653,7 +653,7 @@ impl CatalogState {
                         CatalogItem::Type(item_type) => item_type,
                         _ => unreachable!("types can only reference other types"),
                     };
-                    item_type.details.array_id = Some(id);
+                    item_type.details.array_id = Some(id.to_global_id());
                 }
 
                 // Assert that no built-in types are record types so that we don't
@@ -886,7 +886,7 @@ impl CatalogState {
                 };
                 // We allow sinks to break this invariant due to a know issue with `ALTER SINK`.
                 // https://github.com/MaterializeInc/materialize/pull/28708.
-                if !entry.is_sink() && entry.uses().iter().any(|id| *id > entry.id) {
+                if !entry.is_sink() && entry.uses().iter().any(|id| *id > entry.id.to_global_id()) {
                     let msg = format!(
                         "item cannot depend on items with larger GlobalIds, item: {:?}, dependencies: {:?}",
                         entry,
@@ -1058,7 +1058,7 @@ impl CatalogState {
             StateUpdateKind::SystemConfiguration(_) => Vec::new(),
             StateUpdateKind::Cluster(cluster) => self.pack_cluster_update(&cluster.name, diff),
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
-                self.pack_item_update(introspection_source_index.index_id, diff)
+                self.pack_item_update(introspection_source_index.index_id.to_item_id(), diff)
             }
             StateUpdateKind::ClusterReplica(cluster_replica) => self.pack_cluster_replica_update(
                 cluster_replica.cluster_id,
@@ -1096,7 +1096,7 @@ impl CatalogState {
         }
     }
 
-    fn get_entry_mut(&mut self, id: &GlobalId) -> &mut CatalogEntry {
+    fn get_entry_mut(&mut self, id: &CatalogItemId) -> &mut CatalogEntry {
         self.entry_by_id
             .get_mut(id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
@@ -1216,7 +1216,7 @@ impl CatalogState {
                     acl_items.extend_from_slice(&view.access);
 
                     state.insert_item(
-                        id,
+                        id.to_item_id(),
                         view.oid,
                         qname,
                         item,
@@ -1299,7 +1299,7 @@ impl CatalogState {
         assert!(views.is_empty());
 
         ids.into_iter()
-            .flat_map(|id| state.pack_item_update(id, 1))
+            .flat_map(|id| state.pack_item_update(id.to_item_id(), 1))
             .collect()
     }
 
@@ -1316,8 +1316,8 @@ impl CatalogState {
         }
 
         for u in &entry.references().0 {
-            match self.entry_by_id.get_mut(u) {
-                Some(metadata) => metadata.referenced_by.push(entry.id()),
+            match self.entry_by_id.get_mut(&u.to_item_id()) {
+                Some(metadata) => metadata.referenced_by.push(entry.id().into()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
                     &u,
@@ -1326,8 +1326,8 @@ impl CatalogState {
             }
         }
         for u in entry.uses() {
-            match self.entry_by_id.get_mut(&u) {
-                Some(metadata) => metadata.used_by.push(entry.id()),
+            match self.entry_by_id.get_mut(&u.to_item_id()) {
+                Some(metadata) => metadata.used_by.push(entry.id().into()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
                     &u,
@@ -1345,9 +1345,13 @@ impl CatalogState {
         let prev_id = match entry.item() {
             CatalogItem::Func(_) => schema
                 .functions
-                .insert(entry.name().item.clone(), entry.id()),
-            CatalogItem::Type(_) => schema.types.insert(entry.name().item.clone(), entry.id()),
-            _ => schema.items.insert(entry.name().item.clone(), entry.id()),
+                .insert(entry.name().item.clone(), entry.item_id()),
+            CatalogItem::Type(_) => schema
+                .types
+                .insert(entry.name().item.clone(), entry.item_id()),
+            _ => schema
+                .items
+                .insert(entry.name().item.clone(), entry.item_id()),
         };
 
         assert!(
@@ -1356,13 +1360,13 @@ impl CatalogState {
             entry.name().item.clone()
         );
 
-        self.entry_by_id.insert(entry.id(), entry.clone());
+        self.entry_by_id.insert(entry.item_id(), entry.clone());
     }
 
-    /// Associates a name, `GlobalId`, and entry.
+    /// Associates a name, [`CatalogItemId`], and entry.
     fn insert_item(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         name: QualifiedItemName,
         item: CatalogItem,
@@ -1384,16 +1388,18 @@ impl CatalogState {
     }
 
     #[mz_ore::instrument(level = "trace")]
-    fn drop_item(&mut self, id: GlobalId) -> CatalogEntry {
+    fn drop_item(&mut self, id: CatalogItemId) -> CatalogEntry {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
         for u in &metadata.references().0 {
-            if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
-                dep_metadata.referenced_by.retain(|u| *u != metadata.id())
+            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u.to_item_id()) {
+                dep_metadata
+                    .referenced_by
+                    .retain(|u| *u != metadata.item_id())
             }
         }
         for u in metadata.uses() {
-            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
-                dep_metadata.used_by.retain(|u| *u != metadata.id())
+            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u.to_item_id()) {
+                dep_metadata.used_by.retain(|u| *u != metadata.item_id())
             }
         }
 
@@ -1459,7 +1465,7 @@ impl CatalogState {
         let index_item_name = index_name.item.clone();
         let log_id = self.resolve_builtin_log(log);
         self.insert_item(
-            index_id,
+            index_id.to_item_id(),
             oid,
             index_name,
             CatalogItem::Index(Index {
@@ -1664,7 +1670,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 if item.create_sql.starts_with("CREATE SINK") {
                     GlobalId::User(u64::MAX)
                 } else {
-                    item.id
+                    item.id.to_global_id()
                 }
             })
             .collect()
@@ -1684,7 +1690,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             // we can just always move sinks to the end.
             .sorted_by_key(|(item, _ts, _diff)| match item.item.typ() {
                 CatalogItemType::Sink => GlobalId::User(u64::MAX),
-                _ => item.id,
+                _ => item.id.to_global_id(),
             })
             .collect()
     }
@@ -1953,5 +1959,8 @@ fn lookup_builtin_view_addition(
     let (_, builtin) = BUILTIN_LOOKUP
         .get(&system_object_mapping.description)
         .expect("missing builtin view");
-    (*builtin, system_object_mapping.unique_identifier.id)
+    (
+        *builtin,
+        system_object_mapping.unique_identifier.id.to_global_id(),
+    )
 }

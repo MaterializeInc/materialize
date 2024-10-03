@@ -85,7 +85,7 @@ impl Coordinator {
                 }),
                 referenced_by: Vec::new(),
                 used_by: Vec::new(),
-                id: sink_id,
+                id: sink_id.into(),
                 oid: 0,
                 name: name.clone(),
                 owner_id: *session.current_role_id(),

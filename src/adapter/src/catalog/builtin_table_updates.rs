@@ -51,7 +51,7 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, ScalarType, Timestamp};
+use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, Row, RowPacker, ScalarType, Timestamp};
 use mz_sql::ast::{ContinualTaskStmt, CreateIndexStatement, Statement, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
@@ -457,7 +457,7 @@ impl CatalogState {
 
     pub(super) fn pack_item_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let entry = self.get_entry(&id);

@@ -127,7 +127,7 @@ impl Coordinator {
                                         let (_since, write_frontier) = self
                                             .controller
                                             .storage
-                                              .collection_frontiers(*id)
+                                              .collection_frontiers(id.to_global_id())
                                             .expect("the storage controller should know about MVs that exist in the catalog");
                                         Some((*id, write_frontier))
                                     } else {
@@ -176,6 +176,7 @@ impl Coordinator {
                                     None
                                 }
                             })
+                            .map(|id| id.to_global_id())
                             .collect_vec();
                         let cluster_on = !mvs_needing_refresh.is_empty();
                         (
