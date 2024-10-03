@@ -516,7 +516,7 @@ pub struct PeekStageFinish {
     /// When present, an optimizer trace to be used for emitting a plan insights
     /// notice.
     plan_insights_optimizer_trace: Option<OptimizerTrace>,
-    insights_ctx: Option<PlanInsightsContext>,
+    insights_ctx: Option<Box<PlanInsightsContext>>,
     global_lir_plan: optimize::peek::GlobalLirPlan,
     optimization_finished_at: EpochMillis,
 }
@@ -536,7 +536,7 @@ pub struct PeekStageExplainPlan {
     optimizer: optimize::peek::Optimizer,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
-    insights_ctx: Option<PlanInsightsContext>,
+    insights_ctx: Option<Box<PlanInsightsContext>>,
 }
 
 #[derive(Debug)]
