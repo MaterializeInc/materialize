@@ -88,7 +88,7 @@ async fn migrate_builtin_items_legacy(
     txn: &mut Transaction<'_>,
     migrated_builtins: Vec<GlobalId>,
 ) -> Result<BuiltinItemMigrationResult, Error> {
-    let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
+    let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter(&state.config().builtins_cfg)
         .map(|builtin| {
             let id = state.resolve_builtin_object(builtin);
             let fingerprint = builtin.fingerprint();
@@ -182,7 +182,7 @@ async fn migrate_builtin_items_0dt(
     );
 
     // 0. Update durably stored fingerprints.
-    let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter()
+    let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter(&state.config().builtins_cfg)
         .map(|builtin| {
             let id = state.resolve_builtin_object(builtin);
             let fingerprint = builtin.fingerprint();

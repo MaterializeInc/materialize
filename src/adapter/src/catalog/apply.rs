@@ -735,6 +735,44 @@ impl CatalogState {
                     PrivilegeMap::from_mz_acl_items(acl_items),
                 );
             }
+            Builtin::ContinualTask(ct) => {
+                let mut acl_items = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::Source,
+                    MZ_SYSTEM_ROLE_ID,
+                )];
+                acl_items.extend_from_slice(&ct.access);
+
+                let item = self
+                    .parse_item(
+                        id,
+                        &ct.create_sql(),
+                        None,
+                        false,
+                        None,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "internal error: failed to load bootstrap continual task:\n\
+                                    {}\n\
+                                    error:\n\
+                                    {:?}\n\n\
+                                    make sure that the schema name is specified in the builtin continual task's create sql statement.",
+                            ct.name, e
+                        )
+                    });
+                let CatalogItem::ContinualTask(_) = &item else {
+                    panic!("internal error: builtin continual task {}'s SQL does not begin with \"CREATE CONTINUAL TASK\".", ct.name);
+                };
+
+                self.insert_item(
+                    id,
+                    ct.oid,
+                    name,
+                    item,
+                    MZ_SYSTEM_ROLE_ID,
+                    PrivilegeMap::from_mz_acl_items(acl_items),
+                );
+            }
             Builtin::Connection(connection) => {
                 let mut item = self
                     .parse_item(
@@ -1332,6 +1370,11 @@ impl CatalogState {
             }
         }
         for u in entry.uses() {
+            // Ignore self for self-referential tasks (e.g. Continual Tasks), if
+            // present.
+            if u == entry.id() {
+                continue;
+            }
             match self.entry_by_id.get_mut(&u) {
                 Some(metadata) => metadata.used_by.push(entry.id()),
                 None => panic!(

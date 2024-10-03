@@ -377,6 +377,8 @@ pub struct CatalogConfig {
     pub now: NowFn,
     /// Context for source and sink connections.
     pub connection_context: ConnectionContext,
+    /// Which system builtins to include. Not allowed to change dynamically.
+    pub builtins_cfg: BuiltinsConfig,
 }
 
 /// A database in a [`SessionCatalog`].
@@ -1644,6 +1646,17 @@ impl DefaultPrivilegeAclItem {
             acl_mode: self.acl_mode,
         }
     }
+}
+
+/// Which builtins to return in `BUILTINS::iter`.
+///
+/// All calls to `BUILTINS::iter` within the lifetime of an environmentd process
+/// must provide an equal `BuiltinsConfig`. It is not allowed to change
+/// dynamically.
+#[derive(Debug, Clone)]
+pub struct BuiltinsConfig {
+    /// If true, include system builtin continual tasks.
+    pub include_continual_tasks: bool,
 }
 
 #[cfg(test)]

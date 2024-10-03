@@ -24,7 +24,6 @@
 
 pub mod notice;
 
-use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::string::ToString;
 use std::sync::LazyLock;
@@ -32,6 +31,7 @@ use std::sync::Mutex;
 
 use clap::clap_derive::ArgEnum;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
+use mz_ore::collections::HashMap;
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::namespaces::{
@@ -90,6 +90,7 @@ pub enum Builtin<T: 'static + TypeReference> {
     Type(&'static BuiltinType<T>),
     Func(BuiltinFunc),
     Source(&'static BuiltinSource),
+    ContinualTask(&'static BuiltinContinualTask),
     Index(&'static BuiltinIndex),
     Connection(&'static BuiltinConnection),
 }
@@ -103,6 +104,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Type(typ) => typ.name,
             Builtin::Func(func) => func.name,
             Builtin::Source(coll) => coll.name,
+            Builtin::ContinualTask(ct) => ct.name,
             Builtin::Index(index) => index.name,
             Builtin::Connection(connection) => connection.name,
         }
@@ -116,6 +118,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
             Builtin::Source(coll) => coll.schema,
+            Builtin::ContinualTask(ct) => ct.schema,
             Builtin::Index(index) => index.schema,
             Builtin::Connection(connection) => connection.schema,
         }
@@ -125,6 +128,7 @@ impl<T: TypeReference> Builtin<T> {
         match self {
             Builtin::Log(_) => CatalogItemType::Source,
             Builtin::Source(_) => CatalogItemType::Source,
+            Builtin::ContinualTask(_) => CatalogItemType::ContinualTask,
             Builtin::Table(_) => CatalogItemType::Table,
             Builtin::View(_) => CatalogItemType::View,
             Builtin::Type(_) => CatalogItemType::Type,
@@ -176,6 +180,17 @@ pub struct BuiltinSource {
     /// Whether the source's retention policy is controlled by
     /// the system variable `METRICS_RETENTION`
     pub is_retained_metrics_object: bool,
+    /// ACL items to apply to the object
+    pub access: Vec<MzAclItem>,
+}
+
+#[derive(Hash, Debug, PartialEq, Eq)]
+pub struct BuiltinContinualTask {
+    pub name: &'static str,
+    pub schema: &'static str,
+    pub oid: u32,
+    pub desc: RelationDesc,
+    pub sql: &'static str,
     /// ACL items to apply to the object
     pub access: Vec<MzAclItem>,
 }
@@ -241,6 +256,15 @@ impl BuiltinIndex {
     }
 }
 
+impl BuiltinContinualTask {
+    pub fn create_sql(&self) -> String {
+        format!(
+            "CREATE CONTINUAL TASK {}.{}\n{}",
+            self.schema, self.name, self.sql
+        )
+    }
+}
+
 #[derive(Hash, Debug)]
 pub struct BuiltinConnection {
     pub name: &'static str,
@@ -300,6 +324,7 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
             Builtin::Source(coll) => coll.fingerprint(),
+            Builtin::ContinualTask(ct) => ct.fingerprint(),
             Builtin::Index(index) => index.fingerprint(),
             Builtin::Connection(connection) => connection.fingerprint(),
         }
@@ -379,6 +404,12 @@ impl Fingerprint for &BuiltinView {
 impl Fingerprint for &BuiltinSource {
     fn fingerprint(&self) -> String {
         self.desc.fingerprint()
+    }
+}
+
+impl Fingerprint for &BuiltinContinualTask {
+    fn fingerprint(&self) -> String {
+        self.create_sql()
     }
 }
 
@@ -3318,6 +3349,28 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
+
+pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY_CT: LazyLock<BuiltinContinualTask> = LazyLock::new(
+    || {
+        BuiltinContinualTask {
+            name: "mz_cluster_replica_metrics_history_ct",
+            schema: MZ_INTERNAL_SCHEMA,
+            oid: oid::CT_MZ_CLUSTER_REPLICA_METRICS_HISTORY_OID,
+            desc: REPLICA_METRICS_HISTORY_DESC.clone(),
+            // The current mechanism for mz_cluster_replica_metrics_history
+            // truncates at 30d, but initially this to something smaller (1d) so we
+            // can verify the end-to-end behavior.
+            sql: "
+(replica_id STRING, process_id UINT8, cpu_nano_cores UINT8, memory_bytes UINT8, disk_bytes UINT8, occurred_at TIMESTAMPTZ)
+IN CLUSTER mz_catalog_server
+ON INPUT mz_internal.mz_cluster_replica_metrics_history AS (
+    DELETE FROM mz_internal.mz_cluster_replica_metrics_history_ct WHERE occurred_at + '1d' < mz_now();
+    INSERT INTO mz_internal.mz_cluster_replica_metrics_history_ct SELECT * FROM mz_internal.mz_cluster_replica_metrics_history;
+)",
+            access: vec![PUBLIC_SELECT],
+        }
+    },
+);
 
 pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
@@ -8530,6 +8583,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),
+        Builtin::ContinualTask(&MZ_CLUSTER_REPLICA_METRICS_HISTORY_CT),
     ]);
 
     builtins.extend(notice::builtins());
@@ -8558,6 +8612,8 @@ pub const BUILTIN_CLUSTER_REPLICAS: &[&BuiltinClusterReplica] = &[
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {
+    use mz_sql::catalog::BuiltinsConfig;
+
     use super::*;
 
     pub fn logs() -> impl Iterator<Item = &'static BuiltinLog> {
@@ -8588,19 +8644,28 @@ pub mod BUILTINS {
         })
     }
 
-    pub fn iter() -> impl Iterator<Item = &'static Builtin<NameReference>> {
-        BUILTINS_STATIC.iter()
+    pub fn iter(cfg: &BuiltinsConfig) -> impl Iterator<Item = &'static Builtin<NameReference>> {
+        let include_continual_tasks = cfg.include_continual_tasks;
+        BUILTINS_STATIC.iter().filter(move |x| match x {
+            Builtin::ContinualTask(_) if !include_continual_tasks => false,
+            _ => true,
+        })
     }
 }
 
-pub static BUILTIN_LOG_LOOKUP: LazyLock<BTreeMap<&'static str, &'static BuiltinLog>> =
+pub static BUILTIN_LOG_LOOKUP: LazyLock<HashMap<&'static str, &'static BuiltinLog>> =
     LazyLock::new(|| BUILTINS::logs().map(|log| (log.name, log)).collect());
 /// Keys are builtin object description, values are the builtin index when sorted by dependency and
 /// the builtin itself.
 pub static BUILTIN_LOOKUP: LazyLock<
-    BTreeMap<SystemObjectDescription, (usize, &'static Builtin<NameReference>)>,
+    HashMap<SystemObjectDescription, (usize, &'static Builtin<NameReference>)>,
 > = LazyLock::new(|| {
-    BUILTINS::iter()
+    // BUILTIN_LOOKUP is only ever used for lookups by key, it's not iterated,
+    // so it's safe to include all of them, regardless of BuiltinConfig. We
+    // enforce this statically by using the mz_ore HashMap which disallows
+    // iteration.
+    BUILTINS_STATIC
+        .iter()
         .enumerate()
         .map(|(idx, builtin)| {
             (

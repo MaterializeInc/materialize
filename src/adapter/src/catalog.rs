@@ -2018,7 +2018,9 @@ mod tests {
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
     use mz_repr::{Datum, GlobalId, RelationType, RowArena, ScalarType, Timestamp};
-    use mz_sql::catalog::{CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog};
+    use mz_sql::catalog::{
+        BuiltinsConfig, CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog,
+    };
     use mz_sql::func::{Func, FuncImpl, Operation, OP_IMPLS};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
@@ -2585,7 +2587,10 @@ mod tests {
                 a == b
             };
 
-            for builtin in BUILTINS::iter() {
+            let builtins_cfg = BuiltinsConfig {
+                include_continual_tasks: true,
+            };
+            for builtin in BUILTINS::iter(&builtins_cfg) {
                 match builtin {
                     Builtin::Type(ty) => {
                         assert!(all_oids.insert(ty.oid), "{} reused oid {}", ty.name, ty.oid);
@@ -2641,7 +2646,7 @@ mod tests {
                         // Ensure the type matches.
                         match &ty.details.typ {
                             CatalogType::Array { element_reference } => {
-                                let elem_ty = BUILTINS::iter()
+                                let elem_ty = BUILTINS::iter(&builtins_cfg)
                                     .filter_map(|builtin| match builtin {
                                         Builtin::Type(ty @ BuiltinType { name, .. })
                                             if element_reference == name =>

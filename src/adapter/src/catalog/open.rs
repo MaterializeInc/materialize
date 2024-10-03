@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_adapter_types::dyncfgs::ENABLE_CONTINUAL_TASK_BUILTINS;
 use mz_catalog::builtin::{
     Builtin, BuiltinTable, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
     BUILTIN_PREFIXES, BUILTIN_ROLES, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
@@ -49,8 +50,8 @@ use mz_repr::namespaces::is_unstable_schema;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
-    RoleMembership, RoleVars,
+    BuiltinsConfig, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+    CatalogItemType, RoleMembership, RoleVars,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::SchemaId;
@@ -246,6 +247,16 @@ impl Catalog {
                 timestamp_interval: Duration::from_secs(1),
                 now: config.now.clone(),
                 connection_context: config.connection_context,
+                builtins_cfg: BuiltinsConfig {
+                    // This will fall back to the default in code (false) if we timeout on the
+                    // initial LD sync. We're just using this to get some additional testing in on
+                    // CTs so a false negative is fine, we're only worried about false positives.
+                    include_continual_tasks: get_dyncfg_val_from_defaults_and_remote(
+                        &config.system_parameter_defaults,
+                        config.remote_system_parameters.as_ref(),
+                        &ENABLE_CONTINUAL_TASK_BUILTINS,
+                    ),
+                },
             },
             cluster_replica_sizes: config.cluster_replica_sizes,
             availability_zones: config.availability_zones,
@@ -272,7 +283,7 @@ impl Catalog {
             }
             // Add any new builtin objects and remove old ones.
             let (migrated_builtins, new_builtins) =
-                add_new_remove_old_builtin_items_migration(&mut txn)?;
+                add_new_remove_old_builtin_items_migration(&state.config().builtins_cfg, &mut txn)?;
             let cluster_sizes = BuiltinBootstrapClusterSizes {
                 system_cluster: config.builtin_system_cluster_replica_size,
                 catalog_server_cluster: config.builtin_catalog_server_cluster_replica_size,
@@ -854,6 +865,7 @@ impl CatalogState {
 /// Returns the list of builtin [`GlobalId`]s that need to be migrated, and the list of new builtin
 /// [`GlobalId`]s.
 fn add_new_remove_old_builtin_items_migration(
+    builtins_cfg: &BuiltinsConfig,
     txn: &mut mz_catalog::durable::Transaction<'_>,
 ) -> Result<(Vec<GlobalId>, Vec<GlobalId>), mz_catalog::durable::CatalogError> {
     let mut new_builtins = Vec::new();
@@ -862,7 +874,7 @@ fn add_new_remove_old_builtin_items_migration(
 
     // We compare the builtin items that are compiled into the binary with the builtin items that
     // are persisted in the catalog to discover new, deleted, and migrated builtin items.
-    let builtins: Vec<_> = BUILTINS::iter()
+    let builtins: Vec<_> = BUILTINS::iter(builtins_cfg)
         .map(|builtin| {
             (
                 SystemObjectDescription {
@@ -1303,6 +1315,31 @@ pub(crate) fn into_consolidatable_updates_startup(
             (kind, ts, Diff::from(diff))
         })
         .collect()
+}
+
+fn get_dyncfg_val_from_defaults_and_remote<T: mz_dyncfg::ConfigDefault>(
+    defaults: &BTreeMap<String, String>,
+    remote: Option<&BTreeMap<String, String>>,
+    cfg: &mz_dyncfg::Config<T>,
+) -> T::ConfigType {
+    let mut val = T::into_config_type(cfg.default().clone());
+    let get_fn = |map: &BTreeMap<String, String>| {
+        let val = map.get(cfg.name())?;
+        match <T::ConfigType as mz_dyncfg::ConfigType>::parse(val) {
+            Ok(x) => Some(x),
+            Err(err) => {
+                tracing::warn!("could not parse {} value [{}]: {}", cfg.name(), val, err);
+                None
+            }
+        }
+    };
+    if let Some(x) = get_fn(defaults) {
+        val = x;
+    }
+    if let Some(x) = remote.and_then(get_fn) {
+        val = x;
+    }
+    val
 }
 
 #[cfg(test)]

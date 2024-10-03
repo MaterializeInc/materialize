@@ -1942,11 +1942,7 @@ impl CatalogEntry {
     /// referenced. For example this will include any catalog objects used to implement functions
     /// and casts in the item.
     pub fn uses(&self) -> BTreeSet<GlobalId> {
-        let mut uses = self.item.uses();
-        // Remove self for self-referential tasks (e.g. Continual Tasks), if
-        // present.
-        let _ = uses.remove(&self.id);
-        uses
+        self.item.uses()
     }
 
     /// Returns the `CatalogItem` associated with this catalog entry.
