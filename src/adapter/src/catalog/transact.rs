@@ -37,7 +37,7 @@ use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{strconv, GlobalId};
+use mz_repr::{strconv, CatalogItemId, GlobalId};
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
     CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, RoleAttributes, RoleMembership,
@@ -238,7 +238,7 @@ impl DropObjectInfo {
             ObjectId::Database(database_id) => DropObjectInfo::Database(database_id),
             ObjectId::Schema(schema) => DropObjectInfo::Schema(schema),
             ObjectId::Role(role_id) => DropObjectInfo::Role(role_id),
-            ObjectId::Item(global_id) => DropObjectInfo::Item(global_id),
+            ObjectId::Item(item_id) => DropObjectInfo::Item(item_id.to_global_id()),
         }
     }
 
@@ -253,7 +253,7 @@ impl DropObjectInfo {
             DropObjectInfo::Database(database_id) => ObjectId::Database(database_id.clone()),
             DropObjectInfo::Schema(schema) => ObjectId::Schema(schema.clone()),
             DropObjectInfo::Role(role_id) => ObjectId::Role(role_id.clone()),
-            DropObjectInfo::Item(global_id) => ObjectId::Item(global_id.clone()),
+            DropObjectInfo::Item(global_id) => ObjectId::Item(global_id.to_item_id()),
         }
     }
 }
@@ -356,7 +356,7 @@ impl Catalog {
             )))
         });
 
-        let drop_ids: BTreeSet<GlobalId> = ops
+        let drop_ids: BTreeSet<CatalogItemId> = ops
             .iter()
             .filter_map(|op| match op {
                 Op::DropObjects(drop_object_infos) => {
@@ -420,6 +420,7 @@ impl Catalog {
         self.transient_revision += 1;
 
         // Drop in-memory planning metadata.
+        let drop_ids = drop_ids.into_iter().map(|id| id.to_global_id()).collect();
         let dropped_notices = self.drop_plans_and_metainfos(&drop_ids);
         if self.state.system_config().enable_mz_notices() {
             // Generate retractions for the Builtin tables.
@@ -609,7 +610,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, new_entry.into())?;
+                tx.update_item(id.to_item_id(), new_entry.into())?;
 
                 Self::log_update(state, &id);
             }
@@ -990,7 +991,7 @@ impl Catalog {
                     }
                     let oid = tx.allocate_oid(&temporary_oids)?;
                     let item = TemporaryItem {
-                        id,
+                        id: id.to_item_id(),
                         oid,
                         name: name.clone(),
                         item: item.clone(),
@@ -1024,7 +1025,7 @@ impl Catalog {
                     let item_type = item.typ();
                     let serialized_item = item.to_serialized();
                     tx.insert_user_item(
-                        id,
+                        id.into(),
                         schema_id,
                         &name.item,
                         serialized_item,
@@ -1167,7 +1168,7 @@ impl Catalog {
                     delta
                         .items
                         .iter()
-                        .copied()
+                        .map(|id| id.to_item_id())
                         .partition(|id| !state.get_entry(id).item().is_temporary());
                 tx.remove_items(&durable_items_to_drop)?;
                 temporary_item_updates.extend(temporary_items_to_drop.into_iter().map(|id| {
@@ -1709,15 +1710,15 @@ impl Catalog {
                     updates.push(*id);
                 }
                 if !new_entry.item().is_temporary() {
-                    tx.update_item(id, new_entry.into())?;
+                    tx.update_item(id.to_item_id(), new_entry.into())?;
                 } else {
                     temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
                     temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
                 }
 
-                updates.push(id);
+                updates.push(id.to_item_id());
                 for id in updates {
-                    Self::log_update(state, &id);
+                    Self::log_update(state, &id.to_global_id());
                 }
             }
             Op::RenameSchema {
@@ -1833,7 +1834,7 @@ impl Catalog {
                 tx.update_schema(schema_id, new_schema.into())?;
 
                 for id in updates {
-                    Self::log_update(state, id);
+                    Self::log_update(state, &id.to_global_id());
                 }
             }
             Op::UpdateOwner { id, new_owner } => {
@@ -1994,7 +1995,7 @@ impl Catalog {
                 let mut entry = state.get_entry(&id).clone();
                 entry.name = name.clone();
                 entry.item = to_item.clone();
-                tx.update_item(id, entry.into())?;
+                tx.update_item(id.to_item_id(), entry.into())?;
 
                 if Self::should_audit_log_item(&to_item) {
                     let mut full_name = Self::full_name_detail(
