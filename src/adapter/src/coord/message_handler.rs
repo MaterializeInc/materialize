@@ -393,8 +393,8 @@ impl Coordinator {
     async fn message_controller(&mut self, message: ControllerResponse) {
         event!(Level::TRACE, message = format!("{:?}", message));
         match message {
-            ControllerResponse::PeekResponse(uuid, response, otel_ctx) => {
-                self.send_peek_response(uuid, response, otel_ctx);
+            ControllerResponse::PeekNotification(uuid, response, otel_ctx) => {
+                self.handle_peek_notification(uuid, response, otel_ctx);
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
                 if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =
