@@ -924,7 +924,7 @@ impl CoercibleScalarType {
                 fields.push((name, ty))
             }
             ScalarType::Record {
-                fields,
+                fields: fields.into(),
                 custom_id: None,
             }
         }

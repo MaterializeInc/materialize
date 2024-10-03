@@ -104,7 +104,7 @@ impl ColumnType {
 
                 Ok(ColumnType {
                     scalar_type: ScalarType::Record {
-                        fields: union_fields,
+                        fields: union_fields.into(),
                         custom_id,
                     },
                     nullable: self.nullable || other.nullable,

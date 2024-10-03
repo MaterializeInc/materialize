@@ -161,7 +161,7 @@ fn derive_inner_type(
             }
             seen_messages.remove(m.name());
             let ty = ScalarType::Record {
-                fields,
+                fields: fields.into(),
                 custom_id: None,
             };
             Ok(ty.nullable(true))

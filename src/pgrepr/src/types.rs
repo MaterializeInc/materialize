@@ -1055,7 +1055,7 @@ impl TryFrom<&Type> for ScalarType {
             }
             Type::Oid => Ok(ScalarType::Oid),
             Type::Record(_) => Ok(ScalarType::Record {
-                fields: vec![],
+                fields: [].into(),
                 custom_id: None,
             }),
             Type::Text => Ok(ScalarType::String),

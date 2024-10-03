@@ -2594,10 +2594,10 @@ impl AggregateFunc {
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
-                        fields: vec![
+                        fields: [
                             (column_name, output_type_inner),
                             (ColumnName::from("?orig_row?"), original_row_type),
-                        ],
+                        ].into(),
                         custom_id: None,
                     }),
                     custom_id: None,
@@ -2615,10 +2615,10 @@ impl AggregateFunc {
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
-                        fields: vec![
+                        fields: [
                             (ColumnName::from("?first_value?"), value_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
-                        ],
+                        ].into(),
                         custom_id: None,
                     }),
                     custom_id: None,
@@ -2636,10 +2636,10 @@ impl AggregateFunc {
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
-                        fields: vec![
+                        fields: [
                             (ColumnName::from("?last_value?"), value_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
-                        ],
+                        ].into(),
                         custom_id: None,
                     }),
                     custom_id: None,
@@ -2660,10 +2660,10 @@ impl AggregateFunc {
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
-                        fields: vec![
+                        fields: [
                             (ColumnName::from("?window_agg?"), wrapped_aggr_out_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
-                        ],
+                        ].into(),
                         custom_id: None,
                     }),
                     custom_id: None,
@@ -2682,7 +2682,7 @@ impl AggregateFunc {
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
-                        fields: vec![
+                        fields: [
                             (ColumnName::from("?fused_value_window_func?"), ScalarType::Record {
                                 fields: encoded_args_type.into_iter().zip_eq(funcs).map(|(arg_type, func)| {
                                     match func {
@@ -2710,7 +2710,7 @@ impl AggregateFunc {
                                 custom_id: None,
                             }.nullable(false)),
                             (ColumnName::from("?orig_row?"), original_row_type),
-                        ],
+                        ].into(),
                         custom_id: None,
                     }),
                     custom_id: None,
@@ -2782,7 +2782,7 @@ impl AggregateFunc {
         match input_type.scalar_type {
             ScalarType::Record { ref fields, .. } => ScalarType::List {
                 element_type: Box::new(ScalarType::Record {
-                    fields: vec![
+                    fields: [
                         (
                             ColumnName::from(col_name),
                             ScalarType::Int64.nullable(false),
@@ -2794,7 +2794,8 @@ impl AggregateFunc {
                             };
                             inner.nullable(false)
                         }),
-                    ],
+                    ]
+                    .into(),
                     custom_id: None,
                 }),
                 custom_id: None,

@@ -1500,7 +1500,9 @@ pub enum ScalarType {
     Record {
         /// The names and types of the fields of the record, in order from left
         /// to right.
-        fields: Vec<(ColumnName, ColumnType)>,
+        ///
+        /// Boxed slice to reduce the size of the enum variant.
+        fields: Box<[(ColumnName, ColumnType)]>,
         custom_id: Option<GlobalId>,
     },
     /// A PostgreSQL object identifier.
@@ -2713,7 +2715,7 @@ impl ScalarType {
                             },
                         )
                     })
-                    .collect_vec();
+                    .collect();
                 Record {
                     fields,
                     custom_id: None,
@@ -3683,7 +3685,10 @@ impl Arbitrary for ScalarType {
 
                     // Now we combine it with the default strategies to get Records.
                     (fields_strat, any::<Option<GlobalId>>())
-                        .prop_map(|(fields, custom_id)| ScalarType::Record { fields, custom_id })
+                        .prop_map(|(fields, custom_id)| ScalarType::Record {
+                            fields: fields.into(),
+                            custom_id,
+                        })
                         .boxed()
                 },
             ])

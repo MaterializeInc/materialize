@@ -2739,11 +2739,11 @@ impl BinaryFunc {
             TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
 
             TimezoneOffset => ScalarType::Record {
-                fields: vec![
+                fields: [
                     ("abbrev".into(), ScalarType::String.nullable(false)),
                     ("base_utc_offset".into(), ScalarType::Interval.nullable(false)),
                     ("dst_offset".into(), ScalarType::Interval.nullable(false)),
-                ],
+                ].into(),
                 custom_id: None,
             }.nullable(true),
 

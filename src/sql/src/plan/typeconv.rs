@@ -1028,7 +1028,7 @@ pub fn guess_best_common_type(
                 fields.push((name, guess.nullable(nullable)));
             }
             return Ok(ScalarType::Record {
-                fields,
+                fields: fields.into(),
                 custom_id: None,
             });
         }

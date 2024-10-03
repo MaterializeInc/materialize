@@ -1172,7 +1172,7 @@ impl HirScalarExpr {
                                     .map(|t| {
                                         (ColumnName::from("?column?"), t.clone().nullable(false))
                                     })
-                                    .collect_vec(),
+                                    .collect(),
                                 custom_id: None,
                             }
                             .nullable(false);
@@ -1209,13 +1209,13 @@ impl HirScalarExpr {
                             // 1. the original row in a record
                             // 2. the encoded args (which can be either a single value, or a record
                             //    if the window function has multiple arguments, such as `lag`)
-                            let fn_input_record_fields =
+                            let fn_input_record_fields: Box<[_]> =
                                 [original_row_record_type, mir_encoded_args_type]
                                     .iter()
                                     .map(|t| {
                                         (ColumnName::from("?column?"), t.clone().nullable(false))
                                     })
-                                    .collect_vec();
+                                    .collect();
                             let fn_input_record = MirScalarExpr::CallVariadic {
                                 func: mz_expr::VariadicFunc::RecordCreate {
                                     field_names: fn_input_record_fields
@@ -1245,10 +1245,11 @@ impl HirScalarExpr {
                             };
 
                             let agg_input_type = ScalarType::Record {
-                                fields: vec![(
+                                fields: [(
                                     ColumnName::from("?column?"),
                                     fn_input_record_type.nullable(false),
-                                )],
+                                )]
+                                .into(),
                                 custom_id: None,
                             }
                             .nullable(false);
@@ -1434,12 +1435,12 @@ impl HirScalarExpr {
                     let input_type = get_inner.typ();
 
                     // Original columns of the relation
-                    let fields = input_type
+                    let fields: Box<_> = input_type
                         .column_types
                         .iter()
                         .take(input_arity)
                         .map(|t| (ColumnName::from("?column?"), t.clone()))
-                        .collect_vec();
+                        .collect();
 
                     // Original row made into a record
                     let original_row_record = MirScalarExpr::CallVariadic {

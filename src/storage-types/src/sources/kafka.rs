@@ -349,7 +349,7 @@ pub fn kafka_metadata_columns_desc(
                 } => ScalarType::String.nullable(true),
                 KafkaMetadataKind::Headers => ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
-                        fields: vec![
+                        fields: [
                             (
                                 "key".into(),
                                 ColumnType {
@@ -364,7 +364,8 @@ pub fn kafka_metadata_columns_desc(
                                     scalar_type: ScalarType::Bytes,
                                 },
                             ),
-                        ],
+                        ]
+                        .into(),
                         custom_id: None,
                     }),
                     custom_id: None,

@@ -5806,7 +5806,7 @@ pub fn scalar_type_from_catalog(
                     element_type: Box::new(scalar_type_from_catalog(catalog, *element_id, &[])?),
                 }),
                 CatalogType::Record { fields } => {
-                    let scalars: Vec<(ColumnName, ColumnType)> = fields
+                    let scalars: Box<[(ColumnName, ColumnType)]> = fields
                         .iter()
                         .map(|f| {
                             let scalar_type = scalar_type_from_catalog(
@@ -5822,7 +5822,7 @@ pub fn scalar_type_from_catalog(
                                 },
                             ))
                         })
-                        .collect::<Result<Vec<_>, PlanError>>()?;
+                        .collect::<Result<Box<_>, PlanError>>()?;
                     Ok(ScalarType::Record {
                         fields: scalars,
                         custom_id: Some(id),
