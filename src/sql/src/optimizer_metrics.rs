@@ -40,7 +40,7 @@ impl OptimizerMetrics {
         }
     }
 
-    pub fn observe_e2e_optimization_time<F: Fn() -> String>(
+    pub fn observe_e2e_optimization_time(
         &self,
         object_type: &str,
         duration: Duration,
