@@ -6,8 +6,6 @@ pygmentsUseClasses = true
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
-bannerMessage = "Register for the upcoming live workshop: Materialize vs. PostgreSQL Read Replicas. Oct. 3rd, 2PM ET"
-bannerLink="https://materialize.com/events/operational-data-store-vs-read-replica/?utm_medium=docs-banner&utm_source=documentation&utm_campaign=FY25_Q3_Webinar_Hosted_-Operational-Data-Store-vs.-Read-Replica&utm_term=&utm_content="
 
 [frontmatter]
 publishDate = ["publishDate"]
