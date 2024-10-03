@@ -33,8 +33,8 @@ use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
     Database, DefaultPrivilege, IntrospectionSourceIndex, Item, ReplicaConfig, ReplicaLocation,
-    Role, Schema, SourceReferences, StorageCollectionMetadata, SystemConfiguration,
-    SystemObjectDescription, SystemObjectMapping, UnfinalizedShard,
+    Role, Schema, SourceReference, SourceReferences, StorageCollectionMetadata,
+    SystemConfiguration, SystemObjectDescription, SystemObjectMapping, UnfinalizedShard,
 };
 pub use crate::durable::persist::builtin_migration_shard_id;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};

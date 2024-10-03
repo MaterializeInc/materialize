@@ -635,12 +635,31 @@ pub struct CreateSourcePlan {
     pub in_cluster: Option<ClusterId>,
 }
 
+#[derive(Clone, Debug)]
+pub struct SourceReferences {
+    pub updated_at: u64,
+    pub references: Vec<SourceReference>,
+}
+
+/// An available external reference for a source and if possible to retrieve,
+/// any column names it contains.
+#[derive(Clone, Debug)]
+pub struct SourceReference {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub columns: Vec<String>,
+}
+
 /// A [`CreateSourcePlan`] and the metadata necessary to sequence it.
 #[derive(Debug)]
 pub struct CreateSourcePlanBundle {
     pub source_id: GlobalId,
     pub plan: CreateSourcePlan,
     pub resolved_ids: ResolvedIds,
+    /// All the available upstream references for this source.
+    /// Populated for top-level sources that can contain subsources/tables
+    /// and used during sequencing to populate the appropriate catalog fields.
+    pub available_source_references: Option<SourceReferences>,
 }
 
 #[derive(Debug)]

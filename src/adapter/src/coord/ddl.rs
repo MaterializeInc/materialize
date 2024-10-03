@@ -1515,6 +1515,7 @@ impl Coordinator {
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }
                 | Op::UpdateClusterReplicaConfig { .. }
+                | Op::UpdateSourceReferences { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }

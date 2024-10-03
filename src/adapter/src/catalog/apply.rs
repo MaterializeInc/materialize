@@ -729,6 +729,7 @@ impl CatalogState {
                             },
                         ),
                         is_retained_metrics_object: coll.is_retained_metrics_object,
+                        available_source_references: None,
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(acl_items),
@@ -946,16 +947,18 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_source_references_update(
         &mut self,
-        _source_references: mz_catalog::durable::SourceReferences,
+        source_references: mz_catalog::durable::SourceReferences,
         diff: StateDiff,
         _retractions: &mut InProgressRetractions,
     ) {
         match diff {
             StateDiff::Addition => {
-                unimplemented!("source references are not yet implemented");
+                let source = self.get_entry_mut(&source_references.source_id);
+                source.update_source_available_references(Some(source_references.into()));
             }
             StateDiff::Retraction => {
-                unimplemented!("source references are not yet implemented");
+                let source = self.get_entry_mut(&source_references.source_id);
+                source.update_source_available_references(None);
             }
         }
     }

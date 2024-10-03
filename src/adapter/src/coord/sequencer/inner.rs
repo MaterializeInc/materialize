@@ -279,6 +279,7 @@ impl Coordinator {
                      source_id,
                      plan,
                      resolved_ids: _,
+                     available_source_references: _,
                  }| {
                     if plan.if_not_exists {
                         Some((*source_id, plan.name.clone()))
@@ -293,6 +294,7 @@ impl Coordinator {
             source_id,
             mut plan,
             resolved_ids,
+            available_source_references,
         } in plans
         {
             let name = plan.name.clone();
@@ -330,7 +332,17 @@ impl Coordinator {
                 }
             }
 
-            let source = Source::new(plan, resolved_ids, None, false);
+            // If this source contained a set of available source references, update the
+            // source references catalog table.
+            let mut reference_ops = vec![];
+            if let Some(references) = &available_source_references {
+                reference_ops.push(catalog::Op::UpdateSourceReferences {
+                    source_id,
+                    references: references.clone().into(),
+                });
+            }
+
+            let source = Source::new(plan, resolved_ids, None, false, available_source_references);
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 name,
@@ -338,6 +350,8 @@ impl Coordinator {
                 owner_id: *session.current_role_id(),
             });
             sources.push((source_id, source));
+            // These operations must be executed after the source is added to the catalog.
+            ops.extend(reference_ops);
         }
 
         Ok(CreateSourceInner {
@@ -374,6 +388,7 @@ impl Coordinator {
             source_id,
             plan,
             resolved_ids,
+            available_source_references: None,
         })
     }
 
@@ -489,6 +504,8 @@ impl Coordinator {
             source_id,
             plan: source_plan,
             resolved_ids: resolved_ids.clone(),
+            // TODO(roshan): Populate this based on the results of purification
+            available_source_references: None,
         });
 
         // 3. Finally, plan all the subsources
@@ -3767,6 +3784,10 @@ impl Coordinator {
                     resolved_ids,
                     cur_source.custom_logical_compaction_window,
                     cur_source.is_retained_metrics_object,
+                    cur_source
+                        .available_source_references
+                        .clone()
+                        .map(Into::into),
                 );
 
                 let source_compaction_window = source.custom_logical_compaction_window;

@@ -900,6 +900,8 @@ impl CatalogState {
                     .compaction_window
                     .or(custom_logical_compaction_window),
                 is_retained_metrics_object,
+                // This will be populated separately
+                available_source_references: None,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 // Collect optimizer parameters.

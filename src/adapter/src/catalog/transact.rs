@@ -25,8 +25,8 @@ use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::Transaction;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterConfig, DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind,
-    TemporaryItem,
+    CatalogItem, ClusterConfig, DataSourceDesc, SourceReferences, StateDiff, StateUpdate,
+    StateUpdateKind, TemporaryItem,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
@@ -178,6 +178,10 @@ pub enum Op {
         id: GlobalId,
         name: QualifiedItemName,
         to_item: CatalogItem,
+    },
+    UpdateSourceReferences {
+        source_id: GlobalId,
+        references: SourceReferences,
     },
     UpdateSystemConfiguration {
         name: String,
@@ -1130,6 +1134,20 @@ impl Catalog {
                         }),
                     )?;
                 }
+            }
+            Op::UpdateSourceReferences {
+                source_id,
+                references,
+            } => {
+                tx.update_source_references(
+                    source_id,
+                    references
+                        .references
+                        .into_iter()
+                        .map(|reference| reference.into())
+                        .collect(),
+                    references.updated_at,
+                )?;
             }
             Op::DropObjects(drop_object_infos) => {
                 // Generate all of the objects that need to get dropped.

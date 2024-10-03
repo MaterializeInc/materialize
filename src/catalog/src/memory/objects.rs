@@ -485,6 +485,108 @@ pub struct ClusterReplicaProcessStatus {
     pub time: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct SourceReferences {
+    pub updated_at: u64,
+    pub references: Vec<SourceReference>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct SourceReference {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub columns: Vec<String>,
+}
+
+impl From<SourceReference> for durable::SourceReference {
+    fn from(source_reference: SourceReference) -> durable::SourceReference {
+        durable::SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
+impl SourceReferences {
+    pub fn to_durable(self, source_id: GlobalId) -> durable::SourceReferences {
+        durable::SourceReferences {
+            source_id,
+            updated_at: self.updated_at,
+            references: self.references.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<durable::SourceReference> for SourceReference {
+    fn from(source_reference: durable::SourceReference) -> SourceReference {
+        SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
+impl From<durable::SourceReferences> for SourceReferences {
+    fn from(source_references: durable::SourceReferences) -> SourceReferences {
+        SourceReferences {
+            updated_at: source_references.updated_at,
+            references: source_references
+                .references
+                .into_iter()
+                .map(|source_reference| source_reference.into())
+                .collect(),
+        }
+    }
+}
+
+impl From<mz_sql::plan::SourceReference> for SourceReference {
+    fn from(source_reference: mz_sql::plan::SourceReference) -> SourceReference {
+        SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
+impl From<mz_sql::plan::SourceReferences> for SourceReferences {
+    fn from(source_references: mz_sql::plan::SourceReferences) -> SourceReferences {
+        SourceReferences {
+            updated_at: source_references.updated_at,
+            references: source_references
+                .references
+                .into_iter()
+                .map(|source_reference| source_reference.into())
+                .collect(),
+        }
+    }
+}
+
+impl From<SourceReferences> for mz_sql::plan::SourceReferences {
+    fn from(source_references: SourceReferences) -> mz_sql::plan::SourceReferences {
+        mz_sql::plan::SourceReferences {
+            updated_at: source_references.updated_at,
+            references: source_references
+                .references
+                .into_iter()
+                .map(|source_reference| source_reference.into())
+                .collect(),
+        }
+    }
+}
+
+impl From<SourceReference> for mz_sql::plan::SourceReference {
+    fn from(source_reference: SourceReference) -> mz_sql::plan::SourceReference {
+        mz_sql::plan::SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct CatalogEntry {
     pub item: CatalogItem,
@@ -620,6 +722,8 @@ pub struct Source {
     /// Whether the source's logical compaction window is controlled by
     /// METRICS_RETENTION
     pub is_retained_metrics_object: bool,
+    /// An optional list of all available source references for this source.
+    pub available_source_references: Option<SourceReferences>,
 }
 
 impl Source {
@@ -634,6 +738,7 @@ impl Source {
         resolved_ids: ResolvedIds,
         custom_logical_compaction_window: Option<CompactionWindow>,
         is_retained_metrics_object: bool,
+        available_source_references: Option<mz_sql::plan::SourceReferences>,
     ) -> Source {
         Source {
             create_sql: Some(plan.source.create_sql),
@@ -691,6 +796,7 @@ impl Source {
                 .compaction_window
                 .or(custom_logical_compaction_window),
             is_retained_metrics_object,
+            available_source_references: available_source_references.map(Into::into),
         }
     }
 
@@ -1712,6 +1818,16 @@ impl CatalogEntry {
                 _ => None,
             },
             _ => None,
+        }
+    }
+
+    /// Update the available references for a source from the durable catalog
+    pub fn update_source_available_references(
+        &mut self,
+        available_source_references: Option<SourceReferences>,
+    ) {
+        if let CatalogItem::Source(source) = &mut self.item {
+            source.available_source_references = available_source_references;
         }
     }
 

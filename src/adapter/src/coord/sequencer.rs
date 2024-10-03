@@ -150,6 +150,7 @@ impl Coordinator {
                                 source_id,
                                 plan,
                                 resolved_ids,
+                                available_source_references: None,
                             }],
                         )
                         .await;

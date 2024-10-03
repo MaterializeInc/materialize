@@ -487,6 +487,7 @@ fn generate_rbac_requirements(
                                  in_cluster,
                              },
                          resolved_ids: _,
+                         available_source_references: _,
                      }| {
                         generate_required_source_privileges(
                             name,

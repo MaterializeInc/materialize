@@ -49,9 +49,10 @@ use crate::durable::objects::{
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
     Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
+    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
@@ -1694,6 +1695,21 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    pub fn update_source_references(
+        &mut self,
+        source_id: GlobalId,
+        references: Vec<SourceReference>,
+        updated_at: u64,
+    ) -> Result<(), CatalogError> {
+        let key = SourceReferencesKey { source_id };
+        let value = SourceReferencesValue {
+            references,
+            updated_at,
+        };
+        self.source_references.set(key, Some(value), self.op_id)?;
+        Ok(())
+    }
+
     /// Upserts persisted system configuration `name` to `value`.
     pub fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), CatalogError> {
         let key = ServerConfigurationKey {
@@ -2006,6 +2022,7 @@ impl<'a> Transaction<'a> {
             introspection_sources: self.introspection_sources.pending(),
             id_allocator: self.id_allocator.pending(),
             configs: self.configs.pending(),
+            source_references: self.source_references.pending(),
             settings: self.settings.pending(),
             system_gid_mapping: self.system_gid_mapping.pending(),
             system_configurations: self.system_configurations.pending(),
@@ -2042,6 +2059,7 @@ impl<'a> Transaction<'a> {
             introspection_sources,
             id_allocator,
             configs,
+            source_references,
             settings,
             system_gid_mapping,
             system_configurations,
@@ -2066,6 +2084,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(id_allocator);
         differential_dataflow::consolidation::consolidate_updates(configs);
         differential_dataflow::consolidation::consolidate_updates(settings);
+        differential_dataflow::consolidation::consolidate_updates(source_references);
         differential_dataflow::consolidation::consolidate_updates(system_gid_mapping);
         differential_dataflow::consolidation::consolidate_updates(system_configurations);
         differential_dataflow::consolidation::consolidate_updates(default_privileges);
@@ -2259,6 +2278,11 @@ pub struct TransactionBatch {
         proto::DefaultPrivilegesValue,
         Diff,
     )>,
+    pub(crate) source_references: Vec<(
+        proto::SourceReferencesKey,
+        proto::SourceReferencesValue,
+        Diff,
+    )>,
     pub(crate) system_privileges: Vec<(
         proto::SystemPrivilegesKey,
         proto::SystemPrivilegesValue,
@@ -2290,6 +2314,7 @@ impl TransactionBatch {
             id_allocator,
             configs,
             settings,
+            source_references,
             system_gid_mapping,
             system_configurations,
             default_privileges,
@@ -2311,6 +2336,7 @@ impl TransactionBatch {
             && id_allocator.is_empty()
             && configs.is_empty()
             && settings.is_empty()
+            && source_references.is_empty()
             && system_gid_mapping.is_empty()
             && system_configurations.is_empty()
             && default_privileges.is_empty()
