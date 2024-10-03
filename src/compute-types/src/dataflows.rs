@@ -76,7 +76,7 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub has_transitive_refresh_schedule: bool,
     /// TODO
     pub transitive_upper: Option<Antichain<T>>,
-    /// Whether the timeline of the dataflow is [`Timeline::EpochMilliseconds`].
+    /// Whether the timeline of the dataflow is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
     pub is_timeline_epochms: bool,
 }
 
@@ -119,17 +119,16 @@ impl<P: fmt::Debug, S> DataflowDescription<P, S, mz_repr::Timestamp> {
         &self,
         expiration: Option<mz_repr::Timestamp>,
     ) -> Antichain<mz_repr::Timestamp> {
-        if expiration.is_none() {
-            return Antichain::default();
-        }
-
-        if self.has_transitive_refresh_schedule || !self.is_timeline_epochms {
+        if expiration.is_none()
+            || (self.refresh_schedule.is_some() || self.has_transitive_refresh_schedule)
+            || !self.is_timeline_epochms
+        {
             return Antichain::default();
         }
 
         let expiration = expiration.unwrap();
         if let Some(upper) = &self.transitive_upper {
-            if upper.is_empty() {
+            if upper.is_empty() || upper == &Antichain::from_elem(mz_repr::Timestamp::from(0)) {
                 return Antichain::default();
             }
             if !upper.less_than(&expiration) {
@@ -163,7 +162,7 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
 
 impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     /// Creates a new dataflow description with a human-readable name.
-    pub fn new(name: String, _check: usize) -> Self {
+    pub fn new(name: String) -> Self {
         Self {
             source_imports: Default::default(),
             index_imports: Default::default(),

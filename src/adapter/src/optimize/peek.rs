@@ -251,7 +251,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         };
 
         let debug_name = format!("oneshot-select-{}", self.select_id);
-        let mut df_desc = MirDataflowDescription::new(debug_name.to_string(), 0);
+        let mut df_desc = MirDataflowDescription::new(debug_name.to_string());
 
         df_builder.import_view_into_dataflow(
             &self.select_id,
