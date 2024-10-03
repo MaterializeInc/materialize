@@ -37,7 +37,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType, Timestamp,
+    strconv, CatalogItemId, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType,
+    ScalarType, Timestamp,
 };
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
@@ -2382,7 +2383,7 @@ pub fn plan_create_view(
             cascade,
         )? {
             if view.expr.depends_on().contains(&id) {
-                let item = scx.catalog.get_item(&id);
+                let item = scx.catalog.get_item(&id.into());
                 sql_bail!(
                     "cannot replace view {0}: depended upon by new {0} definition",
                     scx.catalog.resolve_full_name(item.name())
@@ -2398,9 +2399,9 @@ pub fn plan_create_view(
     let drop_ids = replace
         .map(|id| {
             scx.catalog
-                .item_dependents(id)
+                .item_dependents(id.to_item_id())
                 .into_iter()
-                .map(|id| id.unwrap_item_id())
+                .map(|id| id.unwrap_item_id().into())
                 .collect()
         })
         .unwrap_or_default();
@@ -2655,7 +2656,7 @@ pub fn plan_create_materialized_view(
             )?;
             if let Some(id) = replace_id {
                 if expr.depends_on().contains(&id) {
-                    let item = scx.catalog.get_item(&id);
+                    let item = scx.catalog.get_item(&id.into());
                     sql_bail!(
                         "cannot replace materialized view {0}: depended upon by new {0} definition",
                         scx.catalog.resolve_full_name(item.name())
@@ -2670,9 +2671,9 @@ pub fn plan_create_materialized_view(
     let drop_ids = replace
         .map(|id| {
             scx.catalog
-                .item_dependents(id)
+                .item_dependents(id.to_item_id())
                 .into_iter()
-                .map(|id| id.unwrap_item_id())
+                .map(|id| id.unwrap_item_id().into())
                 .collect()
         })
         .unwrap_or_default();
@@ -2807,7 +2808,7 @@ pub fn plan_create_continual_task(
 
     // Check for an object in the catalog with this same name
     let name = match &ct_name {
-        ResolvedItemName::Item { id, .. } => scx.catalog.get_item(id).name().clone(),
+        ResolvedItemName::Item { id, .. } => scx.catalog.get_item(&id.into()).name().clone(),
         ResolvedItemName::ContinualTask { name, .. } => {
             let name = scx.allocate_qualified_name(name.clone())?;
             let full_name = scx.catalog.resolve_full_name(&name);
@@ -3758,9 +3759,9 @@ pub fn plan_create_type(
         data_type: ResolvedDataType,
         as_type: &str,
         key: &str,
-    ) -> Result<(GlobalId, Vec<i64>), PlanError> {
+    ) -> Result<(CatalogItemId, Vec<i64>), PlanError> {
         let (id, modifiers) = match data_type {
-            ResolvedDataType::Named { id, modifiers, .. } => (id, modifiers),
+            ResolvedDataType::Named { id, modifiers, .. } => (id.into(), modifiers),
             _ => sql_bail!(
                 "CREATE TYPE ... AS {}option {} can only use named data types, but \
                         found unnamed data type {}. Use CREATE TYPE to create a named type first",
@@ -4804,7 +4805,7 @@ pub fn plan_drop_objects(
             }
             UnresolvedObjectName::Item(name) => {
                 plan_drop_item(scx, object_type, if_exists, name.clone(), cascade)?
-                    .map(ObjectId::Item)
+                    .map(ObjectId::from)
             }
         };
         match id {
@@ -5054,7 +5055,7 @@ pub fn plan_drop_owned(
                 let non_owned_bound_objects: Vec<_> = cluster
                     .bound_objects()
                     .into_iter()
-                    .map(|global_id| scx.catalog.get_item(global_id))
+                    .map(|item_id| scx.catalog.get_item(item_id))
                     .filter(|item| !role_ids.contains(&item.owner_id()))
                     .collect();
                 if !non_owned_bound_objects.is_empty() {
@@ -5093,13 +5094,13 @@ pub fn plan_drop_owned(
                 for sub_item in item
                     .progress_id()
                     .iter()
-                    .map(|id| scx.catalog.get_item(id))
+                    .map(|id| scx.catalog.get_item(&id.into()))
                     .chain(iter::once(item))
                 {
                     let non_owned_dependencies: Vec<_> = sub_item
                         .used_by()
                         .into_iter()
-                        .map(|global_id| scx.catalog.get_item(global_id))
+                        .map(|item_id| scx.catalog.get_item(item_id))
                         .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
                         .filter(|item| !role_ids.contains(&item.owner_id()))
                         .collect();
@@ -5142,7 +5143,7 @@ pub fn plan_drop_owned(
                 if !cascade {
                     let non_owned_dependencies: Vec<_> = schema
                         .item_ids()
-                        .map(|global_id| scx.catalog.get_item(&global_id))
+                        .map(|item_id| scx.catalog.get_item(&item_id))
                         .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
                         .filter(|item| !role_ids.contains(&item.owner_id()))
                         .collect();
@@ -6707,34 +6708,34 @@ pub fn plan_comment(
             let item = scx.get_item_by_resolved_name(name)?;
             match (com_ty, item.item_type()) {
                 (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
-                    (CommentObjectId::Table(item.id()), None)
+                    (CommentObjectId::Table(item.id().into()), None)
                 }
                 (CommentObjectType::View { .. }, CatalogItemType::View) => {
-                    (CommentObjectId::View(item.id()), None)
+                    (CommentObjectId::View(item.id().into()), None)
                 }
                 (CommentObjectType::MaterializedView { .. }, CatalogItemType::MaterializedView) => {
-                    (CommentObjectId::MaterializedView(item.id()), None)
+                    (CommentObjectId::MaterializedView(item.id().into()), None)
                 }
                 (CommentObjectType::Index { .. }, CatalogItemType::Index) => {
-                    (CommentObjectId::Index(item.id()), None)
+                    (CommentObjectId::Index(item.id().into()), None)
                 }
                 (CommentObjectType::Func { .. }, CatalogItemType::Func) => {
-                    (CommentObjectId::Func(item.id()), None)
+                    (CommentObjectId::Func(item.id().into()), None)
                 }
                 (CommentObjectType::Connection { .. }, CatalogItemType::Connection) => {
-                    (CommentObjectId::Connection(item.id()), None)
+                    (CommentObjectId::Connection(item.id().into()), None)
                 }
                 (CommentObjectType::Source { .. }, CatalogItemType::Source) => {
-                    (CommentObjectId::Source(item.id()), None)
+                    (CommentObjectId::Source(item.id().into()), None)
                 }
                 (CommentObjectType::Sink { .. }, CatalogItemType::Sink) => {
-                    (CommentObjectId::Sink(item.id()), None)
+                    (CommentObjectId::Sink(item.id().into()), None)
                 }
                 (CommentObjectType::Secret { .. }, CatalogItemType::Secret) => {
-                    (CommentObjectId::Secret(item.id()), None)
+                    (CommentObjectId::Secret(item.id().into()), None)
                 }
                 (CommentObjectType::ContinualTask { .. }, CatalogItemType::ContinualTask) => {
-                    (CommentObjectId::ContinualTask(item.id()), None)
+                    (CommentObjectId::ContinualTask(item.id().into()), None)
                 }
                 (com_ty, cat_ty) => {
                     let expected_type = match com_ty {
@@ -6766,20 +6767,23 @@ pub fn plan_comment(
                 if !modifiers.is_empty() {
                     sql_bail!("cannot comment on type with modifiers");
                 }
-                (CommentObjectId::Type(*id), None)
+                (CommentObjectId::Type((*id).into()), None)
             }
             ResolvedDataType::Error => unreachable!("should have been caught in name resolution"),
         },
         CommentObjectType::Column { name } => {
             let (item, pos) = scx.get_column_by_resolved_name(name)?;
             match item.item_type() {
-                CatalogItemType::Table => (CommentObjectId::Table(item.id()), Some(pos + 1)),
-                CatalogItemType::Source => (CommentObjectId::Source(item.id()), Some(pos + 1)),
-                CatalogItemType::View => (CommentObjectId::View(item.id()), Some(pos + 1)),
-                CatalogItemType::MaterializedView => {
-                    (CommentObjectId::MaterializedView(item.id()), Some(pos + 1))
+                CatalogItemType::Table => (CommentObjectId::Table(item.id().into()), Some(pos + 1)),
+                CatalogItemType::Source => {
+                    (CommentObjectId::Source(item.id().into()), Some(pos + 1))
                 }
-                CatalogItemType::Type => (CommentObjectId::Type(item.id()), Some(pos + 1)),
+                CatalogItemType::View => (CommentObjectId::View(item.id().into()), Some(pos + 1)),
+                CatalogItemType::MaterializedView => (
+                    CommentObjectId::MaterializedView(item.id().into()),
+                    Some(pos + 1),
+                ),
+                CatalogItemType::Type => (CommentObjectId::Type(item.id().into()), Some(pos + 1)),
                 r => {
                     return Err(PlanError::Unsupported {
                         feature: format!("Specifying comments on a column of {r}"),

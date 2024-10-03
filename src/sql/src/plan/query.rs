@@ -51,8 +51,8 @@ use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, RowArena,
-    ScalarType,
+    strconv, CatalogItemId, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType,
+    Row, RowArena, ScalarType,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
@@ -558,7 +558,7 @@ pub fn plan_copy_from_rows(
 ) -> Result<HirRelationExpr, PlanError> {
     let scx = StatementContext::new(Some(pcx), catalog);
 
-    let table = catalog.get_item(&id);
+    let table = catalog.get_item(&id.into());
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
     let mut defaults = table
@@ -5662,7 +5662,7 @@ pub fn scalar_type_from_sql(
             })
         }
         ResolvedDataType::Named { id, modifiers, .. } => {
-            scalar_type_from_catalog(scx.catalog, *id, modifiers)
+            scalar_type_from_catalog(scx.catalog, id.to_item_id(), modifiers)
         }
         ResolvedDataType::Error => unreachable!("should have been caught in name resolution"),
     }
@@ -5670,7 +5670,7 @@ pub fn scalar_type_from_sql(
 
 pub fn scalar_type_from_catalog(
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     modifiers: &[i64],
 ) -> Result<ScalarType, PlanError> {
     let entry = catalog.get_item(&id);
@@ -5785,7 +5785,7 @@ pub fn scalar_type_from_catalog(
                         *element_id,
                         element_modifiers,
                     )?),
-                    custom_id: Some(id),
+                    custom_id: Some(id.into()),
                 }),
                 CatalogType::Map {
                     key_reference: _,
@@ -5798,7 +5798,7 @@ pub fn scalar_type_from_catalog(
                         *value_id,
                         value_modifiers,
                     )?),
-                    custom_id: Some(id),
+                    custom_id: Some(id.into()),
                 }),
                 CatalogType::Range {
                     element_reference: element_id,
@@ -5825,7 +5825,7 @@ pub fn scalar_type_from_catalog(
                         .collect::<Result<Vec<_>, PlanError>>()?;
                     Ok(ScalarType::Record {
                         fields: scalars,
-                        custom_id: Some(id),
+                        custom_id: Some(id.into()),
                     })
                 }
                 CatalogType::AclItem => Ok(ScalarType::AclItem),

@@ -21,7 +21,7 @@ use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_repr::{ColumnName, RelationVersionSelector};
 use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, Version};
 use mz_sql_parser::ident;
@@ -934,7 +934,7 @@ pub enum ObjectId {
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Role(RoleId),
-    Item(GlobalId),
+    Item(CatalogItemId),
 }
 
 impl ObjectId {
@@ -968,7 +968,7 @@ impl ObjectId {
             _ => panic!("ObjectId::unwrap_role_id called on {self:?}"),
         }
     }
-    pub fn unwrap_item_id(self) -> GlobalId {
+    pub fn unwrap_item_id(self) -> CatalogItemId {
         match self {
             ObjectId::Item(id) => id,
             _ => panic!("ObjectId::unwrap_item_id called on {self:?}"),
@@ -1039,7 +1039,7 @@ impl TryFrom<ResolvedObjectName> for ObjectId {
             },
             ResolvedObjectName::Role(name) => Ok(ObjectId::Role(name.id)),
             ResolvedObjectName::Item(name) => match name {
-                ResolvedItemName::Item { id, .. } => Ok(ObjectId::Item(id)),
+                ResolvedItemName::Item { id, .. } => Ok(ObjectId::Item(id.into())),
                 ResolvedItemName::Cte { .. } => Err(anyhow!("CTE does not correspond to object")),
                 ResolvedItemName::ContinualTask { .. } => {
                     Err(anyhow!("ContinualTask does not correspond to object"))
@@ -1124,12 +1124,24 @@ impl From<&RoleId> for ObjectId {
 
 impl From<GlobalId> for ObjectId {
     fn from(id: GlobalId) -> Self {
-        ObjectId::Item(id)
+        ObjectId::Item(id.into())
     }
 }
 
 impl From<&GlobalId> for ObjectId {
     fn from(id: &GlobalId) -> Self {
+        ObjectId::Item((*id).into())
+    }
+}
+
+impl From<CatalogItemId> for ObjectId {
+    fn from(id: CatalogItemId) -> Self {
+        ObjectId::Item(id)
+    }
+}
+
+impl From<&CatalogItemId> for ObjectId {
+    fn from(id: &CatalogItemId) -> Self {
         ObjectId::Item(*id)
     }
 }
@@ -1137,17 +1149,17 @@ impl From<&GlobalId> for ObjectId {
 impl From<CommentObjectId> for ObjectId {
     fn from(id: CommentObjectId) -> Self {
         match id {
-            CommentObjectId::Table(global_id)
-            | CommentObjectId::View(global_id)
-            | CommentObjectId::MaterializedView(global_id)
-            | CommentObjectId::Source(global_id)
-            | CommentObjectId::Sink(global_id)
-            | CommentObjectId::Index(global_id)
-            | CommentObjectId::Func(global_id)
-            | CommentObjectId::Connection(global_id)
-            | CommentObjectId::Type(global_id)
-            | CommentObjectId::Secret(global_id)
-            | CommentObjectId::ContinualTask(global_id) => ObjectId::Item(global_id),
+            CommentObjectId::Table(item_id)
+            | CommentObjectId::View(item_id)
+            | CommentObjectId::MaterializedView(item_id)
+            | CommentObjectId::Source(item_id)
+            | CommentObjectId::Sink(item_id)
+            | CommentObjectId::Index(item_id)
+            | CommentObjectId::Func(item_id)
+            | CommentObjectId::Connection(item_id)
+            | CommentObjectId::Type(item_id)
+            | CommentObjectId::Secret(item_id)
+            | CommentObjectId::ContinualTask(item_id) => ObjectId::Item(item_id),
             CommentObjectId::Role(id) => ObjectId::Role(id),
             CommentObjectId::Database(id) => ObjectId::Database(id),
             CommentObjectId::Schema(id) => ObjectId::Schema(id),
@@ -1185,22 +1197,23 @@ impl From<ObjectId> for SystemObjectId {
 }
 
 /// Comments can be applied to multiple kinds of objects (e.g. Tables and Role), so we need a way
-/// to represent these different types and their IDs (e.g. [`GlobalId`] and [`RoleId`]), as well as
-/// the inner kind of object that is represented, e.g. [`GlobalId`] is used to identify both Tables
-/// and Views. No other kind of ID encapsulates all of this, hence this new "*Id" type.
+/// to represent these different types and their IDs (e.g. [`CatalogItemId`] and [`RoleId`]), as
+/// well as the inner kind of object that is represented, e.g. [`CatalogItemId`] is used to
+/// identify both Tables and Views. No other kind of ID encapsulates all of this, hence this new
+/// "*Id" type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
 pub enum CommentObjectId {
-    Table(GlobalId),
-    View(GlobalId),
-    MaterializedView(GlobalId),
-    Source(GlobalId),
-    Sink(GlobalId),
-    Index(GlobalId),
-    Func(GlobalId),
-    Connection(GlobalId),
-    Type(GlobalId),
-    Secret(GlobalId),
-    ContinualTask(GlobalId),
+    Table(CatalogItemId),
+    View(CatalogItemId),
+    MaterializedView(CatalogItemId),
+    Source(CatalogItemId),
+    Sink(CatalogItemId),
+    Index(CatalogItemId),
+    Func(CatalogItemId),
+    Connection(CatalogItemId),
+    Type(CatalogItemId),
+    Secret(CatalogItemId),
+    ContinualTask(CatalogItemId),
     Role(RoleId),
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
@@ -1254,12 +1267,12 @@ impl<'a> NameResolver<'a> {
                         sql_bail!("type \"{}[]\" does not exist", name)
                     }
                     ResolvedDataType::Named { id, modifiers, .. } => {
-                        let element_item = self.catalog.get_item(&id);
+                        let element_item = self.catalog.get_item(&id.into());
                         let array_item = match element_item.type_details() {
                             Some(CatalogTypeDetails {
                                 array_id: Some(array_id),
                                 ..
-                            }) => self.catalog.get_item(array_id),
+                            }) => self.catalog.get_item(&array_id.into()),
                             Some(_) => sql_bail!("type \"{}[]\" does not exist", name),
                             None => {
                                 // Resolution should never produce a
@@ -1311,8 +1324,8 @@ impl<'a> NameResolver<'a> {
                         (full_name, item)
                     }
                     RawItemName::Id(id, name, version) => {
-                        let gid: GlobalId = id.parse()?;
-                        let item = self.catalog.get_item(&gid);
+                        let id: CatalogItemId = id.parse()?;
+                        let item = self.catalog.get_item(&id);
                         let full_name = normalize::full_name(name)?;
                         assert_none!(version, "no support for versioning data types");
 
@@ -1329,7 +1342,7 @@ impl<'a> NameResolver<'a> {
                     ..
                 }) = item.type_details()
                 {
-                    self.ids.insert(*element_reference);
+                    self.ids.insert(element_reference.into());
                 }
                 Ok(ResolvedDataType::Named {
                     id: item.id(),
@@ -1470,7 +1483,7 @@ impl<'a> NameResolver<'a> {
                 return ResolvedItemName::Error;
             }
         };
-        let item = match self.catalog.try_get_item(&gid) {
+        let item = match self.catalog.try_get_item(&gid.into()) {
             Some(item) => item,
             None => {
                 if self.status.is_ok() {
@@ -1671,7 +1684,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 qualifiers: _,
                 print_id: _,
             } => {
-                let item = self.catalog.get_item(id);
+                let item = self.catalog.get_item(&id.into());
                 let desc = match item.desc(full_name) {
                     Ok(desc) => desc,
                     Err(e) => {
@@ -1859,7 +1872,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let item_name = self.fold_item_name(secret);
                 match &item_name {
                     ResolvedItemName::Item { id, .. } => {
-                        let item = self.catalog.get_item(id);
+                        let item = self.catalog.get_item(&id.into());
                         if item.item_type() != CatalogItemType::Secret {
                             self.status =
                                 Err(PlanError::InvalidSecret(Box::new(item_name.clone())));
@@ -2190,7 +2203,7 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
             ..
         } = name
         {
-            let item = self.catalog.get_item(id);
+            let item = self.catalog.get_item(&(*id).into());
             let catalog_full_name = self.catalog.resolve_full_name(item.name());
             if catalog_full_name == *full_name {
                 *print_id = false;
@@ -2206,7 +2219,7 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
             ..
         } = name
         {
-            let item = self.catalog.get_item(id);
+            let item = self.catalog.get_item(&(*id).into());
             let catalog_full_name = self.catalog.resolve_full_name(item.name());
             if catalog_full_name == *full_name {
                 *print_id = false;

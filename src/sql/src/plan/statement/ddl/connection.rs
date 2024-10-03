@@ -542,7 +542,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                             "internal error: Kafka PrivateLink connection was not resolved"
                         ),
                     };
-                    let entry = scx.catalog.get_item(id);
+                    let entry = scx.catalog.get_item(&id.into());
                     match entry.connection()? {
                         Connection::AwsPrivatelink(connection) => {
                             if let Some(az) = &availability_zone {
@@ -571,7 +571,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                             "internal error: Kafka SSH tunnel connection was not resolved"
                         ),
                     };
-                    let ssh_tunnel = scx.catalog.get_item(id);
+                    let ssh_tunnel = scx.catalog.get_item(&id.into());
                     match ssh_tunnel.connection()? {
                         Connection::Ssh(_connection) => Tunnel::Ssh(SshTunnel {
                             connection_id: *id,
@@ -679,7 +679,7 @@ fn plan_kafka_security(
                 Some(id) => {
                     scx.require_feature_flag(&ENABLE_AWS_MSK_IAM_AUTH)?;
                     let id = GlobalId::from(id);
-                    let item = scx.catalog.get_item(&id);
+                    let item = scx.catalog.get_item(&id.into());
                     let aws = match item.connection()? {
                         Connection::Aws(_) => AwsConnectionReference {
                             connection_id: id,

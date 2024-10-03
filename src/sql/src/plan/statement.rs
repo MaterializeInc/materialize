@@ -294,7 +294,7 @@ pub fn plan(
         .0
         .iter()
         // Filter out items that may not have been created yet, such as sub-sources.
-        .filter_map(|id| catalog.try_get_item(id))
+        .filter_map(|id| catalog.try_get_item(&id.into()))
         .any(|item| {
             item.func().is_ok()
                 && item.name().qualifiers.schema_spec
@@ -721,7 +721,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem {
-        self.catalog.get_item(id)
+        self.catalog.get_item(&id.into())
     }
 
     pub fn get_item_by_resolved_name(
@@ -866,7 +866,7 @@ impl<'a> StatementContext<'a> {
             (None, None) => Ok(Tunnel::Direct),
             (Some(ssh_tunnel), None) => {
                 let id = GlobalId::from(ssh_tunnel);
-                let ssh_tunnel = self.catalog.get_item(&id);
+                let ssh_tunnel = self.catalog.get_item(&id.into());
                 match ssh_tunnel.connection()? {
                     Connection::Ssh(_connection) => Ok(Tunnel::Ssh(SshTunnel {
                         connection_id: id,
@@ -877,7 +877,7 @@ impl<'a> StatementContext<'a> {
             }
             (None, Some(aws_privatelink)) => {
                 let id = aws_privatelink.connection.item_id().clone();
-                let entry = self.catalog.get_item(&id);
+                let entry = self.catalog.get_item(&id.into());
                 match entry.connection()? {
                     Connection::AwsPrivatelink(_) => Ok(Tunnel::AwsPrivatelink(AwsPrivatelink {
                         connection_id: id,
