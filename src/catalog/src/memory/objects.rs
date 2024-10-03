@@ -28,7 +28,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Expr, Raw, Statement, UnresolvedItemName, Value, WithOptionValue};
 use mz_sql::catalog::{
@@ -139,9 +139,9 @@ pub struct Schema {
     pub name: QualifiedSchemaName,
     pub id: SchemaSpecifier,
     pub oid: u32,
-    pub items: BTreeMap<String, GlobalId>,
-    pub functions: BTreeMap<String, GlobalId>,
-    pub types: BTreeMap<String, GlobalId>,
+    pub items: BTreeMap<String, CatalogItemId>,
+    pub functions: BTreeMap<String, CatalogItemId>,
+    pub types: BTreeMap<String, CatalogItemId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
 }
@@ -294,7 +294,7 @@ pub struct Cluster {
     pub log_indexes: BTreeMap<LogVariant, GlobalId>,
     /// Objects bound to this cluster. Does not include introspection source
     /// indexes.
-    pub bound_objects: BTreeSet<GlobalId>,
+    pub bound_objects: BTreeSet<CatalogItemId>,
     pub replica_id_by_name_: BTreeMap<String, ReplicaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub replicas_by_id_: BTreeMap<ReplicaId, ClusterReplica>,
@@ -489,13 +489,13 @@ pub struct ClusterReplicaProcessStatus {
 pub struct CatalogEntry {
     pub item: CatalogItem,
     #[serde(skip)]
-    pub referenced_by: Vec<GlobalId>,
+    pub referenced_by: Vec<CatalogItemId>,
     // TODO(database-issues#7922)––this should have an invariant tied to it that all
     // dependents (i.e. entries in this field) have IDs greater than this
     // entry's ID.
     #[serde(skip)]
-    pub used_by: Vec<GlobalId>,
-    pub id: GlobalId,
+    pub used_by: Vec<CatalogItemId>,
+    pub id: CatalogItemId,
     pub oid: u32,
     pub name: QualifiedItemName,
     pub owner_id: RoleId,
@@ -1831,6 +1831,11 @@ impl CatalogEntry {
 
     /// Returns the global ID of this catalog entry.
     pub fn id(&self) -> GlobalId {
+        self.id.into()
+    }
+
+    /// Returns the [`CatalogItemId`] of this catalog entry.
+    pub fn item_id(&self) -> CatalogItemId {
         self.id
     }
 
@@ -1845,12 +1850,12 @@ impl CatalogEntry {
     }
 
     /// Returns the identifiers of the dataflows that are directly referenced by this dataflow.
-    pub fn referenced_by(&self) -> &[GlobalId] {
+    pub fn referenced_by(&self) -> &[CatalogItemId] {
         &self.referenced_by
     }
 
     /// Returns the identifiers of the dataflows that depend upon this dataflow.
-    pub fn used_by(&self) -> &[GlobalId] {
+    pub fn used_by(&self) -> &[CatalogItemId] {
         &self.used_by
     }
 
@@ -2290,7 +2295,7 @@ impl mz_sql::catalog::CatalogSchema for Schema {
         !self.items.is_empty()
     }
 
-    fn item_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_> {
+    fn item_ids(&self) -> Box<dyn Iterator<Item = CatalogItemId> + '_> {
         Box::new(
             self.items
                 .values()
@@ -2340,7 +2345,7 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         self.id
     }
 
-    fn bound_objects(&self) -> &BTreeSet<GlobalId> {
+    fn bound_objects(&self) -> &BTreeSet<CatalogItemId> {
         &self.bound_objects
     }
 
@@ -2508,11 +2513,11 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.uses()
     }
 
-    fn referenced_by(&self) -> &[GlobalId] {
+    fn referenced_by(&self) -> &[CatalogItemId] {
         self.referenced_by()
     }
 
-    fn used_by(&self) -> &[GlobalId] {
+    fn used_by(&self) -> &[CatalogItemId] {
         self.used_by()
     }
 
@@ -2612,7 +2617,7 @@ impl TryFrom<Diff> for StateDiff {
 /// Information needed to process an update to a temporary item.
 #[derive(Debug, Clone)]
 pub struct TemporaryItem {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub oid: u32,
     pub name: QualifiedItemName,
     pub item: CatalogItem,

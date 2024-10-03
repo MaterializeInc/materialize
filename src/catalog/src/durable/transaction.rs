@@ -25,7 +25,7 @@ use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::{CatalogItemId, Diff, GlobalId};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
     RoleVars,
@@ -180,8 +180,8 @@ impl<'a> Transaction<'a> {
         })
     }
 
-    pub fn get_item(&self, id: &GlobalId) -> Option<Item> {
-        let key = ItemKey { gid: *id };
+    pub fn get_item(&self, id: &CatalogItemId) -> Option<Item> {
+        let key = ItemKey { id: *id };
         self.items
             .get(&key)
             .map(|v| DurableType::from_key_value(key, v.clone()))
@@ -565,7 +565,7 @@ impl<'a> Transaction<'a> {
 
     pub fn insert_user_item(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         schema_id: SchemaId,
         item_name: &str,
         create_sql: String,
@@ -582,7 +582,7 @@ impl<'a> Transaction<'a> {
 
     pub fn insert_item(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: SchemaId,
         item_name: &str,
@@ -591,7 +591,7 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
     ) -> Result<(), CatalogError> {
         match self.items.insert(
-            ItemKey { gid: id },
+            ItemKey { id },
             ItemValue {
                 schema_id,
                 name: item_name.to_string(),
@@ -603,7 +603,9 @@ impl<'a> Transaction<'a> {
             self.op_id,
         ) {
             Ok(_) => Ok(()),
-            Err(_) => Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into()),
+            Err(_) => {
+                Err(SqlCatalogError::ItemAlreadyExists(id.into(), item_name.to_owned()).into())
+            }
         }
     }
 
@@ -639,19 +641,25 @@ impl<'a> Transaction<'a> {
         Ok((current_id..next_id).collect())
     }
 
-    pub fn allocate_system_item_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
+    pub fn allocate_system_item_ids(
+        &mut self,
+        amount: u64,
+    ) -> Result<Vec<CatalogItemId>, CatalogError> {
         Ok(self
             .get_and_increment_id_by(SYSTEM_ITEM_ALLOC_KEY.to_string(), amount)?
             .into_iter()
-            .map(GlobalId::System)
+            .map(CatalogItemId::System)
             .collect())
     }
 
-    pub fn allocate_user_item_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
+    pub fn allocate_user_item_ids(
+        &mut self,
+        amount: u64,
+    ) -> Result<Vec<CatalogItemId>, CatalogError> {
         Ok(self
             .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), amount)?
             .into_iter()
-            .map(GlobalId::User)
+            .map(CatalogItemId::User)
             .collect())
     }
 
@@ -1071,8 +1079,8 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::remove_items`] instead.
-    pub fn remove_item(&mut self, id: GlobalId) -> Result<(), CatalogError> {
-        let prev = self.items.set(ItemKey { gid: id }, None, self.op_id)?;
+    pub fn remove_item(&mut self, id: CatalogItemId) -> Result<(), CatalogError> {
+        let prev = self.items.set(ItemKey { id }, None, self.op_id)?;
         if prev.is_some() {
             Ok(())
         } else {
@@ -1086,18 +1094,18 @@ impl<'a> Transaction<'a> {
     ///
     /// NOTE: On error, there still may be some items removed from the transaction. It is
     /// up to the caller to either abort the transaction or commit.
-    pub fn remove_items(&mut self, ids: &BTreeSet<GlobalId>) -> Result<(), CatalogError> {
+    pub fn remove_items(&mut self, ids: &BTreeSet<CatalogItemId>) -> Result<(), CatalogError> {
         if ids.is_empty() {
             return Ok(());
         }
 
-        let ks: Vec<_> = ids.clone().into_iter().map(|gid| ItemKey { gid }).collect();
+        let ks: Vec<_> = ids.clone().into_iter().map(|id| ItemKey { id }).collect();
         let n = self.items.delete_by_keys(ks, self.op_id).len();
         if n == ids.len() {
             Ok(())
         } else {
-            let item_gids = self.items.items().keys().map(|k| k.gid).collect();
-            let mut unknown = ids.difference(&item_gids);
+            let item_ids = self.items.items().keys().map(|k| k.id).collect();
+            let mut unknown = ids.difference(&item_ids);
             Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
         }
     }
@@ -1195,10 +1203,10 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
-    pub fn update_item(&mut self, id: GlobalId, item: Item) -> Result<(), CatalogError> {
+    pub fn update_item(&mut self, id: CatalogItemId, item: Item) -> Result<(), CatalogError> {
         let updated =
             self.items
-                .update_by_key(ItemKey { gid: id }, item.into_key_value().1, self.op_id)?;
+                .update_by_key(ItemKey { id }, item.into_key_value().1, self.op_id)?;
         if updated {
             Ok(())
         } else {
@@ -1213,7 +1221,10 @@ impl<'a> Transaction<'a> {
     ///
     /// NOTE: On error, there still may be some items updated in the transaction. It is
     /// up to the caller to either abort the transaction or commit.
-    pub fn update_items(&mut self, items: BTreeMap<GlobalId, Item>) -> Result<(), CatalogError> {
+    pub fn update_items(
+        &mut self,
+        items: BTreeMap<CatalogItemId, Item>,
+    ) -> Result<(), CatalogError> {
         if items.is_empty() {
             return Ok(());
         }
@@ -1222,14 +1233,14 @@ impl<'a> Transaction<'a> {
         let kvs: Vec<_> = items
             .clone()
             .into_iter()
-            .map(|(gid, item)| (ItemKey { gid }, item.into_key_value().1))
+            .map(|(id, item)| (ItemKey { id }, item.into_key_value().1))
             .collect();
         let n = self.items.update_by_keys(kvs, self.op_id)?;
         let n = usize::try_from(n).expect("Must be positive and fit in usize");
         if n == update_ids.len() {
             Ok(())
         } else {
-            let item_ids: BTreeSet<_> = self.items.items().keys().map(|k| k.gid).collect();
+            let item_ids: BTreeSet<_> = self.items.items().keys().map(|k| k.id).collect();
             let mut unknown = update_ids.difference(&item_ids);
             Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
         }
