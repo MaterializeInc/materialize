@@ -813,7 +813,7 @@ pub struct SetTransactionPlan {
 
 #[derive(Clone, Debug)]
 pub struct SelectPlan {
-    pub select: Option<SelectStatement<Aug>>,
+    pub select: Option<Box<SelectStatement<Aug>>>,
     pub source: HirRelationExpr,
     pub when: QueryWhen,
     pub finishing: RowSetFinishing,

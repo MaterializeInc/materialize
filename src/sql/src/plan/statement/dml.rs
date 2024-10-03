@@ -247,7 +247,7 @@ fn plan_select_inner(
             order_by: finishing.order_by,
         },
         copy_to,
-        select: Some(select),
+        select: Some(Box::new(select)),
     };
 
     Ok((plan, desc))
