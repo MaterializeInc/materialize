@@ -63,6 +63,7 @@ use std::collections::{BTreeMap, BinaryHeap};
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -85,8 +86,12 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Diff, GlobalId, Row, TimestampManipulation};
-use mz_storage_client::client::TimestamplessUpdate;
+use mz_storage_client::client::{AppendOnlyUpdate, Status, TimestamplessUpdate};
 use mz_storage_client::controller::{IntrospectionType, MonotonicAppender, StorageWriteOp};
+use mz_storage_client::healthcheck::{
+    MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_METRICS_HISTORY_DESC,
+    WALLCLOCK_LAG_HISTORY_DESC,
+};
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_client::storage_collections::StorageCollections;
@@ -105,9 +110,9 @@ use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
 use crate::{
-    collection_mgmt, collection_status, privatelink_status_history_desc,
-    replica_status_history_desc, snapshot, snapshot_statistics, statistics, StatusHistoryDesc,
-    StatusHistoryRetentionPolicy, StorageError,
+    collection_mgmt, privatelink_status_history_desc, replica_status_history_desc,
+    sink_status_history_desc, snapshot, snapshot_statistics, source_status_history_desc,
+    statistics, StatusHistoryDesc, StatusHistoryRetentionPolicy, StorageError,
 };
 
 // Default rate at which we advance the uppers of managed collections.
@@ -119,7 +124,7 @@ type DifferentialWriteChannel<T> =
 
 /// A channel for sending writes to an append-only collection.
 type AppendOnlyWriteChannel<T> = mpsc::UnboundedSender<(
-    Vec<(Row, Diff)>,
+    Vec<AppendOnlyUpdate>,
     oneshot::Sender<Result<(), StorageError<T>>>,
 )>;
 
@@ -294,12 +299,12 @@ where
         let read_only = self.get_read_only(id, force_writable);
 
         // Spawns a new task so we can write to this collection.
-        let writer_and_handle = append_only_write_task(
+        let writer_and_handle = AppendOnlyWriteTask::spawn(
             id,
             write_handle,
-            Arc::clone(&self.user_batch_duration_ms),
-            self.now.clone(),
             read_only,
+            self.now.clone(),
+            Arc::clone(&self.user_batch_duration_ms),
             introspection_config,
         );
         let prev = guard.insert(id, writer_and_handle);
@@ -359,7 +364,7 @@ where
     /// - If `id` does not belong to an append-only collections.
     /// - If this [`CollectionManager`] is in read-only mode.
     /// - If the collection closed.
-    pub(super) fn blind_write(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    pub(super) fn blind_write(&self, id: GlobalId, updates: Vec<AppendOnlyUpdate>) {
         if self.read_only {
             panic!("attempting blind write to {} while in read-only mode", id);
         }
@@ -668,7 +673,6 @@ where
                     .insert(self.id, scraper_token);
             }
 
-            // Truncate compute-maintained collections.
             IntrospectionType::ComputeDependencies
             | IntrospectionType::ComputeOperatorHydrationStatus
             | IntrospectionType::ComputeMaterializedViewRefreshes
@@ -1028,273 +1032,433 @@ where
     pub(crate) persist: Arc<PersistClientCache>,
 }
 
-/// Spawns an [`mz_ore::task`] that will continuously bump the upper for the specified collection,
-/// and append data that is sent via the provided [`mpsc::UnboundedSender`].
+/// A task that writes to an append only collection and continuously bumps the upper for the specified
+/// collection.
 ///
-/// TODO(parkmycar): One day if we want to customize the tick interval for each collection, that
-/// should be done here.
-/// TODO(parkmycar): Maybe add prometheus metrics for each collection?
-fn append_only_write_task<T>(
-    id: GlobalId,
-    mut write_handle: WriteHandle<SourceData, (), T, Diff>,
-    user_batch_duration_ms: Arc<AtomicU64>,
-    now: NowFn,
-    read_only: bool,
-    introspection_config: Option<AppendOnlyIntrospectionConfig<T>>,
-) -> (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender)
+/// For status history collections, this task can deduplicate redundant [`Statuses`](Status).
+struct AppendOnlyWriteTask<T>
 where
     T: Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+    /// The collection that we are writing to.
+    id: GlobalId,
+    write_handle: WriteHandle<SourceData, (), T, Diff>,
+    read_only: bool,
+    now: NowFn,
+    user_batch_duration_ms: Arc<AtomicU64>,
+    /// Receiver for write commands.
+    rx: mpsc::UnboundedReceiver<(
+        Vec<AppendOnlyUpdate>,
+        oneshot::Sender<Result<(), StorageError<T>>>,
+    )>,
 
-    let handle = mz_ore::task::spawn(
-        || format!("CollectionManager-append_only_write_task-{id}"),
-        async move {
-            if !read_only {
-                if let Some(AppendOnlyIntrospectionConfig {
+    /// We have to shut down when receiving from this.
+    shutdown_rx: oneshot::Receiver<()>,
+    /// If this collection deduplicates statuses, this map is used to track the previous status.
+    previous_statuses: Option<BTreeMap<GlobalId, Status>>,
+}
+
+impl<T> AppendOnlyWriteTask<T>
+where
+    T: Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+{
+    /// Spawns an [`AppendOnlyWriteTask`] in an [`mz_ore::task`] that will continuously bump the
+    /// upper for the specified collection,
+    /// and append data that is sent via the provided [`mpsc::UnboundedSender`].
+    ///
+    /// TODO(parkmycar): One day if we want to customize the tick interval for each collection, that
+    /// should be done here.
+    /// TODO(parkmycar): Maybe add prometheus metrics for each collection?
+    fn spawn(
+        id: GlobalId,
+        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        read_only: bool,
+        now: NowFn,
+        user_batch_duration_ms: Arc<AtomicU64>,
+        introspection_config: Option<AppendOnlyIntrospectionConfig<T>>,
+    ) -> (AppendOnlyWriteChannel<T>, WriteTask, ShutdownSender) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let previous_statuses: Option<BTreeMap<GlobalId, Status>> = match introspection_config
+            .as_ref()
+            .map(|config| config.introspection_type)
+        {
+            Some(IntrospectionType::SourceStatusHistory)
+            | Some(IntrospectionType::SinkStatusHistory) => Some(BTreeMap::new()),
+
+            Some(IntrospectionType::ReplicaMetricsHistory)
+            | Some(IntrospectionType::WallclockLagHistory)
+            | Some(IntrospectionType::PrivatelinkConnectionStatusHistory)
+            | Some(IntrospectionType::ReplicaStatusHistory)
+            | Some(IntrospectionType::PreparedStatementHistory)
+            | Some(IntrospectionType::StatementExecutionHistory)
+            | Some(IntrospectionType::SessionHistory)
+            | Some(IntrospectionType::StatementLifecycleHistory)
+            | Some(IntrospectionType::SqlText)
+            | None => None,
+
+            Some(introspection_type @ IntrospectionType::ShardMapping)
+            | Some(introspection_type @ IntrospectionType::Frontiers)
+            | Some(introspection_type @ IntrospectionType::ReplicaFrontiers)
+            | Some(introspection_type @ IntrospectionType::StorageSourceStatistics)
+            | Some(introspection_type @ IntrospectionType::StorageSinkStatistics)
+            | Some(introspection_type @ IntrospectionType::ComputeDependencies)
+            | Some(introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus)
+            | Some(introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes)
+            | Some(introspection_type @ IntrospectionType::ComputeErrorCounts)
+            | Some(introspection_type @ IntrospectionType::ComputeHydrationTimes) => {
+                unreachable!("not append-only collection: {introspection_type:?}")
+            }
+        };
+
+        let mut task = Self {
+            id,
+            write_handle,
+            rx,
+            shutdown_rx,
+            read_only,
+            now,
+            user_batch_duration_ms,
+            previous_statuses,
+        };
+
+        let handle = mz_ore::task::spawn(
+            || format!("CollectionManager-append_only_write_task-{id}"),
+            async move {
+                if !task.read_only {
+                    task.prepare(introspection_config).await;
+                }
+                task.run().await;
+            },
+        );
+
+        (tx, handle.abort_on_drop(), shutdown_tx)
+    }
+
+    /// Does any work that is required before the background task starts
+    /// writing to the given append only introspection collection.
+    ///
+    /// This might include consolidation or deleting older entries.
+    async fn prepare(&mut self, introspection_config: Option<AppendOnlyIntrospectionConfig<T>>) {
+        let Some(AppendOnlyIntrospectionConfig {
+            introspection_type,
+            config_set,
+            parameters,
+            storage_collections,
+            txns_read,
+            persist,
+        }) = introspection_config
+        else {
+            return;
+        };
+        let initial_statuses = match introspection_type {
+            IntrospectionType::ReplicaMetricsHistory | IntrospectionType::WallclockLagHistory => {
+                let result = partially_truncate_metrics_history(
+                    self.id,
                     introspection_type,
+                    &mut self.write_handle,
                     config_set,
-                    parameters,
+                    self.now.clone(),
                     storage_collections,
                     txns_read,
                     persist,
-                }) = introspection_config
-                {
-                    prepare_append_only_introspection_collection(
-                        id,
-                        introspection_type,
-                        &mut write_handle,
-                        config_set,
-                        parameters,
-                        now.clone(),
-                        storage_collections,
-                        txns_read,
-                        persist,
-                    )
-                    .await;
+                )
+                .await;
+                if let Err(error) = result {
+                    soft_panic_or_log!(
+                        "error truncating metrics history: {error} (type={introspection_type:?})"
+                    );
                 }
+                Vec::new()
             }
 
-            let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_TICK_MS));
+            IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                partially_truncate_status_history(
+                    self.id,
+                    IntrospectionType::PrivatelinkConnectionStatusHistory,
+                    &mut self.write_handle,
+                    privatelink_status_history_desc(&parameters),
+                    self.now.clone(),
+                    &storage_collections,
+                    &txns_read,
+                    &persist,
+                )
+                .await;
+                Vec::new()
+            }
+            IntrospectionType::ReplicaStatusHistory => {
+                partially_truncate_status_history(
+                    self.id,
+                    IntrospectionType::ReplicaStatusHistory,
+                    &mut self.write_handle,
+                    replica_status_history_desc(&parameters),
+                    self.now.clone(),
+                    &storage_collections,
+                    &txns_read,
+                    &persist,
+                )
+                .await;
+                Vec::new()
+            }
 
-            const BATCH_SIZE: usize = 4096;
-            let mut batch: Vec<(Vec<_>, _)> = Vec::with_capacity(BATCH_SIZE);
+            // Note [btv] - we don't truncate these, because that uses
+            // a huge amount of memory on environmentd startup.
+            IntrospectionType::PreparedStatementHistory
+            | IntrospectionType::StatementExecutionHistory
+            | IntrospectionType::SessionHistory
+            | IntrospectionType::StatementLifecycleHistory
+            | IntrospectionType::SqlText => {
+                // NOTE(aljoscha): We never remove from these
+                // collections. Someone, at some point needs to
+                // think about that! Issue:
+                // https://github.com/MaterializeInc/database-issues/issues/7666
+                Vec::new()
+            }
 
-            'run: loop {
-                tokio::select! {
-                    // Prefer sending actual updates over just bumping the upper, because sending
-                    // updates also bump the upper.
-                    biased;
+            IntrospectionType::SourceStatusHistory => {
+                let last_status_per_id = partially_truncate_status_history(
+                    self.id,
+                    IntrospectionType::SourceStatusHistory,
+                    &mut self.write_handle,
+                    source_status_history_desc(&parameters),
+                    self.now.clone(),
+                    &storage_collections,
+                    &txns_read,
+                    &persist,
+                )
+                .await;
 
-                    // Listen for a shutdown signal so we can gracefully cleanup.
-                    _ = &mut shutdown_rx => {
-                        let mut senders = Vec::new();
+                let status_col = MZ_SOURCE_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("status"))
+                    .expect("schema has not changed")
+                    .0;
 
-                        // Prevent new messages from being sent.
-                        rx.close();
+                last_status_per_id
+                    .into_iter()
+                    .map(|(id, row)| {
+                        (
+                            id,
+                            Status::from_str(
+                                row.iter()
+                                    .nth(status_col)
+                                    .expect("schema has not changed")
+                                    .unwrap_str(),
+                            )
+                            .expect("statuses must be uncorrupted"),
+                        )
+                    })
+                    .collect()
+            }
+            IntrospectionType::SinkStatusHistory => {
+                let last_status_per_id = partially_truncate_status_history(
+                    self.id,
+                    IntrospectionType::SinkStatusHistory,
+                    &mut self.write_handle,
+                    sink_status_history_desc(&parameters),
+                    self.now.clone(),
+                    &storage_collections,
+                    &txns_read,
+                    &persist,
+                )
+                .await;
 
-                        // Get as many waiting senders as possible.
-                        while let Ok((_batch, sender)) = rx.try_recv() {
-                            senders.push(sender);
-                        }
+                let status_col = MZ_SINK_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("status"))
+                    .expect("schema has not changed")
+                    .0;
 
-                        // Notify them that this collection is closed.
+                last_status_per_id
+                    .into_iter()
+                    .map(|(id, row)| {
+                        (
+                            id,
+                            Status::from_str(
+                                row.iter()
+                                    .nth(status_col)
+                                    .expect("schema has not changed")
+                                    .unwrap_str(),
+                            )
+                            .expect("statuses must be uncorrupted"),
+                        )
+                    })
+                    .collect()
+            }
+
+            introspection_type @ IntrospectionType::ShardMapping
+            | introspection_type @ IntrospectionType::Frontiers
+            | introspection_type @ IntrospectionType::ReplicaFrontiers
+            | introspection_type @ IntrospectionType::StorageSourceStatistics
+            | introspection_type @ IntrospectionType::StorageSinkStatistics
+            | introspection_type @ IntrospectionType::ComputeDependencies
+            | introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus
+            | introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes
+            | introspection_type @ IntrospectionType::ComputeErrorCounts
+            | introspection_type @ IntrospectionType::ComputeHydrationTimes => {
+                unreachable!("not append-only collection: {introspection_type:?}")
+            }
+        };
+        if let Some(previous_statuses) = &mut self.previous_statuses {
+            previous_statuses.extend(initial_statuses);
+        }
+    }
+
+    async fn run(mut self) {
+        let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_TICK_MS));
+
+        const BATCH_SIZE: usize = 4096;
+        let mut batch: Vec<(Vec<_>, _)> = Vec::with_capacity(BATCH_SIZE);
+
+        'run: loop {
+            tokio::select! {
+                // Prefer sending actual updates over just bumping the upper, because sending
+                // updates also bump the upper.
+                biased;
+
+                // Listen for a shutdown signal so we can gracefully cleanup.
+                _ = &mut self.shutdown_rx => {
+                    let mut senders = Vec::new();
+
+                    // Prevent new messages from being sent.
+                    self.rx.close();
+
+                    // Get as many waiting senders as possible.
+                    while let Ok((_batch, sender)) = self.rx.try_recv() {
+                        senders.push(sender);
+                    }
+
+                    // Notify them that this collection is closed.
+                    //
+                    // Note: if a task is shutting down, that indicates the source has been
+                    // dropped, at which point the identifier is invalid. Returning this
+                    // error provides a better user experience.
+                    notify_listeners(senders, || Err(StorageError::IdentifierInvalid(self.id)));
+
+                    break 'run;
+                }
+
+                // Pull a chunk of queued updates off the channel.
+                count = self.rx.recv_many(&mut batch, BATCH_SIZE) => {
+                    if count > 0 {
+                        // To rate limit appends to persist we add artificial latency, and will
+                        // finish no sooner than this instant.
+                        let batch_duration_ms = match self.id {
+                            GlobalId::User(_) => Duration::from_millis(self.user_batch_duration_ms.load(Ordering::Relaxed)),
+                            // For non-user collections, always just use the default.
+                            _ => STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
+                        };
+                        let use_batch_now = Instant::now();
+                        let min_time_to_complete = use_batch_now + batch_duration_ms;
+
+                        tracing::debug!(
+                            ?use_batch_now,
+                            ?batch_duration_ms,
+                            ?min_time_to_complete,
+                            "batch duration",
+                        );
+
+                        // Reset the interval which is used to periodically bump the uppers
+                        // because the uppers will get bumped with the following update. This
+                        // makes it such that we will write at most once every `interval`.
                         //
-                        // Note: if a task is shutting down, that indicates the source has been
-                        // dropped, at which point the identifier is invalid. Returning this
-                        // error provides a better user experience.
-                        notify_listeners(senders, || Err(StorageError::IdentifierInvalid(id)));
+                        // For example, let's say our `DEFAULT_TICK` interval is 10, so at
+                        // `t + 10`, `t + 20`, ... we'll bump the uppers. If we receive an
+                        // update at `t + 3` we want to shift this window so we bump the uppers
+                        // at `t + 13`, `t + 23`, ... which resetting the interval accomplishes.
+                        interval.reset();
 
-                        break 'run;
-                    }
 
-                    // Pull a chunk of queued updates off the channel.
-                    count = rx.recv_many(&mut batch, BATCH_SIZE) => {
-                        if count > 0 {
-                            // To rate limit appends to persist we add artificial latency, and will
-                            // finish no sooner than this instant.
-                            let batch_duration_ms = match id {
-                                GlobalId::User(_) => Duration::from_millis(user_batch_duration_ms.load(Ordering::Relaxed)),
-                                // For non-user collections, always just use the default.
-                                _ => STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
-                            };
-                            let use_batch_now = Instant::now();
-                            let min_time_to_complete = use_batch_now + batch_duration_ms;
+                        let mut all_rows = Vec::with_capacity(batch.iter().map(|(rows, _)| rows.len()).sum());
+                        let mut responders = Vec::with_capacity(batch.len());
 
-                            tracing::debug!(
-                                ?use_batch_now,
-                                ?batch_duration_ms,
-                                ?min_time_to_complete,
-                                "batch duration",
-                            );
+                        for (updates, responder) in batch.drain(..) {
+                            let rows = self.process_updates(updates);
 
-                            // Reset the interval which is used to periodically bump the uppers
-                            // because the uppers will get bumped with the following update. This
-                            // makes it such that we will write at most once every `interval`.
-                            //
-                            // For example, let's say our `DEFAULT_TICK` interval is 10, so at
-                            // `t + 10`, `t + 20`, ... we'll bump the uppers. If we receive an
-                            // update at `t + 3` we want to shift this window so we bump the uppers
-                            // at `t + 13`, `t + 23`, ... which reseting the interval accomplishes.
-                            interval.reset();
-
-                            let mut all_rows = Vec::with_capacity(batch.iter().map(|(rows, _)| rows.len()).sum());
-                            let mut responders = Vec::with_capacity(batch.len());
-
-                            for (rows, reponders) in batch.drain(..) {
-                                all_rows.extend(rows.into_iter().map(|(row, diff)| TimestamplessUpdate { row, diff}));
-                                responders.push(reponders);
-                            }
-
-                            if read_only {
-                                tracing::warn!(%id, ?all_rows, "append while in read-only mode");
-                                notify_listeners(responders, || Err(StorageError::ReadOnly));
-                                continue;
-                            }
-
-                            // Append updates to persist!
-                            let at_least = T::from(now());
-
-                            monotonic_append(&mut write_handle, all_rows, at_least).await;
-                            // Notify all of our listeners.
-                            notify_listeners(responders, || Ok(()));
-
-                            // Wait until our artificial latency has completed.
-                            //
-                            // Note: if writing to persist took longer than `DEFAULT_TICK` this
-                            // await will resolve immediately.
-                            tokio::time::sleep_until(min_time_to_complete).await;
-                        } else {
-                            // Sender has been dropped, which means the collection should have been
-                            // unregistered, break out of the run loop if we weren't already
-                            // aborted.
-                            break 'run;
+                            all_rows.extend(rows.map(|(row, diff)| TimestamplessUpdate { row, diff}));
+                            responders.push(responder);
                         }
-                    }
 
-                    // If we haven't received any updates, then we'll move the upper forward.
-                    _ = interval.tick() => {
-                        if read_only {
-                            // Not bumping uppers while in read-only mode.
+                        if self.read_only {
+                            tracing::warn!(%self.id, ?all_rows, "append while in read-only mode");
+                            notify_listeners(responders, || Err(StorageError::ReadOnly));
                             continue;
                         }
 
-                        // Update our collection.
-                        let now = T::from(now());
-                        let updates = vec![];
-                        let at_least = now.clone();
+                        // Append updates to persist!
+                        let at_least = T::from((self.now)());
 
-                        // Failures don't matter when advancing collections' uppers. This might
-                        // fail when a clusterd happens to be writing to this concurrently.
-                        // Advancing uppers here is best-effort and only needs to succeed if no
-                        // one else is advancing it; contention proves otherwise.
-                        monotonic_append(&mut write_handle, updates, at_least).await;
-                    },
+                        if !all_rows.is_empty() {
+                            monotonic_append(&mut self.write_handle, all_rows, at_least).await;
+                        }
+                        // Notify all of our listeners.
+                        notify_listeners(responders, || Ok(()));
+
+                        // Wait until our artificial latency has completed.
+                        //
+                        // Note: if writing to persist took longer than `DEFAULT_TICK` this
+                        // await will resolve immediately.
+                        tokio::time::sleep_until(min_time_to_complete).await;
+                    } else {
+                        // Sender has been dropped, which means the collection should have been
+                        // unregistered, break out of the run loop if we weren't already
+                        // aborted.
+                        break 'run;
+                    }
                 }
-            }
 
-            info!("write_task-{id} ending");
-        },
-    );
+                // If we haven't received any updates, then we'll move the upper forward.
+                _ = interval.tick() => {
+                    if self.read_only {
+                        // Not bumping uppers while in read-only mode.
+                        continue;
+                    }
 
-    (tx, handle.abort_on_drop(), shutdown_tx)
-}
+                    // Update our collection.
+                    let now = T::from((self.now)());
+                    let updates = vec![];
+                    let at_least = now.clone();
 
-/// Does any work that is required before a background task starts
-/// writing to the given append only introspection collection.
-///
-/// This might include consolidation or deleting older entries.
-async fn prepare_append_only_introspection_collection<T>(
-    id: GlobalId,
-    introspection_type: IntrospectionType,
-    write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
-    config_set: Arc<ConfigSet>,
-    parameters: StorageParameters,
-    now: NowFn,
-    storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    txns_read: TxnsRead<T>,
-    persist: Arc<PersistClientCache>,
-) where
-    T: Codec64 + From<EpochMillis> + TimestampManipulation,
-{
-    tracing::info!(%id, ?introspection_type, "preparing append only introspection collection for writes");
-
-    match introspection_type {
-        IntrospectionType::ReplicaMetricsHistory | IntrospectionType::WallclockLagHistory => {
-            let result = partially_truncate_metrics_history(
-                id,
-                introspection_type,
-                write_handle,
-                config_set,
-                now.clone(),
-                storage_collections,
-                txns_read,
-                persist,
-            )
-            .await;
-            if let Err(error) = result {
-                soft_panic_or_log!(
-                    "error truncating metrics history: {error} (type={introspection_type:?})"
-                );
+                    // Failures don't matter when advancing collections' uppers. This might
+                    // fail when a clusterd happens to be writing to this concurrently.
+                    // Advancing uppers here is best-effort and only needs to succeed if no
+                    // one else is advancing it; contention proves otherwise.
+                    monotonic_append(&mut self.write_handle, updates, at_least).await;
+                },
             }
         }
 
-        IntrospectionType::PrivatelinkConnectionStatusHistory => {
-            partially_truncate_status_history(
-                id,
-                IntrospectionType::PrivatelinkConnectionStatusHistory,
-                write_handle,
-                privatelink_status_history_desc(&parameters),
-                now.clone(),
-                &storage_collections,
-                &txns_read,
-                &persist,
-            )
-            .await;
-        }
-        IntrospectionType::ReplicaStatusHistory => {
-            partially_truncate_status_history(
-                id,
-                IntrospectionType::ReplicaStatusHistory,
-                write_handle,
-                replica_status_history_desc(&parameters),
-                now.clone(),
-                &storage_collections,
-                &txns_read,
-                &persist,
-            )
-            .await;
-        }
+        info!("write_task-{} ending", self.id);
+    }
 
-        // Note [btv] - we don't truncate these, because that uses
-        // a huge amount of memory on environmentd startup.
-        IntrospectionType::PreparedStatementHistory
-        | IntrospectionType::StatementExecutionHistory
-        | IntrospectionType::SessionHistory
-        | IntrospectionType::StatementLifecycleHistory
-        | IntrospectionType::SqlText => {
-            // NOTE(aljoscha): We never remove from these
-            // collections. Someone, at some point needs to
-            // think about that! Issue:
-            // https://github.com/MaterializeInc/database-issues/issues/7666
-        }
+    /// Deduplicate any [`mz_storage_client::client::StatusUpdate`] within `updates` and converts
+    /// `updates` to rows and diffs.
+    fn process_updates(
+        &mut self,
+        updates: Vec<AppendOnlyUpdate>,
+    ) -> impl Iterator<Item = (Row, Diff)> {
+        let updates = if let Some(previous_statuses) = &mut self.previous_statuses {
+            let new: Vec<_> = updates
+                .into_iter()
+                .filter(|r| match r {
+                    AppendOnlyUpdate::Row(_) => true,
+                    AppendOnlyUpdate::Status(update) => {
+                        match (previous_statuses.get(&update.id).as_deref(), &update.status) {
+                            (None, _) => true,
+                            (Some(old), new) => old.superseded_by(*new),
+                        }
+                    }
+                })
+                .collect();
+            previous_statuses.extend(new.iter().filter_map(|update| match update {
+                AppendOnlyUpdate::Row(_) => None,
+                AppendOnlyUpdate::Status(update) => Some((update.id, update.status)),
+            }));
+            new
+        } else {
+            updates
+        };
 
-        // TODO(jkosh44) Handle these here instead of in the controller.
-        IntrospectionType::SourceStatusHistory | IntrospectionType::SinkStatusHistory => {}
-
-        introspection_type @ IntrospectionType::ShardMapping
-        | introspection_type @ IntrospectionType::Frontiers
-        | introspection_type @ IntrospectionType::ReplicaFrontiers
-        | introspection_type @ IntrospectionType::StorageSourceStatistics
-        | introspection_type @ IntrospectionType::StorageSinkStatistics
-        | introspection_type @ IntrospectionType::ComputeDependencies
-        | introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus
-        | introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes
-        | introspection_type @ IntrospectionType::ComputeErrorCounts
-        | introspection_type @ IntrospectionType::ComputeHydrationTimes => {
-            unreachable!("not append-only collection: {introspection_type:?}")
-        }
+        updates.into_iter().map(AppendOnlyUpdate::into_row)
     }
 }
 
@@ -1320,14 +1484,14 @@ where
     let (keep_duration, occurred_at_col) = match introspection_type {
         IntrospectionType::ReplicaMetricsHistory => (
             REPLICA_METRICS_HISTORY_RETENTION_INTERVAL.get(&config_set),
-            collection_status::REPLICA_METRICS_HISTORY_DESC
+            REPLICA_METRICS_HISTORY_DESC
                 .get_by_name(&ColumnName::from("occurred_at"))
                 .expect("schema has not changed")
                 .0,
         ),
         IntrospectionType::WallclockLagHistory => (
             WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL.get(&config_set),
-            collection_status::WALLCLOCK_LAG_HISTORY_DESC
+            WALLCLOCK_LAG_HISTORY_DESC
                 .get_by_name(&ColumnName::from("occurred_at"))
                 .expect("schema has not changed")
                 .0,
@@ -1615,5 +1779,231 @@ fn notify_listeners<T>(
     for r in responders {
         // We don't care if the listener disappeared.
         let _ = r.send(result());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use mz_repr::{Datum, Row};
+    use mz_storage_client::client::StatusUpdate;
+    use mz_storage_client::healthcheck::{
+        MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
+    };
+
+    #[mz_ore::test]
+    fn test_row() {
+        let error_message = "error message";
+        let hint = "hint message";
+        let id = GlobalId::User(1);
+        let status = Status::Dropped;
+        let row = Row::from(StatusUpdate {
+            id,
+            timestamp: chrono::offset::Utc::now(),
+            status,
+            error: Some(error_message.to_string()),
+            hints: BTreeSet::from([hint.to_string()]),
+            namespaced_errors: Default::default(),
+        });
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+
+        let details = row
+            .iter()
+            .nth(4)
+            .unwrap()
+            .unwrap_map()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(details.len(), 1);
+        let hint_datum = &details[0];
+
+        assert_eq!(hint_datum.0, "hints");
+        assert_eq!(
+            hint_datum.1.unwrap_list().iter().next().unwrap(),
+            Datum::String(hint)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_row_without_hint() {
+        let error_message = "error message";
+        let id = GlobalId::User(1);
+        let status = Status::Dropped;
+        let row = Row::from(StatusUpdate {
+            id,
+            timestamp: chrono::offset::Utc::now(),
+            status,
+            error: Some(error_message.to_string()),
+            hints: Default::default(),
+            namespaced_errors: Default::default(),
+        });
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+        assert_eq!(row.iter().nth(4).unwrap(), Datum::Null);
+    }
+
+    #[mz_ore::test]
+    fn test_row_without_error() {
+        let id = GlobalId::User(1);
+        let status = Status::Dropped;
+        let hint = "hint message";
+        let row = Row::from(StatusUpdate {
+            id,
+            timestamp: chrono::offset::Utc::now(),
+            status,
+            error: None,
+            hints: BTreeSet::from([hint.to_string()]),
+            namespaced_errors: Default::default(),
+        });
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::Null);
+
+        let details = row
+            .iter()
+            .nth(4)
+            .unwrap()
+            .unwrap_map()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(details.len(), 1);
+        let hint_datum = &details[0];
+
+        assert_eq!(hint_datum.0, "hints");
+        assert_eq!(
+            hint_datum.1.unwrap_list().iter().next().unwrap(),
+            Datum::String(hint)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_row_with_namespaced() {
+        let error_message = "error message";
+        let id = GlobalId::User(1);
+        let status = Status::Dropped;
+        let row = Row::from(StatusUpdate {
+            id,
+            timestamp: chrono::offset::Utc::now(),
+            status,
+            error: Some(error_message.to_string()),
+            hints: Default::default(),
+            namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
+        });
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+
+        let details = row
+            .iter()
+            .nth(4)
+            .unwrap()
+            .unwrap_map()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(details.len(), 1);
+        let ns_datum = &details[0];
+
+        assert_eq!(ns_datum.0, "namespaced");
+        assert_eq!(
+            ns_datum.1.unwrap_map().iter().next().unwrap(),
+            ("thing", Datum::String("error"))
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_row_with_everything() {
+        let error_message = "error message";
+        let hint = "hint message";
+        let id = GlobalId::User(1);
+        let status = Status::Dropped;
+        let row = Row::from(StatusUpdate {
+            id,
+            timestamp: chrono::offset::Utc::now(),
+            status,
+            error: Some(error_message.to_string()),
+            hints: BTreeSet::from([hint.to_string()]),
+            namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
+        });
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+
+        let details = row
+            .iter()
+            .nth(4)
+            .unwrap()
+            .unwrap_map()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(details.len(), 2);
+        // These are always sorted
+        let hint_datum = &details[0];
+        let ns_datum = &details[1];
+
+        assert_eq!(hint_datum.0, "hints");
+        assert_eq!(
+            hint_datum.1.unwrap_list().iter().next().unwrap(),
+            Datum::String(hint)
+        );
+
+        assert_eq!(ns_datum.0, "namespaced");
+        assert_eq!(
+            ns_datum.1.unwrap_map().iter().next().unwrap(),
+            ("thing", Datum::String("error"))
+        );
     }
 }

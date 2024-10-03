@@ -53,7 +53,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::TimestamplessUpdate;
+use crate::client::{AppendOnlyUpdate, StatusUpdate, TimestamplessUpdate};
 use crate::statistics::WebhookStatistics;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -693,6 +693,13 @@ pub trait StorageController: Debug {
     /// introspection type, as readers rely on this and might panic otherwise.
     fn append_introspection_updates(&mut self, type_: IntrospectionType, updates: Vec<(Row, Diff)>);
 
+    /// Records append-only status updates for the given introspection type.
+    fn append_status_introspection_updates(
+        &mut self,
+        type_: IntrospectionType,
+        updates: Vec<StatusUpdate>,
+    );
+
     /// Updates the desired state of the given introspection type.
     ///
     /// Rows passed in `op` MUST have the correct schema for the given
@@ -830,7 +837,7 @@ impl<T: Timestamp> ExportState<T> {
 pub struct MonotonicAppender<T> {
     /// Channel that sends to a [`tokio::task`] which pushes updates to Persist.
     tx: mpsc::UnboundedSender<(
-        Vec<(Row, Diff)>,
+        Vec<AppendOnlyUpdate>,
         oneshot::Sender<Result<(), StorageError<T>>>,
     )>,
 }
@@ -838,14 +845,14 @@ pub struct MonotonicAppender<T> {
 impl<T> MonotonicAppender<T> {
     pub fn new(
         tx: mpsc::UnboundedSender<(
-            Vec<(Row, Diff)>,
+            Vec<AppendOnlyUpdate>,
             oneshot::Sender<Result<(), StorageError<T>>>,
         )>,
     ) -> Self {
         MonotonicAppender { tx }
     }
 
-    pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError<T>> {
+    pub async fn append(&self, updates: Vec<AppendOnlyUpdate>) -> Result<(), StorageError<T>> {
         let (tx, rx) = oneshot::channel();
 
         // Send our update to the CollectionManager.
