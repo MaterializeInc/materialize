@@ -63,6 +63,7 @@ message ProtoComputeLog {
     google.protobuf.Empty shutdown_duration = 11;
     google.protobuf.Empty error_count = 12;
     google.protobuf.Empty hydration_time = 13;
+    google.protobuf.Empty lir_mapping = 14;
   }
 }
 message ProtoLogVariant {

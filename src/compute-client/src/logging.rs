@@ -303,6 +303,8 @@ pub enum ComputeLog {
     ErrorCount,
     /// Hydration times of exported collections.
     HydrationTime,
+    /// Mappings from GlobalId/LirId pairs to dataflow addresses.
+    LirMapping,
 }
 
 impl RustType<ProtoComputeLog> for ComputeLog {
@@ -321,6 +323,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
                 ComputeLog::ShutdownDuration => ShutdownDuration(()),
                 ComputeLog::ErrorCount => ErrorCount(()),
                 ComputeLog::HydrationTime => HydrationTime(()),
+                ComputeLog::LirMapping => LirMapping(()),
             }),
         }
     }
@@ -339,6 +342,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
             Some(ShutdownDuration(())) => Ok(ComputeLog::ShutdownDuration),
             Some(ErrorCount(())) => Ok(ComputeLog::ErrorCount),
             Some(HydrationTime(())) => Ok(ComputeLog::HydrationTime),
+            Some(LirMapping(())) => Ok(ComputeLog::LirMapping),
             None => Err(TryFromProtoError::missing_field("ProtoComputeLog::kind")),
         }
     }
@@ -360,7 +364,11 @@ impl LogVariant {
             .unwrap_or_else(|| (0..arity).collect())
     }
 
-    /// TODO(database-issues#7533): Add documentation.
+    /// Relation schemas for the logs.
+    ///
+    /// This types need to agree with the values that are produced
+    /// in `logging::compute::construct` and with the description in
+    /// `catalog/src/builtin.rs`.
     pub fn desc(&self) -> RelationDesc {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::builder()
@@ -519,6 +527,20 @@ impl LogVariant {
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time_ns", ScalarType::UInt64.nullable(true))
+                .with_key(vec![0, 1])
+                .finish(),
+
+            LogVariant::Compute(ComputeLog::LirMapping) => RelationDesc::builder()
+                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("lir_id", ScalarType::UInt64.nullable(false))
+                .with_column(
+                    "address",
+                    ScalarType::List {
+                        element_type: Box::new(ScalarType::UInt64),
+                        custom_id: None,
+                    }
+                    .nullable(false),
+                )
                 .with_key(vec![0, 1])
                 .finish(),
         }
