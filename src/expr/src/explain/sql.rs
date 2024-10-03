@@ -16,7 +16,7 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::str::Indent;
 use mz_repr::explain::sql::DisplaySql;
 use mz_repr::explain::PlanRenderingContext;
-use mz_repr::{ColumnType, Datum, GlobalId, ScalarType};
+use mz_repr::{Datum, GlobalId, ScalarType};
 use mz_sql_parser::ast::{
     Cte, CteBlock, Distinct, Expr, Ident, IdentError, JoinConstraint, JoinOperator, Limit,
     OrderByExpr, Query, Raw, RawDataType, RawItemName, Select, SelectItem, SelectOption,
@@ -1255,8 +1255,14 @@ impl MirToSql {
                 max_length: Some(max_length),
             } => named(format!("varchar({})", max_length.into_u32())),
             ScalarType::VarChar { max_length: None } => named("varchar"),
-            ScalarType::Timestamp { precision } => todo!(),
-            ScalarType::TimestampTz { precision } => todo!(),
+            ScalarType::Timestamp { precision: None } => named("timestamp"),
+            ScalarType::Timestamp {
+                precision: Some(precision),
+            } => named(format!("timestamp({})", precision.into_u8())),
+            ScalarType::TimestampTz { precision: None } => named("timestamptz"),
+            ScalarType::TimestampTz {
+                precision: Some(precision),
+            } => named(format!("timestamptz({})", precision.into_u8())),
             ScalarType::Numeric {
                 max_scale: Some(max_scale),
             } => named(format!("numeric(39, {})", max_scale.into_u8())), // precision is always 39
