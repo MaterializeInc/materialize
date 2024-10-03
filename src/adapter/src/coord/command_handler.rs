@@ -62,8 +62,8 @@ use crate::command::{
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::{
-    ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
-    PurifiedStatementReady,
+    ConnMeta, Coordinator, DeferredPlanStatement, Message, NetworkPolicy, PendingTxn,
+    PlanStatement, PlanValidity, PurifiedStatementReady,
 };
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -256,10 +256,10 @@ impl Coordinator {
         notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     ) {
         // Early return if successful, otherwise cleanup any possible state.
-        match self.handle_startup_inner(&user, &conn_id).await {
+        match self.handle_startup_inner(&user, &conn_id, &client_ip).await {
             Ok(role_id) => {
-                let mut session_defaults = BTreeMap::new();
                 let system_config = self.catalog().state().system_config();
+                let mut session_defaults = BTreeMap::new();
 
                 // Override the session with any system defaults.
                 session_defaults.extend(
@@ -347,7 +347,30 @@ impl Coordinator {
         &mut self,
         user: &User,
         conn_id: &ConnectionId,
+        client_ip: &Option<IpAddr>,
     ) -> Result<RoleId, AdapterError> {
+        // Validate network policies for external users. Internal users
+        // can only connect on the internal interfaces (internal HTTP/
+        // pgwire). It is up to the person deploying the system to
+        // ensure these internal interfaces are well secured.
+        let system_config = self.catalog().state().system_config();
+        if !user.is_internal() {
+            let default_policy = NetworkPolicy::new(system_config.default_network_policy());
+            if let Some(ip) = client_ip {
+                match default_policy.validate(ip) {
+                    Ok(_) => {}
+                    Err(e) => return Err(AdapterError::NetworkPolicyDenied(e)),
+                }
+            } else {
+                // Only temporary and internal representation of a session
+                // should be missing a client_ip. These sessions should not be
+                // making requests or going through handle_startup.
+                return Err(AdapterError::NetworkPolicyDenied(
+                    super::NetworkPolicyError::MissingIp,
+                ));
+            }
+        }
+
         if self.catalog().try_get_role_by_name(&user.name).is_none() {
             // If the user has made it to this point, that means they have been fully authenticated.
             // This includes preventing any user, except a pre-defined set of system users, from

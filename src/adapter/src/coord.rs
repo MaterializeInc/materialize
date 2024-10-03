@@ -86,6 +86,7 @@ use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use thiserror::Error;
 
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
@@ -4005,4 +4006,34 @@ enum PlanStatement {
         plan: mz_sql::plan::Plan,
         resolved_ids: ResolvedIds,
     },
+}
+
+#[derive(Debug, Error)]
+pub enum NetworkPolicyError {
+    #[error("Access denied for address {0}")]
+    AddressDenied(IpAddr),
+    #[error("Access denied missing IP address")]
+    MissingIp,
+}
+
+// TODO @jubrad this will be moved to a catalog resource in v1
+// of network policies.
+/// Represents a basic network policy.
+#[derive(Debug, Clone)]
+pub struct NetworkPolicy {
+    allow_list: Vec<IpNet>,
+}
+
+impl NetworkPolicy {
+    pub fn new(allow_list: Vec<IpNet>) -> Self {
+        NetworkPolicy { allow_list }
+    }
+
+    /// Validate the provided IP is allowed by the network policy.
+    pub fn validate(&self, ip: &IpAddr) -> Result<(), NetworkPolicyError> {
+        match self.allow_list.iter().any(|net| net.contains(ip)) {
+            true => Ok(()),
+            false => Err(NetworkPolicyError::AddressDenied(ip.clone())),
+        }
+    }
 }

@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use ipnet::IpNet;
 use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
@@ -1486,6 +1487,13 @@ pub static USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION: VarDefinition = VarD
     value!(Duration; STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT),
     "Duration which we'll wait to collect a batch of events for a webhook source.",
     false,
+);
+
+pub static DEFAULT_NETWORK_POLICY_ALLOW_LIST: VarDefinition = VarDefinition::new_lazy(
+    "default_network_policy_allow_list",
+    lazy_value!(Vec<IpNet>; || vec![IpNet::from_str("0.0.0.0/0").expect("this is a valid IpNet")]),
+    "Network policy allow list that external user connections will be validated against.",
+    true,
 );
 
 /// Configuration for gRPC client connections.
