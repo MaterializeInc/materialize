@@ -127,6 +127,82 @@ output of `EXPLAIN` in general and `EXPLAIN PLAN PROFILE` in
 particular, rather than attempting to guess at the right information
 to show.
 
+## Implementation strategy
+
+We will use introspection sources to do the source mapping. At present,
+we have introspection sources that let us map dataflow addresses to
+their statistics and operators.
+
+Each LIR operator has a distinct (to that query) `LirId`, a `u64`
+value generated when lowering MIR to LIR.
+
+Each MIR operator has a distinct index in the post-order traversal;
+we can call this index its `MirId`.
+
+We will add introspection sources:
+
+ - mapping `GlobalId`s and `LirId`s to dataflow addresses
+ - mapping `GlobalId`s and `LirId`s to the LIR operator (think: a
+   single line of an `EXPLAIN PHYSICAL PLAN`)
+ - mapping `GlobalId`s and `MirId`s to an `LirId`
+ - mapping `GlobalId`s and `MirId`s to the MIR operator (think: a
+   single line of an `EXPLAIN PLAN`)
+
+With these introspection sources, we can implement `EXPLAIN PLAN
+PROFILE FOR (INDEX|MATERIALIZED VIEW) [name]` as a query not unlike
+the existing ad-hoc WMR used to analyze dataflow. That query will:
+
+ - resolve `name` to a `GlobalId`
+ - run a query that:
+   + joins (for that `GlobalId`) the `MirId`, the MIR operator, the
+     `LirId`, the dataflow address, and the dataflow statistics
+   + sorts appropriately (by `MirId` descending will give you
+     post-order)
+   + indents appropriately (cf. the existing WMR query)
+
+We might see output like the following (totally made up numbers, query
+drawn from `joins.slt`; plan seems weird to me, not relevant):
+
+```
+> CREATE MATERIALIZED VIEW v AS SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id = 1);
+> EXPLAIN PLAN PROFILE FOR MATERIALIZED VIEW v;
+|operator                                                        |memory|
+|----------------------------------------------------------------|------|
+|Project (#0, #1)                                                |      |
+|  Join on=(#0 = #2) type=differential                           |      |
+|    ArrangeBy keys=[[#0]]                                       |  12GB|
+|      ReadStorage materialize.public.t4362                      |      |
+|    ArrangeBy keys=[[#0]]                                       |  10GB|
+|      Union                                                     |      |
+|        Project (#0)                                            |      |
+|          Get l0                                                |      |
+|        Map (error("more than one record produced in subquery"))|      |
+|          Project ()                                            |      |
+|            Filter (#0 > 1)                                     |      |
+|              Reduce aggregates=[count(*)]                      |   3GB|
+|                Project ()                                      |      |
+|                  Get l0                                        |      |
+|cte l0 =                                                        |      |
+|  Filter (#1 = 1)                                               |      |
+|    ReadStorage materialize.public.t4362                        |      |
+```
+
+There are pros and cons to this approach.
+
+ + Minimal new code (just the new tables and the logic for the
+   `EXPLAIN PLAN PROFILE` macro).
+ + Avoids tricky reentrancy: if we implemented `EXPLAIN PLAN PROFILE`
+   inside environmentd, we'd need to have a way to read from
+   introspection sources while running an `EXPLAIN`.
+ + Adaptable: we can run custom queries or edit the macro easily. We
+   can therefore experiment a little more freely with how we render
+   different MIR operators.
+
+ - Doesn't hook in to existing `EXPLAIN` infrastructure.
+
+If we find we miss features from the `EXPLAIN` infrastructure, we can
+enrich what we put in the `MirId` operator mapping.
+
 ## Open questions
 
 We must be careful to show profiles and plans for the existing,
