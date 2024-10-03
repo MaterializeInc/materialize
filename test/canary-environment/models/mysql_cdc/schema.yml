@@ -14,16 +14,16 @@ sources:
     schema: public_mysql_cdc
     tables:
       - name: mysql_cdc_progress
-        tests:
+        data_tests:
           - makes_progress
       - name: mysql_people
-        tests:
+        data_tests:
           - makes_progress
       - name: mysql_relationships
-        tests:
+        data_tests:
           - makes_progress
 
 models:
     - name: mysql_wmr
-      tests:
+      data_tests:
         - makes_progress
