@@ -156,10 +156,14 @@ class DecodeError(Check):
                 $ kafka-ingest format=avro topic=decode-error schema=${schema-f1} repeat=1
                 {"f1": "A"}
 
-                > CREATE SOURCE decode_error
+                >[version<11900] CREATE SOURCE decode_error
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
 
-                > CREATE TABLE decode_error_tbl FROM SOURCE decode_error (REFERENCE "testdrive-decode-error-${testdrive.seed}")
+                >[version>=11900] CREATE SOURCE decode_error_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE decode_error FROM SOURCE decode_error_src (REFERENCE "testdrive-decode-error-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
             """
@@ -186,7 +190,7 @@ class DecodeError(Check):
         return Testdrive(
             dedent(
                 """
-                ! SELECT * FROM decode_error_tbl
+                ! SELECT * FROM decode_error
                 contains: Decode error
                 """
             )
@@ -215,11 +219,17 @@ class DecodeErrorUpsertValue(Check):
 
                 > CREATE CLUSTER decode_error_upsert_value_cluster SIZE '1';
 
-                > CREATE SOURCE decode_error_upsert_value
+                >[version<11900] CREATE SOURCE decode_error_upsert_value
                   IN CLUSTER decode_error_upsert_value_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-upsert-value-${testdrive.seed}')
+                  KEY FORMAT TEXT
+                  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+                  ENVELOPE UPSERT
 
-                > CREATE TABLE decode_error_upsert_value_tbl FROM SOURCE decode_error_upsert_value (REFERENCE "testdrive-decode-error-upsert-value-${testdrive.seed}")
+                >[version>=11900] CREATE SOURCE decode_error_upsert_value_src
+                  IN CLUSTER decode_error_upsert_value_cluster
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-upsert-value-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE decode_error_upsert_value FROM SOURCE decode_error_upsert_value_src (REFERENCE "testdrive-decode-error-upsert-value-${testdrive.seed}")
                   KEY FORMAT TEXT
                   VALUE FORMAT AVRO USING SCHEMA '${schema}'
                   ENVELOPE UPSERT
@@ -227,7 +237,7 @@ class DecodeErrorUpsertValue(Check):
                 $ kafka-ingest topic=decode-error-upsert-value key-format=bytes key-terminator=: format=bytes
                 key1: garbage
 
-                ! SELECT * FROM decode_error_upsert_value_tbl
+                ! SELECT * FROM decode_error_upsert_value
                 contains: avro deserialization error
             """
             )
@@ -241,7 +251,7 @@ class DecodeErrorUpsertValue(Check):
                     $ kafka-ingest topic=decode-error-upsert-value key-format=bytes key-terminator=: format=bytes
                     key2: garbage2
 
-                    ! SELECT * FROM decode_error_upsert_value_tbl
+                    ! SELECT * FROM decode_error_upsert_value
                     contains: avro deserialization error
                     """
                 )
@@ -261,7 +271,7 @@ class DecodeErrorUpsertValue(Check):
                     $ kafka-ingest topic=decode-error-upsert-value key-format=bytes key-terminator=: format=avro schema=${schema-string} confluent-wire-format=false
                     key3: {"f1": "garbage3"}
 
-                    ! SELECT * FROM decode_error_upsert_value_tbl
+                    ! SELECT * FROM decode_error_upsert_value
                     contains: avro deserialization error
                     """,
                 )
@@ -280,7 +290,7 @@ class DecodeErrorUpsertValue(Check):
                 key3:
 
                 # TODO: database-issues#8605
-                # > SELECT f1 FROM decode_error_upsert_value_tbl
+                # > SELECT f1 FROM decode_error_upsert_value
                 # 1
                 """
             )
@@ -306,10 +316,15 @@ class DecodeErrorUpsertKey(Check):
                 {"f1": 1} value1
                 {"f1": 2} value2
 
-                > CREATE SOURCE decode_error_upsert_key
+                >[version<11900] CREATE SOURCE decode_error_upsert_key
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-upsert-key-${testdrive.seed}')
+                  KEY FORMAT AVRO USING SCHEMA '${key-schema}'
+                  VALUE FORMAT BYTES
+                  ENVELOPE UPSERT
 
-                > CREATE TABLE decode_error_upsert_key_tbl FROM SOURCE decode_error_upsert_key (REFERENCE "testdrive-decode-error-upsert-key-${testdrive.seed}")
+                >[version>=11900] CREATE SOURCE decode_error_upsert_key_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-upsert-key-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE decode_error_upsert_key FROM SOURCE decode_error_upsert_key_src (REFERENCE "testdrive-decode-error-upsert-key-${testdrive.seed}")
                   KEY FORMAT AVRO USING SCHEMA '${key-schema}'
                   VALUE FORMAT BYTES
                   ENVELOPE UPSERT
@@ -317,7 +332,7 @@ class DecodeErrorUpsertKey(Check):
                 $ kafka-ingest topic=decode-error-upsert-key key-format=bytes key-terminator=: format=bytes
                 garbage1: value3
 
-                ! SELECT * FROM decode_error_upsert_key_tbl
+                ! SELECT * FROM decode_error_upsert_key
                 contains: avro deserialization error
             """
             )
@@ -344,7 +359,7 @@ class DecodeErrorUpsertKey(Check):
                     $ kafka-ingest topic=decode-error-upsert-key key-format=avro format=bytes key-schema=${key-schema-string} confluent-wire-format=false
                     {"f1": "garbage2"} value4
 
-                    ! SELECT * FROM decode_error_upsert_key_tbl
+                    ! SELECT * FROM decode_error_upsert_key
                     contains: avro deserialization error
                     """
                 )
@@ -367,7 +382,7 @@ class DecodeErrorUpsertKey(Check):
                     $ kafka-ingest topic=decode-error-upsert-key key-format=avro format=bytes key-schema=${key-schema-string} confluent-wire-format=false
                     {"f1": "garbage2"}
 
-                    ! SELECT * FROM decode_error_upsert_key_tbl
+                    ! SELECT * FROM decode_error_upsert_key
                     contains: avro deserialization error
                     """,
                 )
@@ -383,7 +398,7 @@ class DecodeErrorUpsertKey(Check):
                 garbage3:
 
                 # Source should return to operational status
-                > SELECT f1 FROM decode_error_upsert_key_tbl
+                > SELECT f1 FROM decode_error_upsert_key
                 1
                 2
                 """
