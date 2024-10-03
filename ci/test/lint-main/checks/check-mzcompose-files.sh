@@ -83,6 +83,6 @@ try check_all_files_referenced_in_ci
 try check_default_workflow_references_others
 
 # ensure that we can list the compositions without requiring environment variables to be set
-try env -i PATH="$PATH" MZ_DEV_CI_BUILDER="$MZ_DEV_CI_BUILDER" bin/mzcompose list-compositions > /dev/null
+try env -i PATH="$PATH" MZ_DEV_CI_BUILDER="${MZ_DEV_CI_BUILDER:-local}" bin/mzcompose list-compositions > /dev/null
 
 try_status_report
