@@ -1,6 +1,6 @@
 ---
 title: "Overview"
-description: "Connect and ingest data from MySQL."
+description: "Connecting Materialize to a MySQL database for Change Data Capture (CDC)."
 disable_list: true
 menu:
   main:
@@ -9,59 +9,43 @@ menu:
     identifier: 'mysql-overview'
 ---
 
-### Native MySQL Connectors
+## Change Data Capture (CDC)
 
-Materialize provides native support for MySQL (5.7+) as a source.
+Materialize supports MySQL as a real-time data source. The [MySQL source](/sql/create-source/mysql/)
+uses MySQL's [binlog replication protocol](/sql/create-source/mysql/#change-data-capture)
+to **continually ingest changes** resulting from CRUD operations in the upstream
+database. The native support for MySQL Change Data Capture (CDC) in Materialize
+gives you the following benefits:
 
-{{< public-preview />}}
+* **No additional infrastructure:** Ingest MySQL change data into Materialize in
+    real-time with no architectural changes or additional operational overhead.
+    In particular, you **do not need to deploy Kafka and Debezium** for MySQL
+    CDC.
 
+* **Transactional consistency:** The MySQL source ensures that transactions in
+    the upstream MySQL database are respected downstream. Materialize will
+    **never show partial results** based on partially replicated transactions.
 
-{{< multilinkbox >}}
-{{< linkbox title="MySQL Connector (Preview)" >}}
+* **Incrementally updated materialized views:** Materialized views are **not
+    supported in MySQL**, so you can use Materialize as a
+    read-replica to build views on top of your MySQL data that are efficiently
+    maintained and always up-to-date.
 
-- [Amazon Aurora](/ingest-data/mysql/amazon-aurora/)
+## Supported versions and services
 
-{{</ linkbox >}}
+{{< note >}}
+MySQL-compatible database systems are not guaranteed to work with the MySQL
+source out-of-the-box. [MariaDB](https://mariadb.org/), [Vitess](https://vitess.io/)
+and [PlanetScale](https://planetscale.com/) are currently **not supported**.
+{{< /note >}}
 
-{{< linkbox title="MySQL Connector (Preview)" >}}
+The MySQL source requires **MySQL 5.7+** and is compatible with most common
+MySQL hosted services.
 
-- [Amazon RDS](/ingest-data/mysql/amazon-rds/)
+| Integration guides                          |
+| ------------------------------------------- |
+| {{% ingest-data/mysql-native-support %}}    |
 
-{{</ linkbox >}}
-
-
-{{< linkbox title="MySQL Connector (Preview)" >}}
-
-- [Azure DB](/ingest-data/mysql/azure-db/)
-
-{{</ linkbox >}}
-
-
-{{</ multilinkbox >}}
-
-{{< multilinkbox >}}
-{{< linkbox title="MySQL Connector (Preview)" >}}
-
-- [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/)
-
-{{</ linkbox >}}
-{{< linkbox title="MySQL Connector (Preview)" >}}
-
-- [Self-hosted MySQL](/ingest-data/mysql/self-hosted/)
-
-{{</ linkbox >}}
-
-{{</ multilinkbox >}}
-
-
-### Support via Kafka and Debezium
-
-{{< tip >}}
-
-If possible, use Materialize's [native support for MySQL](#native-mysql-connectors) instead.
-
-{{< /tip >}}
-
-Materialize also supports the use of [Debezium  and
-Kafka](/integrations/cdc-mysql/) to propagate Change Data Capture (CDC) data
-from MySQL to Materialize.
+If there is a hosted service or MySQL distribution that is not listed above but
+you would like to use with Materialize, please submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)
+or reach out in the Materialize [Community Slack](https://materialize.com/s/chat).

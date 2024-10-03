@@ -1,30 +1,38 @@
 ---
 title: "PostgreSQL CDC using Kafka and Debezium"
-description: "How to propagate Change Data Capture (CDC) data from a PostgreSQL database to Materialize"
+description: "How to propagate Change Data Capture (CDC) data from a PostgreSQL database to Materialize using Kafka and Debezium"
 aliases:
   - /connect-sources/cdc-postgres-kafka-debezium/
   - /ingest-data/cdc-postgres-kafka-debezium/
-menu:
-  main:
-    parent: "postgresql"
-    name: "Using Kafka and Debezium"
-    identifier: "pg-dbz"
 ---
 
+{{< warning >}}
+You can use [Debezium](https://debezium.io/) to propagate Change Data Capture
+(CDC) data to Materialize from a PostgreSQL database, but we **strongly
+recommend** using the native [PostgreSQL](/sql/create-source/postgres/) source
+instead.
+{{</ warning >}}
+
+{{< guided-tour-blurb-for-ingest-data >}}
+
 Change Data Capture (CDC) allows you to track and propagate changes in a
-Postgres database to downstream consumers based on its Write-Ahead Log (WAL).
+PostgreSQL database to downstream consumers based on its Write-Ahead Log (WAL).
 
 This guide shows you how to use [Debezium](https://debezium.io/) and [Kafka](/sql/create-source/kafka/#using-debezium)
-to propagate CDC data from Postgres to Materialize. Debezium captures row-level
-changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the
-upstream database and publishes them as events to Kafka using Kafka
-Connect-compatible connectors.
+to propagate CDC data from PostgreSQL to Materialize. In this
+guide, we'll cover how to use Materialize to create and efficiently maintain
+real-time query results on top of CDC data using Kafka and Debezium.
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+## Kafka + Debezium
 
-## A. Configure database
+You can use [Debezium](https://debezium.io/) and the [Kafka source](/sql/create-source/kafka/#using-debezium)
+to propagate CDC data from PostgreSQL to Materialize in the unlikely event that
+using the[native PostgreSQL source](/sql/create-source/postgres/) is not an
+option. Debezium captures row-level changes resulting from `INSERT`, `UPDATE`
+and `DELETE` operations in the upstream database and publishes them as events
+to Kafka using Kafka Connect-compatible connectors.
+
+### A. Configure database
 
 **Minimum requirements:** PostgreSQL 11+
 
@@ -45,7 +53,7 @@ As a _superuser_:
 
     The default value is `replica`. For CDC, you'll need to set it to `logical`
     in the database configuration file (`postgresql.conf`). Keep in mind that
-    changing the `wal_level` requires a restart of the Postgres instance and
+    changing the `wal_level` requires a restart of the PostgreSQL instance and
     can affect database performance.
 
 1. Restart the database so all changes can take effect.
@@ -171,13 +179,13 @@ Once logical replication is enabled:
     increased CPU usage. For more information, see the
     [PostgreSQL documentation](https://www.postgresql.org/docs/current/logical-replication-publication.html).
 
-## B. Deploy Debezium
+### B. Deploy Debezium
 
 **Minimum requirements:** Debezium 1.5+
 
 Debezium is deployed as a set of Kafka Connect-compatible connectors, so you
-first need to define a Postgres connector configuration and then start the
-connector by adding it to Kafka Connect.
+first need to define a SQL connector configuration and then start the connector
+by adding it to Kafka Connect.
 
 {{< warning >}}
 If you deploy the PostgreSQL Debezium connector in [Confluent Cloud](https://docs.confluent.io/cloud/current/connectors/cc-mysql-source-cdc-debezium.html),
@@ -325,7 +333,7 @@ you **must** override the default value of `After-state only` to `false`.
 {{< /tab >}}
 {{< /tabs >}}
 
-## C. Create a source
+### C. Create a source
 
 {{< debezium-json >}}
 
@@ -347,23 +355,10 @@ cluster, use the `IN CLUSTER` clause.
 This allows you to replicate tables with `REPLICA IDENTITY DEFAULT`, `INDEX`, or
 `FULL`.
 
-#### Transaction support
+### D. Create a view on the source
 
-Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata)
-that can be used to preserve transactional boundaries downstream. We are
-working on using this topic to support transaction-aware processing in
-[Materialize #7537](https://github.com/MaterializeInc/database-issues/issues/2337)!
+{{% ingest-data/ingest-data-kafka-debezium-view %}}
 
-## D. Create a materialized view
+### E. Create an index on the view
 
-Any materialized view defined on top of this source will be incrementally
-updated as new change events stream in through Kafka, as a result of `INSERT`,
-`UPDATE` and `DELETE` operations in the original Postgres database.
-
-```mzsql
-CREATE MATERIALIZED VIEW cnt_table1 AS
-    SELECT field1,
-           COUNT(*) AS cnt
-    FROM kafka_repl
-    GROUP BY field1;
-```
+{{% ingest-data/ingest-data-kafka-debezium-index %}}
