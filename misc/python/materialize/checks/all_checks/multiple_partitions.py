@@ -44,17 +44,16 @@ class MultiplePartitions(Check):
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=100
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
-                # Note: we use "postgres-execute" here instead of ">" because for commands run with
-                # the ">" testdrive parses them with the SQL parser from `main`, and the SQL for
-                # this command is version dependent.
-                $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
-                CREATE SOURCE multiple_partitions_source FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL '500ms');
+                >[version<11900] CREATE SOURCE multiple_partitions_source FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL '500ms')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
 
-                CREATE TABLE multiple_partitions_source_tbl FROM SOURCE multiple_partitions_source (REFERENCE "testdrive-multiple-partitions-topic-${testdrive.seed}") FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
+                >[version>=11900] CREATE SOURCE multiple_partitions_source_src FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL '500ms');
+                >[version>=11900] CREATE TABLE multiple_partitions_source FROM SOURCE multiple_partitions_source_src (REFERENCE "testdrive-multiple-partitions-topic-${testdrive.seed}")
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
 
                 $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=2
 
-                > CREATE MATERIALIZED VIEW mv_multiple_partitions AS SELECT * FROM multiple_partitions_source_tbl;
+                > CREATE MATERIALIZED VIEW mv_multiple_partitions AS SELECT * FROM multiple_partitions_source;
                 """
             )
         )
@@ -69,7 +68,7 @@ class MultiplePartitions(Check):
                 {"key1": "B${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
 
                 # Make sure that source is up and complete
-                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source_tbl GROUP BY LEFT(f1, 1);
+                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
                 A 100
                 B 60
 
@@ -89,7 +88,7 @@ class MultiplePartitions(Check):
                 {"key1": "C${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}
 
                 # Make sure that source is up and complete
-                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source_tbl GROUP BY LEFT(f1, 1);
+                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
                 A 50
                 B 60
                 C 60
@@ -108,10 +107,16 @@ class MultiplePartitions(Check):
         ]
 
     def validate(self) -> Testdrive:
+        source_name = (
+            "multiple_partitions_source"
+            if self.base_version < MzVersion.parse_mz("v0.119.0")
+            else "multiple_partitions_source_src"
+        )
+
         return Testdrive(
             dedent(
-                """
-                > SELECT partition FROM multiple_partitions_source_progress;
+                f"""
+                > SELECT partition FROM {source_name}_progress;
                 (3,)
                 [0,0]
                 [1,1]
@@ -119,14 +124,14 @@ class MultiplePartitions(Check):
                 [3,3]
 
                 # alias is needed to avoid error due to reserved keyword
-                > SELECT SUM(p.offset) FROM multiple_partitions_source_progress p;
+                > SELECT SUM(p.offset) FROM {source_name}_progress p;
                 420
 
                 # TODO: Reenable when database-issues#7695 is fixed
                 # > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
                 # running
 
-                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source_tbl GROUP BY LEFT(f1, 1);
+                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
                 A 50
                 B 60
                 C 60

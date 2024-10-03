@@ -56,17 +56,21 @@ class UpsertEnrichValue(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-enrich-value key-schema=${{keyschema}} schema=${{schema}} repeat=1000
                 {{"key1": "B${{kafka-ingest.iteration}}"}} {{"f1": {{"string":"{PAD_1K}"}}}}
 
-                > CREATE SOURCE upsert_enrich_value
+                >[version<11900] CREATE SOURCE upsert_enrich_value
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-enrich-value-${{testdrive.seed}}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE UPSERT
 
-                > CREATE TABLE upsert_enrich_value_tbl FROM SOURCE upsert_enrich_value (REFERENCE "testdrive-upsert-enrich-value-${{testdrive.seed}}")
+                >[version>=11900] CREATE SOURCE upsert_enrich_value_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-enrich-value-${{testdrive.seed}}')
+                >[version>=11900] CREATE TABLE upsert_enrich_value FROM SOURCE upsert_enrich_value_src (REFERENCE "testdrive-upsert-enrich-value-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_enrich_value_view AS
                   SELECT LEFT(key1, 1) AS key_left, LEFT(f1, 1) AS value_left, RIGHT(f1, 1),
                   LENGTH(f1), COUNT(*), SUM(CASE WHEN f1 IS NULL THEN 1 ELSE 0 END) AS nulls, COUNT(f1) AS not_nulls
-                  FROM upsert_enrich_value_tbl
+                  FROM upsert_enrich_value
                   GROUP BY LEFT(key1, 1), f1
                 """
             )
