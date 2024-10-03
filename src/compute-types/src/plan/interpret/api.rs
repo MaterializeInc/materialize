@@ -31,7 +31,7 @@ use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
-use crate::plan::{AvailableCollections, GetPlan, Plan};
+use crate::plan::{AvailableCollections, GetPlan, Plan, PlanNode};
 
 /// An [abstract interpreter] for [Plan] expressions.
 ///
@@ -247,9 +247,9 @@ where
         expr: &Plan<T>,
         rg: &RecursionGuard,
     ) -> Result<I::Domain, RecursionLimitError> {
-        use Plan::*;
+        use PlanNode::*;
         rg.checked_recur(|_| {
-            match expr {
+            match &expr.node {
                 Constant { rows, lir_id: _ } => {
                     // Interpret the current node.
                     Ok(self.interpret.constant(&self.ctx, rows))
@@ -527,9 +527,9 @@ where
         expr: &mut Plan<T>,
         rg: &RecursionGuard,
     ) -> Result<I::Domain, RecursionLimitError> {
-        use Plan::*;
+        use PlanNode::*;
         rg.checked_recur(|_| {
-            match expr {
+            match &mut expr.node {
                 Constant { rows, lir_id: _ } => {
                     // Interpret the current node.
                     let result = self.interpret.constant(&self.ctx, rows);

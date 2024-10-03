@@ -120,7 +120,7 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
                     "duplicate `LirId` in `DataflowDescription`: {lir_id}"
                 ));
             }
-            plans.extend(plan.children());
+            plans.extend(plan.node.children());
         }
 
         Ok(())

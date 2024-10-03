@@ -26,7 +26,7 @@ use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
-use crate::plan::{AvailableCollections, GetPlan, LirId, Plan};
+use crate::plan::{AvailableCollections, GetPlan, LirId, Plan, PlanNode};
 
 pub(super) struct Context {
     /// Known bindings to (possibly arranged) collections.
@@ -182,16 +182,17 @@ impl Context {
             }
             // These operators may not have been extracted, and need to result in a `Plan`.
             MirRelationExpr::Constant { rows, typ: _ } => {
-                let plan = Plan::Constant {
+                let lir_id = self.allocate_lir_id();
+                let node = PlanNode::Constant {
                     rows: rows.clone().map(|rows| {
                         rows.into_iter()
                             .map(|(row, diff)| (row, T::minimum(), diff))
                             .collect()
                     }),
-                    lir_id: self.allocate_lir_id(),
+                    lir_id,
                 };
                 // The plan, not arranged in any way.
-                (plan, AvailableCollections::new_raw())
+                (node.as_plan(lir_id), AvailableCollections::new_raw())
             }
             MirRelationExpr::Get { id, typ: _, .. } => {
                 // This stage can absorb arbitrary MFP operators.
@@ -257,16 +258,15 @@ impl Context {
                     AvailableCollections::new_raw()
                 };
 
+                let lir_id = self.allocate_lir_id();
+                let node = PlanNode::Get {
+                    id: id.clone(),
+                    keys: in_keys,
+                    plan,
+                    lir_id,
+                };
                 // Return the plan, and any keys if an identity `mfp`.
-                (
-                    Plan::Get {
-                        id: id.clone(),
-                        keys: in_keys,
-                        plan,
-                        lir_id: self.allocate_lir_id(),
-                    },
-                    out_keys,
-                )
+                (node.as_plan(lir_id), out_keys)
             }
             MirRelationExpr::Let { id, value, body } => {
                 // It would be unfortunate to have a non-trivial `mfp` here, as we hope
@@ -283,13 +283,15 @@ impl Context {
                 let (body, b_keys) = self.lower_mir_expr(body)?;
                 self.arrangements.remove(&Id::Local(*id));
                 // Return the plan, and any `body` arrangements.
+                let lir_id = self.allocate_lir_id();
                 (
-                    Plan::Let {
+                    PlanNode::Let {
                         id: id.clone(),
                         value: Box::new(value),
                         body: Box::new(body),
-                        lir_id: self.allocate_lir_id(),
-                    },
+                        lir_id,
+                    }
+                    .as_plan(lir_id),
                     b_keys,
                 )
             }
@@ -326,32 +328,47 @@ impl Context {
                         // then we insert the `ArrangeBy` on the `body` of the inner `LetRec`,
                         // instead of on top of the inner `LetRec`.
                         lir_value = match lir_value {
-                            Plan::LetRec {
-                                ids,
-                                values,
-                                limits,
-                                body,
+                            Plan {
+                                node:
+                                    PlanNode::LetRec {
+                                        ids,
+                                        values,
+                                        limits,
+                                        body,
+                                        lir_id: _,
+                                    },
                                 lir_id,
-                            } => Plan::LetRec {
-                                ids,
-                                values,
-                                limits,
-                                body: Box::new(Plan::ArrangeBy {
-                                    input: body,
+                            } => {
+                                let inner_lir_id = self.allocate_lir_id();
+                                PlanNode::LetRec {
+                                    ids,
+                                    values,
+                                    limits,
+                                    body: Box::new(
+                                        PlanNode::ArrangeBy {
+                                            input: body,
+                                            forms,
+                                            input_key,
+                                            input_mfp,
+                                            lir_id: inner_lir_id,
+                                        }
+                                        .as_plan(inner_lir_id),
+                                    ),
+                                    lir_id,
+                                }
+                                .as_plan(lir_id)
+                            }
+                            lir_value => {
+                                let lir_id = self.allocate_lir_id();
+                                PlanNode::ArrangeBy {
+                                    input: Box::new(lir_value),
                                     forms,
                                     input_key,
                                     input_mfp,
-                                    lir_id: self.allocate_lir_id(),
-                                }),
-                                lir_id,
-                            },
-                            lir_value => Plan::ArrangeBy {
-                                input: Box::new(lir_value),
-                                forms,
-                                input_key,
-                                input_mfp,
-                                lir_id: self.allocate_lir_id(),
-                            },
+                                    lir_id,
+                                }
+                                .as_plan(lir_id)
+                            }
                         };
                         v_keys.raw = true;
                     }
@@ -372,14 +389,16 @@ impl Context {
                     self.arrangements.remove(&Id::Local(*id));
                 }
                 // Return the plan, and any `body` arrangements.
+                let lir_id = self.allocate_lir_id();
                 (
-                    Plan::LetRec {
+                    PlanNode::LetRec {
                         ids: ids.clone(),
                         values: lir_values,
                         limits: limits.clone(),
                         body: Box::new(body),
-                        lir_id: self.allocate_lir_id(),
-                    },
+                        lir_id,
+                    }
+                    .as_plan(lir_id),
                     b_keys,
                 )
             }
@@ -516,16 +535,19 @@ impl Context {
                     } else {
                         None
                     };
+
+                    let lir_id = self.allocate_lir_id();
                     // Return the plan, and no arrangements.
                     (
-                        Plan::FlatMap {
+                        PlanNode::FlatMap {
                             input: Box::new(input),
                             func: func.clone(),
                             exprs: exprs.clone(),
                             mfp_after: mfp,
                             input_key,
-                            lir_id: self.allocate_lir_id(),
-                        },
+                            lir_id,
+                        }
+                        .as_plan(lir_id),
                         AvailableCollections::new_raw(),
                     )
                 }
@@ -644,23 +666,27 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             //    joins. This was fixed in
                             //    https://github.com/MaterializeInc/materialize/pull/16099)
                         }
+                        let lir_id = self.allocate_lir_id();
                         let raw_plan = std::mem::replace(
                             input_plan,
-                            Plan::Constant {
+                            PlanNode::Constant {
                                 rows: Ok(Vec::new()),
-                                lir_id: self.allocate_lir_id(),
-                            },
+                                lir_id,
+                            }
+                            .as_plan(lir_id),
                         );
                         *input_plan = self.arrange_by(raw_plan, missing, input_keys, arity);
                     }
                 }
                 // Return the plan, and no arrangements.
+                let lir_id = self.allocate_lir_id();
                 (
-                    Plan::Join {
+                    PlanNode::Join {
                         inputs: plans,
                         plan,
-                        lir_id: self.allocate_lir_id(),
-                    },
+                        lir_id,
+                    }
+                    .as_plan(lir_id),
                     AvailableCollections::new_raw(),
                 )
             }
@@ -723,12 +749,14 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input
                 };
                 // Return the plan, and no arrangements.
+                let lir_id = self.allocate_lir_id();
                 (
-                    Plan::TopK {
+                    PlanNode::TopK {
                         input: Box::new(input),
                         top_k_plan,
-                        lir_id: self.allocate_lir_id(),
-                    },
+                        lir_id,
+                    }
+                    .as_plan(lir_id),
                     AvailableCollections::new_raw(),
                 )
             }
@@ -744,11 +772,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input
                 };
                 // Return the plan, and no arrangements.
+                let lir_id = self.allocate_lir_id();
                 (
-                    Plan::Negate {
+                    PlanNode::Negate {
                         input: Box::new(input),
-                        lir_id: self.allocate_lir_id(),
-                    },
+                        lir_id,
+                    }
+                    .as_plan(lir_id),
                     AvailableCollections::new_raw(),
                 )
             }
@@ -785,12 +815,14 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
                 let output_keys = threshold_plan.keys(types);
                 // Return the plan, and any produced keys.
+                let lir_id = self.allocate_lir_id();
                 (
-                    Plan::Threshold {
+                    PlanNode::Threshold {
                         input: Box::new(plan),
                         threshold_plan,
-                        lir_id: self.allocate_lir_id(),
-                    },
+                        lir_id,
+                    }
+                    .as_plan(lir_id),
                     output_keys,
                 )
             }
@@ -816,12 +848,16 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     })
                     .collect();
                 // Return the plan and no arrangements.
-                let plan = Plan::Union {
-                    inputs: plans,
-                    consolidate_output: false,
-                    lir_id: self.allocate_lir_id(),
-                };
-                (plan, AvailableCollections::new_raw())
+                let lir_id = self.allocate_lir_id();
+                (
+                    PlanNode::Union {
+                        inputs: plans,
+                        consolidate_output: false,
+                        lir_id,
+                    }
+                    .as_plan(lir_id),
+                    AvailableCollections::new_raw(),
+                )
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
                 let arity = input.arity();
@@ -855,14 +891,16 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input_keys.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
 
                     // Return the plan and extended keys.
+                    let lir_id = self.allocate_lir_id();
                     (
-                        Plan::ArrangeBy {
+                        PlanNode::ArrangeBy {
                             input: Box::new(input),
                             forms: input_keys.clone(),
                             input_key,
                             input_mfp,
-                            lir_id: self.allocate_lir_id(),
-                        },
+                            lir_id,
+                        }
+                        .as_plan(lir_id),
                         input_keys,
                     )
                 }
@@ -934,21 +972,25 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // Creating a Plan::Mfp node is now logically unnecessary, but we
                 // should do so anyway when `val` is populated, so that
                 // the `key_val` optimization gets applied.
+                let lir_id = self.allocate_lir_id();
                 if val.is_some() {
-                    plan = Plan::Mfp {
+                    plan = PlanNode::Mfp {
                         input: Box::new(plan),
                         mfp,
                         input_key_val: Some((key, val)),
-                        lir_id: self.allocate_lir_id(),
+                        lir_id,
                     }
+                    .as_plan(lir_id)
                 }
             } else {
-                plan = Plan::Mfp {
+                let lir_id = self.allocate_lir_id();
+                plan = PlanNode::Mfp {
                     input: Box::new(plan),
                     mfp,
                     input_key_val,
-                    lir_id: self.allocate_lir_id(),
-                };
+                    lir_id,
+                }
+                .as_plan(lir_id);
                 keys = AvailableCollections::new_raw();
             }
         }
@@ -1011,15 +1053,17 @@ This is not expected to cause incorrect results, but could indicate a performanc
             "Output arity of reduce must match input arity for MFP on top of it"
         );
         let output_keys = reduce_plan.keys(group_key.len(), output_arity);
+        let lir_id = self.allocate_lir_id();
         Ok((
-            Plan::Reduce {
+            PlanNode::Reduce {
                 input: Box::new(input),
                 key_val_plan,
                 plan: reduce_plan,
                 input_key,
                 mfp_after,
-                lir_id: self.allocate_lir_id(),
-            },
+                lir_id,
+            }
+            .as_plan(lir_id),
             output_keys,
         ))
     }
@@ -1033,13 +1077,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
         old_collections: &AvailableCollections,
         arity: usize,
     ) -> Plan<T> {
-        if let Plan::ArrangeBy {
+        if let PlanNode::ArrangeBy {
             input,
             mut forms,
             input_key,
             input_mfp,
             lir_id,
-        } = plan
+        } = plan.node
         {
             forms.raw |= collections.raw;
             forms.arranged.extend(collections.arranged);
@@ -1050,13 +1094,14 @@ This is not expected to cause incorrect results, but could indicate a performanc
             } else {
                 assert!(collections.types.is_none() || collections.types == forms.types);
             }
-            Plan::ArrangeBy {
+            PlanNode::ArrangeBy {
                 input,
                 forms,
                 input_key,
                 input_mfp,
                 lir_id,
             }
+            .as_plan(plan.lir_id)
         } else {
             let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
                 old_collections.arbitrary_arrangement()
@@ -1067,13 +1112,15 @@ This is not expected to cause incorrect results, but could indicate a performanc
             } else {
                 (None, MapFilterProject::new(arity))
             };
-            Plan::ArrangeBy {
+            let lir_id = self.allocate_lir_id();
+            PlanNode::ArrangeBy {
                 input: Box::new(plan),
                 forms: collections,
                 input_key,
                 input_mfp,
-                lir_id: self.allocate_lir_id(),
+                lir_id,
             }
+            .as_plan(lir_id)
         }
     }
 }

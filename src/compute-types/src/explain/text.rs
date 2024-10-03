@@ -39,7 +39,7 @@ use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
 use crate::plan::reduce::{
     AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan, SingleBasicPlan,
 };
-use crate::plan::{AvailableCollections, LirId, Plan};
+use crate::plan::{AvailableCollections, LirId, Plan, PlanNode};
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
     fn fmt_text(
@@ -47,12 +47,12 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, Plan>,
     ) -> fmt::Result {
-        use Plan::*;
+        use PlanNode::*;
 
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let annotations = PlanAnnotations::new(ctx.config.clone(), self);
 
-        match &self {
+        match &self.node {
             Constant { rows, lir_id: _ } => match rows {
                 Ok(rows) => {
                     if !rows.is_empty() {
@@ -152,7 +152,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     value,
                     body,
                     lir_id: _,
-                } = head
+                } = &head.node
                 {
                     bindings.push((id, value.as_ref()));
                     head = body.as_ref();
