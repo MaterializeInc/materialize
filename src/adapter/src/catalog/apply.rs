@@ -895,9 +895,11 @@ impl CatalogState {
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
                         if retraction.create_sql() != create_sql {
-                            let item = self.deserialize_item(id.to_global_id(), &create_sql).unwrap_or_else(|e| {
-                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                            });
+                            let item = self
+                                .deserialize_item(id.to_global_id(), &create_sql)
+                                .unwrap_or_else(|e| {
+                                    panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                                });
                             retraction.item = item;
                         }
                         retraction.id = id;
@@ -909,8 +911,9 @@ impl CatalogState {
                         retraction
                     }
                     None => {
-                        let catalog_item =
-                            self.deserialize_item(id.to_global_id(), &create_sql).unwrap_or_else(|e| {
+                        let catalog_item = self
+                            .deserialize_item(id.to_global_id(), &create_sql)
+                            .unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
                         CatalogEntry {

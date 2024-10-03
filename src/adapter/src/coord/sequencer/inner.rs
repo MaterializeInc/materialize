@@ -701,7 +701,7 @@ impl Coordinator {
                 let secret = key_set.to_bytes();
                 if let Err(err) = self
                     .secrets_controller
-                    .ensure(connection_gid, &secret)
+                    .ensure(connection_gid.to_item_id(), &secret)
                     .await
                 {
                     return ctx.retire(Err(err.into()));
@@ -726,7 +726,7 @@ impl Coordinator {
             let current_storage_parameters = self.controller.storage.config().clone();
             task::spawn(|| format!("validate_connection:{conn_id}"), async move {
                 let result = match connection
-                    .validate(connection_gid, &current_storage_parameters)
+                    .validate(connection_gid.to_item_id(), &current_storage_parameters)
                     .await
                 {
                     Ok(()) => Ok(plan),
@@ -803,7 +803,7 @@ impl Coordinator {
                                 }
                             };
                         if let Err(err) = cloud_resource_controller
-                            .ensure_vpc_endpoint(connection_gid, spec)
+                            .ensure_vpc_endpoint(connection_gid.to_item_id(), spec)
                             .await
                         {
                             tracing::warn!(?err, "failed to ensure vpc endpoint!");
@@ -3445,7 +3445,10 @@ impl Coordinator {
                 || format!("validate_alter_connection:{conn_id}"),
                 async move {
                     let dependency_ids = conn.resolved_ids.0.clone();
-                    let result = match connection.validate(id, &current_storage_parameters).await {
+                    let result = match connection
+                        .validate(id.to_item_id(), &current_storage_parameters)
+                        .await
+                    {
                         Ok(()) => Ok(conn),
                         Err(err) => Err(err.into()),
                     };
@@ -3492,7 +3495,7 @@ impl Coordinator {
                 curr_conn
                     .details
                     .to_connection()
-                    .alter_compatible(id, &connection.details.to_connection())
+                    .alter_compatible(id.to_item_id(), &connection.details.to_connection())
                     .map_err(StorageError::from)?;
             }
             _ => unreachable!("known to be a connection"),
@@ -3515,7 +3518,7 @@ impl Coordinator {
                 self.cloud_resource_controller
                     .as_ref()
                     .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
-                    .ensure_vpc_endpoint(id, spec)
+                    .ensure_vpc_endpoint(id.to_item_id(), spec)
                     .await?;
             }
             _ => {}

@@ -612,7 +612,7 @@ impl Coordinator {
                     let current_storage_configuration = self.controller.storage.config().clone();
                     mz_ore::task::spawn(|| "coord::validate_connection", async move {
                         let res = match connection
-                            .validate(plan.id, &current_storage_configuration)
+                            .validate(plan.id.to_item_id(), &current_storage_configuration)
                             .await
                         {
                             Ok(()) => Ok(ExecuteResponse::ValidatedConnection),

@@ -741,7 +741,7 @@ impl Coordinator {
                     // startup.
                     fail_point!("drop_secrets");
                     for secret in secrets_to_drop {
-                        if let Err(e) = secrets_controller.delete(secret).await {
+                        if let Err(e) = secrets_controller.delete(secret.to_item_id()).await {
                             warn!("Dropping secrets has encountered an error: {}", e);
                         }
                     }
@@ -1100,7 +1100,7 @@ impl Coordinator {
                                 Err(anyhow::anyhow!("Fail point error {:?}", r))
                             });
                             match cloud_resource_controller
-                                .delete_vpc_endpoint(vpc_endpoint)
+                                .delete_vpc_endpoint(vpc_endpoint.to_item_id())
                                 .await
                             {
                                 Ok(_) => Ok(()),

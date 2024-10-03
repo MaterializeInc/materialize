@@ -790,8 +790,8 @@ pub fn plan_create_source(
                 .collect();
 
             let connection = KafkaSourceConnection::<ReferencedConnection> {
-                connection: connection_item.id(),
-                connection_id: connection_item.id(),
+                connection: connection_item.item_id(),
+                connection_id: connection_item.item_id(),
                 topic,
                 start_offsets,
                 group_id_prefix,
@@ -849,8 +849,8 @@ pub fn plan_create_source(
 
             let connection =
                 GenericSourceConnection::<ReferencedConnection>::from(PostgresSourceConnection {
-                    connection: connection_item.id(),
-                    connection_id: connection_item.id(),
+                    connection: connection_item.item_id(),
+                    connection_id: connection_item.item_id(),
                     publication: publication.expect("validated exists during purification"),
                     publication_details,
                 });
@@ -889,8 +889,8 @@ pub fn plan_create_source(
 
             let connection =
                 GenericSourceConnection::<ReferencedConnection>::from(MySqlSourceConnection {
-                    connection: connection_item.id(),
-                    connection_id: connection_item.id(),
+                    connection: connection_item.item_id(),
+                    connection_id: connection_item.item_id(),
                     details,
                 });
 
@@ -2091,7 +2091,7 @@ fn get_encoding_inner(
                 } => {
                     let item = scx.get_item_by_resolved_name(&connection.connection)?;
                     let csr_connection = match item.connection()? {
-                        Connection::Csr(_) => item.id(),
+                        Connection::Csr(_) => item.item_id(),
                         _ => {
                             sql_bail!(
                                 "{} is not a schema registry connection",
@@ -3359,7 +3359,7 @@ fn kafka_sink_builder(
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     // Get Kafka connection.
     let connection_item = scx.get_item_by_resolved_name(&connection)?;
-    let connection_id = connection_item.id();
+    let connection_id = connection_item.item_id();
     match connection_item.connection()? {
         Connection::Kafka(_) => (),
         _ => sql_bail!(
@@ -3445,7 +3445,7 @@ fn kafka_sink_builder(
 
         let item = scx.get_item_by_resolved_name(&connection)?;
         let csr_connection = match item.connection()? {
-            Connection::Csr(_) => item.id(),
+            Connection::Csr(_) => item.item_id(),
             _ => {
                 sql_bail!(
                     "{} is not a schema registry connection",

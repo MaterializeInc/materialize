@@ -428,7 +428,7 @@ impl ConnCatalog<'_> {
 impl ConnectionResolver for ConnCatalog<'_> {
     fn resolve_connection(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> mz_storage_types::connections::Connection<InlinedConnection> {
         self.state().resolve_connection(id)
     }

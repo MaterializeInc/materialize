@@ -883,7 +883,7 @@ impl Source {
     }
 
     /// Connection ID of the source, if one exists.
-    pub fn connection_id(&self) -> Option<GlobalId> {
+    pub fn connection_id(&self) -> Option<CatalogItemId> {
         match &self.data_source {
             DataSourceDesc::Ingestion { ingestion_desc, .. } => {
                 ingestion_desc.desc.connection.connection_id()
@@ -988,7 +988,7 @@ impl Sink {
         (key_format, value_format)
     }
 
-    pub fn connection_id(&self) -> Option<GlobalId> {
+    pub fn connection_id(&self) -> Option<CatalogItemId> {
         self.connection.connection_id()
     }
 }
@@ -2547,6 +2547,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn id(&self) -> GlobalId {
         self.id()
+    }
+
+    fn item_id(&self) -> CatalogItemId {
+        self.item_id()
     }
 
     fn oid(&self) -> u32 {

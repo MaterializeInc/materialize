@@ -128,7 +128,7 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
@@ -2053,7 +2053,7 @@ impl Coordinator {
                 CatalogItem::Connection(catalog_connection) => {
                     if let ConnectionDetails::AwsPrivatelink(conn) = &catalog_connection.details {
                         privatelink_connections.insert(
-                            entry.id(),
+                            entry.item_id(),
                             VpcEndpointConfig {
                                 aws_service_name: conn.service_name.clone(),
                                 availability_zone_ids: conn.availability_zones.clone(),
@@ -2242,8 +2242,8 @@ impl Coordinator {
             // things using secrets. Today, SECRET and CONNECTION objects use
             // secrets_controller.ensure, but more things could in the future
             // that would be easy to miss adding here.
-            let catalog_ids: BTreeSet<GlobalId> =
-                catalog.entries().map(|entry| entry.id()).collect();
+            let catalog_ids: BTreeSet<CatalogItemId> =
+                catalog.entries().map(|entry| entry.item_id()).collect();
             let secrets_controller = Arc::clone(secrets_controller);
 
             spawn(|| "cleanup-orphaned-secrets", async move {
@@ -2255,14 +2255,14 @@ impl Coordinator {
 
                 match secrets_controller.list().await {
                     Ok(controller_secrets) => {
-                        let controller_secrets: BTreeSet<GlobalId> =
+                        let controller_secrets: BTreeSet<CatalogItemId> =
                             controller_secrets.into_iter().collect();
                         let orphaned = controller_secrets.difference(&catalog_ids);
                         for id in orphaned {
                             let id_too_large = match id {
-                                GlobalId::System(id) => *id >= next_system_item_id,
-                                GlobalId::User(id) => *id >= next_user_item_id,
-                                GlobalId::Transient(_) | GlobalId::Explain => false,
+                                CatalogItemId::System(id) => *id >= next_system_item_id,
+                                CatalogItemId::User(id) => *id >= next_user_item_id,
+                                CatalogItemId::Transient(_) => false,
                             };
                             if id_too_large {
                                 info!(

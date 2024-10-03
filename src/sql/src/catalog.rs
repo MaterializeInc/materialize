@@ -568,6 +568,9 @@ pub trait CatalogItem {
     /// Returns a stable ID for the catalog item.
     fn id(&self) -> GlobalId;
 
+    /// Returns the [`CatalogItemId`] for the item.
+    fn item_id(&self) -> CatalogItemId;
+
     /// Returns the catalog item's OID.
     fn oid(&self) -> u32;
 

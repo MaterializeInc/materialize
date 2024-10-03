@@ -200,7 +200,7 @@ where
         let leader_work = async move {
             info!(%sink_id, %worker_id, "s3 leader worker initialization");
             let sdk_config = aws_connection
-                .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+                .load_sdk_config(&connection_context, connection_id.to_item_id(), InTask::Yes)
                 .await?;
 
             let client = mz_aws_util::s3::new_client(&sdk_config);
@@ -336,7 +336,7 @@ fn render_completion_operator<G, F>(
             if is_leader {
                 debug!(%sink_id, %worker_id, "s3 leader worker completion");
                 let sdk_config = aws_connection
-                    .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+                    .load_sdk_config(&connection_context, connection_id.to_item_id(), InTask::Yes)
                     .await?;
 
                 let client = mz_aws_util::s3::new_client(&sdk_config);
@@ -420,7 +420,7 @@ where
         // fallible async block to use the `?` operator for convenience
         let res = async move {
             let sdk_config = aws_connection
-                .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+                .load_sdk_config(&connection_context, connection_id.to_item_id(), InTask::Yes)
                 .await?;
 
             // Map of an uploader per batch.

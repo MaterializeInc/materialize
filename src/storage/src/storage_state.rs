@@ -895,7 +895,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             // ingestion, we must either track that we need to synthesize an update
                             // command to change the ingestion, or panic.
                             prev_ingest
-                                .alter_compatible(ingestion.id, &ingestion.description)
+                                .alter_compatible(ingestion.id.to_item_id(), &ingestion.description)
                                 .expect("only alter compatible ingestions permitted");
                         }
                     }
@@ -910,7 +910,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                         if let Some(prev_export) = prev {
                             prev_export
-                                .alter_compatible(export.id, &export.description)
+                                .alter_compatible(export.id.to_item_id(), &export.description)
                                 .expect("only alter compatible ingestions permitted");
                         }
                     }

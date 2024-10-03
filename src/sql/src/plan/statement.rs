@@ -15,7 +15,9 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::namespaces::is_system_schema;
-use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationVersionSelector, ScalarType};
+use mz_repr::{
+    CatalogItemId, ColumnType, GlobalId, RelationDesc, RelationVersionSelector, ScalarType,
+};
 use mz_sql_parser::ast::{
     ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
     RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
@@ -865,7 +867,7 @@ impl<'a> StatementContext<'a> {
         match (ssh_tunnel, aws_privatelink) {
             (None, None) => Ok(Tunnel::Direct),
             (Some(ssh_tunnel), None) => {
-                let id = GlobalId::from(ssh_tunnel);
+                let id = CatalogItemId::from(ssh_tunnel);
                 let ssh_tunnel = self.catalog.get_item(&id.into());
                 match ssh_tunnel.connection()? {
                     Connection::Ssh(_connection) => Ok(Tunnel::Ssh(SshTunnel {
@@ -876,8 +878,8 @@ impl<'a> StatementContext<'a> {
                 }
             }
             (None, Some(aws_privatelink)) => {
-                let id = aws_privatelink.connection.item_id().clone();
-                let entry = self.catalog.get_item(&id.into());
+                let id = aws_privatelink.connection.item_id().to_item_id();
+                let entry = self.catalog.get_item(&id);
                 match entry.connection()? {
                     Connection::AwsPrivatelink(_) => Ok(Tunnel::AwsPrivatelink(AwsPrivatelink {
                         connection_id: id,

@@ -861,7 +861,7 @@ impl CatalogState {
         schema_id: &SchemaSpecifier,
         name: &str,
         source_desc_name: &str,
-        connection_id: Option<GlobalId>,
+        connection_id: Option<CatalogItemId>,
         envelope: Option<&str>,
         key_format: Option<&str>,
         value_format: Option<&str>,
@@ -1104,7 +1104,7 @@ impl CatalogState {
         kafka: &KafkaConnection<ReferencedConnection>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let progress_topic = kafka.progress_topic(&self.config.connection_context, id);
+        let progress_topic = kafka.progress_topic(&self.config.connection_context, id.to_item_id());
         let mut row = Row::default();
         row.packer()
             .push_array(
@@ -1185,11 +1185,15 @@ impl CatalogState {
                     .connection_context
                     .aws_connection_role_arn
                     .as_deref();
-                external_id =
-                    Some(assume_role.external_id(&self.config.connection_context, connection_id)?);
+                external_id = Some(
+                    assume_role
+                        .external_id(&self.config.connection_context, connection_id.to_item_id())?,
+                );
                 example_trust_policy = {
-                    let policy = assume_role
-                        .example_trust_policy(&self.config.connection_context, connection_id)?;
+                    let policy = assume_role.example_trust_policy(
+                        &self.config.connection_context,
+                        connection_id.to_item_id(),
+                    )?;
                     let policy = Jsonb::from_serde_json(policy).expect("valid json");
                     Some(policy.into_row())
                 };

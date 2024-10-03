@@ -31,7 +31,7 @@ use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
@@ -77,14 +77,14 @@ trait SecretsReaderExt {
     async fn read_in_task_if(
         &self,
         in_task: InTask,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> Result<Vec<u8>, anyhow::Error>;
 
     /// `SecretsReader::read_string`, but optionally run in a task.
     async fn read_string_in_task_if(
         &self,
         in_task: InTask,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> Result<String, anyhow::Error>;
 }
 
@@ -93,7 +93,7 @@ impl SecretsReaderExt for Arc<dyn SecretsReader> {
     async fn read_in_task_if(
         &self,
         in_task: InTask,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> Result<Vec<u8>, anyhow::Error> {
         let sr = Arc::clone(self);
         async move { sr.read(id).await }
@@ -103,7 +103,7 @@ impl SecretsReaderExt for Arc<dyn SecretsReader> {
     async fn read_string_in_task_if(
         &self,
         in_task: InTask,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> Result<String, anyhow::Error> {
         let sr = Arc::clone(self);
         async move { sr.read_string(id).await }
@@ -236,7 +236,7 @@ impl Connection<InlinedConnection> {
     /// Validates this connection by attempting to connect to the upstream system.
     pub async fn validate(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), ConnectionValidationError> {
         match self {
@@ -322,7 +322,7 @@ impl ConnectionValidationError {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
-    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: mz_repr::CatalogItemId, other: &Self) -> Result<(), AlterError> {
         match (self, other) {
             (Self::Aws(s), Self::Aws(o)) => s.alter_compatible(id, o),
             (Self::AwsPrivatelink(s), Self::AwsPrivatelink(o)) => s.alter_compatible(id, o),
@@ -350,7 +350,7 @@ pub struct AwsPrivatelinkConnection {
 }
 
 impl AlterCompatible for AwsPrivatelinkConnection {
-    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, _id: CatalogItemId, _other: &Self) -> Result<(), AlterError> {
         // Every element of the AwsPrivatelinkConnection connection is configurable.
         Ok(())
     }
@@ -366,7 +366,7 @@ pub struct KafkaTlsConfig {
 pub struct KafkaSaslConfig<C: ConnectionAccess = InlinedConnection> {
     pub mechanism: String,
     pub username: StringOrSecret,
-    pub password: Option<GlobalId>,
+    pub password: Option<CatalogItemId>,
     pub aws: Option<AwsConnectionReference<C>>,
 }
 
@@ -505,7 +505,7 @@ impl<C: ConnectionAccess> KafkaConnection<C> {
     pub fn progress_topic(
         &self,
         connection_context: &ConnectionContext,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
     ) -> Cow<str> {
         if let Some(progress_topic) = &self.progress_topic {
             Cow::Borrowed(progress_topic)
@@ -528,7 +528,7 @@ impl KafkaConnection {
     /// or sink.
     pub fn id_base(
         connection_context: &ConnectionContext,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
         object_id: GlobalId,
     ) -> String {
         format!(
@@ -809,7 +809,7 @@ impl KafkaConnection {
 
     async fn validate(
         &self,
-        _id: GlobalId,
+        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let (context, error_rx) = MzClientContext::with_errors();
@@ -874,7 +874,7 @@ impl KafkaConnection {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for KafkaConnection<C> {
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
         let KafkaConnection {
             brokers: _,
             default_tunnel: _,
@@ -1182,7 +1182,7 @@ impl CsrConnection {
 
     async fn validate(
         &self,
-        _id: GlobalId,
+        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let client = self
@@ -1222,7 +1222,7 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for CsrConnection<C> {
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
         let CsrConnection {
             tunnel,
             // All non-tunnel fields may change
@@ -1256,7 +1256,7 @@ pub struct TlsIdentity {
     pub cert: StringOrSecret,
     /// The ID of the secret containing the client's TLS private key in PEM
     /// format.
-    pub key: GlobalId,
+    pub key: CatalogItemId,
 }
 
 impl RustType<ProtoTlsIdentity> for TlsIdentity {
@@ -1281,7 +1281,7 @@ pub struct CsrConnectionHttpAuth {
     /// The username.
     pub username: StringOrSecret,
     /// The ID of the secret containing the password, if any.
-    pub password: Option<GlobalId>,
+    pub password: Option<CatalogItemId>,
 }
 
 impl RustType<ProtoCsrConnectionHttpAuth> for CsrConnectionHttpAuth {
@@ -1314,7 +1314,7 @@ pub struct PostgresConnection<C: ConnectionAccess = InlinedConnection> {
     /// The username to authenticate as.
     pub user: StringOrSecret,
     /// An optional password for authentication.
-    pub password: Option<GlobalId>,
+    pub password: Option<CatalogItemId>,
     /// A tunnel through which to route traffic.
     pub tunnel: Tunnel<C>,
     /// Whether to use TLS for encryption, authentication, or both.
@@ -1509,7 +1509,7 @@ impl PostgresConnection<InlinedConnection> {
 
     async fn validate(
         &self,
-        _id: GlobalId,
+        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let config = self
@@ -1537,7 +1537,7 @@ impl PostgresConnection<InlinedConnection> {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for PostgresConnection<C> {
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
         let PostgresConnection {
             tunnel,
             flavor,
@@ -1657,7 +1657,7 @@ impl RustType<ProtoTunnel> for Tunnel<InlinedConnection> {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for Tunnel<C> {
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
         let compatible = match (self, other) {
             (Self::Ssh(s), Self::Ssh(o)) => s.alter_compatible(id, o).is_ok(),
             (s, o) => s == o,
@@ -1732,7 +1732,7 @@ pub struct MySqlConnection<C: ConnectionAccess = InlinedConnection> {
     /// The username to authenticate as.
     pub user: StringOrSecret,
     /// An optional password for authentication.
-    pub password: Option<GlobalId>,
+    pub password: Option<CatalogItemId>,
     /// A tunnel through which to route traffic.
     pub tunnel: Tunnel<C>,
     /// Whether to use TLS for encryption, verify the server's certificate, and identity.
@@ -1907,7 +1907,7 @@ impl MySqlConnection<InlinedConnection> {
 
     async fn validate(
         &self,
-        _id: GlobalId,
+        _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let config = self
@@ -1960,7 +1960,7 @@ impl RustType<ProtoMySqlConnection> for MySqlConnection {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
         let MySqlConnection {
             tunnel,
             // All non-tunnel options may change arbitrarily
@@ -2022,7 +2022,7 @@ impl RustType<ProtoSshConnection> for SshConnection {
 }
 
 impl AlterCompatible for SshConnection {
-    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, _id: CatalogItemId, _other: &Self) -> Result<(), AlterError> {
         // Every element of the SSH connection is configurable.
         Ok(())
     }
@@ -2032,7 +2032,7 @@ impl AlterCompatible for SshConnection {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelink {
     /// The ID of the connection to the AWS PrivateLink service.
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     // The availability zone to use when connecting to the AWS PrivateLink service.
     pub availability_zone: Option<String>,
     /// The port to use when connecting to the AWS PrivateLink service, if
@@ -2061,7 +2061,7 @@ impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
 }
 
 impl AlterCompatible for AwsPrivatelink {
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
         let AwsPrivatelink {
             connection_id,
             availability_zone: _,
@@ -2090,7 +2090,7 @@ impl AlterCompatible for AwsPrivatelink {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshTunnel<C: ConnectionAccess = InlinedConnection> {
     /// id of the ssh connection
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     /// ssh connection object
     pub connection: C::Ssh,
 }
@@ -2174,7 +2174,7 @@ impl SshTunnel<InlinedConnection> {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for SshTunnel<C> {
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
         let SshTunnel {
             connection_id,
             connection,
@@ -2208,7 +2208,7 @@ impl SshConnection {
     #[allow(clippy::unused_async)]
     async fn validate(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let secret = storage_configuration
@@ -2254,7 +2254,7 @@ impl AwsPrivatelinkConnection {
     #[allow(clippy::unused_async)]
     async fn validate(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let Some(ref cloud_resource_reader) = storage_configuration

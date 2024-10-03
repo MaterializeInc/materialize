@@ -124,7 +124,7 @@ impl Coordinator {
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "create secret ensure",
             async move {
-                secrets_controller.ensure(id, &payload).await?;
+                secrets_controller.ensure(id.to_item_id(), &payload).await?;
                 let stage = SecretStage::CreateFinish(CreateSecretFinish { validity, id, plan });
                 Ok(Box::new(stage))
             }
@@ -221,7 +221,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedSecret)
             }
             Err(err) => {
-                if let Err(e) = self.secrets_controller.delete(id).await {
+                if let Err(e) = self.secrets_controller.delete(id.to_item_id()).await {
                     warn!(
                         "Dropping newly created secrets has encountered an error: {}",
                         e
@@ -267,7 +267,7 @@ impl Coordinator {
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(
             || "alter secret ensure",
             async move {
-                secrets_controller.ensure(id, &payload).await?;
+                secrets_controller.ensure(id.to_item_id(), &payload).await?;
                 Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
             }
             .instrument(span),
@@ -304,11 +304,11 @@ impl Coordinator {
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "rotate keys ensure",
             async move {
-                let secret = secrets_controller.reader().read(id).await?;
+                let secret = secrets_controller.reader().read(id.to_item_id()).await?;
                 let previous_key_set = SshKeyPairSet::from_bytes(&secret)?;
                 let new_key_set = previous_key_set.rotate()?;
                 secrets_controller
-                    .ensure(id, &new_key_set.to_bytes())
+                    .ensure(id.to_item_id(), &new_key_set.to_bytes())
                     .await?;
 
                 let mut to_item = entry.item;

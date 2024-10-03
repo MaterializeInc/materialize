@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use mz_ore::future::InTask;
 use mz_proto::{RustType, TryFromProtoError};
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_secrets::SecretsReader;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,7 @@ include!(concat!(
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum StringOrSecret {
     String(String),
-    Secret(GlobalId),
+    Secret(CatalogItemId),
 }
 
 impl StringOrSecret {
@@ -52,7 +52,7 @@ impl StringOrSecret {
 
     /// Asserts that this string or secret is a secret and returns its global
     /// ID.
-    pub fn unwrap_secret(&self) -> GlobalId {
+    pub fn unwrap_secret(&self) -> CatalogItemId {
         match self {
             StringOrSecret::String(_) => panic!("StringOrSecret::unwrap_secret called on a string"),
             StringOrSecret::Secret(id) => *id,
@@ -78,7 +78,7 @@ impl RustType<ProtoStringOrSecret> for StringOrSecret {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoStringOrSecret::kind"))?;
         Ok(match kind {
             Kind::String(s) => StringOrSecret::String(s),
-            Kind::Secret(id) => StringOrSecret::Secret(GlobalId::from_proto(id)?),
+            Kind::Secret(id) => StringOrSecret::Secret(CatalogItemId::from_proto(id)?),
         })
     }
 }

@@ -19,7 +19,7 @@ use mz_persist_types::ShardId;
 use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::bytes::ByteSize;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -63,7 +63,7 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
     /// support `ALTER CONNECTION` or `ALTER SINK`.
     fn alter_compatible(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         other: &StorageSinkDesc<S, T>,
     ) -> Result<(), AlterError> {
         if self == other {
@@ -304,7 +304,7 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
     /// CONNECTION`).
     pub fn alter_compatible(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         other: &StorageSinkConnection<C>,
     ) -> Result<(), AlterError> {
         if self == other {
@@ -355,7 +355,7 @@ impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
 
 impl<C: ConnectionAccess> StorageSinkConnection<C> {
     /// returns an option to not constrain ourselves in the future
-    pub fn connection_id(&self) -> Option<GlobalId> {
+    pub fn connection_id(&self) -> Option<CatalogItemId> {
         use StorageSinkConnection::*;
         match self {
             Kafka(KafkaSinkConnection { connection_id, .. }) => Some(*connection_id),
@@ -432,7 +432,7 @@ impl KafkaSinkCompressionType {
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     pub connection: C::Kafka,
     pub format: KafkaSinkFormat<C>,
     /// A natural key of the sinked relation (view or source).
@@ -524,7 +524,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
     /// CONNECTION`).
     pub fn alter_compatible(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         other: &KafkaSinkConnection<C>,
     ) -> Result<(), AlterError> {
         if self == other {
@@ -804,7 +804,7 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
         }
     }
 
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
