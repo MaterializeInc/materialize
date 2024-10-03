@@ -29,7 +29,7 @@ use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::Statement;
-use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
+use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
@@ -137,7 +137,7 @@ impl Coordinator {
                             sink_id,
                             CollectionDescription {
                                 desc,
-                                data_source: DataSource::Other(DataSourceOther::Compute),
+                                data_source: DataSource::Other,
                                 since: Some(as_of),
                                 status_collection_id: None,
                             },
