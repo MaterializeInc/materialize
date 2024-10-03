@@ -12,7 +12,7 @@ menu:
 ## Change Data Capture (CDC)
 
 Materialize supports MySQL as a real-time data source. The [MySQL source](/sql/create-source/mysql/)
-uses MySQL’s [binlog replication protocol](/sql/create-source/mysql/#change-data-capture)
+uses MySQL's [binlog replication protocol](/sql/create-source/mysql/#change-data-capture)
 to **continually ingest changes** resulting from CRUD operations in the upstream
 database. The native support for MySQL Change Data Capture (CDC) in Materialize
 gives you the following benefits:
@@ -34,12 +34,12 @@ gives you the following benefits:
 ## Supported versions and services
 
 {{< note >}}
-MySQL-compatible database systems aren't guaranteed to work with the MySQL
+MySQL-compatible database systems are not guaranteed to work with the MySQL
 source out-of-the-box. [MariaDB](https://mariadb.org/), [Vitess](https://vitess.io/)
 and [PlanetScale](https://planetscale.com/) are currently **not supported**.
 {{< /note >}}
 
-The MySQL source requires **MySQL 5.7+**, and is compatible with most common
+The MySQL source requires **MySQL 5.7+** and is compatible with most common
 MySQL hosted services.
 
 | Integration guides                          |
@@ -47,5 +47,5 @@ MySQL hosted services.
 | {{% ingest-data/mysql-native-support %}}    |
 
 If there is a hosted service or MySQL distribution that is not listed above but
-you’d like to use with Materialize, please submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)
+you would like to use with Materialize, please submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)
 or reach out in the Materialize [Community Slack](https://materialize.com/s/chat).

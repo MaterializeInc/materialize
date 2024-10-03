@@ -5,6 +5,7 @@ aliases:
   - /guides/dbt/
   - /third-party/dbt/
   - /integrations/dbt/
+  - /manage/dbt/
 menu:
   main:
     parent: manage-dbt
@@ -346,9 +347,9 @@ transformations on top of any other database.
 
 #### Views
 
-dbt models are materialized as `views` by default. So, to create a
-[view](/sql/create-view) in Materialize, you can provide the SQL statement in
-the model (and skip the `materialized` configuration parameter). For example:
+dbt models are materialized as `views` by default, so to create a [view](/sql/create-view)
+in Materialize you can simply provide the SQL statement in the model (and skip
+the `materialized` configuration parameter).
 
 **Filename:** models/view_a.sql
 ```mzsql
@@ -357,27 +358,16 @@ SELECT
 FROM {{ ref('kafka_topic_a') }}
 ```
 
-The model above would be compiled to `database.schema.view_a`.
-
-{{< tip >}}
-
-- The model depends on the Kafka source defined above. To express this
-  dependency and track the **lineage** of your project, you can use the dbt
-  [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function.
-
-- To keep your models **up-to-date** in Materialize, you can index the view. In
-  Materialize, [indexes](/concepts/indexes/) on a view maintain view results in
-  memory within a [cluster](/concepts/clusters/ "pools of compute resources
-  (CPU, memory, and scratch disk space)"). As the underlying data changes,
-  indexes **incrementally update** the view results in memory. To index a view,
-  see [Configuration: Indexes](#indexes).
-
-{{</ tip >}}
+The model above would be compiled to `database.schema.view_a`. One thing to note
+here is that the model depends on the Kafka source defined above. To express
+this dependency and track the **lineage** of your project, you can use the dbt
+[`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function.
 
 #### Materialized views
 
-In Materialize, [materialized views](/concepts/views/#materialized-views)
-**perform incremental updates** as the underlying data changes:
+This is where Materialize goes beyond dbt's incremental models (and traditional
+databases), with [materialized views](/sql/create-materialized-view)
+that **continuously update** as the underlying data changes:
 
 **Filename:** models/materialized_view_a.sql
 ```mzsql
@@ -425,9 +415,8 @@ database.schema.kafka_topic_c
 
 #### Clusters
 
-Use the `cluster` option to specify the [cluster](/sql/create-cluster/ "pools of
-compute resources (CPU, memory, and scratch disk space)") in which a
-`materialized view`, `index`, `source`, or `sink` model is created. If
+Use the `cluster` option to specify the [cluster](/sql/create-cluster/) in which
+a `materialized view`, `index`, `source`, or `sink` model is created. If
 unspecified, the default cluster for the connection is used.
 
 ```mzsql
@@ -462,14 +451,9 @@ unspecified, the default database for the connection is used.
 
 #### Indexes
 
-Use the `indexes` option to define a list of [indexes](/concepts/indexes/) on
-`source`, `view`, `table` or `materialized view` materializations. In
-Materialize, [indexes](/concepts/indexes/) on a view maintain view results in
-memory within a [cluster](/concepts/clusters/ "pools of compute resources (CPU,
-memory, and scratch disk space)"). As the underlying data changes, indexes
-**incrementally update** the view results in memory.
-
-Each index option can have the following components:
+Use the `indexes` option to define a list of [indexes](/sql/create-index/) on
+`source`, `view`, `table` or `materialized view` materializations. Each index
+option can have the following components:
 
 Component                            | Value     | Description
 -------------------------------------|-----------|--------------------------------------------------

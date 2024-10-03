@@ -36,18 +36,20 @@ Materialize gives you the following benefits:
 ## Supported versions and services
 
 {{< note >}}
-PostgreSQL-compatible database systems aren't guaranteed to work with the
+PostgreSQL-compatible database systems are not guaranteed to work with the
 PostgreSQL source out-of-the-box. [Yugabyte](https://www.yugabyte.com/) is
 currently supported with **limitations**.
 {{< /note >}}
 
-The PostgreSQL source requires **PostgreSQL 11+**, and is compatible with most
+The PostgreSQL source requires **PostgreSQL 11+** and is compatible with most
 common PostgreSQL hosted services.
 
 | Integration guides                          |
 | ------------------------------------------- |
 | {{% ingest-data/postgres-native-support %}} |
 
-If there is a hosted service or PostgreSQL distribution that is not listed above but
-you’d like to use with Materialize, please submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)
-or reach out in the Materialize [Community Slack](https://materialize.com/s/chat).
+If there is a hosted service or PostgreSQL distribution that is not listed above
+but you would like to use with Materialize, please submit a [feature
+request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)
+or reach out in the Materialize [Community
+Slack](https://materialize.com/s/chat).
