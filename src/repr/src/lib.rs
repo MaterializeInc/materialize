@@ -32,6 +32,7 @@ mod scalar;
 pub mod adt;
 pub mod antichain;
 pub mod bytes;
+pub mod catalog_item_id;
 pub mod explain;
 pub mod fixed_length;
 pub mod global_id;
@@ -46,6 +47,7 @@ pub mod timestamp;
 pub mod url;
 pub mod user;
 
+pub use crate::catalog_item_id::CatalogItemId;
 pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
 pub use crate::global_id::GlobalId;
