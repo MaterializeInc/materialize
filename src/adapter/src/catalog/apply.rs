@@ -611,6 +611,7 @@ impl CatalogState {
             Builtin::Index(index) => {
                 let mut item = self
                     .parse_item(
+                        id,
                         &index.create_sql(),
                         None,
                         index.is_retained_metrics_object,
@@ -736,6 +737,7 @@ impl CatalogState {
             Builtin::Connection(connection) => {
                 let mut item = self
                     .parse_item(
+                        id,
                         connection.sql,
                         None,
                         false,
@@ -855,7 +857,7 @@ impl CatalogState {
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
                         if retraction.create_sql() != create_sql {
-                            let item = self.deserialize_item(&create_sql).unwrap_or_else(|e| {
+                            let item = self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
                             retraction.item = item;
@@ -869,9 +871,10 @@ impl CatalogState {
                         retraction
                     }
                     None => {
-                        let catalog_item = self.deserialize_item(&create_sql).unwrap_or_else(|e| {
-                            panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                        });
+                        let catalog_item =
+                            self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
+                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                            });
                         CatalogEntry {
                             item: catalog_item,
                             referenced_by: Vec::new(),
@@ -1182,7 +1185,7 @@ impl CatalogState {
                     let handle = mz_ore::task::spawn(
                         || "parse view",
                         async move {
-                            let res = task_state.parse_item(&create_sql, None, false, None);
+                            let res = task_state.parse_item(id, &create_sql, None, false, None);
                             (id, res)
                         }
                         .instrument(span),

@@ -142,7 +142,7 @@ impl CatalogItemRebuilder {
         }
     }
 
-    fn build(self, state: &CatalogState) -> CatalogItem {
+    fn build(self, id: GlobalId, state: &CatalogState) -> CatalogItem {
         match self {
             Self::SystemSource(item) => item,
             Self::Object {
@@ -151,6 +151,7 @@ impl CatalogItemRebuilder {
                 custom_logical_compaction_window,
             } => state
                 .parse_item(
+                    id,
                     &sql,
                     None,
                     is_retained_metrics_object,
@@ -808,7 +809,7 @@ impl Catalog {
             item_rebuilder,
         } in migration_metadata.user_item_create_ops.drain(..)
         {
-            let item = item_rebuilder.build(state);
+            let item = item_rebuilder.build(id, state);
             let serialized_item = item.to_serialized();
             txn.insert_item(
                 id,

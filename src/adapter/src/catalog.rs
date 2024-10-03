@@ -2349,7 +2349,7 @@ mod tests {
                     .expect("unable to open debug catalog");
             let item = catalog
                 .state()
-                .deserialize_item(&create_sql)
+                .deserialize_item(id, &create_sql)
                 .expect("unable to parse view");
             catalog
                 .transact(
@@ -3234,16 +3234,16 @@ mod tests {
             let schema_spec = schema.id().clone();
             let schema_name = &schema.name().schema;
             let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
-            let mv = catalog
-                .state()
-                .deserialize_item(&format!(
-                    "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
-                ))
-                .expect("unable to deserialize item");
             let mv_id = catalog
                 .allocate_user_id()
                 .await
                 .expect("unable to allocate id");
+            let mv = catalog
+                .state()
+                .deserialize_item(mv_id, &format!(
+                    "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
+                ))
+                .expect("unable to deserialize item");
             catalog
                 .transact(
                     None,

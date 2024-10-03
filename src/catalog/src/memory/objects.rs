@@ -958,6 +958,11 @@ pub struct Connection {
 #[derive(Debug, Clone, Serialize)]
 pub struct ContinualTask {
     pub create_sql: String,
+    pub input_id: GlobalId,
+    /// ContinualTasks are self-referential. We make this work by using a
+    /// placeholder `LocalId` for the CT itself through name resolution and
+    /// planning. Then we fill in the real `GlobalId` before constructing this
+    /// catalog item.
     pub raw_expr: Arc<HirRelationExpr>,
     pub desc: RelationDesc,
     pub resolved_ids: ResolvedIds,
@@ -1821,7 +1826,11 @@ impl CatalogEntry {
     /// referenced. For example this will include any catalog objects used to implement functions
     /// and casts in the item.
     pub fn uses(&self) -> BTreeSet<GlobalId> {
-        self.item.uses()
+        let mut uses = self.item.uses();
+        // Remove self for self-referential tasks (e.g. Continual Tasks), if
+        // present.
+        let _ = uses.remove(&self.id);
+        uses
     }
 
     /// Returns the `CatalogItem` associated with this catalog entry.
