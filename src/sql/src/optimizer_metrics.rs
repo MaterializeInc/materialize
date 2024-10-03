@@ -44,7 +44,6 @@ impl OptimizerMetrics {
         &self,
         object_type: &str,
         duration: Duration,
-        show_query: F,
     ) {
         self.e2e_optimization_time_seconds
             .with_label_values(&[object_type])
@@ -52,7 +51,6 @@ impl OptimizerMetrics {
         if duration > Duration::from_millis(500) {
             tracing::warn!(
                 object_type = object_type,
-                query = show_query(),
                 duration = format!("{}ms", duration.as_millis()),
                 "optimizer took more than 500ms"
             );

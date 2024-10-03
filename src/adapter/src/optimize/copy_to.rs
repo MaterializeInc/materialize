@@ -360,7 +360,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
 
         self.duration += time.elapsed();
         self.metrics
-            .observe_e2e_optimization_time("copy_to", self.duration, || format!("{df_desc:?}"));
+            .observe_e2e_optimization_time("copy_to", self.duration);
 
         Ok(GlobalLirPlan { df_desc, df_meta })
     }

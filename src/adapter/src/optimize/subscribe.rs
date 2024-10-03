@@ -345,7 +345,7 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
 
         self.duration += time.elapsed();
         self.metrics
-            .observe_e2e_optimization_time("subscribe", self.duration, || format!("{df_desc:?}"));
+            .observe_e2e_optimization_time("subscribe", self.duration);
 
         // Return the plan at the end of this `optimize` step.
         Ok(GlobalLirPlan { df_desc, df_meta })
