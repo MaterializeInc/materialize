@@ -203,6 +203,10 @@ There are pros and cons to this approach.
 If we find we miss features from the `EXPLAIN` infrastructure, we can
 enrich what we put in the `MirId` operator mapping.
 
+As an extension, we can support `EXPLAIN PLAN PROFILE ... AS SQL`,
+which would generate and print the attribution query without actually
+running it; this allows us to edit that query as we please.
+
 ## Open questions
 
 We must be careful to show profiles and plans for the existing,
