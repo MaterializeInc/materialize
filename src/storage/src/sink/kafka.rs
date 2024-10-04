@@ -113,7 +113,7 @@ use mz_timely_util::builder_async::{
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{Header, OwnedHeaders, ToBytes};
-use rdkafka::producer::{BaseProducer, BaseRecord, Producer};
+use rdkafka::producer::{BaseRecord, Producer, ThreadedProducer};
 use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -219,7 +219,7 @@ struct TransactionalProducer {
     /// A task to periodically refresh the partition count.
     _partition_count_task: AbortOnDropHandle<()>,
     /// The underlying Kafka producer.
-    producer: BaseProducer<TunnelingClientContext<MzClientContext>>,
+    producer: ThreadedProducer<TunnelingClientContext<MzClientContext>>,
     /// A handle to the metrics associated with this sink.
     statistics: SinkStatistics,
     /// The number of messages staged for the currently open transactions. It is reset to zero
@@ -293,7 +293,7 @@ impl TransactionalProducer {
             collect_statistics(stats_receiver, Arc::clone(&metrics)),
         );
 
-        let producer: BaseProducer<_> = connection
+        let producer: ThreadedProducer<_> = connection
             .connection
             .create_with_context(storage_configuration, ctx, &options, InTask::Yes)
             .await?;
@@ -396,7 +396,9 @@ impl TransactionalProducer {
     /// status in case of failure.
     async fn spawn_blocking<F, R>(&self, f: F) -> Result<R, ContextCreationError>
     where
-        F: FnOnce(BaseProducer<TunnelingClientContext<MzClientContext>>) -> Result<R, KafkaError>
+        F: FnOnce(
+                ThreadedProducer<TunnelingClientContext<MzClientContext>>,
+            ) -> Result<R, KafkaError>
             + Send
             + 'static,
         R: Send + 'static,
@@ -1177,7 +1179,7 @@ fn parse_progress_record(payload: &[u8]) -> Result<ProgressRecord, anyhow::Error
 
 /// Fetches the partition count for the identified topic.
 async fn fetch_partition_count(
-    producer: &BaseProducer<TunnelingClientContext<MzClientContext>>,
+    producer: &ThreadedProducer<TunnelingClientContext<MzClientContext>>,
     sink_id: GlobalId,
     topic_name: &str,
 ) -> Result<u64, anyhow::Error> {
@@ -1211,7 +1213,7 @@ async fn fetch_partition_count(
 /// When an updated partition count is discovered, invokes
 /// `update_partition_count` with the new partition count.
 async fn fetch_partition_count_loop<F>(
-    producer: BaseProducer<TunnelingClientContext<MzClientContext>>,
+    producer: ThreadedProducer<TunnelingClientContext<MzClientContext>>,
     sink_id: GlobalId,
     topic_name: String,
     interval: Duration,

@@ -966,7 +966,7 @@ version = "0.29.0@git:1e27332856a433235aeba7f82d46d06e3f646b69"
 [[audits.rdkafka]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
-version = "0.29.0@git:4a217ecc7a05d6514c8d18c7e4c1d206605edb6b"
+version = "0.29.0@git:727ae0719709276bf58a281a7fc4e50ac1c54dbc"
 importable = false
 
 [[audits.rdkafka]]
@@ -1007,7 +1007,7 @@ version = "4.3.0+2.4.0@git:f7d81eab5a21bdcf5c2dfb75dd7784b55a9953f9"
 [[audits.rdkafka-sys]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
-version = "4.3.0+2.5.0@git:4a217ecc7a05d6514c8d18c7e4c1d206605edb6b"
+version = "4.3.0+2.5.0@git:727ae0719709276bf58a281a7fc4e50ac1c54dbc"
 importable = false
 
 [[audits.redox_syscall]]
