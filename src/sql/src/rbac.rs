@@ -1632,7 +1632,10 @@ fn generate_read_privileges_inner(
 
     for (view_ids, view_owner) in views {
         privileges.extend_from_slice(&generate_read_privileges_inner(
-            catalog, view_ids, view_owner, seen,
+            catalog,
+            view_ids.map(|id| id.to_global_id()),
+            view_owner,
+            seen,
         ));
     }
 

@@ -301,7 +301,7 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
         .0
         .clone()
         .into_iter()
-        .chain_one(from.id())
+        .chain_one(from.item_id())
         .collect::<Vec<_>>();
 
     // Collect all Avro formats that use a schema registry, as well as a set of
@@ -1215,7 +1215,7 @@ async fn purify_alter_source(
     let source_name = item.name();
 
     let resolved_source_name = ResolvedItemName::Item {
-        id: item.id(),
+        id: item.item_id(),
         qualifiers: item.name().qualifiers.clone(),
         full_name: scx.catalog.resolve_full_name(source_name),
         print_id: true,
@@ -2205,10 +2205,10 @@ pub fn purify_create_materialized_view_options(
             })
             .expect("we should be able to resolve mz_now");
         (
-            item.id(),
+            item.item_id(),
             Expr::Function(Function {
                 name: ResolvedItemName::Item {
-                    id: item.id(),
+                    id: item.item_id(),
                     qualifiers: item.name().qualifiers.clone(),
                     full_name: catalog.resolve_full_name(item.name()),
                     print_id: false,
@@ -2229,9 +2229,9 @@ pub fn purify_create_materialized_view_options(
         let item = catalog.get_system_type("mz_timestamp");
         let full_name = catalog.resolve_full_name(item.name());
         (
-            item.id(),
+            item.item_id(),
             ResolvedDataType::Named {
-                id: item.id(),
+                id: item.item_id(),
                 qualifiers: item.name().qualifiers.clone(),
                 full_name,
                 modifiers: vec![],

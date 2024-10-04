@@ -1207,7 +1207,12 @@ impl CatalogItem {
     /// referenced. For example this will include any catalog objects used to implement functions
     /// and casts in the item.
     pub fn uses(&self) -> BTreeSet<GlobalId> {
-        let mut uses = self.references().0.clone();
+        let mut uses: BTreeSet<_> = self
+            .references()
+            .0
+            .iter()
+            .map(|id| id.to_global_id())
+            .collect();
         match self {
             // TODO(jkosh44) This isn't really correct for functions. They may use other objects in
             // their implementation. However, currently there's no way to get that information.

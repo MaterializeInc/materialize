@@ -1094,7 +1094,7 @@ pub fn plan_create_source(
         create_sql,
         data_source: DataSourceDesc::Ingestion(Ingestion {
             desc: source_desc,
-            progress_subsource,
+            progress_subsource: progress_subsource.to_global_id(),
         }),
         desc,
         compaction_window,
@@ -1490,7 +1490,7 @@ pub fn plan_create_subsource(
             }
         };
         DataSourceDesc::IngestionExport {
-            ingestion_id,
+            ingestion_id: ingestion_id.to_global_id(),
             external_reference,
             details,
             // Subsources don't currently support non-default envelopes / encoding
@@ -3303,11 +3303,11 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
                             relation: ResolvedItemName::Item { id, .. },
                             column: ResolvedColumnReference::Column { name, index: _ },
                         }) => DocTarget::Field {
-                            object_id: id,
+                            object_id: id.to_global_id(),
                             column_name: name,
                         },
                         DocOnIdentifier::Type(ResolvedItemName::Item { id, .. }) => {
-                            DocTarget::Type(id)
+                            DocTarget::Type(id.to_global_id())
                         }
                         _ => unreachable!(),
                     };

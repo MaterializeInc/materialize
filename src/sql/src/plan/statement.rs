@@ -625,7 +625,7 @@ impl<'a> StatementContext<'a> {
     // `UnresolvedItemName`.
     pub fn allocate_resolved_item_name(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         name: UnresolvedItemName,
     ) -> Result<ResolvedItemName, PlanError> {
         let partial = normalize::unresolved_item_name(name)?;
@@ -722,8 +722,8 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem {
-        self.catalog.get_item(&id.into())
+    pub fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem {
+        self.catalog.get_item(id)
     }
 
     pub fn get_item_by_resolved_name(
@@ -878,11 +878,11 @@ impl<'a> StatementContext<'a> {
                 }
             }
             (None, Some(aws_privatelink)) => {
-                let id = aws_privatelink.connection.item_id().to_item_id();
+                let id = aws_privatelink.connection.item_id();
                 let entry = self.catalog.get_item(&id);
                 match entry.connection()? {
                     Connection::AwsPrivatelink(_) => Ok(Tunnel::AwsPrivatelink(AwsPrivatelink {
-                        connection_id: id,
+                        connection_id: *id,
                         // By default we do not specify an availability zone for the tunnel.
                         availability_zone: None,
                         // We always use the port as specified by the top-level connection.
@@ -979,7 +979,7 @@ impl<'a> StatementContext<'a> {
         let full_name = self.allocate_full_name(partial).unwrap();
 
         ResolvedItemName::Item {
-            id: entry.id(),
+            id: entry.item_id(),
             qualifiers: entry.name().qualifiers.clone(),
             full_name,
             print_id: true,

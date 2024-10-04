@@ -416,7 +416,7 @@ pub struct ItemQualifiers {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedItemName {
     Item {
-        id: GlobalId,
+        id: CatalogItemId,
         qualifiers: ItemQualifiers,
         full_name: FullItemName,
         // Whether this object, when printed out, should use [id AS name] syntax. We
@@ -453,7 +453,7 @@ impl ResolvedItemName {
         }
     }
 
-    pub fn item_id(&self) -> &GlobalId {
+    pub fn item_id(&self) -> &CatalogItemId {
         match self {
             ResolvedItemName::Item { id, .. } => id,
             _ => panic!("cannot call item_id on non-object"),
@@ -648,7 +648,7 @@ pub enum ResolvedDataType {
         value_type: Box<ResolvedDataType>,
     },
     Named {
-        id: GlobalId,
+        id: CatalogItemId,
         qualifiers: ItemQualifiers,
         full_name: FullItemName,
         modifiers: Vec<i64>,
@@ -1244,7 +1244,7 @@ pub struct NameResolver<'a> {
     ctes: BTreeMap<String, LocalId>,
     continual_task: Option<(PartialItemName, LocalId)>,
     status: Result<(), PlanError>,
-    ids: BTreeSet<GlobalId>,
+    ids: BTreeSet<CatalogItemId>,
 }
 
 impl<'a> NameResolver<'a> {
@@ -1288,9 +1288,9 @@ impl<'a> NameResolver<'a> {
                                 );
                             }
                         };
-                        self.ids.insert(array_item.id());
+                        self.ids.insert(array_item.item_id());
                         Ok(ResolvedDataType::Named {
-                            id: array_item.id(),
+                            id: array_item.item_id(),
                             qualifiers: array_item.name().qualifiers.clone(),
                             full_name: self.catalog.resolve_full_name(array_item.name()),
                             modifiers,
@@ -1332,7 +1332,7 @@ impl<'a> NameResolver<'a> {
                         (full_name, item)
                     }
                 };
-                self.ids.insert(item.id());
+                self.ids.insert(item.item_id());
                 // If this is a named array type, then make sure to include the element reference
                 // in the resolved IDs. This helps ensure that named array types are resolved the
                 // same as an array type with the same element type. For example, `int4[]` and
@@ -1345,7 +1345,7 @@ impl<'a> NameResolver<'a> {
                     self.ids.insert(element_reference.into());
                 }
                 Ok(ResolvedDataType::Named {
-                    id: item.id(),
+                    id: item.item_id(),
                     qualifiers: item.name().qualifiers.clone(),
                     full_name,
                     modifiers: typ_mod,
@@ -1421,13 +1421,13 @@ impl<'a> NameResolver<'a> {
 
         match r {
             Ok(item) => {
-                self.ids.insert(item.id());
+                self.ids.insert(item.item_id());
                 let print_id = !matches!(
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
                 );
                 ResolvedItemName::Item {
-                    id: item.id(),
+                    id: item.item_id(),
                     qualifiers: item.name().qualifiers.clone(),
                     full_name: self.catalog.resolve_full_name(item.name()),
                     print_id,
@@ -1474,7 +1474,7 @@ impl<'a> NameResolver<'a> {
         raw_name: UnresolvedItemName,
         _version: Option<Version>,
     ) -> ResolvedItemName {
-        let gid: GlobalId = match id.parse() {
+        let id: CatalogItemId = match id.parse() {
             Ok(id) => id,
             Err(e) => {
                 if self.status.is_ok() {
@@ -1483,17 +1483,17 @@ impl<'a> NameResolver<'a> {
                 return ResolvedItemName::Error;
             }
         };
-        let item = match self.catalog.try_get_item(&gid.into()) {
+        let item = match self.catalog.try_get_item(&id) {
             Some(item) => item,
             None => {
                 if self.status.is_ok() {
-                    self.status = Err(PlanError::InvalidId(gid));
+                    self.status = Err(PlanError::InvalidId(id));
                 }
                 return ResolvedItemName::Error;
             }
         };
 
-        self.ids.insert(gid.clone());
+        self.ids.insert(id.clone());
         let full_name = match normalize::full_name(raw_name) {
             Ok(full_name) => full_name,
             Err(e) => {
@@ -1504,7 +1504,7 @@ impl<'a> NameResolver<'a> {
             }
         };
         ResolvedItemName::Item {
-            id: gid,
+            id,
             qualifiers: item.name().qualifiers.clone(),
             full_name,
             print_id: true,
@@ -2139,14 +2139,14 @@ where
 
 /// A set of IDs resolved by name resolution.
 ///
-/// This is a newtype of a `BTreeSet<GlobalId>` that is provided to make it
-/// harder to confuse a set of resolved IDs with other sets of `GlobalId`.
+/// This is a newtype of a `BTreeSet<CatalogItemId>` that is provided to make it
+/// harder to confuse a set of resolved IDs with other sets of [`CatalogItemId`].
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct ResolvedIds(pub BTreeSet<GlobalId>);
+pub struct ResolvedIds(pub BTreeSet<CatalogItemId>);
 
 #[derive(Debug, Default)]
 pub struct DependencyVisitor {
-    ids: BTreeSet<GlobalId>,
+    ids: BTreeSet<CatalogItemId>,
 }
 
 impl<'ast> Visit<'ast, Aug> for DependencyVisitor {

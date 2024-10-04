@@ -771,7 +771,7 @@ pub fn plan_mutation_query_inner(
     };
 
     Ok(ReadThenWritePlan {
-        id,
+        id: id.to_global_id(),
         selection: get,
         finishing,
         assignments: sets,
@@ -1151,7 +1151,7 @@ pub fn plan_webhook_validate_using(
         );
 
         validation_secrets.push(WebhookValidationSecret {
-            id,
+            id: id.to_global_id(),
             column_idx,
             use_bytes,
         });
@@ -5683,7 +5683,7 @@ pub fn scalar_type_from_sql(
             })
         }
         ResolvedDataType::Named { id, modifiers, .. } => {
-            scalar_type_from_catalog(scx.catalog, id.to_item_id(), modifiers)
+            scalar_type_from_catalog(scx.catalog, *id, modifiers)
         }
         ResolvedDataType::Error => unreachable!("should have been caught in name resolution"),
     }

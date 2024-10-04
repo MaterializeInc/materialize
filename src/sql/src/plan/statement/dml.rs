@@ -1022,7 +1022,7 @@ fn plan_copy_to_expr(
     options: CopyOptionExtracted,
 ) -> Result<Plan, PlanError> {
     let conn_id = match options.aws_connection {
-        Some(conn_id) => CatalogItemId::from(conn_id).to_global_id(),
+        Some(conn_id) => CatalogItemId::from(conn_id),
         None => sql_bail!("AWS CONNECTION is required for COPY ... TO <expr>"),
     };
     let connection = scx.get_item(&conn_id).connection()?;
@@ -1092,7 +1092,7 @@ fn plan_copy_to_expr(
         desc,
         to,
         connection: connection.to_owned(),
-        connection_id: conn_id,
+        connection_id: conn_id.to_global_id(),
         format,
         max_file_size: options.max_file_size.as_bytes(),
     }))

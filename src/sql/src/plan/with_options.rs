@@ -57,9 +57,9 @@ impl TryFromValue<WithOptionValue<Aug>> for Secret {
     }
 
     fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
-        let secret = catalog.get_item(&self.0.into());
+        let secret = catalog.get_item(&self.0);
         let name = ResolvedItemName::Item {
-            id: self.0.to_global_id(),
+            id: self.0,
             qualifiers: secret.name().qualifiers.clone(),
             full_name: catalog.resolve_full_name(secret.name()),
             print_id: false,
@@ -97,15 +97,15 @@ impl From<&Object> for CatalogItemId {
 impl TryFromValue<WithOptionValue<Aug>> for Object {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
-            WithOptionValue::Item(ResolvedItemName::Item { id, .. }) => Object(id.to_item_id()),
+            WithOptionValue::Item(ResolvedItemName::Item { id, .. }) => Object(id),
             _ => sql_bail!("must provide an object"),
         })
     }
 
     fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
-        let item = catalog.get_item(&self.0.into());
+        let item = catalog.get_item(&self.0);
         let name = ResolvedItemName::Item {
-            id: self.0.to_global_id(),
+            id: self.0,
             qualifiers: item.name().qualifiers.clone(),
             full_name: catalog.resolve_full_name(item.name()),
             print_id: false,
@@ -228,7 +228,7 @@ impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
             WithOptionValue::Secret(ResolvedItemName::Item { id, .. }) => {
-                StringOrSecret::Secret(id.to_item_id())
+                StringOrSecret::Secret(id)
             }
             v => StringOrSecret::String(String::try_from_value(v)?),
         })

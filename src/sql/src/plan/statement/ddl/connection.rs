@@ -537,7 +537,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     )?;
 
                     let id = match &aws_privatelink.connection {
-                        ResolvedItemName::Item { id, .. } => id.to_item_id(),
+                        ResolvedItemName::Item { id, .. } => *id,
                         _ => sql_bail!(
                             "internal error: Kafka PrivateLink connection was not resolved"
                         ),
@@ -566,7 +566,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                 }
                 KafkaBrokerTunnel::SshTunnel(ssh) => {
                     let id = match &ssh {
-                        ResolvedItemName::Item { id, .. } => id.to_item_id(),
+                        ResolvedItemName::Item { id, .. } => *id,
                         _ => sql_bail!(
                             "internal error: Kafka SSH tunnel connection was not resolved"
                         ),

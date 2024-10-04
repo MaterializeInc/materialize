@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::RoleMetadata;
 
@@ -33,7 +33,7 @@ pub enum PlanValidity {
         /// The most recent revision at which this plan was verified as valid.
         transient_revision: u64,
         /// Objects on which the plan depends.
-        dependency_ids: BTreeSet<GlobalId>,
+        dependency_ids: BTreeSet<CatalogItemId>,
         cluster_id: Option<ComputeInstanceId>,
         replica_id: Option<ReplicaId>,
         role_metadata: RoleMetadata,
@@ -43,7 +43,7 @@ pub enum PlanValidity {
 impl PlanValidity {
     pub fn new(
         transient_revision: u64,
-        dependency_ids: BTreeSet<GlobalId>,
+        dependency_ids: BTreeSet<CatalogItemId>,
         cluster_id: Option<ComputeInstanceId>,
         replica_id: Option<ReplicaId>,
         role_metadata: RoleMetadata,
@@ -67,7 +67,7 @@ impl PlanValidity {
     }
 
     /// Panics if not called on a Checks variant.
-    pub fn extend_dependencies(&mut self, ids: impl Iterator<Item = GlobalId>) {
+    pub fn extend_dependencies(&mut self, ids: impl Iterator<Item = CatalogItemId>) {
         let Self::Checks { dependency_ids, .. } = self else {
             unreachable!();
         };

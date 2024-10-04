@@ -349,7 +349,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn add_notice(&self, notice: PlanNotice);
 
     /// Returns the associated comments for the given `id`
-    fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>>;
+    fn get_item_comments(&self, id: &CatalogItemId) -> Option<&BTreeMap<Option<usize>, String>>;
 }
 
 /// Configuration associated with a catalog.

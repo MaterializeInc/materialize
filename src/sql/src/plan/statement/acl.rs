@@ -496,7 +496,7 @@ fn plan_update_privilege(
         let acl_mode = privilege_spec_to_acl_mode(scx, &privileges, actual_object_type);
 
         if let SystemObjectId::Object(ObjectId::Item(id)) = &target_id {
-            let item = scx.get_item(&id.into());
+            let item = scx.get_item(&id);
             let item_type: ObjectType = item.item_type().into();
             if (item_type == ObjectType::View
                 || item_type == ObjectType::MaterializedView
