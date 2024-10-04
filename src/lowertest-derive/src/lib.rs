@@ -186,7 +186,7 @@ fn get_type_as_string(t: &syn::Type) -> String {
 ///
 /// Supported types are:
 /// A plain path type A -> extracts A
-/// `Box<A>`, `Vec<A>`, `Option<A>` -> extracts A
+/// `Box<A>`, `Vec<A>`, `Option<A>`, `[A]` -> extracts A
 /// Tuple (A, (B, C)) -> extracts A, B, C.
 /// Remove A, B, C from expected results if they are primitive types or listed
 /// in [EXTERNAL_TYPES].
@@ -233,6 +233,9 @@ fn extract_reflected_type(t: &syn::Type) -> Vec<&syn::Type> {
                 .iter()
                 .flat_map(extract_reflected_type)
                 .collect::<Vec<_>>();
+        }
+        syn::Type::Slice(ts) => {
+            return extract_reflected_type(&ts.elem);
         }
         _ => {}
     }
