@@ -14,18 +14,18 @@ sources:
     schema: public_tpch
     tables:
       - name: tpch_progress
-        tests:
+        data_tests:
           - makes_progress
       - name: tpch_customer
       - name: tpch_lineitem
       - name: tpch_orders
-        tests:
+        data_tests:
           - makes_progress
 
 models:
     - name: tpch_q01
-      tests:
+      data_tests:
         - makes_progress
     - name: tpch_q18
-      tests:
+      data_tests:
         - makes_progress

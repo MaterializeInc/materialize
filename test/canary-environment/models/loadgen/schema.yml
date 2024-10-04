@@ -14,10 +14,10 @@ sources:
     schema: public_loadgen
     tables:
       - name: sales
-        tests:
+        data_tests:
           - makes_progress
       - name: sales_progress
-        tests:
+        data_tests:
           - makes_progress
       - name: product
       - name: product_category
@@ -28,5 +28,5 @@ sources:
 
 models:
     - name: sales_product_product_category
-      tests:
+      data_tests:
         - makes_progress
