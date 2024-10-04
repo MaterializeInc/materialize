@@ -485,8 +485,7 @@ mod boxed_str {
             Self: 'a,
             I: Iterator<Item = &'a Self> + Clone,
         {
-            self.region
-                .reserve(regions.clone().map(|r| r.region.len()).sum());
+            self.region.reserve(regions.map(|r| r.region.len()).sum());
         }
         #[inline]
         fn heap_size(&self, callback: impl FnMut(usize, usize)) {
