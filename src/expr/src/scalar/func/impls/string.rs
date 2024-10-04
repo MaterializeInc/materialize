@@ -922,7 +922,7 @@ impl fmt::Display for IsRegexpMatch {
         write!(
             f,
             "is_regexp_match[{}, case_insensitive={}]",
-            self.0.pattern.escaped(),
+            self.0.pattern().escaped(),
             self.0.case_insensitive
         )
     }
@@ -980,7 +980,7 @@ impl fmt::Display for RegexpMatch {
         write!(
             f,
             "regexp_match[{}, case_insensitive={}]",
-            self.0.pattern.escaped(),
+            self.0.pattern().escaped(),
             self.0.case_insensitive
         )
     }
@@ -1037,7 +1037,7 @@ impl fmt::Display for RegexpSplitToArray {
         write!(
             f,
             "regexp_split_to_array[{}, case_insensitive={}]",
-            self.0.pattern.escaped(),
+            self.0.pattern().escaped(),
             self.0.case_insensitive
         )
     }

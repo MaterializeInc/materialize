@@ -3742,7 +3742,7 @@ impl fmt::Display for BinaryFunc {
                 Ok((regex, limit)) => write!(
                     f,
                     "regexp_replace[{}, case_insensitive={}, limit={}]",
-                    regex.pattern.escaped(),
+                    regex.pattern().escaped(),
                     regex.case_insensitive,
                     limit
                 ),
@@ -6603,7 +6603,7 @@ pub fn build_regex(needle: &str, flags: &str) -> Result<Regex, EvalError> {
             _ => return Err(EvalError::InvalidRegexFlag(f)),
         }
     }
-    Ok(Regex::new(needle.to_string(), case_insensitive)?)
+    Ok(Regex::new(needle, case_insensitive)?)
 }
 
 pub fn hmac_string<'a>(
