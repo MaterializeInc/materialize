@@ -440,7 +440,7 @@ impl Coordinator {
         progress_stmt: CreateSubsourceStatement<Aug>,
         mut source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
-        available_source_references: SourceReferences,
+        available_source_references: plan::SourceReferences,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         let mut create_source_plans = Vec::with_capacity(subsources.len() + 2);
 

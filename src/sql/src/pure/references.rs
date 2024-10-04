@@ -5,7 +5,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_repr::RelationDesc;
 use mz_sql_parser::ast::{ExternalReferences, Ident, IdentError, UnresolvedItemName};
 use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorOutput};
-use mz_storage_types::sources::SourceReferenceResolver;
+use mz_storage_types::sources::{ExternalReferenceResolutionError, SourceReferenceResolver};
 
 use crate::names::{FullItemName, RawDatabaseSpecifier};
 use crate::plan::{PlanError, SourceReference, SourceReferences};
@@ -36,7 +36,7 @@ pub(super) enum SourceReferenceClient<'a> {
 
 /// Metadata about an available source reference retrieved from the upstream system.
 #[derive(Clone)]
-enum ReferenceMetadata {
+pub(super) enum ReferenceMetadata {
     Postgres {
         table: mz_postgres_util::desc::PostgresTableDesc,
         database: String,
@@ -297,15 +297,15 @@ impl RetrievedSourceReferences {
     /// Resolve the requested external references to their appropriate source exports.
     pub(super) fn requested_source_exports<'a>(
         &'a self,
-        requested: &ExternalReferences,
+        requested: Option<&ExternalReferences>,
         source_name: &UnresolvedItemName,
     ) -> Result<Vec<RequestedSourceExport<&ReferenceMetadata>>, PlanError> {
         // Filter all available references to those requested by the `ExternalReferences`
         // specification and include any alias that the user has specified.
         // TODO(#8260): The alias handling can be removed once subsources are removed.
         let filtered: Vec<(&ReferenceMetadata, Option<&UnresolvedItemName>)> = match requested {
-            ExternalReferences::All => self.references.iter().map(|r| (r, None)).collect(),
-            ExternalReferences::SubsetSchemas(schemas) => {
+            Some(ExternalReferences::All) => self.references.iter().map(|r| (r, None)).collect(),
+            Some(ExternalReferences::SubsetSchemas(schemas)) => {
                 let available_schemas: BTreeSet<&str> = self
                     .references
                     .iter()
@@ -331,13 +331,13 @@ impl RetrievedSourceReferences {
                             .map(|namespace| {
                                 requested_schemas
                                     .contains(namespace)
-                                    .then(|| (reference, None))
+                                    .then_some((reference, None))
                             })
                             .flatten()
                     })
                     .collect()
             }
-            ExternalReferences::SubsetTables(requested_tables) => {
+            Some(ExternalReferences::SubsetTables(requested_tables)) => {
                 // Use the `SourceReferenceResolver` to resolve the requested tables to their
                 // appropriate index in the available references.
                 requested_tables
@@ -348,10 +348,20 @@ impl RetrievedSourceReferences {
                     })
                     .collect::<Result<Vec<_>, PlanError>>()?
             }
+            None => {
+                // If no reference is requested we must validate that only one reference is
+                // available, else we cannot determine which reference the user is referring to.
+                if self.references.len() != 1 {
+                    Err(ExternalReferenceResolutionError::Ambiguous {
+                        name: "".to_string(),
+                    })?
+                }
+                vec![(&self.references[0], None)]
+            }
         };
 
         // Convert the filtered references to their appropriate `RequestedSourceExport` form.
-        Ok(filtered
+        filtered
             .into_iter()
             .map(|(reference, alias)| {
                 let name = match alias {
@@ -378,7 +388,7 @@ impl RetrievedSourceReferences {
                     meta: reference,
                 })
             })
-            .collect::<Result<Vec<_>, PlanError>>()?)
+            .collect::<Result<Vec<_>, PlanError>>()
     }
 
     pub(super) fn resolve_name(&self, name: &[Ident]) -> Result<&ReferenceMetadata, PlanError> {

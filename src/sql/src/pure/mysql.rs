@@ -16,7 +16,7 @@ use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    ExternalReferences, Ident, IdentError, MySqlConfigOptionName, TableConstraint, WithOptionValue,
+    ExternalReferences, Ident, MySqlConfigOptionName, TableConstraint, WithOptionValue,
 };
 use mz_sql_parser::ast::{UnresolvedItemName, Value};
 use mz_storage_types::sources::{SourceExportStatementDetails, SourceReferenceResolver};
@@ -36,16 +36,7 @@ use super::{
 /// of databases AND schemas, it treats both as the same thing.
 pub(crate) static MYSQL_DATABASE_FAKE_NAME: &str = "mysql";
 
-pub(super) fn mysql_table_to_external_reference(
-    table: &MySqlTableDesc,
-) -> Result<UnresolvedItemName, IdentError> {
-    Ok(UnresolvedItemName::qualified(&[
-        Ident::new(&table.schema_name)?,
-        Ident::new(&table.name)?,
-    ]))
-}
-
-/// Reverses the `mysql_table_external_reference` function.
+/// Convert an unresolved item name to a qualified table reference.
 pub(super) fn external_reference_to_table(
     name: &UnresolvedItemName,
 ) -> Result<QualifiedTableRef, MySqlSourcePurificationError> {
@@ -348,9 +339,8 @@ pub(super) async fn purify_source_exports(
     reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
     let requested_exports = match requested_references.as_ref() {
-        Some(requested) => {
-            retrieved_references.requested_source_exports(requested, unresolved_source_name)?
-        }
+        Some(requested) => retrieved_references
+            .requested_source_exports(Some(requested), unresolved_source_name)?,
         None => {
             if matches!(reference_policy, SourceReferencePolicy::Required) {
                 Err(MySqlSourcePurificationError::RequiresExternalReferences)?

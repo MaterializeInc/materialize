@@ -96,7 +96,7 @@ use mz_storage_types::sources::kafka::{
     kafka_metadata_columns_desc, KafkaMetadataKind, KafkaSourceConnection, KafkaSourceExportDetails,
 };
 use mz_storage_types::sources::load_generator::{
-    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceConnection,
+    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
     LoadGeneratorSourceExportDetails, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
 };
 use mz_storage_types::sources::mysql::{
@@ -121,8 +121,8 @@ use crate::catalog::{
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
     Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
-    RawDatabaseSpecifier, ResolvedClusterName, ResolvedColumnReference, ResolvedDataType,
-    ResolvedDatabaseSpecifier, ResolvedItemName, SchemaSpecifier, SystemObjectId,
+    ResolvedClusterName, ResolvedColumnReference, ResolvedDataType, ResolvedDatabaseSpecifier,
+    ResolvedItemName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -147,10 +147,9 @@ use crate::plan::{
     CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, FullItemName, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
-    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
-    WebhookHeaders, WebhookValidation,
+    DropOwnedPlan, Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice,
+    QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue,
+    View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_CREATE_CONTINUAL_TASK, ENABLE_KAFKA_SINK_HEADERS,
