@@ -5182,7 +5182,7 @@ impl Arbitrary for UnaryFunc {
                 .prop_map(|(return_ty, cast_exprs)| {
                     UnaryFunc::CastRecord1ToRecord2(CastRecord1ToRecord2 {
                         return_ty,
-                        cast_exprs,
+                        cast_exprs: cast_exprs.into(),
                     })
                 })
                 .boxed(),
