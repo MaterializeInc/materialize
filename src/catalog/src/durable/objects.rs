@@ -37,7 +37,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
@@ -457,7 +457,7 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Item {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub oid: u32,
     pub schema_id: SchemaId,
     pub name: String,
@@ -472,7 +472,7 @@ impl DurableType for Item {
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
-            ItemKey { gid: self.id },
+            ItemKey { id: self.id },
             ItemValue {
                 oid: self.oid,
                 schema_id: self.schema_id,
@@ -486,7 +486,7 @@ impl DurableType for Item {
 
     fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
-            id: key.gid,
+            id: key.id,
             oid: value.oid,
             schema_id: value.schema_id,
             name: value.name,
@@ -497,7 +497,7 @@ impl DurableType for Item {
     }
 
     fn key(&self) -> Self::Key {
-        ItemKey { gid: self.id }
+        ItemKey { id: self.id }
     }
 }
 
@@ -555,7 +555,7 @@ pub struct SystemObjectDescription {
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SystemObjectUniqueIdentifier {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub fingerprint: String,
 }
 
@@ -591,10 +591,11 @@ impl DurableType for SystemObjectMapping {
             },
             GidMappingValue {
                 id: match self.unique_identifier.id {
-                    GlobalId::System(id) => id,
-                    GlobalId::User(_) => unreachable!("GID mapping cannot use a User ID"),
-                    GlobalId::Transient(_) => unreachable!("GID mapping cannot use a Transient ID"),
-                    GlobalId::Explain => unreachable!("GID mapping cannot use an Explain ID"),
+                    CatalogItemId::System(id) => id,
+                    CatalogItemId::User(_) => unreachable!("GID mapping cannot use a User ID"),
+                    CatalogItemId::Transient(_) => {
+                        unreachable!("GID mapping cannot use a Transient ID")
+                    }
                 },
                 fingerprint: self.unique_identifier.fingerprint,
             },
@@ -609,7 +610,7 @@ impl DurableType for SystemObjectMapping {
                 object_name: key.object_name,
             },
             unique_identifier: SystemObjectUniqueIdentifier {
-                id: GlobalId::System(value.id),
+                id: CatalogItemId::System(value.id),
                 fingerprint: value.fingerprint,
             },
         }
@@ -1121,7 +1122,7 @@ pub struct SchemaValue {
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug, Arbitrary)]
 pub struct ItemKey {
-    pub(crate) gid: GlobalId,
+    pub(crate) id: CatalogItemId,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]

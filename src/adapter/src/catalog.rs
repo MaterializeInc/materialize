@@ -45,7 +45,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, ScalarType};
+use mz_repr::{CatalogItemId, Diff, GlobalId, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
@@ -613,6 +613,7 @@ impl Catalog {
             .allocate_user_id()
             .await
             .maybe_terminate("allocating user ids")
+            .map(|item_id| item_id.to_global_id())
             .err_into()
     }
 
@@ -633,7 +634,7 @@ impl Catalog {
             .allocate_system_ids(1)
             .await
             .maybe_terminate("allocating system ids")
-            .map(|ids| ids.into_element())
+            .map(|ids| ids.into_element().into())
             .err_into()
     }
 
@@ -841,11 +842,11 @@ impl Catalog {
         self.state.resolve_full_name(name, conn_id)
     }
 
-    pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+    pub fn try_get_entry<T: Into<CatalogItemId>>(&self, id: T) -> Option<&CatalogEntry> {
         self.state.try_get_entry(id)
     }
 
-    pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    pub fn get_entry<T: Into<CatalogItemId>>(&self, id: T) -> &CatalogEntry {
         self.state.get_entry(id)
     }
 
@@ -1159,12 +1160,14 @@ impl Catalog {
             )
             .await
             .unwrap_or_terminate("cannot fail to allocate system ids");
-        BUILTINS::logs().zip(system_ids.into_iter()).collect()
+        BUILTINS::logs()
+            .zip(system_ids.into_iter().map(|id| id.to_global_id()))
+            .collect()
     }
 
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
         self.state
-            .resolve_builtin_table_updates(self.state.pack_item_update(id, diff))
+            .resolve_builtin_table_updates(self.state.pack_item_update(id.into(), diff))
     }
 
     pub fn pack_storage_usage_update(
@@ -1400,7 +1403,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
         self.state
             .entry_by_id
-            .get(&id)
+            .get(&id.to_item_id())
             .map(|entry| entry.name())
             .map(|name| self.resolve_full_name(name).to_string())
     }
@@ -1408,7 +1411,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
     fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
         self.state
             .entry_by_id
-            .get(&id)
+            .get(&id.to_item_id())
             .map(|entry| entry.name())
             .map(|name| name.item.clone())
     }
@@ -1416,7 +1419,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
     fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>> {
         self.state
             .entry_by_id
-            .get(&id)
+            .get(&id.to_item_id())
             .map(|entry| entry.name())
             .map(|name| self.resolve_full_name(name).into_parts())
     }
@@ -1434,7 +1437,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 custom_id: Some(global_id),
                 ..
             } => {
-                let item = self.get_item(global_id);
+                let item = self.get_item(&global_id.to_item_id());
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
@@ -1449,7 +1452,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 custom_id: Some(id),
                 ..
             } => {
-                let item = self.get_item(id);
+                let item = self.get_item(&id.to_item_id());
                 self.minimal_qualification(item.name()).to_string()
             }
             Record { fields, .. } => format!(
@@ -1491,13 +1494,13 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
-        let Some(entry) = self.state.entry_by_id.get(&id) else {
+        let Some(entry) = self.state.entry_by_id.get(&id.to_item_id()) else {
             return None;
         };
 
         match entry.index() {
             Some(index) => {
-                let Some(on_entry) = self.state.entry_by_id.get(&index.on) else {
+                let Some(on_entry) = self.state.entry_by_id.get(&index.on.to_item_id()) else {
                     return None;
                 };
                 let Ok(on_desc) = on_entry.desc(&self.resolve_full_name(on_entry.name())) else {
@@ -1544,7 +1547,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
     fn humanize_column(&self, id: GlobalId, column: usize) -> Option<String> {
         self.state
             .entry_by_id
-            .get(&id)
+            .get(&id.to_item_id())
             .try_map(|entry| {
                 let desc = entry.desc(&self.resolve_full_name(entry.name()))?;
                 let column_name = desc.get_name(column);
@@ -1554,7 +1557,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn id_exists(&self, id: GlobalId) -> bool {
-        self.state.entry_by_id.contains_key(&id)
+        self.state.entry_by_id.contains_key(&id.to_item_id())
     }
 }
 
@@ -1780,11 +1783,11 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.get_system_type(name)
     }
 
-    fn try_get_item(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
+    fn try_get_item(&self, id: &CatalogItemId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
         Some(self.state.try_get_entry(id)?)
     }
 
-    fn get_item(&self, id: &GlobalId) -> &dyn mz_sql::catalog::CatalogItem {
+    fn get_item(&self, id: &CatalogItemId) -> &dyn mz_sql::catalog::CatalogItem {
         self.state.get_entry(id)
     }
 
@@ -1909,7 +1912,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.object_dependents(ids, &self.conn_id, &mut seen)
     }
 
-    fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId> {
+    fn item_dependents(&self, id: CatalogItemId) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
         self.state.item_dependents(id, &mut seen)
     }
@@ -1986,7 +1989,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>> {
-        let comment_id = self.state.get_comment_id(ObjectId::Item(*id));
+        let comment_id = self.state.get_comment_id(ObjectId::Item(id.to_item_id()));
         self.state.comments.get_object_comments(comment_id)
     }
 }
@@ -3192,7 +3195,7 @@ mod tests {
 
             for entry in catalog.entries() {
                 let schema_spec = entry.name().qualifiers.schema_spec;
-                let introspection_deps = catalog.introspection_dependencies(entry.id);
+                let introspection_deps = catalog.introspection_dependencies(entry.id.into());
                 if introspection_deps.is_empty() {
                     assert!(
                         schema_spec != introspection_schema_spec,

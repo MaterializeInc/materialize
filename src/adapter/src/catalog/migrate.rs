@@ -36,7 +36,7 @@ where
 
     for mut item in tx.get_items() {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
-        f(tx, item.id, &mut stmt).await?;
+        f(tx, item.id.to_global_id(), &mut stmt).await?;
 
         item.create_sql = stmt.to_ast_string_stable();
 
@@ -64,7 +64,7 @@ where
     for mut item in items {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
 
-        f(tx, &cat, item.id, &mut stmt).await?;
+        f(tx, &cat, item.id.to_global_id(), &mut stmt).await?;
 
         item.create_sql = stmt.to_ast_string_stable();
 

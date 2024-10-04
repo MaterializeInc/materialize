@@ -14,7 +14,7 @@
 
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::catalog::{CatalogItem, DefaultPrivilegeObject};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
@@ -133,12 +133,9 @@ impl CatalogState {
                 }
             }
         }
-        for (global_id, entry) in &self.entry_by_id {
+        for (item_id, entry) in &self.entry_by_id {
             if !self.roles_by_id.contains_key(entry.owner_id()) {
-                inconsistencies.push(RoleInconsistency::Entry(
-                    *global_id,
-                    entry.owner_id().clone(),
-                ));
+                inconsistencies.push(RoleInconsistency::Entry(*item_id, entry.owner_id().clone()));
             }
         }
         for (cluster_id, cluster) in &self.clusters_by_id {
@@ -228,18 +225,18 @@ impl CatalogState {
         let mut comment_inconsistencies = Vec::new();
         for (comment_object_id, col_pos, _comment) in self.comments.iter() {
             match comment_object_id {
-                CommentObjectId::Table(global_id)
-                | CommentObjectId::View(global_id)
-                | CommentObjectId::MaterializedView(global_id)
-                | CommentObjectId::Source(global_id)
-                | CommentObjectId::Sink(global_id)
-                | CommentObjectId::Index(global_id)
-                | CommentObjectId::Func(global_id)
-                | CommentObjectId::Connection(global_id)
-                | CommentObjectId::Type(global_id)
-                | CommentObjectId::Secret(global_id)
-                | CommentObjectId::ContinualTask(global_id) => {
-                    let entry = self.entry_by_id.get(&global_id);
+                CommentObjectId::Table(item_id)
+                | CommentObjectId::View(item_id)
+                | CommentObjectId::MaterializedView(item_id)
+                | CommentObjectId::Source(item_id)
+                | CommentObjectId::Sink(item_id)
+                | CommentObjectId::Index(item_id)
+                | CommentObjectId::Func(item_id)
+                | CommentObjectId::Connection(item_id)
+                | CommentObjectId::Type(item_id)
+                | CommentObjectId::Secret(item_id)
+                | CommentObjectId::ContinualTask(item_id) => {
+                    let entry = self.entry_by_id.get(&item_id);
                     match entry {
                         None => comment_inconsistencies
                             .push(CommentInconsistency::Dangling(comment_object_id)),
@@ -333,10 +330,11 @@ impl CatalogState {
 
         for (id, entry) in &self.entry_by_id {
             for referenced_id in &entry.references().0 {
-                let Some(referenced_entry) = self.entry_by_id.get(referenced_id) else {
+                let referenced_id = referenced_id.to_item_id();
+                let Some(referenced_entry) = self.entry_by_id.get(&referenced_id) else {
                     dependency_inconsistencies.push(ObjectDependencyInconsistency::MissingUses {
                         object_a: *id,
-                        object_b: *referenced_id,
+                        object_b: referenced_id,
                     });
                     continue;
                 };
@@ -344,16 +342,16 @@ impl CatalogState {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
-                            object_b: *referenced_id,
+                            object_b: referenced_id,
                         },
                     );
                 }
             }
             for used_id in entry.uses() {
-                let Some(used_entry) = self.entry_by_id.get(&used_id) else {
+                let Some(used_entry) = self.entry_by_id.get(&used_id.to_item_id()) else {
                     dependency_inconsistencies.push(ObjectDependencyInconsistency::MissingUses {
                         object_a: *id,
-                        object_b: used_id,
+                        object_b: used_id.to_item_id(),
                     });
                     continue;
                 };
@@ -361,7 +359,7 @@ impl CatalogState {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
-                            object_b: used_id,
+                            object_b: used_id.to_item_id(),
                         },
                     );
                 }
@@ -375,7 +373,11 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !referenced_by_entry.references().0.contains(id) {
+                if !referenced_by_entry
+                    .references()
+                    .0
+                    .contains(&id.to_global_id())
+                {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUses {
                             object_a: *id,
@@ -392,7 +394,7 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !used_by_entry.uses().contains(id) {
+                if !used_by_entry.uses().contains(&id.to_global_id()) {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUses {
                             object_a: *id,
@@ -447,13 +449,13 @@ impl CatalogState {
                         item_inconsistencies.push(ItemInconsistency::NonExistentItem {
                             db_id: *db_id,
                             schema_id: schema.id,
-                            item_id: *item_id,
+                            item_id: item_id.to_global_id(),
                         });
                         continue;
                     };
                     if item_name != &entry.name().item {
                         item_inconsistencies.push(ItemInconsistency::ItemNameMismatch {
-                            item_id: *item_id,
+                            item_id: item_id.to_global_id(),
                             map_name: item_name.clone(),
                             entry_name: entry.name().clone(),
                         });
@@ -596,7 +598,7 @@ enum InternalFieldsInconsistency {
 enum RoleInconsistency {
     Database(DatabaseId, RoleId),
     Schema(SchemaId, RoleId),
-    Entry(GlobalId, RoleId),
+    Entry(CatalogItemId, RoleId),
     Cluster(ClusterId, RoleId),
     ClusterReplica(ClusterId, ReplicaId, RoleId),
     DefaultPrivilege(DefaultPrivilegeObject),
@@ -626,23 +628,23 @@ enum CommentInconsistency {
 enum ObjectDependencyInconsistency {
     /// Object A uses Object B, but Object B does not exist.
     MissingUses {
-        object_a: GlobalId,
-        object_b: GlobalId,
+        object_a: CatalogItemId,
+        object_b: CatalogItemId,
     },
     /// Object A is used by Object B, but Object B does not exist.
     MissingUsedBy {
-        object_a: GlobalId,
-        object_b: GlobalId,
+        object_a: CatalogItemId,
+        object_b: CatalogItemId,
     },
     /// Object A uses Object B, but Object B does not record that it is used by Object A.
     InconsistentUsedBy {
-        object_a: GlobalId,
-        object_b: GlobalId,
+        object_a: CatalogItemId,
+        object_b: CatalogItemId,
     },
     /// Object B is used by Object A, but Object B does not record that is uses Object A.
     InconsistentUses {
-        object_a: GlobalId,
-        object_b: GlobalId,
+        object_a: CatalogItemId,
+        object_b: CatalogItemId,
     },
 }
 

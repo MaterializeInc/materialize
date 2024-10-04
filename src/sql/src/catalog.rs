@@ -29,7 +29,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, GlobalId, RelationDesc};
+use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
@@ -237,12 +237,12 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn get_system_type(&self, name: &str) -> &dyn CatalogItem;
 
     /// Gets an item by its ID.
-    fn try_get_item(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
+    fn try_get_item(&self, id: &CatalogItemId) -> Option<&dyn CatalogItem>;
 
     /// Gets an item by its ID.
     ///
     /// Panics if `id` does not specify a valid item.
-    fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem;
+    fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem;
 
     /// Gets all items.
     fn get_items(&self) -> Vec<&dyn CatalogItem>;
@@ -329,7 +329,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
     /// earlier in the list than `id`. This is particularly userful for the order to drop
     /// objects.
-    fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId>;
+    fn item_dependents(&self, id: CatalogItemId) -> Vec<ObjectId>;
 
     /// Returns all possible privileges associated with an object type.
     fn all_object_privileges(&self, object_type: SystemObjectType) -> AclMode;
@@ -419,7 +419,7 @@ pub trait CatalogSchema {
     fn has_items(&self) -> bool;
 
     /// Returns the IDs of the items in the schema.
-    fn item_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_>;
+    fn item_ids(&self) -> Box<dyn Iterator<Item = CatalogItemId> + '_>;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
@@ -505,7 +505,7 @@ pub trait CatalogCluster<'a> {
     fn id(&self) -> ClusterId;
 
     /// Returns the objects that are bound to this cluster.
-    fn bound_objects(&self) -> &BTreeSet<GlobalId>;
+    fn bound_objects(&self) -> &BTreeSet<CatalogItemId>;
 
     /// Returns the replicas of the cluster as a map from replica name to
     /// replica ID.
@@ -608,10 +608,10 @@ pub trait CatalogItem {
     fn uses(&self) -> BTreeSet<GlobalId>;
 
     /// Returns the IDs of the catalog items that directly reference this catalog item.
-    fn referenced_by(&self) -> &[GlobalId];
+    fn referenced_by(&self) -> &[CatalogItemId];
 
     /// Returns the IDs of the catalog items that depend upon this catalog item.
-    fn used_by(&self) -> &[GlobalId];
+    fn used_by(&self) -> &[CatalogItemId];
 
     /// Reports whether this catalog entry is a subsource and, if it is, the
     /// ingestion it is an export of, as well as the item it exports.
@@ -807,7 +807,7 @@ impl TypeReference for NameReference {
 pub struct IdReference;
 
 impl TypeReference for IdReference {
-    type Reference = GlobalId;
+    type Reference = CatalogItemId;
 }
 
 /// A type stored in the catalog.

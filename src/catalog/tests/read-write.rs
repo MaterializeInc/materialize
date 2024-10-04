@@ -22,7 +22,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistClient;
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 
@@ -199,7 +199,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
     let state_builder = state_builder.with_default_deploy_generation();
     let items = [
         Item {
-            id: GlobalId::User(100),
+            id: CatalogItemId::User(100),
             oid: 20_000,
             schema_id: SchemaId::User(1),
             name: "foo".to_string(),
@@ -208,7 +208,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             privileges: vec![],
         },
         Item {
-            id: GlobalId::User(200),
+            id: CatalogItemId::User(200),
             oid: 20_001,
             schema_id: SchemaId::User(1),
             name: "bar".to_string(),

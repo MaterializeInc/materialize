@@ -126,7 +126,7 @@ fn plan_show_create_item(
     }
     let create_sql = humanize_sql_for_show_create(scx.catalog, item.id(), item.create_sql())?;
     Ok(ShowCreatePlan {
-        id: ObjectId::Item(item.id()),
+        id: ObjectId::from(item.id()),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
     })
 }
@@ -994,7 +994,7 @@ fn humanize_sql_for_show_create(
             // Collect all current subsource references.
             let mut curr_references: BTreeMap<UnresolvedItemName, Vec<UnresolvedItemName>> =
                 catalog
-                    .get_item(&id)
+                    .get_item(&id.into())
                     .used_by()
                     .into_iter()
                     .filter_map(|subsource| {

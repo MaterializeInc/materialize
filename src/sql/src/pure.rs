@@ -326,7 +326,7 @@ pub(crate) fn add_materialize_comments(
 ) -> Result<(), PlanError> {
     // updating avro format with comments so that they are frozen in the `create_sql`
     let from_id = stmt.from.item_id();
-    let from = catalog.get_item(from_id);
+    let from = catalog.get_item(&from_id.into());
     let object_ids = from.references().0.clone().into_iter().chain_one(from.id());
 
     // add comments to the avro doc comments
@@ -353,7 +353,7 @@ pub(crate) fn add_materialize_comments(
 
         // Adding existing comments if not already provided by user
         for object_id in object_ids {
-            let item = catalog.get_item(&object_id);
+            let item = catalog.get_item(&object_id.into());
             let full_name = catalog.resolve_full_name(item.name());
             let full_resolved_name = ResolvedItemName::Item {
                 id: object_id,
