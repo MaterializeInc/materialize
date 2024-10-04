@@ -7,5 +7,9 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-{{ config(materialized='source', cluster='qa_canary_environment_storage') }}
-FROM MYSQL CONNECTION mysql
+-- depends_on: {{ ref('tpch') }}
+{{ config(
+    materialized='source_table'
+) }}
+FROM SOURCE {{ ref('tpch') }}
+(REFERENCE "lineitem")

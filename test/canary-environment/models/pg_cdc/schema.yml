@@ -16,14 +16,14 @@ sources:
       - name: pg_cdc_progress
         tests:
           - makes_progress
-      - name: people
+      - name: pg_people
         tests:
           - makes_progress
-      - name: relationships
+      - name: pg_relationships
         tests:
           - makes_progress
 
 models:
-    - name: wmr
+    - name: pg_wmr
       tests:
         - makes_progress

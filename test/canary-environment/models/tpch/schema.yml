@@ -16,16 +16,11 @@ sources:
       - name: tpch_progress
         tests:
           - makes_progress
-      - name: customer
-      - name: lineitem
-      - name: nation
-      - name: orders
+      - name: tpch_customer
+      - name: tpch_lineitem
+      - name: tpch_orders
         tests:
           - makes_progress
-      - name: part
-      - name: partsupp
-      - name: region
-      - name: supplier
 
 models:
     - name: tpch_q01

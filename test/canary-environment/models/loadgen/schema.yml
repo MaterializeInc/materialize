@@ -21,6 +21,9 @@ sources:
           - makes_progress
       - name: product
       - name: product_category
+      - name: product_tbl
+      - name: product_category_tbl
+      - name: sales_tbl
 
 
 models:
