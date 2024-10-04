@@ -194,13 +194,6 @@ name = "Tools and integrations"
 weight= 25
 
 [[menu.main]]
-identifier = "tools-and-integrations"
-name = "Overview"
-parent = "integrations"
-url = "/integrations"
-weight = 5
-
-[[menu.main]]
 identifier = "cli-reference"
 name = "Command reference"
 parent = "cli"
