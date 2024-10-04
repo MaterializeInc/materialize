@@ -28,18 +28,17 @@ use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::{
     soft_assert_eq_no_log, soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_no_log,
-    soft_assert_or_log, soft_panic_or_log,
+    soft_assert_or_log,
 };
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
 use mz_persist_client::cli::admin::{CATALOG_FORCE_COMPACTION_FUEL, CATALOG_FORCE_COMPACTION_WAIT};
-use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{RustType, TryFromProtoError};
-use mz_repr::{Diff, RelationDesc, ScalarType};
+use mz_repr::Diff;
 use mz_storage_types::sources::SourceData;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -62,9 +61,9 @@ use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
-    initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
-    OpenableDurableCatalogState, ReadOnlyDurableCatalogState, Transaction,
-    CATALOG_CONTENT_VERSION_KEY,
+    initialize, persist_desc, BootstrapArgs, CatalogError, DurableCatalogError,
+    DurableCatalogState, Epoch, OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
+    Transaction, CATALOG_CONTENT_VERSION_KEY,
 };
 use crate::memory;
 
@@ -357,8 +356,6 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
 pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// The [`Mode`] that this catalog was opened in.
     pub(crate) mode: Mode,
-    /// Since handle to control compaction.
-    since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
     write_handle: WriteHandle<SourceData, (), Timestamp, Diff>,
     /// Listener to catalog changes.
@@ -501,27 +498,6 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             return Err(e.into());
         }
 
-        // Lag the shard's upper by 1 to keep it readable.
-        let downgrade_to = Antichain::from_elem(next_upper.saturating_sub(1));
-
-        // The since handle gives us the ability to fence out other downgraders using an opaque token.
-        // (See the method documentation for details.)
-        // That's not needed here, so we the since handle's opaque token to avoid any comparison
-        // failures.
-        let opaque = *self.since_handle.opaque();
-        let downgrade = self
-            .since_handle
-            .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
-            .await;
-
-        match downgrade {
-            None => {}
-            Some(Err(e)) => soft_panic_or_log!("found opaque value {e}, but expected {opaque}"),
-            Some(Ok(updated)) => soft_assert_or_log!(
-                updated == downgrade_to,
-                "updated bound should match expected"
-            ),
-        }
         self.sync(next_upper).await?;
         Ok(next_upper)
     }
@@ -703,7 +679,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         self.persist_client
             .open_leased_reader(
                 self.shard_id,
-                Arc::new(desc()),
+                Arc::new(persist_desc()),
                 Arc::new(UnitSchema::default()),
                 Diagnostics {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
@@ -974,23 +950,10 @@ impl UnopenedPersistCatalogState {
             }
         }
 
-        let since_handle = persist_client
-            .open_critical_since(
-                catalog_shard_id,
-                // TODO: We may need to use a different critical reader
-                // id for this if we want to be able to introspect it via SQL.
-                PersistClient::CONTROLLER_CRITICAL_SINCE,
-                Diagnostics {
-                    shard_name: CATALOG_SHARD_NAME.to_string(),
-                    handle_purpose: "durable catalog state critical since".to_string(),
-                },
-            )
-            .await
-            .expect("invalid usage");
         let (mut write_handle, mut read_handle) = persist_client
             .open(
                 catalog_shard_id,
-                Arc::new(desc()),
+                Arc::new(persist_desc()),
                 Arc::new(UnitSchema::default()),
                 Diagnostics {
                     shard_name: CATALOG_SHARD_NAME.to_string(),
@@ -1029,7 +992,6 @@ impl UnopenedPersistCatalogState {
         let mut handle = UnopenedPersistCatalogState {
             // Unopened catalogs are always writeable until they're opened in an explicit mode.
             mode: Mode::Writable,
-            since_handle,
             write_handle,
             listen,
             persist_client,
@@ -1159,7 +1121,6 @@ impl UnopenedPersistCatalogState {
         );
         let mut catalog = PersistCatalogState {
             mode: self.mode,
-            since_handle: self.since_handle,
             write_handle: self.write_handle,
             listen: self.listen,
             persist_client: self.persist_client,
@@ -1223,11 +1184,12 @@ impl UnopenedPersistCatalogState {
             catalog
                 .increment_catalog_upgrade_shard_version(self.update_applier.organization_id)
                 .await;
+
             let write_handle = catalog
                 .persist_client
                 .open_writer::<SourceData, (), Timestamp, i64>(
                     catalog.write_handle.shard_id(),
-                    Arc::new(desc()),
+                    Arc::new(persist_desc()),
                     Arc::new(UnitSchema::default()),
                     Diagnostics {
                         shard_name: CATALOG_SHARD_NAME.to_string(),
@@ -1694,6 +1656,10 @@ impl DurableCatalogState for PersistCatalogState {
         self.sync_to_current_upper().await?;
         Ok(())
     }
+
+    fn shard_id(&self) -> ShardId {
+        self.shard_id
+    }
 }
 
 /// Deterministically generate a builtin table migration shard ID for the given
@@ -1708,14 +1674,6 @@ fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
     soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
     let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");
     ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
-}
-
-/// Returns the schema of the `Row`s/`SourceData`s stored in the persist
-/// shard backing the catalog.
-fn desc() -> RelationDesc {
-    RelationDesc::builder()
-        .with_column("data", ScalarType::Jsonb.nullable(false))
-        .finish()
 }
 
 /// Generates a timestamp for reading from `read_handle` that is as fresh as possible, given

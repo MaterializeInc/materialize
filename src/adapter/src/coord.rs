@@ -103,7 +103,7 @@ use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, Cluste
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, TableDataSource,
+    DataSourceDesc, DataSourceIntrospectionDesc, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::controller::error::InstanceMissing;
@@ -2448,8 +2448,11 @@ impl Coordinator {
                     (DataSource::Webhook, Some(source_status_collection_id))
                 }
                 DataSourceDesc::Progress => (DataSource::Progress, None),
-                DataSourceDesc::Introspection(introspection) => {
-                    (DataSource::Introspection(introspection), None)
+                DataSourceDesc::Introspection(DataSourceIntrospectionDesc::Storage(
+                    introspection,
+                )) => (DataSource::Introspection(introspection), None),
+                DataSourceDesc::Introspection(DataSourceIntrospectionDesc::Catalog) => {
+                    (DataSource::Other, None)
                 }
             };
             CollectionDescription {

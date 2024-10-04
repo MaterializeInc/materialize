@@ -1391,6 +1391,15 @@ where
         }
 
         let reader_state = self.critical_reader(reader_id);
+
+        // One-time migration of catalog shard from i64 opaques to PersistEpoch
+        // opaques.
+        //
+        // TODO(benesch): remove in v0.121.
+        let initial_i64_opaque = OpaqueState(<i64 as Codec64>::encode(&<i64 as Opaque>::initial()));
+        if reader_state.opaque_codec == "i64" && reader_state.opaque == initial_i64_opaque {
+            reader_state.opaque_codec = "PersistEpoch".into();
+        }
         assert_eq!(reader_state.opaque_codec, O::codec_name());
 
         if &O::decode(reader_state.opaque.0) != expected_opaque {
