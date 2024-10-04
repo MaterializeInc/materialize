@@ -444,6 +444,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--ignore-other-tag-missing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Don't run anything if 'OTHER' tag is missing",
+    )
+
+    parser.add_argument(
         "--other-size", metavar="N", type=int, default=4, help="SIZE to use for 'OTHER'"
     )
 
@@ -514,7 +521,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         reports.append(report)
 
         for scenario_class in scenario_classes_scheduled_to_run:
-            scenario_result = run_one_scenario(c, scenario_class, args)
+            try:
+                scenario_result = run_one_scenario(c, scenario_class, args)
+            except RuntimeError as e:
+                if (
+                    "No image found for commit hash" in str(e)
+                    and args.ignore_other_tag_missing
+                ):
+                    print(
+                        "Missing image for base, which can happen when main branch fails to build, ignoring"
+                    )
+                    return
+                raise e
 
             if scenario_result.is_empty():
                 continue
