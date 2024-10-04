@@ -78,7 +78,7 @@ impl fmt::Display for CastRecordToString {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastRecord1ToRecord2 {
     pub return_ty: ScalarType,
-    pub cast_exprs: Vec<MirScalarExpr>,
+    pub cast_exprs: Box<[MirScalarExpr]>,
 }
 
 impl LazyUnaryFunc for CastRecord1ToRecord2 {

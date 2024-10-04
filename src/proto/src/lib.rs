@@ -345,10 +345,21 @@ where
     }
 
     fn from_proto(proto: Vec<P>) -> Result<Self, TryFromProtoError> {
-        proto
-            .into_iter()
-            .map(R::from_proto)
-            .collect::<Result<Vec<_>, _>>()
+        proto.into_iter().map(R::from_proto).collect()
+    }
+}
+
+/// Blanket implementation for `Box<[R]>` where `R` is a [`RustType`].
+impl<R, P> RustType<Vec<P>> for Box<[R]>
+where
+    R: RustType<P>,
+{
+    fn into_proto(&self) -> Vec<P> {
+        self.iter().map(R::into_proto).collect()
+    }
+
+    fn from_proto(proto: Vec<P>) -> Result<Self, TryFromProtoError> {
+        proto.into_iter().map(R::from_proto).collect()
     }
 }
 

@@ -709,7 +709,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl
                     .iter()
                     .zip_eq(to_type.unwrap_record_element_type())
                     .map(|(f, t)| plan_hypothetical_cast(ecx, ccx, f, t))
-                    .collect::<Option<Vec<_>>>()?;
+                    .collect::<Option<Box<_>>>()?;
                 let to = to_type.clone();
                 Some(|e: HirScalarExpr| e.call_unary(CastRecord1ToRecord2(func::CastRecord1ToRecord2 { return_ty: to, cast_exprs })))
             }),
