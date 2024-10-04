@@ -1954,9 +1954,6 @@ class StartupTpch(Scenario):
         True  # Can not scale to 100s of objects, so --size=+N will have no effect
     )
 
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def init(self) -> Action:
         # We need to massage the SQL statements so that Testdrive doesn't get confused.
         comment = re.compile(r"--.*?\n", re.IGNORECASE)
