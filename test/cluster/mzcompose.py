@@ -4830,3 +4830,40 @@ def workflow_test_graceful_reconfigure(
             port=6877,
             user="mz_system",
         )
+
+
+def workflow_crash_on_replica_expiration(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests that clusterd crashes when a replica is set to expire
+    """
+    c.down(destroy_volumes=True)
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd1")
+        c.sql(
+            """
+            ALTER SYSTEM SET compute_replica_expiration = 10000;
+
+            DROP CLUSTER IF EXISTS cluster1 CASCADE;
+            DROP TABLE IF EXISTS t CASCADE;
+
+            CREATE CLUSTER cluster1 ( SIZE = '1');
+            SET CLUSTER TO cluster1;
+
+            CREATE TABLE t (x int);
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+            SELECT mz_unsafe.mz_sleep(12);
+            SELECT * FROM mv;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c1 = c.invoke("logs", "clusterd1", capture=True)
+        assert (
+            "replica expired" in c1.stdout
+        ), "unexpected success in crash-on-replica-expiration"

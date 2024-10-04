@@ -2182,3 +2182,48 @@ class SwapSchema(Scenario):
                 """
             )
         )
+
+
+class ReplicaExpiration(Scenario):
+    def init(self) -> list[Action]:
+        return [
+            TdAction(
+                """
+> CREATE TABLE events (
+    content TEXT,
+    event_ts TIMESTAMP
+  );
+> CREATE VIEW last_30_days AS
+  SELECT event_ts, content
+  FROM events
+  WHERE mz_now() <= event_ts + INTERVAL '30 days';
+
+> CREATE DEFAULT INDEX ON last_30_days
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            dedent(
+                f"""
+                > DELETE FROM events;
+
+                > SELECT COUNT(*) FROM last_30_days
+                0
+
+                > SELECT 1;
+                  /* A */
+                1
+
+                > INSERT INTO events SELECT concat('somelongstringthatdoesntmattermuchatallbutrequiresmemorytostoreXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX', x::text), now() FROM generate_series(1, {self.n()}) AS x
+
+                > SELECT COUNT(*) FROM last_30_days
+                {self.n()}
+
+                > SELECT 1;
+                  /* B */
+                1
+                """
+            )
+        )
