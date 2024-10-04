@@ -4337,27 +4337,29 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
 #[mz_ore::test]
 fn verify_base_eq_record_nullability() {
     let s1 = ScalarType::Record {
-        fields: vec![(
+        fields: [(
             "c".into(),
             ColumnType {
                 scalar_type: ScalarType::Bool,
                 nullable: true,
             },
-        )],
+        )]
+        .into(),
         custom_id: None,
     };
     let s2 = ScalarType::Record {
-        fields: vec![(
+        fields: [(
             "c".into(),
             ColumnType {
                 scalar_type: ScalarType::Bool,
                 nullable: false,
             },
-        )],
+        )]
+        .into(),
         custom_id: None,
     };
     let s3 = ScalarType::Record {
-        fields: vec![],
+        fields: [].into(),
         custom_id: None,
     };
     assert!(s1.base_eq(&s2));
