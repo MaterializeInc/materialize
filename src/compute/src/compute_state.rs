@@ -300,18 +300,21 @@ impl ComputeState {
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
 
-        if self.replica_expiration.is_none() {
-            let offset = COMPUTE_REPLICA_EXPIRATION.get(&self.worker_config);
-            if !offset.is_zero() {
-                let now = mz_ore::now::SYSTEM_TIME.clone()();
-                let offset: EpochMillis = offset
-                    .as_millis()
-                    .try_into()
-                    .expect("Duration did not fit within u64");
-                let replica_expiration = Timestamp::new(now + offset);
-                info!("replica will expire at {:?}", replica_expiration);
-                self.replica_expiration = Some(replica_expiration)
+        let offset = COMPUTE_REPLICA_EXPIRATION.get(&self.worker_config);
+        if offset.is_zero() {
+            if self.replica_expiration.is_some() {
+                info!("replica expiration disabled");
+                self.replica_expiration = None;
             }
+        } else {
+            let now = mz_ore::now::SYSTEM_TIME.clone()();
+            let offset: EpochMillis = offset
+                .as_millis()
+                .try_into()
+                .expect("Duration did not fit within u64");
+            let replica_expiration = Timestamp::new(now + offset);
+            info!("replica will expire at {:?}", replica_expiration);
+            self.replica_expiration = Some(replica_expiration)
         }
     }
 
