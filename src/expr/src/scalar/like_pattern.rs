@@ -406,10 +406,9 @@ fn build_regex(subpatterns: &[Subpattern], case_insensitive: bool) -> Result<Reg
     match Regex::new(r, case_insensitive) {
         Ok(regex) => Ok(regex),
         Err(regex::Error::CompiledTooBig(_)) => Err(EvalError::LikePatternTooLong),
-        Err(e) => Err(EvalError::Internal(format!(
-            "build_regex produced invalid regex: {}",
-            e
-        ))),
+        Err(e) => Err(EvalError::Internal(
+            format!("build_regex produced invalid regex: {}", e).into(),
+        )),
     }
 }
 

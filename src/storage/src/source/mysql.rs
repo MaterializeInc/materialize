@@ -286,27 +286,22 @@ pub enum DefiniteError {
 
 impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
+        let m = err.to_string().into();
         DataflowError::SourceError(Box::new(SourceError {
             error: match &err {
-                DefiniteError::ValueDecodeError(_) => SourceErrorDetails::Other(err.to_string()),
-                DefiniteError::TableTruncated(_) => SourceErrorDetails::Other(err.to_string()),
-                DefiniteError::TableDropped(_) => SourceErrorDetails::Other(err.to_string()),
-                DefiniteError::IncompatibleSchema(_) => SourceErrorDetails::Other(err.to_string()),
-                DefiniteError::UnsupportedGtidState(_) => {
-                    SourceErrorDetails::Other(err.to_string())
-                }
+                DefiniteError::ValueDecodeError(_) => SourceErrorDetails::Other(m),
+                DefiniteError::TableTruncated(_) => SourceErrorDetails::Other(m),
+                DefiniteError::TableDropped(_) => SourceErrorDetails::Other(m),
+                DefiniteError::IncompatibleSchema(_) => SourceErrorDetails::Other(m),
+                DefiniteError::UnsupportedGtidState(_) => SourceErrorDetails::Other(m),
                 DefiniteError::BinlogGtidMonotonicityViolation(_, _) => {
-                    SourceErrorDetails::Other(err.to_string())
+                    SourceErrorDetails::Other(m)
                 }
-                DefiniteError::BinlogNotAvailable => {
-                    SourceErrorDetails::Initialization(err.to_string())
-                }
+                DefiniteError::BinlogNotAvailable => SourceErrorDetails::Initialization(m),
                 DefiniteError::BinlogMissingResumePoint(_, _) => {
-                    SourceErrorDetails::Initialization(err.to_string())
+                    SourceErrorDetails::Initialization(m)
                 }
-                DefiniteError::ServerConfigurationError(_) => {
-                    SourceErrorDetails::Initialization(err.to_string())
-                }
+                DefiniteError::ServerConfigurationError(_) => SourceErrorDetails::Initialization(m),
             },
         }))
     }

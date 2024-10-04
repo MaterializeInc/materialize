@@ -628,7 +628,7 @@ fn raise_key_value_errors(
         (None, None) => None,
         // TODO(petrosagg): these errors would be better grouped under an EnvelopeError enum
         _ => Some(Err(DataflowError::from(EnvelopeError::Flat(
-            "Value not present for message".to_string(),
+            "Value not present for message".into(),
         )))),
     }
 }

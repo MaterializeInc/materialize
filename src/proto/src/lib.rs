@@ -549,6 +549,15 @@ impl<'a> RustType<String> for Cow<'a, str> {
     }
 }
 
+impl RustType<String> for Box<str> {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        Ok(proto.into())
+    }
+}
+
 /// The symmetric counterpart of [`RustType`], similar to
 /// what [`Into`] is to [`From`].
 ///

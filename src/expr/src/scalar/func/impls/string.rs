@@ -553,7 +553,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
         let s = format_str_trim(a, self.length, self.fail_on_len).map_err(|_| {
             assert!(self.fail_on_len);
             EvalError::StringValueTooLong {
-                target_type: "character".to_string(),
+                target_type: "character".into(),
                 length: usize::cast_from(self.length.unwrap().into_u32()),
             }
         })?;
@@ -677,7 +677,7 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
             mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
                 assert!(self.fail_on_len);
                 EvalError::StringValueTooLong {
-                    target_type: "character varying".to_string(),
+                    target_type: "character varying".into(),
                     length: usize::cast_from(self.length.unwrap().into_u32()),
                 }
             })?;
@@ -842,7 +842,7 @@ sqlfunc!(
     #[sqlname = "char_length"]
     fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.chars().count();
-        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string())))
+        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 );
 
@@ -850,7 +850,7 @@ sqlfunc!(
     #[sqlname = "bit_length"]
     fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.as_bytes().len() * 8;
-        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string())))
+        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 );
 
@@ -858,7 +858,7 @@ sqlfunc!(
     #[sqlname = "octet_length"]
     fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.as_bytes().len();
-        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string())))
+        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
 );
 
@@ -1069,8 +1069,8 @@ impl LazyUnaryFunc for QuoteIdent {
         }
         let v = d.unwrap_str();
         let i = mz_sql_parser::ast::Ident::new(v).map_err(|err| EvalError::InvalidIdentifier {
-            ident: v.to_string(),
-            detail: Some(err.to_string()),
+            ident: v.into(),
+            detail: Some(err.to_string().into()),
         })?;
         let r = temp_storage.push_string(i.to_string());
 
