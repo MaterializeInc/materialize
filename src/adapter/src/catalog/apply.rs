@@ -733,6 +733,9 @@ impl CatalogState {
                 //
                 // TODO: move the catalog shard to the EpochMillis timeline.
                 if matches!(coll.data_source, DataSourceIntrospectionDesc::Catalog) {
+                    // NOTE(benesch): this logical compaction window determines
+                    // the read policy not just for introspection queries but
+                    // also for bootstrapping the catalog itself.
                     custom_logical_compaction_window =
                         Some(CompactionWindow::Duration(Timestamp::new(1)));
                     timeline = Timeline::External("mz_catalog".into());
