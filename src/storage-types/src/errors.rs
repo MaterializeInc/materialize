@@ -1159,7 +1159,7 @@ mod tests {
     #[mz_ore::test]
     fn test_decode_error_codec_roundtrip() -> Result<(), String> {
         let original = DecodeError {
-            kind: DecodeErrorKind::Text("ciao".to_string()),
+            kind: DecodeErrorKind::Text("ciao".into()),
             raw: b"oaic".to_vec(),
         };
         let mut encoded = Vec::new();
