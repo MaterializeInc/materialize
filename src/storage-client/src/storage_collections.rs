@@ -61,7 +61,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
 
 use crate::controller::{
-    CollectionDescription, DataSource, DataSourceOther, PersistEpoch, StorageMetadata, StorageTxn,
+    CollectionDescription, DataSource, PersistEpoch, StorageMetadata, StorageTxn,
 };
 use crate::storage_collections::metrics::{ShardIdSet, StorageCollectionsMetrics};
 
@@ -809,9 +809,9 @@ where
         let dependencies = match &data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
-            | DataSource::Other(DataSourceOther::TableWrites)
+            | DataSource::Table
             | DataSource::Progress
-            | DataSource::Other(DataSourceOther::Compute) => Vec::new(),
+            | DataSource::Other => Vec::new(),
             DataSource::IngestionExport { ingestion_id, .. } => {
                 // Ingestion exports depend on their primary source's remap
                 // collection.
@@ -1473,8 +1473,8 @@ where
                     | DataSource::Webhook
                     | DataSource::Ingestion(_)
                     | DataSource::Progress
-                    | DataSource::Other(DataSourceOther::Compute) => {},
-                    DataSource::Other(DataSourceOther::TableWrites) => {
+                    | DataSource::Other => {},
+                    DataSource::Table => {
                         let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
                         if since_handle.since().elements() == &[T::minimum()] && !migrated_storage_collections.contains(&id) {
                             debug!("advancing {} to initial since of {:?}", id, register_ts);
@@ -1632,7 +1632,7 @@ where
 
                     self_collections.insert(id, collection_state);
                 }
-                DataSource::Other(DataSourceOther::TableWrites) => {
+                DataSource::Table => {
                     // See comment on self.initial_txn_upper on why we're doing
                     // this.
                     if is_in_txns(id, &metadata)
@@ -1652,7 +1652,7 @@ where
                     }
                     self_collections.insert(id, collection_state);
                 }
-                DataSource::Progress | DataSource::Other(DataSourceOther::Compute) => {
+                DataSource::Progress | DataSource::Other => {
                     self_collections.insert(id, collection_state);
                 }
                 DataSource::Ingestion(_) => {
@@ -1745,10 +1745,7 @@ where
         // TODO(alter_table): To support changing the `RelationDesc` of sources
         // we'll need to cancel the currently running `BackgroundCmd` that
         // fetches recent uppers. See `BackgroundCmd::Register`.
-        if !matches!(
-            &collection.description.data_source,
-            DataSource::Other(DataSourceOther::TableWrites)
-        ) {
+        if !matches!(&collection.description.data_source, DataSource::Table) {
             return Err(StorageError::IdentifierInvalid(table_id));
         }
 

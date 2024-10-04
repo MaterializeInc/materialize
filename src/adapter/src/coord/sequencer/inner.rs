@@ -81,9 +81,7 @@ use mz_sql_parser::ast::{
     WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::{
-    CollectionDescription, DataSource, DataSourceOther, ExportDescription,
-};
+use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::stats::RelationPartStats;
@@ -969,10 +967,7 @@ impl Coordinator {
                             coord.set_statement_execution_timestamp(id, register_ts);
                         }
 
-                        let collection_desc = CollectionDescription::from_desc(
-                            table.desc.clone(),
-                            DataSourceOther::TableWrites,
-                        );
+                        let collection_desc = CollectionDescription::for_table(table.desc.clone());
                         let storage_metadata = coord.catalog.state().storage_metadata();
                         coord
                             .controller

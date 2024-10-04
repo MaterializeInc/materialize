@@ -51,7 +51,7 @@ use mz_storage_client::client::{
     StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
-    BoxFuture, CollectionDescription, DataSource, DataSourceOther, ExportDescription, ExportState,
+    BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
     IntrospectionType, MonotonicAppender, PersistEpoch, Response, SnapshotCursor,
     StorageController, StorageMetadata, StorageTxn, StorageWriteOp,
 };
@@ -728,12 +728,12 @@ where
                     self.collections.insert(id, collection_state);
                     new_source_statistic_entries.insert(id);
                 }
-                DataSource::Other(DataSourceOther::TableWrites) => {
+                DataSource::Table => {
                     debug!(data_source = ?collection_state.data_source, meta = ?metadata, "registering {} with persist table worker", id);
                     self.collections.insert(id, collection_state);
                     table_registers.push((id, write));
                 }
-                DataSource::Progress | DataSource::Other(DataSourceOther::Compute) => {
+                DataSource::Progress | DataSource::Other => {
                     debug!(data_source = ?collection_state.data_source, meta = ?metadata, "not registering {} with a controller persist worker", id);
                     self.collections.insert(id, collection_state);
                 }
@@ -827,9 +827,7 @@ where
                 DataSource::IngestionExport { .. } => unreachable!(
                     "ingestion exports do not execute directly, but instead schedule their source to be re-executed"
                 ),
-                DataSource::Introspection(_) => {}
-                DataSource::Webhook => {}
-                DataSource::Progress | DataSource::Other(_) => {}
+                DataSource::Introspection(_) | DataSource::Webhook | DataSource::Table | DataSource::Progress | DataSource::Other => {}
             };
         }
 
@@ -963,10 +961,7 @@ where
             let collection = collections
                 .get_mut(&table_id)
                 .ok_or(StorageError::IdentifierMissing(table_id))?;
-            if !matches!(
-                collection.data_source,
-                DataSource::Other(DataSourceOther::TableWrites)
-            ) {
+            if !matches!(collection.data_source, DataSource::Other) {
                 return Err(StorageError::IdentifierInvalid(table_id));
             }
 
@@ -1313,7 +1308,7 @@ where
         let (table_write_ids, data_source_ids): (Vec<_>, Vec<_>) = identifiers
             .into_iter()
             .partition(|id| match self.collections[id].data_source {
-                DataSource::Other(DataSourceOther::TableWrites) => true,
+                DataSource::Table => true,
                 DataSource::IngestionExport { .. } => false,
                 _ => panic!("identifier is not a table: {}", id),
             });
@@ -1374,7 +1369,7 @@ where
                     //
                     // We can immediately compact them, because they don't
                     // interact with clusterd.
-                    DataSource::Webhook | DataSource::Other(DataSourceOther::TableWrites) => {
+                    DataSource::Webhook | DataSource::Table => {
                         let pending_compaction_command = PendingCompactionCommand {
                             id: *id,
                             read_frontier: Antichain::new(),
@@ -1424,9 +1419,7 @@ where
                         // same as for the "main" ingestion.
                         ingestions_to_drop.insert(id);
                     }
-                    DataSource::Other(_) | DataSource::Introspection(_) | DataSource::Progress => {
-                        ()
-                    }
+                    DataSource::Other | DataSource::Introspection(_) | DataSource::Progress => (),
                 }
             }
         }
@@ -1848,7 +1841,7 @@ where
                     }
                 } else if let Some(collection) = self.collections.get(&id) {
                     match collection.data_source {
-                        DataSource::Other(DataSourceOther::TableWrites) => {
+                        DataSource::Table => {
                             pending_collection_drops.push(id);
 
                             // Hacky, return an empty future so the IDs are finalized below.
@@ -1874,7 +1867,7 @@ where
                         DataSource::IngestionExport { .. } => (),
                         DataSource::Introspection(_) => (),
                         DataSource::Progress => (),
-                        DataSource::Other(_) => (),
+                        DataSource::Other => (),
                     }
                 } else if instance.is_some() && self.exports.contains_key(&id) {
                     pending_sink_drops.push(id);
@@ -2837,9 +2830,9 @@ where
         let dependency = match &data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
-            | DataSource::Other(DataSourceOther::TableWrites)
+            | DataSource::Table
             | DataSource::Progress
-            | DataSource::Other(DataSourceOther::Compute) => vec![],
+            | DataSource::Other => vec![],
             DataSource::IngestionExport { ingestion_id, .. } => {
                 // Ingestion exports depend on their primary source's remap
                 // collection.

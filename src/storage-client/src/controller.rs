@@ -117,19 +117,11 @@ pub enum DataSource {
     Progress,
     /// Data comes from external HTTP requests pushed to Materialize.
     Webhook,
+    /// The adapter layer appends timestamped data, i.e. it is a `TABLE`.
+    Table,
     /// This source's data is does not need to be managed by the storage
-    /// controller, e.g. it's a materialized view, table, or subsource.
-    Other(DataSourceOther),
-}
-
-/// Describes how data is written to a collection maintained outside of the
-/// storage controller.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DataSourceOther {
-    /// `environmentd` appends timestamped data, i.e. it is a `TABLE`.
-    TableWrites,
-    /// Compute maintains, i.e. it is a `MATERIALIZED VIEW`.
-    Compute,
+    /// controller, e.g. it's a materialized view or the catalog collection.
+    Other,
 }
 
 /// Describes a request to create a source.
@@ -147,10 +139,10 @@ pub struct CollectionDescription<T> {
 }
 
 impl<T> CollectionDescription<T> {
-    pub fn from_desc(desc: RelationDesc, source: DataSourceOther) -> Self {
+    pub fn for_table(desc: RelationDesc) -> Self {
         Self {
             desc,
-            data_source: DataSource::Other(source),
+            data_source: DataSource::Table,
             since: None,
             status_collection_id: None,
         }
@@ -741,8 +733,8 @@ impl DataSource {
     /// source using txn-wal.
     pub fn in_txns(&self) -> bool {
         match self {
-            DataSource::Other(DataSourceOther::TableWrites) => true,
-            DataSource::Other(DataSourceOther::Compute)
+            DataSource::Table => true,
+            DataSource::Other
             | DataSource::Ingestion(_)
             | DataSource::IngestionExport { .. }
             | DataSource::Introspection(_)

@@ -142,7 +142,7 @@ use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
 use mz_storage_client::client::TimestamplessUpdate;
-use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
+use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
@@ -2471,10 +2471,7 @@ impl Coordinator {
                     CatalogItem::Table(table) => {
                         let collection_desc = match &table.data_source {
                             TableDataSource::TableWrites { defaults: _ } => {
-                                CollectionDescription::from_desc(
-                                    table.desc.clone(),
-                                    DataSourceOther::TableWrites,
-                                )
+                                CollectionDescription::for_table(table.desc.clone())
                             }
                             TableDataSource::DataSource(data_source_desc) => {
                                 source_desc(data_source_desc, &table.desc)
@@ -2485,7 +2482,7 @@ impl Coordinator {
                     CatalogItem::MaterializedView(mv) => {
                         let collection_desc = CollectionDescription {
                             desc: mv.desc.clone(),
-                            data_source: DataSource::Other(DataSourceOther::Compute),
+                            data_source: DataSource::Other,
                             since: mv.initial_as_of.clone(),
                             status_collection_id: None,
                         };
@@ -2494,7 +2491,7 @@ impl Coordinator {
                     CatalogItem::ContinualTask(ct) => {
                         let collection_desc = CollectionDescription {
                             desc: ct.desc.clone(),
-                            data_source: DataSource::Other(DataSourceOther::Compute),
+                            data_source: DataSource::Other,
                             since: ct.initial_as_of.clone(),
                             status_collection_id: None,
                         };
