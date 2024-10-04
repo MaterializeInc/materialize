@@ -112,7 +112,7 @@ impl CatalogState {
     pub fn pack_depends_update(
         &self,
         depender: GlobalId,
-        dependee: GlobalId,
+        dependee: CatalogItemId,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         BuiltinTableUpdate {

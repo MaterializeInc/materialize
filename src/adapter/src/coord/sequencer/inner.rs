@@ -36,8 +36,8 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    Datum, Diff, GlobalId, IntoRowIterator, RelationVersionSelector, Row, RowArena, RowIterator,
-    Timestamp,
+    CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersionSelector, Row, RowArena,
+    RowIterator, Timestamp,
 };
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
@@ -423,7 +423,7 @@ impl Coordinator {
 
         Ok((
             Plan::AlterSource(mz_sql::plan::AlterSourcePlan {
-                id: source_id,
+                id: source_id.to_global_id(),
                 action,
             }),
             ResolvedIds(BTreeSet::new()),
@@ -458,7 +458,7 @@ impl Coordinator {
             .catalog()
             .resolve_full_name(&progress_plan.plan.name, None);
         let progress_subsource = ResolvedItemName::Item {
-            id: progress_plan.source_id,
+            id: progress_plan.source_id.to_item_id(),
             qualifiers: progress_plan.plan.name.qualifiers.clone(),
             full_name: progress_full_name,
             print_id: true,
@@ -485,7 +485,7 @@ impl Coordinator {
         let source_id = self.catalog_mut().allocate_user_id().await?;
         let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
         let of_source = ResolvedItemName::Item {
-            id: source_id,
+            id: source_id.to_item_id(),
             qualifiers: source_plan.name.qualifiers.clone(),
             full_name: source_full_name,
             print_id: true,
@@ -673,7 +673,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) {
         let connection_gid = match self.catalog_mut().allocate_user_id().await {
-            Ok(gid) => gid,
+            Ok(gid) => gid.to_item_id(),
             Err(err) => return ctx.retire(Err(err.into())),
         };
 
@@ -701,7 +701,7 @@ impl Coordinator {
                 let secret = key_set.to_bytes();
                 if let Err(err) = self
                     .secrets_controller
-                    .ensure(connection_gid.to_item_id(), &secret)
+                    .ensure(connection_gid, &secret)
                     .await
                 {
                     return ctx.retire(Err(err.into()));
@@ -726,7 +726,7 @@ impl Coordinator {
             let current_storage_parameters = self.controller.storage.config().clone();
             task::spawn(|| format!("validate_connection:{conn_id}"), async move {
                 let result = match connection
-                    .validate(connection_gid.to_item_id(), &current_storage_parameters)
+                    .validate(connection_gid, &current_storage_parameters)
                     .await
                 {
                     Ok(()) => Ok(plan),
@@ -771,12 +771,12 @@ impl Coordinator {
     pub(crate) async fn sequence_create_connection_stage_finish(
         &mut self,
         session: &mut Session,
-        connection_gid: GlobalId,
+        connection_gid: CatalogItemId,
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = vec![catalog::Op::CreateItem {
-            id: connection_gid,
+            id: connection_gid.to_global_id(),
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
@@ -803,7 +803,7 @@ impl Coordinator {
                                 }
                             };
                         if let Err(err) = cloud_resource_controller
-                            .ensure_vpc_endpoint(connection_gid.to_item_id(), spec)
+                            .ensure_vpc_endpoint(connection_gid, spec)
                             .await
                         {
                             tracing::warn!(?err, "failed to ensure vpc endpoint!");
@@ -2551,6 +2551,7 @@ impl Coordinator {
     ) {
         let mut source_ids = plan.selection.depends_on();
         source_ids.insert(plan.id);
+        let source_ids = source_ids.into_iter().map(|id| id.to_item_id()).collect();
         guard_write_critical_section!(self, ctx, Plan::ReadThenWrite(plan), source_ids);
 
         let plan::ReadThenWritePlan {
@@ -3176,7 +3177,7 @@ impl Coordinator {
 
         let plan_validity = PlanValidity::new(
             self.catalog().transient_revision(),
-            BTreeSet::from_iter([plan.sink.from]),
+            BTreeSet::from_iter([plan.sink.from.to_item_id()]),
             Some(plan.in_cluster),
             None,
             ctx.session().role_metadata().clone(),
@@ -3341,7 +3342,7 @@ impl Coordinator {
     async fn sequence_alter_connection_options(
         &mut self,
         mut ctx: ExecuteContext,
-        id: GlobalId,
+        id: CatalogItemId,
         set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<mz_sql::names::Aug>>>,
         drop_options: BTreeSet<ConnectionOptionName>,
         validate: bool,
@@ -3382,7 +3383,7 @@ impl Coordinator {
             // Open a new catalog, which we will use to re-plan our
             // statement with the desired config.
             let mut catalog = self.catalog().for_system_session();
-            catalog.mark_id_unresolvable_for_replanning(id);
+            catalog.mark_id_unresolvable_for_replanning(id.to_global_id());
 
             // Re-define our source in terms of the amended statement
             let plan = match mz_sql::plan::plan(
@@ -3445,10 +3446,7 @@ impl Coordinator {
                 || format!("validate_alter_connection:{conn_id}"),
                 async move {
                     let dependency_ids = conn.resolved_ids.0.clone();
-                    let result = match connection
-                        .validate(id.to_item_id(), &current_storage_parameters)
-                        .await
-                    {
+                    let result = match connection.validate(id, &current_storage_parameters).await {
                         Ok(()) => Ok(conn),
                         Err(err) => Err(err.into()),
                     };
@@ -3487,7 +3485,7 @@ impl Coordinator {
     pub(crate) async fn sequence_alter_connection_stage_finish(
         &mut self,
         session: &mut Session,
-        id: GlobalId,
+        id: CatalogItemId,
         connection: Connection,
     ) -> Result<ExecuteResponse, AdapterError> {
         match self.catalog.get_entry(&id).item() {
@@ -3495,14 +3493,14 @@ impl Coordinator {
                 curr_conn
                     .details
                     .to_connection()
-                    .alter_compatible(id.to_item_id(), &connection.details.to_connection())
+                    .alter_compatible(id, &connection.details.to_connection())
                     .map_err(StorageError::from)?;
             }
             _ => unreachable!("known to be a connection"),
         };
 
         let ops = vec![catalog::Op::UpdateItem {
-            id,
+            id: id.to_global_id(),
             name: self.catalog.get_entry(&id).name().clone(),
             to_item: CatalogItem::Connection(connection.clone()),
         }];
@@ -3518,7 +3516,7 @@ impl Coordinator {
                 self.cloud_resource_controller
                     .as_ref()
                     .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
-                    .ensure_vpc_endpoint(id.to_item_id(), spec)
+                    .ensure_vpc_endpoint(id, spec)
                     .await?;
             }
             _ => {}

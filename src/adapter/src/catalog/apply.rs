@@ -611,7 +611,7 @@ impl CatalogState {
             Builtin::Index(index) => {
                 let mut item = self
                     .parse_item(
-                        id.to_global_id(),
+                        id,
                         &index.create_sql(),
                         None,
                         index.is_retained_metrics_object,
@@ -743,7 +743,7 @@ impl CatalogState {
 
                 let item = self
                     .parse_item(
-                        id.to_global_id(),
+                        id,
                         &ct.create_sql(),
                         None,
                         false,
@@ -775,7 +775,7 @@ impl CatalogState {
             Builtin::Connection(connection) => {
                 let mut item = self
                     .parse_item(
-                        id.to_global_id(),
+                        id,
                         connection.sql,
                         None,
                         false,
@@ -895,11 +895,9 @@ impl CatalogState {
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
                         if retraction.create_sql() != create_sql {
-                            let item = self
-                                .deserialize_item(id.to_global_id(), &create_sql)
-                                .unwrap_or_else(|e| {
-                                    panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                                });
+                            let item = self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
+                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                            });
                             retraction.item = item;
                         }
                         retraction.id = id;
@@ -911,9 +909,8 @@ impl CatalogState {
                         retraction
                     }
                     None => {
-                        let catalog_item = self
-                            .deserialize_item(id.to_global_id(), &create_sql)
-                            .unwrap_or_else(|e| {
+                        let catalog_item =
+                            self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
                         CatalogEntry {
@@ -1200,24 +1197,25 @@ impl CatalogState {
         builtin_views: Vec<(&Builtin<NameReference>, GlobalId)>,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut handles = Vec::new();
-        let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<GlobalId>> = BTreeMap::new();
-        let mut awaiting_name_dependencies: BTreeMap<String, Vec<GlobalId>> = BTreeMap::new();
+        let mut awaiting_id_dependencies: BTreeMap<CatalogItemId, Vec<CatalogItemId>> =
+            BTreeMap::new();
+        let mut awaiting_name_dependencies: BTreeMap<String, Vec<CatalogItemId>> = BTreeMap::new();
         // Some errors are due to the implementation of casts or SQL functions that depend on some
         // view. Instead of figuring out the exact view dependency, delay these until the end.
         let mut awaiting_all = Vec::new();
         // Completed views, needed to avoid race conditions.
-        let mut completed_ids: BTreeSet<GlobalId> = BTreeSet::new();
+        let mut completed_ids: BTreeSet<CatalogItemId> = BTreeSet::new();
         let mut completed_names: BTreeSet<String> = BTreeSet::new();
         // Avoid some reference lifetime issues by not passing `builtin` into the spawned task.
-        let mut views: BTreeMap<GlobalId, &BuiltinView> =
+        let mut views: BTreeMap<CatalogItemId, &BuiltinView> =
             BTreeMap::from_iter(builtin_views.into_iter().map(|(builtin, id)| {
                 let Builtin::View(view) = builtin else {
                     unreachable!("handled elsewhere");
                 };
-                (id, *view)
+                (id.to_item_id(), *view)
             }));
         let ids: Vec<_> = views.keys().copied().collect();
-        let mut ready: VecDeque<GlobalId> = views.keys().cloned().collect();
+        let mut ready: VecDeque<CatalogItemId> = views.keys().cloned().collect();
         while !handles.is_empty() || !ready.is_empty() || !awaiting_all.is_empty() {
             if handles.is_empty() && ready.is_empty() {
                 // Enqueue the views that were waiting for all the others.
@@ -1270,7 +1268,7 @@ impl CatalogState {
                     acl_items.extend_from_slice(&view.access);
 
                     state.insert_item(
-                        id.to_item_id(),
+                        id,
                         view.oid,
                         qname,
                         item,
@@ -1307,7 +1305,7 @@ impl CatalogState {
                 // If we were missing a dependency, wait for it to be added.
                 Err(AdapterError::PlanError(plan::PlanError::Catalog(
                                                 SqlCatalogError::UnknownItem(missing_dep),
-                                            ))) => match GlobalId::from_str(&missing_dep) {
+                                            ))) => match CatalogItemId::from_str(&missing_dep) {
                     Ok(missing_dep) => {
                         if completed_ids.contains(&missing_dep) {
                             ready.push_back(id);
@@ -1353,7 +1351,7 @@ impl CatalogState {
         assert!(views.is_empty());
 
         ids.into_iter()
-            .flat_map(|id| state.pack_item_update(id.to_item_id(), 1))
+            .flat_map(|id| state.pack_item_update(id, 1))
             .collect()
     }
 
@@ -1370,7 +1368,7 @@ impl CatalogState {
         }
 
         for u in &entry.references().0 {
-            match self.entry_by_id.get_mut(&u.to_item_id()) {
+            match self.entry_by_id.get_mut(u) {
                 Some(metadata) => metadata.referenced_by.push(entry.id().into()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
@@ -1450,7 +1448,7 @@ impl CatalogState {
     fn drop_item(&mut self, id: CatalogItemId) -> CatalogEntry {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
         for u in &metadata.references().0 {
-            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u.to_item_id()) {
+            if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
                 dep_metadata
                     .referenced_by
                     .retain(|u| *u != metadata.item_id())
@@ -1543,7 +1541,7 @@ impl CatalogState {
                     &log.variant.index_by(),
                 ),
                 conn_id: None,
-                resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id])),
+                resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id.to_item_id()])),
                 cluster_id,
                 is_retained_metrics_object: false,
                 custom_logical_compaction_window: None,

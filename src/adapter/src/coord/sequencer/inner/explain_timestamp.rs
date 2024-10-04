@@ -98,9 +98,15 @@ impl Coordinator {
             .catalog()
             .resolve_target_cluster(target_cluster, session)?;
         let cluster_id = cluster.id;
+        let dependencies = plan
+            .raw_plan
+            .depends_on()
+            .into_iter()
+            .map(|id| id.to_item_id())
+            .collect();
         let validity = PlanValidity::new(
             self.catalog().transient_revision(),
-            plan.raw_plan.depends_on(),
+            dependencies,
             Some(cluster_id),
             None,
             session.role_metadata().clone(),
@@ -292,7 +298,7 @@ impl Coordinator {
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         let id_bundle = self
             .index_oracle(cluster_id)
-            .sufficient_collections(&source_ids);
+            .sufficient_collections(source_ids.iter().copied());
 
         let is_json = match format {
             ExplainFormat::Text => false,

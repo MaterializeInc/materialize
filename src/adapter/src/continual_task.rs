@@ -14,7 +14,7 @@ use std::sync::Arc;
 use mz_catalog::memory::objects::ContinualTask;
 use mz_expr::visit::Visit;
 use mz_expr::Id;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self, HirRelationExpr};
 use timely::progress::Antichain;
@@ -23,7 +23,7 @@ use crate::AdapterError;
 
 pub fn ct_item_from_plan(
     plan: plan::CreateContinualTaskPlan,
-    output_id: GlobalId,
+    output_id: CatalogItemId,
     resolved_ids: ResolvedIds,
 ) -> Result<ContinualTask, AdapterError> {
     let plan::CreateContinualTaskPlan {
@@ -48,7 +48,7 @@ pub fn ct_item_from_plan(
     if let Some(placeholder_id) = placeholder_id {
         raw_expr.visit_mut_post(&mut |expr| match expr {
             HirRelationExpr::Get { id, .. } if *id == Id::Local(placeholder_id) => {
-                *id = Id::Global(output_id);
+                *id = Id::Global(output_id.to_global_id());
             }
             _ => {}
         })?;

@@ -304,7 +304,7 @@ impl CatalogState {
             | CatalogItem::ContinualTask(_)) => {
                 // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
                 for id in &item.references().0 {
-                    self.introspection_dependencies_inner(*id, out);
+                    self.introspection_dependencies_inner(id.to_global_id(), out);
                 }
             }
             CatalogItem::Sink(sink) => self.introspection_dependencies_inner(sink.from, out),
@@ -503,7 +503,7 @@ impl CatalogState {
     /// Indicates whether the indicated item is considered stable or not.
     ///
     /// Only stable items can be used as dependencies of other catalog items.
-    fn is_stable(&self, id: GlobalId) -> bool {
+    fn is_stable(&self, id: CatalogItemId) -> bool {
         let spec = self.get_entry(&id).name().qualifiers.schema_spec;
         !self.is_unstable_schema_specifier(spec)
     }
@@ -781,7 +781,7 @@ impl CatalogState {
     /// Parses the given SQL string into a pair of [`CatalogItem`].
     pub(crate) fn deserialize_item(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         create_sql: &str,
     ) -> Result<CatalogItem, AdapterError> {
         self.parse_item(id, create_sql, None, false, None)
@@ -791,7 +791,7 @@ impl CatalogState {
     #[mz_ore::instrument]
     pub(crate) fn parse_item(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         create_sql: &str,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,

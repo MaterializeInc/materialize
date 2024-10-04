@@ -1994,7 +1994,7 @@ mod tests {
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
-    use mz_repr::{Datum, GlobalId, RelationType, RowArena, ScalarType, Timestamp};
+    use mz_repr::{CatalogItemId, Datum, RelationType, RowArena, ScalarType, Timestamp};
     use mz_sql::catalog::{
         BuiltinsConfig, CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog,
     };
@@ -2320,7 +2320,7 @@ mod tests {
 
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
-        let id = GlobalId::User(1);
+        let id = CatalogItemId::User(1);
         {
             let mut catalog =
                 Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
@@ -2344,7 +2344,7 @@ mod tests {
                             },
                             item: "v".to_string(),
                         },
-                        id,
+                        id: id.to_global_id(),
                         owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
                 )
@@ -3222,7 +3222,7 @@ mod tests {
                 .expect("unable to allocate id");
             let mv = catalog
                 .state()
-                .deserialize_item(mv_id, &format!(
+                .deserialize_item(mv_id.to_item_id(), &format!(
                     "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
                 ))
                 .expect("unable to deserialize item");

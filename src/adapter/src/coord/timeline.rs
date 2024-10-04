@@ -26,7 +26,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::batching_oracle::BatchingTimestampOracle;
@@ -566,16 +566,16 @@ impl Coordinator {
         }
 
         // Gather the IDs of all items in all used schemas.
-        let mut item_ids: BTreeSet<GlobalId> = BTreeSet::new();
+        let mut item_ids: BTreeSet<CatalogItemId> = BTreeSet::new();
         for (db, schema) in schemas {
             let schema = self.catalog().get_schema(&db, &schema, conn_id);
-            item_ids.extend(schema.items.values().map(|id| id.to_global_id()));
+            item_ids.extend(schema.items.values());
         }
 
         // Gather the dependencies of those items.
         let mut id_bundle: CollectionIdBundle = self
             .index_oracle(compute_instance)
-            .sufficient_collections(item_ids.iter());
+            .sufficient_collections(item_ids.iter().map(|id| id.to_global_id()));
 
         // Filter out ids from different timelines.
         for ids in [

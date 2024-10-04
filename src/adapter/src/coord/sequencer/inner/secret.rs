@@ -14,7 +14,7 @@ use mz_catalog::memory::objects::{CatalogItem, Secret};
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
-use mz_repr::{Datum, GlobalId, RowArena};
+use mz_repr::{CatalogItemId, Datum, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{ConnectionOption, ConnectionOptionName, Statement, Value, WithOptionValue};
 use mz_sql::catalog::{CatalogError, ObjectType};
@@ -275,7 +275,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(crate) async fn sequence_rotate_keys(&mut self, ctx: ExecuteContext, id: GlobalId) {
+    pub(crate) async fn sequence_rotate_keys(&mut self, ctx: ExecuteContext, id: CatalogItemId) {
         // If the secret is deleted from the catalog during
         // `rotate_keys_ensure()`, this will prevent `rotate_keys_finish()` from
         // issuing the catalog update for the change. The state of the persisted
@@ -304,11 +304,11 @@ impl Coordinator {
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "rotate keys ensure",
             async move {
-                let secret = secrets_controller.reader().read(id.to_item_id()).await?;
+                let secret = secrets_controller.reader().read(id).await?;
                 let previous_key_set = SshKeyPairSet::from_bytes(&secret)?;
                 let new_key_set = previous_key_set.rotate()?;
                 secrets_controller
-                    .ensure(id.to_item_id(), &new_key_set.to_bytes())
+                    .ensure(id, &new_key_set.to_bytes())
                     .await?;
 
                 let mut to_item = entry.item;
@@ -348,7 +348,7 @@ impl Coordinator {
                 }
 
                 let ops = vec![catalog::Op::UpdateItem {
-                    id,
+                    id: id.to_global_id(),
                     name: entry.name,
                     to_item,
                 }];

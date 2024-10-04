@@ -372,9 +372,10 @@ impl Coordinator {
         )?;
         session.add_notices(notices);
 
+        let dependencies = source_ids.iter().map(|id| id.to_item_id()).collect();
         let validity = PlanValidity::new(
             catalog.transient_revision(),
-            source_ids.clone(),
+            dependencies,
             Some(cluster.id()),
             target_replica,
             session.role_metadata().clone(),
@@ -476,11 +477,11 @@ impl Coordinator {
         };
         let id_bundle = self
             .dataflow_builder(cluster_id)
-            .sufficient_collections(&source_ids);
+            .sufficient_collections(source_ids.iter().copied());
 
         // Although we have added `sources.depends_on()` to the validity already, also add the
         // sufficient collections for safety.
-        validity.extend_dependencies(id_bundle.iter());
+        validity.extend_dependencies(id_bundle.iter().map(|id| id.to_item_id()));
 
         let determination = self.sequence_peek_timestamp(
             session,

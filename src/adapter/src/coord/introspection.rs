@@ -162,9 +162,15 @@ impl Coordinator {
         let plan = spec.to_plan(&catalog).expect("valid spec");
 
         let role_metadata = RoleMetadata::new(MZ_SYSTEM_ROLE_ID);
+        let dependencies = plan
+            .from
+            .depends_on()
+            .iter()
+            .map(|id| id.to_item_id())
+            .collect();
         let validity = PlanValidity::new(
             self.catalog.transient_revision(),
-            plan.from.depends_on(),
+            dependencies,
             Some(cluster_id),
             Some(replica_id),
             role_metadata,
@@ -221,7 +227,7 @@ impl Coordinator {
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.from)?;
                     // Add introduced indexes as validity dependencies.
                     let id_bundle = global_mir_plan.id_bundle(cluster_id);
-                    validity.extend_dependencies(id_bundle.iter());
+                    validity.extend_dependencies(id_bundle.iter().map(|id| id.to_item_id()));
 
                     let stage = IntrospectionSubscribeStage::TimestampOptimizeLir(
                         IntrospectionSubscribeTimestampOptimizeLir {

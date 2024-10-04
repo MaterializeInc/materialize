@@ -1039,7 +1039,7 @@ impl TryFrom<ResolvedObjectName> for ObjectId {
             },
             ResolvedObjectName::Role(name) => Ok(ObjectId::Role(name.id)),
             ResolvedObjectName::Item(name) => match name {
-                ResolvedItemName::Item { id, .. } => Ok(ObjectId::Item(id.into())),
+                ResolvedItemName::Item { id, .. } => Ok(ObjectId::Item(id)),
                 ResolvedItemName::Cte { .. } => Err(anyhow!("CTE does not correspond to object")),
                 ResolvedItemName::ContinualTask { .. } => {
                     Err(anyhow!("ContinualTask does not correspond to object"))
@@ -1267,7 +1267,7 @@ impl<'a> NameResolver<'a> {
                         sql_bail!("type \"{}[]\" does not exist", name)
                     }
                     ResolvedDataType::Named { id, modifiers, .. } => {
-                        let element_item = self.catalog.get_item(&id.into());
+                        let element_item = self.catalog.get_item(&id);
                         let array_item = match element_item.type_details() {
                             Some(CatalogTypeDetails {
                                 array_id: Some(array_id),
@@ -2203,7 +2203,7 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
             ..
         } = name
         {
-            let item = self.catalog.get_item(&(*id).into());
+            let item = self.catalog.get_item(id);
             let catalog_full_name = self.catalog.resolve_full_name(item.name());
             if catalog_full_name == *full_name {
                 *print_id = false;
@@ -2219,7 +2219,7 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
             ..
         } = name
         {
-            let item = self.catalog.get_item(&(*id).into());
+            let item = self.catalog.get_item(id);
             let catalog_full_name = self.catalog.resolve_full_name(item.name());
             if catalog_full_name == *full_name {
                 *print_id = false;

@@ -150,7 +150,7 @@ impl CatalogItemRebuilder {
                 custom_logical_compaction_window,
             } => state
                 .parse_item(
-                    id,
+                    id.to_item_id(),
                     &sql,
                     None,
                     is_retained_metrics_object,
@@ -1357,7 +1357,7 @@ mod builtin_migration_tests {
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::ClusterId;
     use mz_expr::MirRelationExpr;
-    use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
+    use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names::{
         ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
@@ -1391,7 +1391,7 @@ mod builtin_migration_tests {
         // values.
         fn to_catalog_item(
             self,
-            id_mapping: &BTreeMap<String, GlobalId>,
+            id_mapping: &BTreeMap<String, CatalogItemId>,
         ) -> (String, ItemNamespace, CatalogItem) {
             let item = match self.item {
                 SimplifiedItem::Table => CatalogItem::Table(Table {
@@ -1453,7 +1453,7 @@ mod builtin_migration_tests {
                     let on_id = id_mapping[&on];
                     CatalogItem::Index(Index {
                         create_sql: format!("CREATE INDEX idx ON materialize.public.{on} (a)"),
-                        on: on_id,
+                        on: on_id.to_global_id(),
                         keys: Default::default(),
                         conn_id: None,
                         resolved_ids: ResolvedIds(BTreeSet::from_iter([on_id])),
@@ -1482,7 +1482,7 @@ mod builtin_migration_tests {
         name: String,
         item: CatalogItem,
         item_namespace: ItemNamespace,
-    ) -> GlobalId {
+    ) -> CatalogItemId {
         let id = match item_namespace {
             ItemNamespace::User => catalog
                 .allocate_user_id()
@@ -1493,6 +1493,7 @@ mod builtin_migration_tests {
                 .await
                 .expect("cannot fail to allocate system ids"),
         };
+        let id = id.to_item_id();
         let database_id = catalog
             .resolve_database(DEFAULT_DATABASE_NAME)
             .expect("failed to resolve default database")
@@ -1509,7 +1510,7 @@ mod builtin_migration_tests {
                 mz_repr::Timestamp::MIN,
                 None,
                 vec![Op::CreateItem {
-                    id,
+                    id: id.to_global_id(),
                     name: QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec,
@@ -1528,14 +1529,14 @@ mod builtin_migration_tests {
 
     fn convert_names_to_ids(
         name_vec: Vec<String>,
-        id_lookup: &BTreeMap<String, GlobalId>,
-    ) -> BTreeSet<GlobalId> {
+        id_lookup: &BTreeMap<String, CatalogItemId>,
+    ) -> BTreeSet<CatalogItemId> {
         name_vec.into_iter().map(|name| id_lookup[&name]).collect()
     }
 
-    fn convert_ids_to_names<I: IntoIterator<Item = GlobalId>>(
+    fn convert_ids_to_names<I: IntoIterator<Item = CatalogItemId>>(
         ids: I,
-        name_lookup: &BTreeMap<GlobalId, String>,
+        name_lookup: &BTreeMap<CatalogItemId, String>,
     ) -> BTreeSet<String> {
         ids.into_iter().map(|id| name_lookup[&id].clone()).collect()
     }
@@ -1554,13 +1555,13 @@ mod builtin_migration_tests {
             let migrated_ids = test_case
                 .migrated_names
                 .into_iter()
-                .map(|name| id_mapping[&name])
+                .map(|name| id_mapping[&name].to_global_id())
                 .collect();
             let id_fingerprint_map: BTreeMap<GlobalId, String> = id_mapping
                 .iter()
                 .filter(|(_name, id)| id.is_system())
                 // We don't use the new fingerprint in this test, so we can just hard code it
-                .map(|(_name, id)| (*id, "".to_string()))
+                .map(|(_name, id)| (id.to_global_id(), "".to_string()))
                 .collect();
 
             let migration_metadata = {
@@ -1584,7 +1585,10 @@ mod builtin_migration_tests {
 
             assert_eq!(
                 convert_ids_to_names(
-                    migration_metadata.previous_storage_collection_ids,
+                    migration_metadata
+                        .previous_storage_collection_ids
+                        .into_iter()
+                        .map(|id| id.to_item_id()),
                     &name_mapping
                 ),
                 test_case
@@ -1608,7 +1612,13 @@ mod builtin_migration_tests {
                 test_case.test_name
             );
             assert_eq!(
-                convert_ids_to_names(migration_metadata.user_item_drop_ops, &name_mapping),
+                convert_ids_to_names(
+                    migration_metadata
+                        .user_item_drop_ops
+                        .into_iter()
+                        .map(|id| id.to_item_id()),
+                    &name_mapping
+                ),
                 test_case.expected_user_item_drop_ops.into_iter().collect(),
                 "{} test failed with wrong user drop ops",
                 test_case.test_name

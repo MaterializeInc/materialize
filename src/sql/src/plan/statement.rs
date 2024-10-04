@@ -868,7 +868,7 @@ impl<'a> StatementContext<'a> {
             (None, None) => Ok(Tunnel::Direct),
             (Some(ssh_tunnel), None) => {
                 let id = CatalogItemId::from(ssh_tunnel);
-                let ssh_tunnel = self.catalog.get_item(&id.into());
+                let ssh_tunnel = self.catalog.get_item(&id);
                 match ssh_tunnel.connection()? {
                     Connection::Ssh(_connection) => Ok(Tunnel::Ssh(SshTunnel {
                         connection_id: id,
@@ -879,7 +879,7 @@ impl<'a> StatementContext<'a> {
             }
             (None, Some(aws_privatelink)) => {
                 let id = aws_privatelink.connection.item_id();
-                let entry = self.catalog.get_item(&id);
+                let entry = self.catalog.get_item(id);
                 match entry.connection()? {
                     Connection::AwsPrivatelink(_) => Ok(Tunnel::AwsPrivatelink(AwsPrivatelink {
                         connection_id: *id,

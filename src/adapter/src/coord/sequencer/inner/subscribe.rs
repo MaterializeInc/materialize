@@ -145,9 +145,10 @@ impl Coordinator {
             timeline = TimelineContext::TimestampDependent;
         }
 
+        let dependencies = depends_on.iter().map(|id| id.to_item_id()).collect();
         let validity = PlanValidity::new(
             self.catalog().transient_revision(),
-            depends_on.clone(),
+            dependencies,
             Some(cluster_id),
             replica_id,
             session.role_metadata().clone(),
@@ -220,7 +221,10 @@ impl Coordinator {
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.from.clone())?;
                     // Add introduced indexes as validity dependencies.
                     validity.extend_dependencies(
-                        global_mir_plan.id_bundle(optimizer.cluster_id()).iter(),
+                        global_mir_plan
+                            .id_bundle(optimizer.cluster_id())
+                            .iter()
+                            .map(|id| id.to_item_id()),
                     );
 
                     let stage =

@@ -1063,7 +1063,7 @@ impl Coordinator {
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
             let ids = self
                 .index_oracle(cluster)
-                .sufficient_collections(resolved_ids.0.iter());
+                .sufficient_collections(resolved_ids.0.iter().map(|id| id.to_global_id()));
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later
@@ -1082,7 +1082,8 @@ impl Coordinator {
                 .iter()
                 .any(materialized_view_option_contains_temporal)
             {
-                let timeline_context = self.validate_timeline_context(resolved_ids.0.clone())?;
+                let timeline_context = self
+                    .validate_timeline_context(resolved_ids.0.iter().map(|id| id.to_global_id()))?;
 
                 // We default to EpochMilliseconds, similarly to `determine_timestamp_for`,
                 // but even in the TimestampIndependent case.

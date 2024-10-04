@@ -32,7 +32,7 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
-use mz_repr::{strconv, GlobalId, RelationDesc, RelationVersionSelector, Timestamp};
+use mz_repr::{strconv, CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
@@ -291,11 +291,11 @@ pub async fn purify_statement(
 /// underlying materialized view).
 pub(crate) fn purify_create_sink_avro_doc_on_options(
     catalog: &dyn SessionCatalog,
-    from_id: GlobalId,
+    from_id: CatalogItemId,
     format: &mut Option<FormatSpecifier<Aug>>,
 ) -> Result<(), PlanError> {
     // Collect all objects referenced by the sink.
-    let from = catalog.get_item(&from_id.into());
+    let from = catalog.get_item(&from_id);
     let object_ids = from
         .references()
         .0
@@ -335,7 +335,7 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
 
         // Adding existing comments if not already provided by user
         for object_id in &object_ids {
-            let item = catalog.get_item(&object_id.into());
+            let item = catalog.get_item(object_id);
             let full_name = catalog.resolve_full_name(item.name());
             let full_resolved_name = ResolvedItemName::Item {
                 id: *object_id,
@@ -348,7 +348,7 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
                 version: RelationVersionSelector::Latest,
             };
 
-            if let Some(comments_map) = catalog.get_item_comments(object_id) {
+            if let Some(comments_map) = catalog.get_item_comments(&object_id) {
                 // Attach comment for the item itself, if the user has not
                 // already provided an overriding `DOC ON` option for the item.
                 let doc_on_item_key = AvroDocOn {

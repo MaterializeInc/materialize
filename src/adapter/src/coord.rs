@@ -387,8 +387,8 @@ pub struct ValidationReady<T> {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
     pub result: Result<T, AdapterError>,
-    pub dependency_ids: BTreeSet<GlobalId>,
-    pub connection_gid: GlobalId,
+    pub dependency_ids: BTreeSet<CatalogItemId>,
+    pub connection_gid: CatalogItemId,
     pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
 }
@@ -865,7 +865,7 @@ pub struct CreateSecretFinish {
 #[derive(Debug)]
 pub struct RotateKeysSecretEnsure {
     validity: PlanValidity,
-    id: GlobalId,
+    id: CatalogItemId,
 }
 
 #[derive(Debug)]

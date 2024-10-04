@@ -179,7 +179,7 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::{assert_contains, assert_ok};
     use mz_repr::role_id::RoleId;
-    use mz_repr::{GlobalId, Timestamp};
+    use mz_repr::{CatalogItemId, Timestamp};
     use mz_sql::catalog::RoleAttributes;
     use mz_sql::session::metadata::SessionMetadata;
     use uuid::Uuid;
@@ -287,7 +287,7 @@ mod tests {
                 ),
                 (
                     Box::new(|validity| {
-                        validity.extend_dependencies(vec![GlobalId::User(6)].into_iter());
+                        validity.extend_dependencies(vec![CatalogItemId::User(6)].into_iter());
                     }),
                     Box::new(|res| {
                         assert_contains!(

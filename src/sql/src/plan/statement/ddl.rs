@@ -3802,7 +3802,7 @@ pub fn plan_create_type(
         key: &str,
     ) -> Result<(CatalogItemId, Vec<i64>), PlanError> {
         let (id, modifiers) = match data_type {
-            ResolvedDataType::Named { id, modifiers, .. } => (id.into(), modifiers),
+            ResolvedDataType::Named { id, modifiers, .. } => (id, modifiers),
             _ => sql_bail!(
                 "CREATE TYPE ... AS {}option {} can only use named data types, but \
                         found unnamed data type {}. Use CREATE TYPE to create a named type first",
@@ -6283,7 +6283,7 @@ pub fn plan_alter_connection(
         }
 
         return Ok(Plan::AlterConnection(AlterConnectionPlan {
-            id: entry.id(),
+            id: entry.item_id(),
             action: crate::plan::AlterConnectionAction::RotateKeys,
         }));
     }
@@ -6401,7 +6401,7 @@ pub fn plan_alter_connection(
     }
 
     Ok(Plan::AlterConnection(AlterConnectionPlan {
-        id: entry.id(),
+        id: entry.item_id(),
         action: crate::plan::AlterConnectionAction::AlterOptions {
             set_options,
             drop_options,
@@ -6808,7 +6808,7 @@ pub fn plan_comment(
                 if !modifiers.is_empty() {
                     sql_bail!("cannot comment on type with modifiers");
                 }
-                (CommentObjectId::Type((*id).into()), None)
+                (CommentObjectId::Type(*id), None)
             }
             ResolvedDataType::Error => unreachable!("should have been caught in name resolution"),
         },
