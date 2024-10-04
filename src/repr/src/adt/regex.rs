@@ -53,7 +53,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 /// and also making the same mistake in our own protobuf serialization code.)
 #[derive(Debug, Clone, MzReflect)]
 pub struct Regex {
-    pub pattern: String,
     pub case_insensitive: bool,
     pub dot_matches_new_line: bool,
     pub regex: regex::Regex,
@@ -63,31 +62,35 @@ impl Regex {
     /// A simple constructor for the default setting of `dot_matches_new_line: true`.
     /// See <https://www.postgresql.org/docs/current/functions-matching.html#POSIX-MATCHING-RULES>
     /// "newline-sensitive matching"
-    pub fn new(pattern: String, case_insensitive: bool) -> Result<Regex, Error> {
+    pub fn new(pattern: &str, case_insensitive: bool) -> Result<Regex, Error> {
         Self::new_dot_matches_new_line(pattern, case_insensitive, true)
     }
 
     /// Allows explicitly setting `dot_matches_new_line`.
     pub fn new_dot_matches_new_line(
-        pattern: String,
+        pattern: &str,
         case_insensitive: bool,
         dot_matches_new_line: bool,
     ) -> Result<Regex, Error> {
-        let mut regex_builder = RegexBuilder::new(pattern.as_str());
+        let mut regex_builder = RegexBuilder::new(pattern);
         regex_builder.case_insensitive(case_insensitive);
         regex_builder.dot_matches_new_line(dot_matches_new_line);
         Ok(Regex {
-            pattern,
             case_insensitive,
             dot_matches_new_line,
             regex: regex_builder.build()?,
         })
     }
+
+    /// Returns the pattern string of the regex.
+    pub fn pattern(&self) -> &str {
+        self.regex.as_str()
+    }
 }
 
 impl PartialEq<Regex> for Regex {
     fn eq(&self, other: &Regex) -> bool {
-        self.pattern == other.pattern
+        self.pattern() == other.pattern()
             && self.case_insensitive == other.case_insensitive
             && self.dot_matches_new_line == other.dot_matches_new_line
     }
@@ -104,12 +107,12 @@ impl PartialOrd for Regex {
 impl Ord for Regex {
     fn cmp(&self, other: &Regex) -> Ordering {
         (
-            &self.pattern,
+            self.pattern(),
             self.case_insensitive,
             self.dot_matches_new_line,
         )
             .cmp(&(
-                &other.pattern,
+                other.pattern(),
                 other.case_insensitive,
                 other.dot_matches_new_line,
             ))
@@ -118,7 +121,7 @@ impl Ord for Regex {
 
 impl Hash for Regex {
     fn hash<H: Hasher>(&self, hasher: &mut H) {
-        self.pattern.hash(hasher);
+        self.pattern().hash(hasher);
         self.case_insensitive.hash(hasher);
         self.dot_matches_new_line.hash(hasher);
     }
@@ -135,7 +138,7 @@ impl Deref for Regex {
 impl RustType<ProtoRegex> for Regex {
     fn into_proto(&self) -> ProtoRegex {
         ProtoRegex {
-            pattern: self.pattern.clone(),
+            pattern: self.pattern().to_owned(),
             case_insensitive: self.case_insensitive,
             dot_matches_new_line: self.dot_matches_new_line,
         }
@@ -143,7 +146,7 @@ impl RustType<ProtoRegex> for Regex {
 
     fn from_proto(proto: ProtoRegex) -> Result<Self, TryFromProtoError> {
         Ok(Regex::new_dot_matches_new_line(
-            proto.pattern,
+            &proto.pattern,
             proto.case_insensitive,
             proto.dot_matches_new_line,
         )?)
@@ -156,7 +159,7 @@ impl Serialize for Regex {
         S: Serializer,
     {
         let mut state = serializer.serialize_struct("Regex", 3)?;
-        state.serialize_field("pattern", &self.pattern)?;
+        state.serialize_field("pattern", &self.pattern())?;
         state.serialize_field("case_insensitive", &self.case_insensitive)?;
         state.serialize_field("dot_matches_new_line", &self.dot_matches_new_line)?;
         state.end()
@@ -242,7 +245,7 @@ impl<'de> Deserialize<'de> for Regex {
             where
                 V: de::MapAccess<'de>,
             {
-                let mut pattern: Option<String> = None;
+                let mut pattern: Option<&str> = None;
                 let mut case_insensitive: Option<bool> = None;
                 let mut dot_matches_new_line: Option<bool> = None;
                 while let Some(key) = map.next_key()? {
@@ -302,7 +305,7 @@ prop_compose! {
                  r in REPETITIONS, e in END_SYMBOLS, case_insensitive in any::<bool>(), dot_matches_new_line in any::<bool>())
                 -> Regex {
         let string = format!("{}{}{}{}", b, c, r, e);
-        Regex::new_dot_matches_new_line(string, case_insensitive, dot_matches_new_line).unwrap()
+        Regex::new_dot_matches_new_line(&string, case_insensitive, dot_matches_new_line).unwrap()
     }
 }
 
@@ -329,7 +332,7 @@ mod tests {
     /// Nowadays, we use our own handwritten Serialize/Deserialize impls for our Regex wrapper struct.
     #[mz_ore::test]
     fn regex_serde_case_insensitive() {
-        let orig_regex = Regex::new("AAA".to_string(), true).unwrap();
+        let orig_regex = Regex::new("AAA", true).unwrap();
         let serialized: String = serde_json::to_string(&orig_regex).unwrap();
         let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
         // Equality test between orig and roundtrip_result wouldn't work, because Eq doesn't test
@@ -345,8 +348,7 @@ mod tests {
     fn regex_serde_dot_matches_new_line() {
         {
             // dot_matches_new_line: true
-            let orig_regex =
-                Regex::new_dot_matches_new_line("A.*B".to_string(), true, true).unwrap();
+            let orig_regex = Regex::new_dot_matches_new_line("A.*B", true, true).unwrap();
             let serialized: String = serde_json::to_string(&orig_regex).unwrap();
             let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
             assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), true);
@@ -354,8 +356,7 @@ mod tests {
         }
         {
             // dot_matches_new_line: false
-            let orig_regex =
-                Regex::new_dot_matches_new_line("A.*B".to_string(), true, false).unwrap();
+            let orig_regex = Regex::new_dot_matches_new_line("A.*B", true, false).unwrap();
             let serialized: String = serde_json::to_string(&orig_regex).unwrap();
             let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
             assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), false);
@@ -363,7 +364,7 @@ mod tests {
         }
         {
             // dot_matches_new_line: default
-            let orig_regex = Regex::new("A.*B".to_string(), true).unwrap();
+            let orig_regex = Regex::new("A.*B", true).unwrap();
             let serialized: String = serde_json::to_string(&orig_regex).unwrap();
             let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
             assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), true);

@@ -3282,7 +3282,7 @@ impl RustType<ProtoAnalyzedRegex> for AnalyzedRegex {
 }
 
 impl AnalyzedRegex {
-    pub fn new(s: String) -> Result<Self, regex::Error> {
+    pub fn new(s: &str) -> Result<Self, regex::Error> {
         let r = ReprRegex::new(s, false)?;
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]

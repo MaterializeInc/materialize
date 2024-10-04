@@ -2216,7 +2216,7 @@ fn get_encoding_inner(
             }
         },
         Format::Regex(regex) => DataEncoding::Regex(RegexEncoding {
-            regex: mz_repr::adt::regex::Regex::new(regex.clone(), false)
+            regex: mz_repr::adt::regex::Regex::new(regex, false)
                 .map_err(|e| sql_err!("parsing regex: {e}"))?,
         }),
         Format::Csv { columns, delimiter } => {
