@@ -248,6 +248,7 @@ steps:
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
         depends_on: build-aarch64
         timeout_in_minutes: 180
+        parallelism: 2 # to prevent high CPU load
         agents:
           queue: hetzner-aarch64-8cpu-16gb
         plugins:
@@ -281,6 +282,7 @@ steps:
         label: ":racing_car: testdrive with SIZE 8"
         depends_on: build-aarch64
         timeout_in_minutes: 180
+        parallelism: 2 # to prevent high CPU load
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -292,6 +294,7 @@ steps:
         label: ":racing_car: testdrive with Structured Persist (Only Structured)"
         depends_on: build-aarch64
         timeout_in_minutes: 180
+        parallelism: 2 # to prevent high CPU load
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
