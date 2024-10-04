@@ -46,7 +46,6 @@ use crate::scalar::{arb_datum, DatumKind};
 use crate::{Datum, RelationDesc, Timestamp};
 
 pub mod collection;
-pub(crate) mod encoding;
 pub(crate) mod encode;
 pub mod iter;
 
