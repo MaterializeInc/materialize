@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 import random
 import re
-from math import floor
+from math import ceil, floor
 from pathlib import Path
 from textwrap import dedent
 
@@ -1835,7 +1835,7 @@ class StartupEmpty(Startup):
 class StartupLoaded(Scenario):
     """Measure the time it takes to restart a populated Mz instance and have all the dataflows be ready to return something"""
 
-    SCALE = 1.2  # 25ish objects of each kind
+    SCALE = 1.2  # 25 objects of each kind
     FIXED_SCALE = (
         True  # Can not scale to 100s of objects, so --size=+N will have no effect
     )
@@ -1869,6 +1869,14 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
 """
             for i in range(0, self.n())
         )
+        join = " ".join(
+            f"LEFT JOIN source{i} USING (f2)" for i in range(1, (ceil(self.scale())))
+        )
+
+        create_views = "\n".join(
+            f"> CREATE MATERIALIZED VIEW v{i} AS SELECT * FROM source{i} AS s {join} LIMIT {i+1}"
+            for i in range(0, self.n())
+        )
 
         create_sinks = "\n".join(
             f"""
@@ -1885,59 +1893,16 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
             for i in range(0, self.n())
         )
 
-        comment = re.compile(r"--.*?\n", re.IGNORECASE)
-        newline = re.compile(r"\n", re.IGNORECASE)
-
-        create_tpch_tables = "\n".join(
-            f"""
-> {newline.sub(" ", comment.sub("", ddl))}
-"""
-            for ddl in materialize.optbench.sql.parse_from_file(
-                Path("misc/python/materialize/optbench/schema/tpch.sql")
-            )
-        )
-
-        tpch_queries = [
-            newline.sub(" ", comment.sub("", query))
-            for query in materialize.optbench.sql.parse_from_file(
-                Path("misc/python/materialize/optbench/workload/tpch.sql")
-            )
-        ]
-
-        create_views = "\n".join(
-            f"""
-> CREATE VIEW v_{q}_{i} AS {query}
-"""
-            for q, query in enumerate(tpch_queries)
-            for i in range(0, self.n())
-        )
-
-        create_indexes = "\n".join(
-            f"""
-> CREATE DEFAULT INDEX ON v_{q}_{i};
-"""
-            for q in range(0, len(tpch_queries))
-            for i in range(0, self.n())
-        )
-
-        create_materialized_views = "\n".join(
-            f"""
-> CREATE MATERIALIZED VIEW mv_{q}_{i} AS {query}
-"""
-            for q, query in enumerate(tpch_queries)
-            for i in range(0, self.n())
-        )
-
         return TdAction(
             f"""
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_objects_per_schema = {self.n() * 100};
-ALTER SYSTEM SET max_materialized_views = {self.n() * 100};
-ALTER SYSTEM SET max_sources = {self.n() * 100};
-ALTER SYSTEM SET max_sinks = {self.n() * 100};
-ALTER SYSTEM SET max_tables = {self.n() * 100};
-ALTER SYSTEM SET max_clusters = {self.n() * 100};
+ALTER SYSTEM SET max_objects_per_schema = {self.n() * 10};
+ALTER SYSTEM SET max_materialized_views = {self.n() * 2};
+ALTER SYSTEM SET max_sources = {self.n() * 2};
+ALTER SYSTEM SET max_sinks = {self.n() * 2};
+ALTER SYSTEM SET max_tables = {self.n() * 2};
+ALTER SYSTEM SET max_clusters = {self.n() * 6};
 
 > DROP OWNED BY materialize CASCADE;
 
@@ -1950,20 +1915,12 @@ ALTER SYSTEM SET max_clusters = {self.n() * 100};
 
 {create_tables}
 {create_sources}
-{create_sinks}
-{create_tpch_tables}
 {create_views}
-{create_indexes}
-{create_materialized_views}
+{create_sinks}
 """
         )
 
     def benchmark(self) -> BenchmarkingSequence:
-        num_tpch_queries = len(
-            materialize.optbench.sql.parse_from_file(
-                Path("misc/python/materialize/optbench/workload/tpch.sql")
-            )
-        )
         check_tables = "\n".join(
             f"> SELECT COUNT(*) >= 0 FROM t{i}\ntrue" for i in range(0, self.n())
         )
@@ -1971,13 +1928,111 @@ ALTER SYSTEM SET max_clusters = {self.n() * 100};
             f"> SELECT COUNT(*) > 0 FROM source{i}\ntrue" for i in range(0, self.n())
         )
         check_views = "\n".join(
+            f"> SELECT COUNT(*) > 0 FROM v{i}\ntrue" for i in range(0, self.n())
+        )
+
+        return [
+            Lambda(lambda e: e.RestartMzClusterd()),
+            Td(
+                f"""
+{check_views}
+{check_sources}
+{check_tables}
+> SELECT 1;
+  /* B */
+1
+"""
+            ),
+        ]
+
+
+class StartupTpch(Scenario):
+    """Measure the time it takes to restart a Mz instance populated with TPC-H and have all the dataflows be ready to return something"""
+
+    SCALE = 1.2  # 25ish objects of each kind
+    FIXED_SCALE = (
+        True  # Can not scale to 100s of objects, so --size=+N will have no effect
+    )
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
+
+    def init(self) -> Action:
+        # We need to massage the SQL statements so that Testdrive doesn't get confused.
+        comment = re.compile(r"--.*?\n", re.IGNORECASE)
+        newline = re.compile(r"\n", re.IGNORECASE)
+
+        create_tables = "\n".join(
+            f"""
+> {newline.sub(" ", comment.sub("", ddl))}
+"""
+            for ddl in materialize.optbench.sql.parse_from_file(
+                Path("misc/python/materialize/optbench/schema/tpch.sql")
+            )
+        )
+
+        queries = [
+            newline.sub(" ", comment.sub("", query))
+            for query in materialize.optbench.sql.parse_from_file(
+                Path("misc/python/materialize/optbench/workload/tpch.sql")
+            )
+        ]
+
+        create_views = "\n".join(
+            f"""
+> CREATE VIEW v_{q}_{i} AS {query}
+"""
+            for q, query in enumerate(queries)
+            for i in range(0, self.n())
+        )
+
+        create_indexes = "\n".join(
+            f"""
+> CREATE DEFAULT INDEX ON v_{q}_{i};
+"""
+            for q in range(0, len(queries))
+            for i in range(0, self.n())
+        )
+
+        create_materialized_views = "\n".join(
+            f"""
+> CREATE MATERIALIZED VIEW mv_{q}_{i} AS {query}
+"""
+            for q, query in enumerate(queries)
+            for i in range(0, self.n())
+        )
+
+        return TdAction(
+            f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_objects_per_schema = {self.n() * 100};
+ALTER SYSTEM SET max_materialized_views = {self.n() * 100};
+ALTER SYSTEM SET max_tables = {self.n() * 100};
+
+> DROP OWNED BY materialize CASCADE;
+
+{create_tables}
+{create_views}
+{create_indexes}
+{create_materialized_views}
+"""
+        )
+
+    def benchmark(self) -> BenchmarkingSequence:
+        num_queries = len(
+            materialize.optbench.sql.parse_from_file(
+                Path("misc/python/materialize/optbench/workload/tpch.sql")
+            )
+        )
+        check_views = "\n".join(
             f"> SELECT COUNT(*) >= 0 FROM v_{q}_{i}\ntrue"
-            for q in range(0, num_tpch_queries)
+            for q in range(0, num_queries)
             for i in range(0, self.n())
         )
         check_materialized_views = "\n".join(
             f"> SELECT COUNT(*) >= 0 FROM mv_{q}_{i}\ntrue"
-            for q in range(0, num_tpch_queries)
+            for q in range(0, num_queries)
             for i in range(0, self.n())
         )
 
@@ -1987,8 +2042,6 @@ ALTER SYSTEM SET max_clusters = {self.n() * 100};
                 f"""
 {check_materialized_views}
 {check_views}
-{check_sources}
-{check_tables}
 > SELECT 1;
   /* B */
 1
