@@ -49,6 +49,7 @@ known_errors = [
     "is not defined for zero",
     "is not defined for negative numbers",
     "requested character too large for encoding",
+    "requested character not valid for encoding",
     "internal error: unrecognized configuration parameter",
     "invalid encoding name",
     "invalid time zone",
