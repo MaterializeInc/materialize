@@ -1,3 +1,12 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
 use std::collections::BTreeSet;
 use std::ops::DerefMut;
 
@@ -302,7 +311,7 @@ impl RetrievedSourceReferences {
     ) -> Result<Vec<RequestedSourceExport<&ReferenceMetadata>>, PlanError> {
         // Filter all available references to those requested by the `ExternalReferences`
         // specification and include any alias that the user has specified.
-        // TODO(#8260): The alias handling can be removed once subsources are removed.
+        // TODO(database-issues#8620): The alias handling can be removed once subsources are removed.
         let filtered: Vec<(&ReferenceMetadata, Option<&UnresolvedItemName>)> = match requested {
             Some(ExternalReferences::All) => self.references.iter().map(|r| (r, None)).collect(),
             Some(ExternalReferences::SubsetSchemas(schemas)) => {

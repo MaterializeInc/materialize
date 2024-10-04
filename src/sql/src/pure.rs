@@ -123,6 +123,7 @@ fn source_export_name_gen(
     Ok(UnresolvedItemName::from(partial))
 }
 
+// TODO(database-issues#8620): Remove once subsources are removed
 /// Validates the requested subsources do not have name conflicts with each other
 /// and that the same upstream table is not referenced multiple times.
 fn validate_source_export_names<T>(
@@ -979,6 +980,10 @@ async fn purify_create_source(
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
             let reference_client = SourceReferenceClient::MySql { conn: &mut conn };
+            // This retrieves all tables in the MySQL database outside of the built-in schemas
+            // (mysql, information_schema, etc.)
+            // TODO(database-issues#8624): If a user specifies a table/schema that is in one of the
+            // built-in schemas we need to handle that case.
             retrieved_source_references = reference_client.get_source_references().await?;
 
             let mysql::PurifiedSourceExports {
@@ -1033,8 +1038,9 @@ async fn purify_create_source(
                 generator: &load_generator,
             };
             retrieved_source_references = reference_client.get_source_references().await?;
-            // Filter to the references that need to be created as 'subsources' which
-            // don't include the output for single-output sources.
+            // Filter to the references that need to be created as 'subsources', which
+            // doesn't include the default output for single-output sources.
+            // TODO(database-issues#8620): Remove once subsources are removed
             let subsource_references = retrieved_source_references
                 .all_references()
                 .iter()
@@ -1168,6 +1174,7 @@ async fn purify_create_source(
     })
 }
 
+// TODO(database-issues#8620): Remove once subsources are removed
 /// Equivalent to `purify_create_source` but for `AlterSourceStatement`.
 ///
 /// On success, returns the details on new subsources and updated
@@ -1487,12 +1494,6 @@ async fn purify_create_table_from_source(
 
     // Run purification work specific to each source type: resolve the external reference to
     // a fully qualified name and obtain the appropriate details for the source-export statement
-    // NOTE that each source type has its own rules for how to resolve the external reference,
-    // and each source-type's fully-qualified external reference may be different. In Postgres
-    // a 3-layer reference is used (database, schema, table), whereas in MySQL only a 2-layer
-    // is used (schema, table), since databases == schemas. For load generator sources
-    // the reference is (schema, table) where schema defines the type of load-generator.
-    // When kafka is implemented, likely just the topic-name will be used.
     let purified_export = match desc.connection {
         GenericSourceConnection::Postgres(pg_source_connection) => {
             // Get PostgresConnection for generating subsources.
@@ -1539,9 +1540,9 @@ async fn purify_create_table_from_source(
 
             let postgres::PurifiedSourceExports {
                 source_exports,
+                // TODO(database-issues#8620): Remove once subsources are removed
                 // This `normalized_text_columns` is not relevant for us and is only returned for
-                // `CREATE SOURCE` statements that automatically generate subsources, and will be
-                // removed with that functionality in the future.
+                // `CREATE SOURCE` statements that automatically generate subsources
                 normalized_text_columns: _,
             } = postgres::purify_source_exports(
                 &client,
@@ -1580,13 +1581,17 @@ async fn purify_create_table_from_source(
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
             let reference_client = SourceReferenceClient::MySql { conn: &mut conn };
+            // This retrieves all tables in the MySQL database outside of the built-in schemas
+            // (mysql, information_schema, etc.)
+            // TODO(database-issues#8624): If a user specifies a table/schema that is in one of the
+            // built-in schemas we need to handle that case.
             retrieved_source_references = reference_client.get_source_references().await?;
 
             let mysql::PurifiedSourceExports {
                 source_exports,
+                // TODO(database-issues#8620): Remove once subsources are removed
                 // `normalized_text/exclude_columns` is not relevant for us and is only returned for
-                // `CREATE SOURCE` statements that automatically generate subsources, and will be
-                // removed with that functionality in the future.
+                // `CREATE SOURCE` statements that automatically generate subsources
                 normalized_text_columns: _,
                 normalized_exclude_columns: _,
             } = mysql::purify_source_exports(

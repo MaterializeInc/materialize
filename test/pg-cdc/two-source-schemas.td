@@ -54,7 +54,7 @@ contains:catalog item 't1' already exists
 > DROP TABLE t1;
 
 ! CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
-contains:reference to t1 is ambiguous, consider specifying an additional layer of qualification
+contains:reference t1 is ambiguous, consider specifying an additional layer of qualification
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE schema1.t1);
 
