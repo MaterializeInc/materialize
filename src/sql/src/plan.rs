@@ -811,12 +811,19 @@ pub struct SetTransactionPlan {
     pub modes: Vec<TransactionMode>,
 }
 
+/// A plan for select statements.
 #[derive(Clone, Debug)]
 pub struct SelectPlan {
-    pub select: Option<SelectStatement<Aug>>,
+    /// The `SELECT` statement itself. Used for explain/notices, but not otherwise
+    /// load-bearing. Boxed to save stack space.
+    pub select: Option<Box<SelectStatement<Aug>>>,
+    /// The plan as a HIR.
     pub source: HirRelationExpr,
+    /// At what time should this select happen?
     pub when: QueryWhen,
+    /// Instructions how to form the result set.
     pub finishing: RowSetFinishing,
+    /// For `COPY TO`, the format to use.
     pub copy_to: Option<CopyFormat>,
 }
 

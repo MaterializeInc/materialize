@@ -600,7 +600,7 @@ impl Coordinator {
                             !(matches!(explain_ctx, ExplainContext::PlanInsightsNotice(_))
                                 && optimizer.duration() > opt_limit);
                         let insights_ctx = needs_plan_insights.then(|| PlanInsightsContext {
-                            stmt: plan.select.clone().map(Statement::Select),
+                            stmt: plan.select.as_deref().map(Clone::clone).map(Statement::Select),
                             raw_expr: plan.source.clone(),
                             catalog,
                             compute_instances,
