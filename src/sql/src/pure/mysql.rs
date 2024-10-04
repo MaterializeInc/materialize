@@ -10,7 +10,6 @@
 //! MySQL utilities for SQL purification.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::DerefMut;
 
 use mz_mysql_util::{validate_source_privileges, MySqlError, MySqlTableDesc, QualifiedTableRef};
 use mz_proto::RustType;
@@ -27,6 +26,7 @@ use crate::names::Aug;
 use crate::plan::{PlanError, StatementContext};
 use crate::pure::{MySqlSourcePurificationError, ResolvedItemName};
 
+use super::references::RetrievedSourceReferences;
 use super::{
     PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport, SourceReferencePolicy,
 };
@@ -259,7 +259,7 @@ pub(super) fn map_column_refs<'a>(
 pub(super) fn normalize_column_refs(
     cols: Vec<UnresolvedItemName>,
     reference_resolver: &SourceReferenceResolver,
-    tables: &[MySqlTableDesc],
+    tables: &[RequestedSourceExport<MySqlTableDesc>],
     option_name: &str,
 ) -> Result<Vec<WithOptionValue<Aug>>, MySqlSourcePurificationError> {
     let (seq, unknown): (Vec<_>, Vec<_>) = cols.into_iter().partition(|name| {
@@ -268,6 +268,7 @@ pub(super) fn normalize_column_refs(
             // TODO: this needs to also introduce the maximum qualification on
             // the columns, i.e. ensure they have the schema name.
             Ok(idx) => tables[idx]
+                .meta
                 .columns
                 .iter()
                 .any(|n| &n.name == column_name.as_str()),
@@ -292,19 +293,14 @@ pub(super) fn normalize_column_refs(
 }
 
 pub(super) async fn validate_requested_references_privileges(
-    requested_references: &[RequestedSourceExport<'_, MySqlTableDesc>],
+    requested_external_references: impl Iterator<Item = &UnresolvedItemName>,
     conn: &mut mz_mysql_util::MySqlConn,
 ) -> Result<(), PlanError> {
     // Ensure that we have correct privileges on all tables; we have to do this before we
     // start snapshotting because if we discover we cannot `SELECT` from a table while
     // snapshotting, we break the entire source.
-    let tables_to_check_permissions = requested_references
-        .iter()
-        .map(
-            |RequestedSourceExport {
-                 external_reference, ..
-             }| external_reference_to_table(external_reference),
-        )
+    let tables_to_check_permissions = requested_external_references
+        .map(external_reference_to_table)
         .collect::<Result<Vec<_>, _>>()?;
 
     validate_source_privileges(&mut *conn, &tables_to_check_permissions)
@@ -343,36 +339,18 @@ pub(super) struct PurifiedSourceExports {
 // fields necessary to generate relevant statements and update statement options
 pub(super) async fn purify_source_exports(
     conn: &mut mz_mysql_util::MySqlConn,
-    external_references: &Option<ExternalReferences>,
+    retrieved_references: &RetrievedSourceReferences,
+    requested_references: &Option<ExternalReferences>,
     text_columns: Vec<UnresolvedItemName>,
     exclude_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
     reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
-    // Determine which table schemas to request from mysql. Note that in mysql
-    // a 'schema' is the same as a 'database', and a fully qualified table
-    // name is 'schema_name.table_name' (there is no db_name)
-    let table_schema_request = match external_references.as_ref() {
-        Some(ExternalReferences::All) => mz_mysql_util::SchemaRequest::All,
-        Some(ExternalReferences::SubsetSchemas(schemas)) => mz_mysql_util::SchemaRequest::Schemas(
-            schemas.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-        ),
-        Some(ExternalReferences::SubsetTables(tables)) => mz_mysql_util::SchemaRequest::Tables(
-            tables
-                .iter()
-                .map(|t| {
-                    let idents = &t.reference.0;
-                    // We only support fully qualified table names for now
-                    if idents.len() != 2 {
-                        Err(MySqlSourcePurificationError::InvalidTableReference(
-                            t.reference.to_ast_string(),
-                        ))?;
-                    }
-                    Ok((idents[0].as_str(), idents[1].as_str()))
-                })
-                .collect::<Result<Vec<_>, MySqlSourcePurificationError>>()?,
-        ),
+    let requested_exports = match requested_references.as_ref() {
+        Some(requested) => {
+            retrieved_references.requested_source_exports(requested, unresolved_source_name)?
+        }
         None => {
             if matches!(reference_policy, SourceReferencePolicy::Required) {
                 Err(MySqlSourcePurificationError::RequiresExternalReferences)?
@@ -403,136 +381,93 @@ pub(super) async fn purify_source_exports(
         }
     };
 
+    if requested_exports.is_empty() {
+        sql_bail!(
+            "[internal error]: MySQL source must ingest at least one table, but {} matched none",
+            requested_references.as_ref().unwrap().to_ast_string()
+        );
+    }
+
+    super::validate_source_export_names(&requested_exports)?;
+
     let text_cols_map = map_column_refs(&text_columns, MySqlConfigOptionName::TextColumns)?;
     let exclude_columns_map =
         map_column_refs(&exclude_columns, MySqlConfigOptionName::ExcludeColumns)?;
 
-    // Retrieve schemas for all requested tables
-    // NOTE: mysql will only expose the schemas of tables we have at least one privilege on
-    // and we can't tell if a table exists without a privilege, so in some cases we may
-    // return an EmptyDatabase error in the case of privilege issues.
-    let raw_tables = mz_mysql_util::schema_info(conn.deref_mut(), &table_schema_request).await?;
-
     // Convert the raw tables into a format that we can use to generate source exports
     // using any applicable text_columns and exclude_columns.
-    let mut tables = Vec::with_capacity(raw_tables.len());
-    for table in raw_tables.into_iter() {
-        let table_ref = table.table_ref();
-        // we are cloning the BTreeSet<&str> so we can avoid a borrow on `table` here
-        let text_cols = text_cols_map.get(&table_ref).map(|s| s.clone());
-        let exclude_columns = exclude_columns_map.get(&table_ref).map(|s| s.clone());
-        let parsed_table = table
-            .to_desc(text_cols.as_ref(), exclude_columns.as_ref())
-            .map_err(|err| match err {
-                mz_mysql_util::MySqlError::UnsupportedDataTypes { columns } => {
-                    PlanError::from(MySqlSourcePurificationError::UnrecognizedTypes {
-                        cols: columns
-                            .into_iter()
-                            .map(|c| (c.qualified_table_name, c.column_name, c.column_type))
-                            .collect(),
-                    })
-                }
-                mz_mysql_util::MySqlError::DuplicatedColumnNames {
-                    qualified_table_name,
-                    columns,
-                } => PlanError::from(MySqlSourcePurificationError::DuplicatedColumnNames(
-                    qualified_table_name,
-                    columns,
-                )),
-                _ => err.into(),
-            })?;
-        tables.push(parsed_table);
-    }
+    let tables = requested_exports
+        .into_iter()
+        .map(|requested_export| {
+            let table = requested_export.meta.mysql_table().expect("is mysql");
+            let table_ref = table.table_ref();
+            // we are cloning the BTreeSet<&str> so we can avoid a borrow on `table` here
+            let text_cols = text_cols_map.get(&table_ref).map(|s| s.clone());
+            let exclude_columns = exclude_columns_map.get(&table_ref).map(|s| s.clone());
+            let parsed_table = table
+                .clone()
+                .to_desc(text_cols.as_ref(), exclude_columns.as_ref())
+                .map_err(|err| match err {
+                    mz_mysql_util::MySqlError::UnsupportedDataTypes { columns } => {
+                        PlanError::from(MySqlSourcePurificationError::UnrecognizedTypes {
+                            cols: columns
+                                .into_iter()
+                                .map(|c| (c.qualified_table_name, c.column_name, c.column_type))
+                                .collect(),
+                        })
+                    }
+                    mz_mysql_util::MySqlError::DuplicatedColumnNames {
+                        qualified_table_name,
+                        columns,
+                    } => PlanError::from(MySqlSourcePurificationError::DuplicatedColumnNames(
+                        qualified_table_name,
+                        columns,
+                    )),
+                    _ => err.into(),
+                })?;
+            Ok(requested_export.change_meta(parsed_table))
+        })
+        .collect::<Result<Vec<_>, PlanError>>()?;
 
     if tables.is_empty() {
         Err(MySqlSourcePurificationError::EmptyDatabase)?;
     }
 
-    let reference_resolver = SourceReferenceResolver::new(MYSQL_DATABASE_FAKE_NAME, &tables)?;
+    validate_requested_references_privileges(tables.iter().map(|t| &t.external_reference), conn)
+        .await?;
 
-    let mut validated_source_exports = vec![];
-    match external_references
-        .as_ref()
-        .ok_or(MySqlSourcePurificationError::RequiresExternalReferences)?
-    {
-        ExternalReferences::All => {
-            for table in &tables {
-                let external_reference = mysql_table_to_external_reference(table)?;
-                let subsource_name =
-                    super::source_export_name_gen(unresolved_source_name, &table.name)?;
-                validated_source_exports.push(RequestedSourceExport {
-                    external_reference,
-                    name: subsource_name,
-                    table,
-                });
-            }
-        }
-        ExternalReferences::SubsetSchemas(schemas) => {
-            let available_schemas: BTreeSet<_> =
-                tables.iter().map(|t| t.schema_name.as_str()).collect();
-            let requested_schemas: BTreeSet<_> = schemas.iter().map(|s| s.as_str()).collect();
-            let missing_schemas: Vec<_> = requested_schemas
-                .difference(&available_schemas)
-                .map(|s| s.to_string())
-                .collect();
-            if !missing_schemas.is_empty() {
-                Err(MySqlSourcePurificationError::NoTablesFoundForSchemas(
-                    missing_schemas,
-                ))?;
-            }
+    let reference_resolver = SourceReferenceResolver::new(
+        MYSQL_DATABASE_FAKE_NAME,
+        &tables.iter().map(|r| &r.meta).collect::<Vec<_>>(),
+    )?;
 
-            for table in &tables {
-                if !requested_schemas.contains(table.schema_name.as_str()) {
-                    continue;
-                }
+    // Normalize column options and remove unused column references.
+    let normalized_text_columns = normalize_column_refs(
+        text_columns.clone(),
+        &reference_resolver,
+        &tables,
+        "TEXT COLUMNS",
+    )?;
+    let normalized_exclude_columns = normalize_column_refs(
+        exclude_columns.clone(),
+        &reference_resolver,
+        &tables,
+        "EXCLUDE COLUMNS",
+    )?;
 
-                let external_reference = mysql_table_to_external_reference(table)?;
-                let subsource_name =
-                    super::source_export_name_gen(unresolved_source_name, &table.name)?;
-                validated_source_exports.push(RequestedSourceExport {
-                    external_reference,
-                    name: subsource_name,
-                    table,
-                });
-            }
-        }
-        ExternalReferences::SubsetTables(references) => {
-            // The user manually selected a subset of upstream tables so we need to
-            // validate that the names actually exist and are not ambiguous
-            validated_source_exports = super::source_export_gen(
-                references,
-                &reference_resolver,
-                &tables,
-                2,
-                unresolved_source_name,
-            )?;
-        }
-    }
-
-    if validated_source_exports.is_empty() {
-        sql_bail!(
-            "[internal error]: MySQL source must ingest at least one table, but {} matched none",
-            external_references.as_ref().unwrap().to_ast_string()
-        );
-    }
-
-    super::validate_source_export_names(&validated_source_exports)?;
-
-    validate_requested_references_privileges(&validated_source_exports, conn).await?;
-
-    let source_exports = validated_source_exports
+    let source_exports = tables
         .into_iter()
         .map(|r| {
             let table_ref = mz_mysql_util::QualifiedTableRef {
-                schema_name: r.table.schema_name.as_str(),
-                table_name: r.table.name.as_str(),
+                schema_name: r.meta.schema_name.as_str(),
+                table_name: r.meta.name.as_str(),
             };
             (
                 r.name,
                 PurifiedSourceExport {
                     external_reference: r.external_reference,
                     details: PurifiedExportDetails::MySql {
-                        table: r.table.clone(),
+                        table: r.meta.clone(),
                         text_columns: text_cols_map.get(&table_ref).map(|cols| {
                             cols.iter()
                                 .map(|c| Ident::new(*c).expect("validated above"))
@@ -552,18 +487,7 @@ pub(super) async fn purify_source_exports(
 
     Ok(PurifiedSourceExports {
         source_exports,
-        // Normalize column options and remove unused column references.
-        normalized_text_columns: normalize_column_refs(
-            text_columns,
-            &reference_resolver,
-            &tables,
-            "TEXT COLUMNS",
-        )?,
-        normalized_exclude_columns: normalize_column_refs(
-            exclude_columns,
-            &reference_resolver,
-            &tables,
-            "EXCLUDE COLUMNS",
-        )?,
+        normalized_text_columns,
+        normalized_exclude_columns,
     })
 }

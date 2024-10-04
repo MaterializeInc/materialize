@@ -21,10 +21,8 @@ use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
     ExternalReferences, Ident, TableConstraint, UnresolvedItemName, Value, WithOptionValue,
 };
-use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::SourceExportStatementDetails;
-use mz_storage_types::sources::SourceReferenceResolver;
 use prost::Message;
 use tokio_postgres::types::Oid;
 use tokio_postgres::Client;
@@ -38,10 +36,8 @@ use crate::plan::{
 };
 
 use super::error::PgSourcePurificationError;
-use super::{
-    PartialItemName, PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport,
-    SourceReferencePolicy,
-};
+use super::references::RetrievedSourceReferences;
+use super::{PartialItemName, PurifiedExportDetails, PurifiedSourceExport, SourceReferencePolicy};
 
 /// Ensure that we have select permissions on all tables; we have to do this before we
 /// start snapshotting because if we discover we cannot `COPY` from a table while
@@ -63,8 +59,7 @@ pub(super) async fn validate_requested_references_privileges(
 /// Additionally, modify `text_columns` so that they contain database-qualified
 /// references to the columns.
 pub(super) fn generate_text_columns(
-    reference_resolver: &SourceReferenceResolver,
-    references: &[PostgresTableDesc],
+    retrieved_references: &RetrievedSourceReferences,
     text_columns: &mut [UnresolvedItemName],
 ) -> Result<BTreeMap<u32, BTreeSet<String>>, PlanError> {
     let mut text_cols_dict: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
@@ -82,17 +77,18 @@ pub(super) fn generate_text_columns(
             (col, qual) => (qual.to_vec(), col.as_str().to_string()),
         };
 
-        let qual_name = UnresolvedItemName(qual);
-
-        let (mut fully_qualified_name, idx) =
-            reference_resolver.resolve(&qual_name.0, 3).map_err(|e| {
-                PlanError::InvalidOptionValue {
+        let resolved_reference = retrieved_references.resolve_name(&qual)?;
+        let mut fully_qualified_name =
+            resolved_reference
+                .external_reference()
+                .map_err(|e| PlanError::InvalidOptionValue {
                     option_name: "TEXT COLUMNS".to_string(),
                     err: Box::new(e.into()),
-                }
-            })?;
+                })?;
 
-        let desc = &references[idx];
+        let desc = resolved_reference
+            .postgres_desc()
+            .expect("known to be postgres");
 
         if !desc.columns.iter().any(|column| column.name == col) {
             let column = mz_repr::ColumnName::from(col);
@@ -341,93 +337,15 @@ pub(super) struct PurifiedSourceExports {
 pub(super) async fn purify_source_exports(
     client: &Client,
     config: &mz_postgres_util::Config,
-    publication: &str,
-    connection: &PostgresConnection,
-    external_references: &Option<ExternalReferences>,
+    retrieved_references: &RetrievedSourceReferences,
+    requested_references: &Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
     reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
-    let publication_tables = mz_postgres_util::publication_info(client, publication).await?;
-
-    if publication_tables.is_empty() {
-        Err(PgSourcePurificationError::EmptyPublication(
-            publication.to_string(),
-        ))?;
-    }
-
-    let reference_resolver =
-        SourceReferenceResolver::new(&connection.database, &publication_tables)?;
-
-    let mut validated_references = vec![];
-    match external_references.as_ref() {
-        Some(ExternalReferences::All) => {
-            for table in &publication_tables {
-                let external_reference = UnresolvedItemName::qualified(&[
-                    Ident::new(&connection.database)?,
-                    Ident::new(&table.namespace)?,
-                    Ident::new(&table.name)?,
-                ]);
-                let subsource_name =
-                    super::source_export_name_gen(unresolved_source_name, &table.name)?;
-                validated_references.push(RequestedSourceExport {
-                    external_reference,
-                    name: subsource_name,
-                    table,
-                });
-            }
-        }
-        Some(ExternalReferences::SubsetSchemas(schemas)) => {
-            let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(client)
-                .await?
-                .into_iter()
-                .map(|s| s.name)
-                .collect();
-
-            let requested_schemas: BTreeSet<_> =
-                schemas.iter().map(|s| s.as_str().to_string()).collect();
-
-            let missing_schemas: Vec<_> = requested_schemas
-                .difference(&available_schemas)
-                .map(|s| s.to_string())
-                .collect();
-
-            if !missing_schemas.is_empty() {
-                Err(PgSourcePurificationError::DatabaseMissingFilteredSchemas {
-                    database: connection.database.clone(),
-                    schemas: missing_schemas,
-                })?;
-            }
-
-            for table in &publication_tables {
-                if !requested_schemas.contains(table.namespace.as_str()) {
-                    continue;
-                }
-
-                let external_reference = UnresolvedItemName::qualified(&[
-                    Ident::new(&connection.database)?,
-                    Ident::new(&table.namespace)?,
-                    Ident::new(&table.name)?,
-                ]);
-                let subsource_name =
-                    super::source_export_name_gen(unresolved_source_name, &table.name)?;
-                validated_references.push(RequestedSourceExport {
-                    external_reference,
-                    name: subsource_name,
-                    table,
-                });
-            }
-        }
-        Some(ExternalReferences::SubsetTables(references)) => {
-            // The user manually selected a subset of upstream tables so we need to
-            // validate that the names actually exist and are not ambiguous
-            validated_references.extend(super::source_export_gen(
-                references,
-                &reference_resolver,
-                &publication_tables,
-                3,
-                unresolved_source_name,
-            )?);
+    let requested_exports = match requested_references.as_ref() {
+        Some(requested) => {
+            retrieved_references.requested_source_exports(requested, unresolved_source_name)?
         }
         None => {
             if matches!(reference_policy, SourceReferencePolicy::Required) {
@@ -451,21 +369,23 @@ pub(super) async fn purify_source_exports(
         }
     };
 
-    if validated_references.is_empty() {
+    if requested_exports.is_empty() {
         sql_bail!(
             "[internal error]: Postgres reference {} did not match any tables",
-            external_references.as_ref().unwrap().to_ast_string()
+            requested_references.as_ref().unwrap().to_ast_string()
         );
     }
 
-    super::validate_source_export_names(&validated_references)?;
+    super::validate_source_export_names(&requested_exports)?;
 
-    let table_oids: Vec<_> = validated_references.iter().map(|r| r.table.oid).collect();
+    let table_oids: Vec<_> = requested_exports
+        .iter()
+        .map(|r| r.meta.postgres_desc().expect("is postgres").oid)
+        .collect();
 
     validate_requested_references_privileges(config, client, &table_oids).await?;
 
-    let mut text_column_map =
-        generate_text_columns(&reference_resolver, &publication_tables, &mut text_columns)?;
+    let mut text_column_map = generate_text_columns(retrieved_references, &mut text_columns)?;
 
     // Normalize options to contain full qualified values.
     text_columns.sort();
@@ -475,44 +395,53 @@ pub(super) async fn purify_source_exports(
         .map(WithOptionValue::UnresolvedItemName)
         .collect();
 
-    let requested_subsources = validated_references
+    let source_exports = requested_exports
         .into_iter()
         .map(|r| {
+            let desc = r.meta.postgres_desc().expect("known postgres");
             (
                 r.name,
                 PurifiedSourceExport {
                     external_reference: r.external_reference,
                     details: PurifiedExportDetails::Postgres {
-                        table: r.table.clone(),
-                        text_columns: text_column_map.remove(&r.table.oid).map(|v| {
+                        text_columns: text_column_map.remove(&desc.oid).map(|v| {
                             v.into_iter()
                                 .map(|s| Ident::new(s).expect("validated above"))
                                 .collect()
                         }),
+                        table: desc.clone(),
                     },
                 },
             )
         })
         .collect();
 
-    // If any any item was not removed from the text_column_map, it wasn't being
-    // added.
-    let mut dangling_text_column_refs = vec![];
+    if !text_column_map.is_empty() {
+        // If any any item was not removed from the text_column_map, it wasn't being
+        // added.
+        let mut dangling_text_column_refs = vec![];
+        let all_references = retrieved_references.all_references();
 
-    for id in text_column_map.keys() {
-        let desc = publication_tables
-            .iter()
-            .find(|t| t.oid == *id)
-            .expect("validated when generating text columns");
+        for id in text_column_map.keys() {
+            let desc = all_references
+                .iter()
+                .find_map(|reference| {
+                    let desc = reference.postgres_desc().expect("is postgres");
+                    if desc.oid == *id {
+                        Some(desc)
+                    } else {
+                        None
+                    }
+                })
+                .expect("validated when generating text columns");
 
-        dangling_text_column_refs.push(PartialItemName {
-            database: None,
-            schema: Some(desc.namespace.clone()),
-            item: desc.name.clone(),
-        });
-    }
+            dangling_text_column_refs.push(PartialItemName {
+                database: None,
+                schema: Some(desc.namespace.clone()),
+                item: desc.name.clone(),
+            });
+        }
 
-    if !dangling_text_column_refs.is_empty() {
         dangling_text_column_refs.sort();
         Err(PgSourcePurificationError::DanglingTextColumns {
             items: dangling_text_column_refs,
@@ -520,7 +449,7 @@ pub(super) async fn purify_source_exports(
     }
 
     Ok(PurifiedSourceExports {
-        source_exports: requested_subsources,
+        source_exports,
         normalized_text_columns,
     })
 }
