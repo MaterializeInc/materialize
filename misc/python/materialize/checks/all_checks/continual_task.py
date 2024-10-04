@@ -23,7 +23,7 @@ class AuditLogCT(Check):
     """Continual Task for audit logging"""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.118.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.120.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -34,7 +34,7 @@ class AuditLogCT(Check):
                 > INSERT INTO t_input VALUES (1);
                 > CREATE MATERIALIZED VIEW anomalies AS SELECT sum(key)::INT FROM t_input;
                 > CREATE CONTINUAL TASK audit_log (count INT) ON INPUT anomalies AS (
-                    INSERT INTO audit_log SELECT * FROM anomalies;
+                    INSERT INTO audit_log SELECT * FROM anomalies WHERE sum > 1;
                   )
                 """
             )
@@ -58,7 +58,6 @@ class AuditLogCT(Check):
             dedent(
                 """
                 > SELECT * FROM audit_log
-                1
                 6
                 21
            """
@@ -70,7 +69,7 @@ class StreamTableJoinCT(Check):
     """Continual Task for stream table join"""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.118.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.120.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -136,7 +135,7 @@ class UpsertCT(Check):
     """Continual Task for upserts"""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.118.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.120.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
