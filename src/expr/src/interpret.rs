@@ -288,7 +288,7 @@ impl<'a> ResultSpec<'a> {
             // Since we only care about whether / not an error is possible, and not the specific
             // error, create an arbitrary error here.
             // NOTE! This assumes that functions do not discriminate on the type of the error.
-            let map_err = result_map(Err(EvalError::Internal(String::new())));
+            let map_err = result_map(Err(EvalError::Internal("".into())));
             let raise_err = ResultSpec::fails();
             // SQL has a very loose notion of evaluation order: https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-EXPRESS-EVAL
             // Here, we account for the possibility that the expression is evaluated strictly,
@@ -819,7 +819,7 @@ impl<'a> ColumnSpecs<'a> {
     /// [Self::set_literal] is called on the resulting expression to give it a meaningful value
     /// before evaluating.
     fn placeholder(col_type: ColumnType) -> MirScalarExpr {
-        MirScalarExpr::Literal(Err(EvalError::Internal("".to_owned())), col_type)
+        MirScalarExpr::Literal(Err(EvalError::Internal("".into())), col_type)
     }
 }
 

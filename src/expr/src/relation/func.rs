@@ -2943,7 +2943,7 @@ where
 {
     if step == N::zero() {
         return Err(EvalError::InvalidParameterValue(
-            "step size cannot equal zero".to_owned(),
+            "step size cannot equal zero".into(),
         ));
     }
     Ok(num::range_step_inclusive(start, stop, step)
@@ -3000,7 +3000,7 @@ fn generate_series_ts<T: TimestampLike>(
     let normalized_step = step.as_microseconds();
     if normalized_step == 0 {
         return Err(EvalError::InvalidParameterValue(
-            "step size cannot equal zero".to_owned(),
+            "step size cannot equal zero".into(),
         ));
     }
     let rev = normalized_step < 0;
@@ -3027,17 +3027,16 @@ fn generate_subscripts_array(
     match a.unwrap_array().dims().into_iter().nth(
         (dim - 1)
             .try_into()
-            .map_err(|_| EvalError::Int32OutOfRange((dim - 1).to_string()))?,
+            .map_err(|_| EvalError::Int32OutOfRange((dim - 1).to_string().into()))?,
     ) {
         Some(requested_dim) => Ok(Box::new(generate_series::<i32>(
-            requested_dim
-                .lower_bound
-                .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange(requested_dim.lower_bound.to_string()))?,
+            requested_dim.lower_bound.try_into().map_err(|_| {
+                EvalError::Int32OutOfRange(requested_dim.lower_bound.to_string().into())
+            })?,
             requested_dim
                 .length
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange(requested_dim.length.to_string()))?,
+                .map_err(|_| EvalError::Int32OutOfRange(requested_dim.length.to_string().into()))?,
             1,
         )?)),
         None => Ok(Box::new(iter::empty())),

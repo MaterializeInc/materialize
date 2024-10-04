@@ -60,7 +60,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastUint16ToUint64)]
     #[is_monotone = true]
     fn cast_uint64_to_uint16(a: u64) -> Result<u16, EvalError> {
-        u16::try_from(a).or(Err(EvalError::UInt16OutOfRange(a.to_string())))
+        u16::try_from(a).or(Err(EvalError::UInt16OutOfRange(a.to_string().into())))
     }
 );
 
@@ -70,7 +70,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastUint32ToUint64)]
     #[is_monotone = true]
     fn cast_uint64_to_uint32(a: u64) -> Result<u32, EvalError> {
-        u32::try_from(a).or(Err(EvalError::UInt32OutOfRange(a.to_string())))
+        u32::try_from(a).or(Err(EvalError::UInt32OutOfRange(a.to_string().into())))
     }
 );
 
@@ -80,7 +80,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastInt16ToUint64)]
     #[is_monotone = true]
     fn cast_uint64_to_int16(a: u64) -> Result<i16, EvalError> {
-        i16::try_from(a).or(Err(EvalError::Int16OutOfRange(a.to_string())))
+        i16::try_from(a).or(Err(EvalError::Int16OutOfRange(a.to_string().into())))
     }
 );
 
@@ -90,7 +90,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastInt32ToUint64)]
     #[is_monotone = true]
     fn cast_uint64_to_int32(a: u64) -> Result<i32, EvalError> {
-        i32::try_from(a).or(Err(EvalError::Int32OutOfRange(a.to_string())))
+        i32::try_from(a).or(Err(EvalError::Int32OutOfRange(a.to_string().into())))
     }
 );
 
@@ -100,7 +100,7 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastInt64ToUint64)]
     #[is_monotone = true]
     fn cast_uint64_to_int64(a: u64) -> Result<i64, EvalError> {
-        i64::try_from(a).or(Err(EvalError::Int64OutOfRange(a.to_string())))
+        i64::try_from(a).or(Err(EvalError::Int64OutOfRange(a.to_string().into())))
     }
 );
 

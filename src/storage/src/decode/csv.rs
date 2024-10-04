@@ -87,12 +87,15 @@ impl CsvDecoderState {
                         }
                         if ends_valid != self.n_cols {
                             self.events_error += 1;
-                            Err(DecodeErrorKind::Text(format!(
-                                "CSV error at record number {}: expected {} columns, got {}.",
-                                self.total_events(),
-                                self.n_cols,
-                                ends_valid
-                            )))
+                            Err(DecodeErrorKind::Text(
+                                format!(
+                                    "CSV error at record number {}: expected {} columns, got {}.",
+                                    self.total_events(),
+                                    self.n_cols,
+                                    ends_valid
+                                )
+                                .into(),
+                            ))
                         } else {
                             match std::str::from_utf8(&self.output[0..self.output_cursor]) {
                                 Ok(output) => {
@@ -107,11 +110,14 @@ impl CsvDecoderState {
                                 }
                                 Err(e) => {
                                     self.events_error += 1;
-                                    Err(DecodeErrorKind::Text(format!(
-                                        "CSV error at record number {}: invalid UTF-8 ({})",
-                                        self.total_events(),
-                                        e
-                                    )))
+                                    Err(DecodeErrorKind::Text(
+                                        format!(
+                                            "CSV error at record number {}: invalid UTF-8 ({})",
+                                            self.total_events(),
+                                            e
+                                        )
+                                        .into(),
+                                    ))
                                 }
                             }
                         }
@@ -128,14 +134,17 @@ impl CsvDecoderState {
                                 .enumerate()
                                 .find(|(_, (actual, expected))| actual.unwrap_str() != &**expected);
                             if let Some((i, (actual, expected))) = mismatched {
-                                break Err(DecodeErrorKind::Text(format!(
-                                    "source file contains incorrect columns '{:?}', \
+                                break Err(DecodeErrorKind::Text(
+                                    format!(
+                                        "source file contains incorrect columns '{:?}', \
                                      first mismatched column at index {} expected={} actual={}",
-                                    row,
-                                    i + 1,
-                                    expected,
-                                    actual
-                                )));
+                                        row,
+                                        i + 1,
+                                        expected,
+                                        actual
+                                    )
+                                    .into(),
+                                ));
                             }
                         }
                         if chunk.is_empty() {

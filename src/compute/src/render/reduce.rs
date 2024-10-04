@@ -442,7 +442,7 @@ where
                                 requested = input.len(),
                             ),
                         );
-                        output.push((EvalError::Internal(message.to_string()).into(), 1));
+                        output.push((EvalError::Internal(message.into()).into(), 1));
                         return;
                     }
 
@@ -477,7 +477,7 @@ where
                             // This situation is not expected, so we log an error if it occurs.
                             let message = "Missing value for key in ReduceCollation";
                             error_logger.log(message, &format!("typ={typ:?}, key={key:?}"));
-                            output.push((EvalError::Internal(message.to_string()).into(), 1));
+                            output.push((EvalError::Internal(message.into()).into(), 1));
                             return;
                         }
                     }
@@ -488,7 +488,7 @@ where
                     {
                         let message = "Rows too large for key in ReduceCollation";
                         error_logger.log(message, &format!("key={key:?}"));
-                        output.push((EvalError::Internal(message.to_string()).into(), 1));
+                        output.push((EvalError::Internal(message.into()).into(), 1));
                     }
 
                     // Finally, if `mfp_after` can produce errors, then we should also report
@@ -592,7 +592,7 @@ where
                         }
                         let message = "Non-positive multiplicity in DistinctBy";
                         error_logger.log(message, &format!("row={key:?}, count={count}"));
-                        output.push((EvalError::Internal(message.to_string()).into(), 1));
+                        output.push((EvalError::Internal(message.into()).into(), 1));
                         return;
                     }
                     // If `mfp_after` can error, then evaluate it here.
@@ -762,7 +762,7 @@ where
             if validating {
                 let (oks, errs) = self
                     .build_reduce_inaccumulable_distinct::<_, _, RowValSpine<Result<(), String>, _, _>>(keyed, None)
-                    .as_collection(|k, v| (k.into_owned(), v.into_owned()))
+                    .as_collection(|k, v| (k.into_owned(), v.as_ref().map(|&()| ()).map_err(|m| m.as_str().into())))
                     .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>("Demux Errors", move |(key_val, result)| match result {
                         Ok(()) => Ok(pairer.split(&key_val)),
                         Err(m) => Err(EvalError::Internal(m).into()),
@@ -887,7 +887,7 @@ where
                                     let message = "Non-positive accumulation in ReduceInaccumulable";
                                     error_logger
                                         .log(message, &format!("value={value:?}, count={count}"));
-                                    target.push((EvalError::Internal(message.to_string()).into(), 1));
+                                    target.push((EvalError::Internal(message.into()).into(), 1));
                                     return;
                                 }
                             }
@@ -1140,8 +1140,7 @@ where
                                     let message = "Non-positive accumulation in ReduceMinsMaxes";
                                     error_logger
                                         .log(message, &format!("val={val:?}, count={count}"));
-                                    target
-                                        .push((EvalError::Internal(message.to_string()).into(), 1));
+                                    target.push((EvalError::Internal(message.into()).into(), 1));
                                     return;
                                 }
                             }
@@ -1252,7 +1251,7 @@ where
                             "Invalid data in source, saw non-positive accumulation \
                                          for key {key:?} in hierarchical mins-maxes aggregate"
                         );
-                        Err(EvalError::Internal(message).into())
+                        Err(EvalError::Internal(message.into()).into())
                     }
                     Ok(values) => Ok((hash_key, values)),
                 },
@@ -1394,7 +1393,7 @@ where
                 "Non-monotonic input to ReduceMonotonic",
                 &format!("data={data:?}, diff={diff}"),
             );
-            let m = "tried to build a monotonic reduction on non-monotonic input".to_string();
+            let m = "tried to build a monotonic reduction on non-monotonic input".into();
             (EvalError::Internal(m).into(), 1)
         });
         // We can place our rows directly into the diff field, and
@@ -1635,7 +1634,7 @@ where
                                 "Invalid data in source, saw net-zero records for key {key} \
                                  with non-zero accumulation in accumulable aggregate"
                             );
-                            output.push((EvalError::Internal(message).into(), 1));
+                            output.push((EvalError::Internal(message.into()).into(), 1));
                         }
                         match (&aggr.func, &accum) {
                             (AggregateFunc::SumUInt16, Accum::SimpleNumber { accum, .. })
@@ -1651,7 +1650,7 @@ where
                                         "Invalid data in source, saw negative accumulation with \
                                          unsigned type for key {key}"
                                     );
-                                    output.push((EvalError::Internal(message).into(), 1));
+                                    output.push((EvalError::Internal(message.into()).into(), 1));
                                 }
                             }
                             _ => (), // no more errors to check for at this point!

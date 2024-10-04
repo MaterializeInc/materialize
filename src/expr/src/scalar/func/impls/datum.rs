@@ -41,7 +41,7 @@ sqlfunc!(
                 let sz = mz_repr::datum_size(&datum);
                 i32::try_from(sz)
                     .map(Some)
-                    .or(Err(EvalError::Int32OutOfRange(sz.to_string())))
+                    .or(Err(EvalError::Int32OutOfRange(sz.to_string().into())))
             }
         }
     }
@@ -52,6 +52,6 @@ sqlfunc!(
     // should we make this unmaterializable?
     fn mz_row_size<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
         let sz = mz_repr::row_size(a.iter());
-        i32::try_from(sz).or(Err(EvalError::Int32OutOfRange(sz.to_string())))
+        i32::try_from(sz).or(Err(EvalError::Int32OutOfRange(sz.to_string().into())))
     }
 );

@@ -151,7 +151,7 @@ where
                             "Non-monotonic input to MonotonicTopK",
                             &format!("data={data:?}, diff={diff}"),
                         );
-                        let m = "tried to build monotonic top-k on non-monotonic input".to_string();
+                        let m = "tried to build monotonic top-k on non-monotonic input".into();
                         (DataflowError::from(EvalError::Internal(m)), 1)
                     });
                     err_collection = err_collection.concat(&errs);
@@ -418,7 +418,7 @@ where
                         let k = SharedRow::pack(hk_iter);
                         let message = "Negative multiplicities in TopK";
                         error_logger.log(message, &format!("k={k:?}, h={h}, v={v:?}"));
-                        Err(EvalError::Internal(message.to_string()).into())
+                        Err(EvalError::Internal(message.into()).into())
                     }
                     Ok(t) => Ok((hk, t)),
                 },
@@ -476,7 +476,7 @@ where
                 "Non-monotonic input to MonotonicTop1",
                 &format!("data={data:?}, diff={diff}"),
             );
-            let m = "tried to build monotonic top-1 on non-monotonic input".to_string();
+            let m = "tried to build monotonic top-1 on non-monotonic input".into();
             (EvalError::Internal(m).into(), 1)
         });
         let partial: KeyCollection<_, _, _> = partial

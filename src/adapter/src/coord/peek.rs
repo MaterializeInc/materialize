@@ -467,10 +467,9 @@ impl crate::coord::Coordinator {
             let mut results = Vec::new();
             for (row, count) in rows {
                 if count < 0 {
-                    Err(EvalError::InvalidParameterValue(format!(
-                        "Negative multiplicity in constant result: {}",
-                        count
-                    )))?
+                    Err(EvalError::InvalidParameterValue(
+                        format!("Negative multiplicity in constant result: {}", count).into(),
+                    ))?
                 };
                 if count > 0 {
                     let count = usize::cast_from(

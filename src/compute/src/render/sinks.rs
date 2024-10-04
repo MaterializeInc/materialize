@@ -107,10 +107,10 @@ where
                         idx += skip + 1;
                         if datum.is_null() {
                             return Err(DataflowError::EvalError(Box::new(
-                                EvalError::MustNotBeNull(format!(
-                                    "column {}",
-                                    from_desc.get_name(i).as_str().quoted()
-                                )),
+                                EvalError::MustNotBeNull(
+                                    format!("column {}", from_desc.get_name(i).as_str().quoted())
+                                        .into(),
+                                ),
                             )));
                         }
                     }

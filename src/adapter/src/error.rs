@@ -237,7 +237,7 @@ impl AdapterError {
             severity,
             code: self.code(),
             message: self.to_string(),
-            detail: self.detail(),
+            detail: self.detail().into(),
             hint: self.hint(),
             position: self.position(),
         }

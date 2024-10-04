@@ -721,7 +721,7 @@ where
                     if !limit.return_at_limit {
                         err = err.concat(&Collection::new(over_limit).map(move |_data| {
                             DataflowError::EvalError(Box::new(EvalError::LetRecLimitExceeded(
-                                format!("{}", limit.max_iters.get()),
+                                format!("{}", limit.max_iters.get()).into(),
                             )))
                         }));
                     }

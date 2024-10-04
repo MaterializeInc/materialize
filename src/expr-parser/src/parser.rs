@@ -987,7 +987,7 @@ mod scalar {
             content.parse::<syn::LitStr>()?.value()
         };
         let err = if msg.starts_with("internal error: ") {
-            Ok(mz_expr::EvalError::Internal(msg.split_off(16)))
+            Ok(mz_expr::EvalError::Internal(msg.split_off(16).into()))
         } else {
             Err(Error::new(msg.span(), "expected `internal error: $msg`"))
         }?;

@@ -134,14 +134,14 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
         | DateTimeUnits::Second
         | DateTimeUnits::Milliseconds
         | DateTimeUnits::Microseconds => Err(EvalError::UnsupportedUnits(
-            format!("{}", units),
-            "date".to_string(),
+            format!("{}", units).into(),
+            "date".into(),
         )),
         DateTimeUnits::Timezone
         | DateTimeUnits::TimezoneHour
         | DateTimeUnits::TimezoneMinute
         | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
-            feature: format!("'{}' timestamp units", units),
+            feature: format!("'{}' timestamp units", units).into(),
             discussion_no: None,
         }),
     }
