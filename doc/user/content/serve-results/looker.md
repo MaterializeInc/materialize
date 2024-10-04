@@ -58,12 +58,31 @@ When using Looker with Materialize, be aware of the following limitations:
    Test kill: Cannot cancel queries: Query could not be found in database.
    ```
 
-   This is a known issue with Looker and can be safely ignored and does not impact the functionality of Looker.
+   This error occurs because Looker attempts to run a test query cancellation, which checks for `pg_stat_activity` (not currently supported in Materialize).
 
-2. **Symmetric Aggregates**: Looker uses [symmetric aggregates](https://cloud.google.com/looker/docs/best-practices/understanding-symmetric-aggregates),a feature that relies on the `BIT` type with `SUM DISTINCT` in PostgreSQL connectors. While we haven't confirmed performance impacts in Materialize, consider the following:
+   While this error can be safely ignored and doesn't impact most Looker functionality, there are workarounds for query cancellation if you need to stop a running query:
 
-   - You can disable symmetric aggregates in Looker if needed. For instructions on how to do this, refer to the [Looker documentation on disabling symmetric aggregates](https://cloud.google.com/looker/docs/reference/param-explore-symmetric-aggregates#not_all_database_dialects_support_median_and_percentile_measure_types_with_symmetric_aggregates).
-   - Looker remains fully functional for visualizing Materialize data without this feature.
+   a. Use `pg_cancel_backend` in Materialize:
+
+      ```sql
+      SELECT pg_cancel_backend(connection_id)
+      FROM mz_sessions
+      WHERE id = 'your_session_id';
+      ```
+
+   b. Via the Materialize Console:
+      - Go to [Materialize Console](https://console.materialize.com/)
+      - Navigate to Query History
+      - Filter by 'Running' queries
+      - Click on the query you want to cancel
+      - Select "Request Cancellation"
+
+2. **Symmetric Aggregates**: Looker uses symmetric aggregates, which rely on types and operations not fully supported in Materialize:
+
+   - Materialize doesn't support the `BIT` type used by Looker for symmetric aggregates.
+   - Looker may use various aggregations (e.g., `SUM DISTINCT`, `AVG DISTINCT`) for symmetric aggregates.
+   - You can disable symmetric aggregates in Looker if needed. For instructions, refer to the [Looker documentation on disabling symmetric aggregates](https://cloud.google.com/looker/docs/reference/param-explore-symmetric-aggregates#not_all_database_dialects_support_median_and_percentile_measure_types_with_symmetric_aggregates).
+   - Looker is fully functional for non-symmetric aggregations when visualizing Materialize data.
 
 3. **Handling Symmetric Aggregates**:
 
