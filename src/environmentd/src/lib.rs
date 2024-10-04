@@ -343,7 +343,7 @@ impl Listeners {
         info!("startup: envd serve: catalog init beginning");
 
         // Get the current timestamp so we can record when we booted.
-        let boot_ts = (config.now)();
+        let mut boot_ts = (config.now)().into();
 
         let persist_client = config
             .catalog_config
@@ -552,10 +552,10 @@ impl Listeners {
         };
 
         // Load the adapter durable storage.
-        let adapter_storage = if read_only {
+        let (adapter_storage, new_boot_ts) = if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
-            let adapter_storage = openable_adapter_storage
+            let (adapter_storage, new_boot_ts) = openable_adapter_storage
                 .open_savepoint(boot_ts, &bootstrap_args)
                 .await?;
 
@@ -563,9 +563,9 @@ impl Listeners {
             // because we are by definition not the leader if we are in
             // read-only mode.
 
-            adapter_storage
+            (adapter_storage, new_boot_ts)
         } else {
-            let adapter_storage = openable_adapter_storage
+            let (adapter_storage, new_boot_ts) = openable_adapter_storage
                 .open(boot_ts, &bootstrap_args)
                 .await?;
 
@@ -574,8 +574,9 @@ impl Listeners {
             // fenced out all other environments using the adapter storage.
             deployment_state.set_is_leader();
 
-            adapter_storage
+            (adapter_storage, new_boot_ts)
         };
+        boot_ts = new_boot_ts;
 
         info!(
             "startup: envd serve: durable catalog open complete in {:?}",
@@ -624,6 +625,7 @@ impl Listeners {
             environment_id: config.environment_id.clone(),
             metrics_registry: config.metrics_registry.clone(),
             now: config.now,
+            boot_ts,
             secrets_controller: config.secrets_controller,
             cloud_resource_controller: config.cloud_resource_controller,
             cluster_replica_sizes: config.cluster_replica_sizes,

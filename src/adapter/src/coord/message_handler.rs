@@ -277,9 +277,10 @@ impl Coordinator {
         };
 
         let mut ops = Vec::with_capacity(shards_usage.by_shard.len());
+        let id_ts = self.get_local_write_ts().await.timestamp;
         let mut storage_usage_ids: Vec<_> = match self
             .catalog()
-            .allocate_storage_usage_ids(usize_to_u64(shards_usage.by_shard.len()))
+            .allocate_storage_usage_ids(usize_to_u64(shards_usage.by_shard.len()), id_ts)
             .await
         {
             Ok(storage_usage_ids) => storage_usage_ids,
@@ -288,6 +289,7 @@ impl Coordinator {
                 return;
             }
         };
+        self.apply_local_write(id_ts).await;
         // Reverse so we can pop IDs from the back in order.
         storage_usage_ids.reverse();
 

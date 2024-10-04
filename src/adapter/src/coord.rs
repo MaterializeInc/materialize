@@ -76,6 +76,7 @@ use mz_sql::names::{ResolvedIds, SchemaSpecifier};
 use mz_sql::session::user::User;
 use mz_storage_types::read_holds::ReadHold;
 use std::borrow::Cow;
+use std::cmp::max;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::net::IpAddr;
@@ -967,6 +968,7 @@ pub struct Config {
     pub environment_id: EnvironmentId,
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
+    pub boot_ts: Timestamp,
     pub secrets_controller: Arc<dyn SecretsController>,
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
     pub availability_zones: Vec<String>,
@@ -3390,6 +3392,7 @@ pub fn serve(
         environment_id,
         metrics_registry,
         now,
+        mut boot_ts,
         secrets_controller,
         cloud_resource_controller,
         cluster_replica_sizes,
@@ -3493,13 +3496,14 @@ pub fn serve(
             .expect("inserted above")
             .oracle;
 
-        let boot_ts = if read_only_controllers {
+        let oracle_boot_ts = if read_only_controllers {
             epoch_millis_oracle.read_ts().await
         } else {
             // Getting a write timestamp bumps the write timestamp in the
             // oracle, which we're not allowed in read-only mode.
             epoch_millis_oracle.write_ts().await.timestamp
         };
+        boot_ts = max(boot_ts.step_forward(), oracle_boot_ts);
 
         info!(
             "startup: coordinator init: timestamp oracle init complete in {:?}",
@@ -3637,16 +3641,29 @@ pub fn serve(
             .spawn(move || {
                 let span = info_span!(parent: parent_span, "coord::coordinator").entered();
 
-                let controller = handle
+                let commit_ts = handle
+                    .block_on(
+                        timestamp_oracles[&Timeline::EpochMilliseconds]
+                            .oracle
+                            .write_ts(),
+                    )
+                    .timestamp;
+                let (controller, commit_ts) = handle
                     .block_on({
                         catalog.initialize_controller(
                             controller_config,
                             controller_envd_epoch,
                             read_only_controllers,
                             storage_collections_to_drop,
+                            commit_ts,
                         )
                     })
                     .expect("failed to initialize storage_controller");
+                handle.block_on(
+                    timestamp_oracles[&Timeline::EpochMilliseconds]
+                        .oracle
+                        .apply_write(commit_ts),
+                );
 
                 let catalog = Arc::new(catalog);
 

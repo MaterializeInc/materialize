@@ -409,7 +409,7 @@ impl Catalog {
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
         // init.
-        tx.commit()
+        tx.commit(oracle_write_ts)
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
 

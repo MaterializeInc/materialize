@@ -430,7 +430,10 @@ impl Coordinator {
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
         let sink_id = if let ExplainContext::None = explain_ctx {
-            self.catalog_mut().allocate_user_id().await?
+            let id_ts = self.get_local_write_ts().await.timestamp;
+            let id = self.catalog_mut().allocate_user_id(id_ts).await?;
+            self.apply_local_write(id_ts).await;
+            id
         } else {
             self.allocate_transient_id()
         };

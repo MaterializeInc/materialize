@@ -112,9 +112,10 @@ async fn test_is_initialized(state_builder: TestCatalogStateBuilder) {
     );
 
     let state = openable_state1
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     state.expire().await;
 
     let mut openable_state2 = state_builder.unwrap_build().await;
@@ -156,9 +157,10 @@ async fn test_get_deployment_generation(state_builder: TestCatalogStateBuilder) 
         );
 
         let state = openable_state
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         state.expire().await;
     }
 
@@ -199,7 +201,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args())
+            .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap_err();
         match err {
@@ -214,9 +216,10 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
         Box::new(state).expire().await;
     }
@@ -227,7 +230,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args())
+            .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap();
         // Drain initial updates.
@@ -281,7 +284,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
         }
         // Drain txn updates.
         let _ = txn.get_and_commit_op_updates();
-        txn.commit().await.unwrap();
+        txn.commit(txn.upper()).await.unwrap();
 
         // Read back writes.
         let snapshot = state.snapshot().await.unwrap();
@@ -308,7 +311,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
         }
         // Drain txn updates.
         let _ = txn.get_and_commit_op_updates();
-        txn.commit().await.unwrap();
+        txn.commit(txn.upper()).await.unwrap();
 
         // Read back updates.
         let snapshot = state.snapshot().await.unwrap();
@@ -330,9 +333,10 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         // Write should not have persisted.
         let db = state
             .snapshot()
@@ -375,9 +379,10 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     // Drain initial updates.
     let _ = state
         .sync_to_current_updates()
@@ -416,7 +421,7 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
         .unwrap();
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
-    txn.commit().await.unwrap();
+    txn.commit(txn.upper()).await.unwrap();
 
     let snapshot = read_only_state.snapshot().await.unwrap();
     let role = snapshot.roles.get(&proto::RoleKey {
@@ -445,9 +450,10 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             .unwrap_build()
             .await
             // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-            .open(NOW_ZERO(), &test_bootstrap_args())
+            .open(NOW_ZERO().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
         // Check initial snapshot.
@@ -469,9 +475,10 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         assert_eq!(state.epoch(), Epoch::new(3).expect("known to be non-zero"));
         assert_eq!(state.snapshot().await.unwrap(), snapshot);
@@ -484,9 +491,10 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         assert_eq!(state.epoch(), Epoch::new(4).expect("known to be non-zero"));
         assert_eq!(state.snapshot().await.unwrap(), snapshot);
@@ -516,9 +524,10 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         // drain catalog updates.
         let _ = state.sync_to_current_updates().await.unwrap();
         let mut txn = state.transaction().await.unwrap();
@@ -544,9 +553,10 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
         .with_deploy_generation(deploy_generation + 1)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     // Unopened catalog should be fenced now with a deploy generation fence.
     let err = openable_state
@@ -614,18 +624,20 @@ async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     // Open catalog, which will bump the epoch.
     let _state = state_builder
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     // Opened catalog should be fenced now with an epoch fence.
     let err = state.snapshot().await.unwrap_err();
@@ -662,9 +674,10 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     // Open catalog, which will bump the epoch AND deploy generation.
     let _state = state_builder
@@ -672,9 +685,10 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .with_deploy_generation(deploy_generation + 1)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     // Opened catalog should be fenced now with an epoch fence.
     let err = state.snapshot().await.unwrap_err();
@@ -715,9 +729,10 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     // Drain updates.
     let _ = state.sync_to_current_updates().await;
     let mut txn = state.transaction().await.unwrap();
@@ -729,9 +744,10 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     // Drain updates.
     let _ = state.sync_to_current_updates().await;
 
@@ -754,9 +770,10 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .with_deploy_generation(deploy_generation + 1)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     // Committing results in a deploy generation fence error.
     let err = txn.commit().await.unwrap_err();
@@ -793,9 +810,10 @@ async fn test_persist_version_fencing() {
             .unwrap_build()
             .await;
         let _persist_state = persist_openable_state
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         persist_cache.cfg.build_version = reader_version.clone();
         let persist_client = persist_cache
@@ -855,9 +873,10 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
     let state_handle = mz_ore::task::spawn(|| "state", async move {
         // Eventually this state should get fenced by the open below.
         let err = run_state(&mut state).await.unwrap_err();
@@ -872,9 +891,10 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 
     state_handle.await.unwrap();
 
@@ -882,7 +902,8 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
     let _state = state_builder
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
+        .unwrap()
+        .0;
 }

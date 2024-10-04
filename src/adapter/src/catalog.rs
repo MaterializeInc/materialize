@@ -45,7 +45,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, ScalarType};
+use mz_repr::{Diff, GlobalId, ScalarType, Timestamp};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
@@ -482,7 +482,10 @@ impl Catalog {
             .with_default_deploy_generation()
             .build()
             .await?;
-        let storage = openable_storage.open(now(), &test_bootstrap_args()).await?;
+        let storage = openable_storage
+            .open(now().into(), &test_bootstrap_args())
+            .await?
+            .0;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
             .await
@@ -607,10 +610,10 @@ impl Catalog {
         self.storage.lock().await
     }
 
-    pub async fn allocate_user_id(&self) -> Result<GlobalId, Error> {
+    pub async fn allocate_user_id(&self, commit_ts: Timestamp) -> Result<GlobalId, Error> {
         self.storage()
             .await
-            .allocate_user_id()
+            .allocate_user_id(commit_ts)
             .await
             .maybe_terminate("allocating user ids")
             .err_into()
@@ -646,20 +649,24 @@ impl Catalog {
             .err_into()
     }
 
-    pub async fn allocate_user_cluster_id(&self) -> Result<ClusterId, Error> {
+    pub async fn allocate_user_cluster_id(&self, commit_ts: Timestamp) -> Result<ClusterId, Error> {
         self.storage()
             .await
-            .allocate_user_cluster_id()
+            .allocate_user_cluster_id(commit_ts)
             .await
             .maybe_terminate("allocating user cluster ids")
             .err_into()
     }
 
-    pub async fn allocate_replica_id(&self, cluster_id: &ClusterId) -> Result<ReplicaId, Error> {
+    pub async fn allocate_replica_id(
+        &self,
+        cluster_id: &ClusterId,
+        commit_ts: Timestamp,
+    ) -> Result<ReplicaId, Error> {
         let mut storage = self.storage().await;
         let id = match cluster_id {
-            ClusterId::User(_) => storage.allocate_user_replica_id().await,
-            ClusterId::System(_) => storage.allocate_system_replica_id().await,
+            ClusterId::User(_) => storage.allocate_user_replica_id(commit_ts).await,
+            ClusterId::System(_) => storage.allocate_system_replica_id(commit_ts).await,
         };
         id.maybe_terminate("allocating replica ids").err_into()
     }
@@ -682,10 +689,14 @@ impl Catalog {
             .err_into()
     }
 
-    pub async fn allocate_storage_usage_ids(&self, amount: u64) -> Result<Vec<u64>, Error> {
+    pub async fn allocate_storage_usage_ids(
+        &self,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<u64>, Error> {
         self.storage()
             .await
-            .allocate_storage_usage_ids(amount)
+            .allocate_storage_usage_ids(amount, commit_ts)
             .await
             .maybe_terminate("allocating storage usage id")
             .err_into()
@@ -1147,7 +1158,10 @@ impl Catalog {
     }
 
     /// Allocate ids for introspection sources. Called once per cluster creation.
-    pub async fn allocate_introspection_sources(&self) -> Vec<(&'static BuiltinLog, GlobalId)> {
+    pub async fn allocate_introspection_sources(
+        &self,
+        commit_ts: Timestamp,
+    ) -> Vec<(&'static BuiltinLog, GlobalId)> {
         let log_amount = BUILTINS::logs().count();
         let system_ids = self
             .storage()
@@ -1156,6 +1170,7 @@ impl Catalog {
                 log_amount
                     .try_into()
                     .expect("builtin logs should fit into u64"),
+                commit_ts,
             )
             .await
             .unwrap_or_terminate("cannot fail to allocate system ids");

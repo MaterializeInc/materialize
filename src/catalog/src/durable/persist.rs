@@ -18,6 +18,26 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::durable::debug::{Collection, DebugCatalogState, Trace};
+use crate::durable::error::FenceError;
+use crate::durable::initialize::{
+    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, SYSTEM_CONFIG_SYNCED_KEY,
+    USER_VERSION_KEY, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+};
+use crate::durable::metrics::Metrics;
+use crate::durable::objects::state_update::{
+    IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
+    TryIntoStateUpdateKind,
+};
+use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
+use crate::durable::transaction::TransactionBatch;
+use crate::durable::upgrade::upgrade;
+use crate::durable::{
+    initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
+    OpenableDurableCatalogState, ReadOnlyDurableCatalogState, Transaction,
+    CATALOG_CONTENT_VERSION_KEY,
+};
+use crate::memory;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
@@ -46,27 +66,6 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::Container;
 use tracing::{debug, warn};
 use uuid::Uuid;
-
-use crate::durable::debug::{Collection, DebugCatalogState, Trace};
-use crate::durable::error::FenceError;
-use crate::durable::initialize::{
-    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, SYSTEM_CONFIG_SYNCED_KEY,
-    USER_VERSION_KEY, WITH_0DT_DEPLOYMENT_MAX_WAIT,
-};
-use crate::durable::metrics::Metrics;
-use crate::durable::objects::state_update::{
-    IntoStateUpdateKindJson, StateUpdate, StateUpdateKind, StateUpdateKindJson,
-    TryIntoStateUpdateKind,
-};
-use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
-use crate::durable::transaction::TransactionBatch;
-use crate::durable::upgrade::upgrade;
-use crate::durable::{
-    initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
-    OpenableDurableCatalogState, ReadOnlyDurableCatalogState, Transaction,
-    CATALOG_CONTENT_VERSION_KEY,
-};
-use crate::memory;
 
 /// New-type used to represent timestamps in persist.
 pub(crate) type Timestamp = mz_repr::Timestamp;
@@ -439,8 +438,15 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     pub(crate) async fn compare_and_append<S: IntoStateUpdateKindJson>(
         &mut self,
         updates: Vec<(S, Diff)>,
+        commit_ts: Timestamp,
     ) -> Result<Timestamp, CompareAndAppendError> {
         assert_eq!(self.mode, Mode::Writable);
+        assert!(
+            commit_ts >= self.upper,
+            "expected commit ts, {}, to be greater than or equal to upper, {}",
+            commit_ts,
+            self.upper
+        );
 
         // This awkward code allows us to perform an expensive soft assert that requires cloning
         // `updates` twice, after `updates` has been consumed.
@@ -473,9 +479,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindJson = kind.into();
-            ((Into::<SourceData>::into(kind), ()), self.upper, diff)
+            ((Into::<SourceData>::into(kind), ()), commit_ts, diff)
         });
-        let next_upper = self.upper.step_forward();
+        let next_upper = commit_ts.step_forward();
         let res = self
             .write_handle
             .compare_and_append(
@@ -1074,9 +1080,10 @@ impl UnopenedPersistCatalogState {
     async fn open_inner(
         mut self,
         mode: Mode,
-        initial_ts: EpochMillis,
+        initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+    ) -> Result<(Box<dyn DurableCatalogState>, Timestamp), CatalogError> {
+        let mut initial_ts = max(initial_ts, self.upper.into());
         self.mode = mode;
 
         // Validate the current deploy generation.
@@ -1108,6 +1115,7 @@ impl UnopenedPersistCatalogState {
         // Fence out previous catalogs.
         loop {
             self.sync_to_current_upper().await?;
+            initial_ts = max(initial_ts, self.upper);
             let (fence_updates, current_fenceable_token) = self
                 .fenceable_token
                 .generate_unfenced_token(self.mode)?
@@ -1123,7 +1131,10 @@ impl UnopenedPersistCatalogState {
                 "fencing previous catalogs"
             );
             if matches!(self.mode, Mode::Writable) {
-                match self.compare_and_append(fence_updates.clone()).await {
+                match self
+                    .compare_and_append(fence_updates.clone(), initial_ts)
+                    .await
+                {
                     Ok(_) => {}
                     Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
                     Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
@@ -1149,7 +1160,7 @@ impl UnopenedPersistCatalogState {
 
         // Perform data migrations.
         if is_initialized && !read_only {
-            upgrade(&mut self).await?;
+            upgrade(&mut self, &mut initial_ts).await?;
         }
 
         debug!(
@@ -1196,11 +1207,12 @@ impl UnopenedPersistCatalogState {
                 catalog.snapshot
             );
 
+            initial_ts = max(initial_ts, catalog.upper);
             let mut txn = catalog.transaction().await?;
             initialize::initialize(
                 &mut txn,
                 bootstrap_args,
-                initial_ts,
+                initial_ts.into(),
                 catalog_content_version,
             )
             .await?;
@@ -1213,7 +1225,8 @@ impl UnopenedPersistCatalogState {
             let updates = StateUpdate::from_txn_batch_ts(txn_batch, catalog.upper);
             catalog.apply_updates(updates)?;
         } else {
-            txn.commit_internal().await?;
+            initial_ts = max(initial_ts, txn.upper());
+            txn.commit_internal(initial_ts.into()).await?;
         }
 
         // Now that we've fully opened the catalog at the current version, we can increment the
@@ -1252,7 +1265,7 @@ impl UnopenedPersistCatalogState {
             });
         }
 
-        Ok(Box::new(catalog))
+        Ok((Box::new(catalog), initial_ts))
     }
 
     /// Reports if the catalog state has been initialized.
@@ -1314,9 +1327,9 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     #[mz_ore::instrument]
     async fn open_savepoint(
         mut self: Box<Self>,
-        initial_ts: EpochMillis,
+        initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+    ) -> Result<(Box<dyn DurableCatalogState>, Timestamp), CatalogError> {
         self.open_inner(Mode::Savepoint, initial_ts, bootstrap_args)
             .boxed()
             .await
@@ -1327,17 +1340,19 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Readonly, EpochMillis::MIN, bootstrap_args)
+        Ok(self
+            .open_inner(Mode::Readonly, EpochMillis::MIN.into(), bootstrap_args)
             .boxed()
-            .await
+            .await?
+            .0)
     }
 
     #[mz_ore::instrument]
     async fn open(
         mut self: Box<Self>,
-        initial_ts: EpochMillis,
+        initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+    ) -> Result<(Box<dyn DurableCatalogState>, Timestamp), CatalogError> {
         self.open_inner(Mode::Writable, initial_ts, bootstrap_args)
             .boxed()
             .await
@@ -1623,18 +1638,20 @@ impl DurableCatalogState for PersistCatalogState {
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
         self.metrics.transactions_started.inc();
         let snapshot = self.snapshot().await?;
-        let commit_ts = self.upper.clone();
-        Transaction::new(self, snapshot, commit_ts)
+        let upper = self.upper.clone();
+        Transaction::new(self, snapshot, upper)
     }
 
     #[mz_ore::instrument(level = "debug")]
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
+        commit_ts: Timestamp,
     ) -> Result<Timestamp, CatalogError> {
         async fn commit_transaction_inner(
             catalog: &mut PersistCatalogState,
             txn_batch: TransactionBatch,
+            commit_ts: Timestamp,
         ) -> Result<Timestamp, CatalogError> {
             // If the transaction is empty then we don't error, even in read-only mode. This matches the
             // semantics that the stash uses.
@@ -1645,12 +1662,12 @@ impl DurableCatalogState for PersistCatalogState {
                 .into());
             }
 
-            // If the current upper does not match the transaction's commit timestamp, then the
+            // If the current upper does not match the transaction's upper, then the
             // catalog must have changed since the transaction was started, making the transaction
             // invalid. When/if we want a multi-writer catalog, this will likely have to change
             // from an assert to a retry.
             assert_eq!(
-                catalog.upper, txn_batch.commit_ts,
+                catalog.upper, txn_batch.upper,
                 "only one transaction at a time is supported"
             );
 
@@ -1659,7 +1676,7 @@ impl DurableCatalogState for PersistCatalogState {
 
             let next_upper = match catalog.mode {
                 Mode::Writable => catalog
-                    .compare_and_append(updates)
+                    .compare_and_append(updates, commit_ts)
                     .await
                     .map_err(|e| e.unwrap_fence_error())?,
                 Mode::Savepoint => {
@@ -1679,7 +1696,7 @@ impl DurableCatalogState for PersistCatalogState {
         }
         self.metrics.transaction_commits.inc();
         let counter = self.metrics.transaction_commit_latency_seconds.clone();
-        commit_transaction_inner(self, txn_batch)
+        commit_transaction_inner(self, txn_batch, commit_ts)
             .wall_time()
             .inc_by(counter)
             .await
@@ -1910,7 +1927,7 @@ impl UnopenedPersistCatalogState {
             match self.fenceable_token.generate_unfenced_token(self.mode)? {
                 Some((fence_updates, current_fenceable_token)) => {
                     updates.extend(fence_updates.clone());
-                    match self.compare_and_append(updates).await {
+                    match self.compare_and_append(updates, self.upper).await {
                         Ok(_) => {
                             self.fenceable_token = current_fenceable_token;
                             break prev_value;
@@ -1923,7 +1940,7 @@ impl UnopenedPersistCatalogState {
                     }
                 }
                 None => {
-                    self.compare_and_append(updates)
+                    self.compare_and_append(updates, self.upper)
                         .await
                         .map_err(|e| e.unwrap_fence_error())?;
                     break prev_value;
@@ -1962,7 +1979,7 @@ impl UnopenedPersistCatalogState {
             match self.fenceable_token.generate_unfenced_token(self.mode)? {
                 Some((fence_updates, current_fenceable_token)) => {
                     retractions.extend(fence_updates.clone());
-                    match self.compare_and_append(retractions).await {
+                    match self.compare_and_append(retractions, self.upper).await {
                         Ok(_) => {
                             self.fenceable_token = current_fenceable_token;
                             break;
@@ -1975,7 +1992,7 @@ impl UnopenedPersistCatalogState {
                     }
                 }
                 None => {
-                    self.compare_and_append(retractions)
+                    self.compare_and_append(retractions, self.upper)
                         .await
                         .map_err(|e| e.unwrap_fence_error())?;
                     break;

@@ -317,8 +317,8 @@ impl Catalog {
 
         // Make life easier by consolidating all updates, so that we end up with only positive
         // diffs.
-        let commit_ts = txn.commit_ts();
-        let mut updates = into_consolidatable_updates_startup(updates, commit_ts);
+        let upper = txn.upper();
+        let mut updates = into_consolidatable_updates_startup(updates, upper);
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
         soft_assert_no_log!(
             updates.iter().all(|(_, _, diff)| *diff == 1),
@@ -413,7 +413,7 @@ impl Catalog {
         builtin_table_updates.extend(builtin_table_update);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
 
-        txn.commit().await?;
+        txn.commit(config.boot_ts).await?;
 
         cleanup_action.await;
 
@@ -509,6 +509,7 @@ impl Catalog {
         &mut self,
         storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
         storage_collections_to_drop: BTreeSet<GlobalId>,
+        commit_ts: Timestamp,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
         let collections = self
             .entries()
@@ -531,7 +532,7 @@ impl Catalog {
         let updates = txn.get_and_commit_op_updates();
         let builtin_updates = state.apply_updates(updates)?;
         assert_eq!(builtin_updates, Vec::new());
-        txn.commit().await?;
+        txn.commit(commit_ts).await?;
         drop(storage);
 
         // Save updated state.
@@ -547,8 +548,11 @@ impl Catalog {
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
         storage_collections_to_drop: BTreeSet<GlobalId>,
-    ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
-    {
+        commit_ts: Timestamp,
+    ) -> Result<
+        (mz_controller::Controller<mz_repr::Timestamp>, Timestamp),
+        mz_catalog::durable::CatalogError,
+    > {
         let controller_start = Instant::now();
         info!("startup: controller init: beginning");
 
@@ -562,16 +566,18 @@ impl Catalog {
                 updates.is_empty(),
                 "initializing controller should not produce updates: {updates:?}"
             );
-            tx.commit().await?;
+            tx.commit(commit_ts).await?;
 
             let read_only_tx = storage.transaction().await?;
 
             mz_controller::Controller::new(config, envd_epoch, read_only, &read_only_tx).await
         };
 
+        let commit_ts = commit_ts.step_forward();
         self.initialize_storage_controller_state(
             &mut *controller.storage,
             storage_collections_to_drop,
+            commit_ts,
         )
         .await?;
 
@@ -580,7 +586,7 @@ impl Catalog {
             controller_start.elapsed()
         );
 
-        Ok(controller)
+        Ok((controller, commit_ts))
     }
 
     /// The objects in the catalog form one or more DAGs (directed acyclic graph) via object
