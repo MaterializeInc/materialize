@@ -9,4 +9,4 @@
 
 {{ config(materialized='table') }}
 
-CREATE TABLE {{ this }} (c int);
+SELECT 1 AS "c"
