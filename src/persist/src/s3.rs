@@ -513,7 +513,7 @@ impl Blob for S3Blob {
                         get_invalid_resp.inc();
                         None
                     }
-                    _ => None,
+                    Some(0) | None => None,
                 };
 
                 while let Some(data) = object.body.next().await {
