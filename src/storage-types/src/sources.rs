@@ -1469,7 +1469,7 @@ pub enum ExternalReferenceResolutionError {
     #[error("reference to {name} not found in source")]
     DoesNotExist { name: String },
     #[error(
-        "reference to {name} is ambiguous, consider specifying an additional \
+        "reference {name} is ambiguous, consider specifying an additional \
     layer of qualification"
     )]
     Ambiguous { name: String },

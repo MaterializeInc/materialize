@@ -344,9 +344,8 @@ pub(super) async fn purify_source_exports(
     reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
     let requested_exports = match requested_references.as_ref() {
-        Some(requested) => {
-            retrieved_references.requested_source_exports(requested, unresolved_source_name)?
-        }
+        Some(requested) => retrieved_references
+            .requested_source_exports(Some(requested), unresolved_source_name)?,
         None => {
             if matches!(reference_policy, SourceReferencePolicy::Required) {
                 Err(PgSourcePurificationError::RequiresExternalReferences)?
