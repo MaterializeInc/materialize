@@ -443,6 +443,7 @@ impl Blob for S3Blob {
             // each download task.
             let min_header_elapsed = Arc::clone(&min_header_elapsed);
             let min_body_elapsed = Arc::clone(&min_body_elapsed);
+            let get_invalid_resp = self.metrics.get_invalid_resp.clone();
             let first_part = first_part.take();
             let path = &path;
             let request_future = async move {
@@ -491,22 +492,28 @@ impl Blob for S3Blob {
                 let enable_one_allocation =
                     ENABLE_ONE_ALLOC_PER_REQUEST.get(&self.cfg) && enable_s3_lgalloc;
                 let mut buffer = match object.content_length() {
-                    Some(len @ 1..) if enable_one_allocation => {
-                        let len: u64 = len.try_into().expect("positive integer");
-                        // N.B. `lgalloc` cannot reallocate so we need to make sure the initial
-                        // allocation is large enough to fit then entire blob.
-                        let buf: MetricsRegion<u8> = self
-                            .metrics
-                            .lgbytes
-                            .persist_s3
-                            .new_region(usize::cast_from(len));
-                        Some(buf)
+                    Some(len @ 1..) => {
+                        if enable_one_allocation {
+                            let len: u64 = len.try_into().expect("positive integer");
+                            // N.B. `lgalloc` cannot reallocate so we need to make sure the initial
+                            // allocation is large enough to fit then entire blob.
+                            let buf: MetricsRegion<u8> = self
+                                .metrics
+                                .lgbytes
+                                .persist_s3
+                                .new_region(usize::cast_from(len));
+                            Some(buf)
+                        } else {
+                            None
+                        }
                     }
-                    Some(len) => {
-                        tracing::error!(?len, "found invalid content-length, falling back");
+                    // content-length of 0 isn't necessarily invalid.
+                    Some(len @ ..=-1) => {
+                        tracing::trace!(?len, "found invalid content-length, falling back");
+                        get_invalid_resp.inc();
                         None
                     }
-                    _ => None,
+                    Some(0) | None => None,
                 };
 
                 while let Some(data) = object.body.next().await {
