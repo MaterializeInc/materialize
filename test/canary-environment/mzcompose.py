@@ -196,6 +196,19 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
         )
 
+        c.testdrive(
+            input=dedent(
+                """
+            > SET DATABASE=qa_canary_environment
+
+            > CREATE SCHEMA IF NOT EXISTS public_table;
+
+            # create the table here because dbt creates it as materialized view, which will not allow inserts
+            > CREATE TABLE IF NOT EXISTS public_table.table (c INT);
+            """
+            )
+        )
+
     c.exec("dbt", "dbt", "run", "--threads", "8", workdir="/workdir")
 
 
