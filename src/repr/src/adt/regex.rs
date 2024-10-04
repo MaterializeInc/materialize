@@ -84,6 +84,8 @@ impl Regex {
 
     /// Returns the pattern string of the regex.
     pub fn pattern(&self) -> &str {
+        // `as_str` returns the raw pattern as provided during construction,
+        // and doesn't include any of the flags.
         self.regex.as_str()
     }
 }
@@ -305,7 +307,9 @@ prop_compose! {
                  r in REPETITIONS, e in END_SYMBOLS, case_insensitive in any::<bool>(), dot_matches_new_line in any::<bool>())
                 -> Regex {
         let string = format!("{}{}{}{}", b, c, r, e);
-        Regex::new_dot_matches_new_line(&string, case_insensitive, dot_matches_new_line).unwrap()
+        let regex = Regex::new_dot_matches_new_line(&string, case_insensitive, dot_matches_new_line).unwrap();
+        assert_eq!(regex.pattern(), string);
+        regex
     }
 }
 
@@ -332,7 +336,8 @@ mod tests {
     /// Nowadays, we use our own handwritten Serialize/Deserialize impls for our Regex wrapper struct.
     #[mz_ore::test]
     fn regex_serde_case_insensitive() {
-        let orig_regex = Regex::new("AAA", true).unwrap();
+        let pattern = "AAA";
+        let orig_regex = Regex::new(pattern, true).unwrap();
         let serialized: String = serde_json::to_string(&orig_regex).unwrap();
         let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
         // Equality test between orig and roundtrip_result wouldn't work, because Eq doesn't test
@@ -340,6 +345,7 @@ mod tests {
         // sensitivity).
         assert_eq!(orig_regex.regex.is_match("aaa"), true);
         assert_eq!(roundtrip_result.regex.is_match("aaa"), true);
+        assert_eq!(pattern, roundtrip_result.pattern());
     }
 
     /// Test the roundtripping of `dot_matches_new_line`.
@@ -348,27 +354,33 @@ mod tests {
     fn regex_serde_dot_matches_new_line() {
         {
             // dot_matches_new_line: true
-            let orig_regex = Regex::new_dot_matches_new_line("A.*B", true, true).unwrap();
+            let pattern = "A.*B";
+            let orig_regex = Regex::new_dot_matches_new_line(pattern, true, true).unwrap();
             let serialized: String = serde_json::to_string(&orig_regex).unwrap();
             let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
             assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), true);
             assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), true);
+            assert_eq!(pattern, roundtrip_result.pattern());
         }
         {
             // dot_matches_new_line: false
-            let orig_regex = Regex::new_dot_matches_new_line("A.*B", true, false).unwrap();
+            let pattern = "A.*B";
+            let orig_regex = Regex::new_dot_matches_new_line(pattern, true, false).unwrap();
             let serialized: String = serde_json::to_string(&orig_regex).unwrap();
             let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
             assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), false);
             assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), false);
+            assert_eq!(pattern, roundtrip_result.pattern());
         }
         {
             // dot_matches_new_line: default
-            let orig_regex = Regex::new("A.*B", true).unwrap();
+            let pattern = "A.*B";
+            let orig_regex = Regex::new(pattern, true).unwrap();
             let serialized: String = serde_json::to_string(&orig_regex).unwrap();
             let roundtrip_result: Regex = serde_json::from_str(&serialized).unwrap();
             assert_eq!(orig_regex.regex.is_match("axxx\nxxxb"), true);
             assert_eq!(roundtrip_result.regex.is_match("axxx\nxxxb"), true);
+            assert_eq!(pattern, roundtrip_result.pattern());
         }
     }
 }
