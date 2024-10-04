@@ -32,7 +32,7 @@ pub fn plan_validate_connection(
     // Validate the target of the validate statement.
     match item.connection() {
         Ok(connection) => Ok(Plan::ValidateConnection(ValidateConnectionPlan {
-            id: item.id(),
+            id: item.global_id(),
             connection,
         })),
         Err(_) => {

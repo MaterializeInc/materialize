@@ -335,7 +335,10 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
 
         // Adding existing comments if not already provided by user
         for object_id in &object_ids {
-            let item = catalog.get_item(object_id);
+            // Always add comments to the latest version of the item.
+            let item = catalog
+                .get_item(object_id)
+                .at_version(RelationVersionSelector::Latest);
             let full_name = catalog.resolve_full_name(item.name());
             let full_resolved_name = ResolvedItemName::Item {
                 id: *object_id,

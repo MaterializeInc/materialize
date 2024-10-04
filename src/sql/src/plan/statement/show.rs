@@ -109,7 +109,7 @@ fn plan_show_create_item(
 ) -> Result<ShowCreatePlan, PlanError> {
     let item = scx.get_item_by_resolved_name(name)?;
     let name = name.full_name_str();
-    if item.id().is_system()
+    if item.item_id().is_system()
         && matches!(
             expect_type,
             CatalogItemType::Table | CatalogItemType::Source
@@ -124,9 +124,10 @@ fn plan_show_create_item(
     if item.item_type() != expect_type {
         sql_bail!("{name} is not a {expect_type}");
     }
-    let create_sql = humanize_sql_for_show_create(scx.catalog, item.id(), item.create_sql())?;
+    let create_sql =
+        humanize_sql_for_show_create(scx.catalog, item.global_id(), item.create_sql())?;
     Ok(ShowCreatePlan {
-        id: ObjectId::from(item.id()),
+        id: ObjectId::Item(item.item_id()),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
     })
 }
@@ -422,7 +423,7 @@ fn show_subsources<'a>(
                 on_item.item_type(),
             );
         }
-        query_filter.push(format!("sources.id = '{}'", on_item.id()));
+        query_filter.push(format!("sources.id = '{}'", on_item.item_id()));
     }
 
     if let Some(schema) = from_schema {
@@ -578,7 +579,7 @@ pub fn show_indexes<'a>(
                 on_item.item_type(),
             );
         }
-        query_filter.push(format!("on_id = '{}'", on_item.id()));
+        query_filter.push(format!("on_id = '{}'", on_item.item_id()));
     }
 
     if let Some(schema) = from_schema {
@@ -633,7 +634,7 @@ pub fn show_columns<'a>(
         "SELECT name, nullable, type, position, comment
          FROM mz_internal.mz_show_columns columns
          WHERE columns.id = '{}'",
-        entry.id(),
+        entry.item_id(),
     );
     let (show_select, new_resolved_ids) = ShowSelect::new_with_resolved_ids(
         scx,
@@ -643,7 +644,7 @@ pub fn show_columns<'a>(
         Some(&["name", "nullable", "type", "comment"]),
     )?;
     Ok(ShowColumnsSelect {
-        id: entry.id(),
+        id: entry.global_id(),
         show_select,
         new_resolved_ids,
     })

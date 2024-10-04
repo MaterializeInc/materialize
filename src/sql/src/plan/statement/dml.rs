@@ -450,8 +450,8 @@ fn plan_explainee(
                 sql_bail!("Expected {name} to be a view, not a {item_type}");
             }
             match is_replan {
-                true => crate::plan::Explainee::ReplanView(item.id()),
-                false => crate::plan::Explainee::View(item.id()),
+                true => crate::plan::Explainee::ReplanView(item.global_id()),
+                false => crate::plan::Explainee::View(item.global_id()),
             }
         }
         Explainee::MaterializedView(name) | Explainee::ReplanMaterializedView(name) => {
@@ -461,8 +461,8 @@ fn plan_explainee(
                 sql_bail!("Expected {name} to be a materialized view, not a {item_type}");
             }
             match is_replan {
-                true => crate::plan::Explainee::ReplanMaterializedView(item.id()),
-                false => crate::plan::Explainee::MaterializedView(item.id()),
+                true => crate::plan::Explainee::ReplanMaterializedView(item.global_id()),
+                false => crate::plan::Explainee::MaterializedView(item.global_id()),
             }
         }
         Explainee::Index(name) | Explainee::ReplanIndex(name) => {
@@ -472,8 +472,8 @@ fn plan_explainee(
                 sql_bail!("Expected {name} to be an index, not a {item_type}");
             }
             match is_replan {
-                true => crate::plan::Explainee::ReplanIndex(item.id()),
-                false => crate::plan::Explainee::Index(item.id()),
+                true => crate::plan::Explainee::ReplanIndex(item.global_id()),
+                false => crate::plan::Explainee::Index(item.global_id()),
             }
         }
         Explainee::Select(select, broken) => {
@@ -837,7 +837,11 @@ pub fn plan_subscribe(
                 _ => None,
             };
             let scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
-            (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
+            (
+                SubscribeFrom::Id(entry.global_id()),
+                desc.into_owned(),
+                scope,
+            )
         }
         SubscribeRelation::Query(query) => {
             #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in Subscribe

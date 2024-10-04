@@ -1680,11 +1680,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             ResolvedItemName::Item {
                 id,
                 full_name,
-                version: _,
+                version,
                 qualifiers: _,
                 print_id: _,
             } => {
-                let item = self.catalog.get_item(&id.into());
+                let item = self.catalog.get_item(id).at_version(*version);
                 let desc = match item.desc(full_name) {
                     Ok(desc) => desc,
                     Err(e) => {

@@ -45,7 +45,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, ScalarType};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersionSelector, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
@@ -1765,6 +1765,13 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.get_entry(id)
     }
 
+    fn resolve_global_id(&self, id: &GlobalId) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
+        // TODO(alter_table): Resolve a GlobalId from a reverse map.
+        self.state
+            .get_entry(&id.to_item_id())
+            .at_version(RelationVersionSelector::Latest)
+    }
+
     fn get_items(&self) -> Vec<&dyn mz_sql::catalog::CatalogItem> {
         self.get_schemas()
             .into_iter()
@@ -1994,10 +2001,11 @@ mod tests {
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
-    use mz_repr::{CatalogItemId, Datum, RelationType, RowArena, ScalarType, Timestamp};
-    use mz_sql::catalog::{
-        BuiltinsConfig, CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog,
+    use mz_repr::{
+        CatalogItemId, Datum, RelationType, RelationVersionSelector, RowArena, ScalarType,
+        Timestamp,
     };
+    use mz_sql::catalog::{BuiltinsConfig, CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog};
     use mz_sql::func::{Func, FuncImpl, Operation, OP_IMPLS};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
@@ -3107,7 +3115,9 @@ mod tests {
                         schema: Some(view.schema.to_string()),
                         item: view.name.to_string(),
                     })
-                    .expect("unable to resolve view");
+                    .expect("unable to resolve view")
+                    // TODO(alter_table)
+                    .at_version(RelationVersionSelector::Latest);
                 let full_name = conn_catalog.resolve_full_name(item.name());
                 for col_type in item
                     .desc(&full_name)

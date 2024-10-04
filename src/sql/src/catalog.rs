@@ -29,7 +29,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationDesc};
+use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationDesc, RelationVersionSelector};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
@@ -243,6 +243,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     ///
     /// Panics if `id` does not specify a valid item.
     fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem;
+
+    /// Gets an item by its [`GlobalId`].
+    ///
+    /// Panics if `id` does not specify a valid item.
+    fn resolve_global_id(&self, id: &GlobalId) -> Box<dyn CatalogCollectionItem>;
 
     /// Gets all items.
     fn get_items(&self) -> Vec<&dyn CatalogItem>;
@@ -565,20 +570,11 @@ pub trait CatalogItem {
     /// Returns the fully qualified name of the catalog item.
     fn name(&self) -> &QualifiedItemName;
 
-    /// Returns a stable ID for the catalog item.
-    fn id(&self) -> GlobalId;
-
     /// Returns the [`CatalogItemId`] for the item.
     fn item_id(&self) -> CatalogItemId;
 
     /// Returns the catalog item's OID.
     fn oid(&self) -> u32;
-
-    /// Returns a description of the result set produced by the catalog item.
-    ///
-    /// If the catalog item is not of a type that produces data (i.e., a sink or
-    /// an index), it returns an error.
-    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
 
     /// Returns the resolved function.
     ///
@@ -659,6 +655,23 @@ pub trait CatalogItem {
 
     /// Returns the cluster the item belongs to.
     fn cluster_id(&self) -> Option<ClusterId>;
+
+    /// Returns the [`CatalogCollectionItem`] for a specific version of this
+    /// [`CatalogItem`].
+    fn at_version(&self, version: RelationVersionSelector) -> Box<dyn CatalogCollectionItem>;
+}
+
+/// An item in a [`SessionCatalog`] and the specific "collection"/pTVC that it
+/// refers to.
+pub trait CatalogCollectionItem: CatalogItem + Send + Sync {
+    /// Returns a description of the result set produced by the catalog item.
+    ///
+    /// If the catalog item is not of a type that produces data (i.e., a sink or
+    /// an index), it returns an error.
+    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
+
+    /// The [`GlobalId`] for this item.
+    fn global_id(&self) -> GlobalId;
 }
 
 /// The type of a [`CatalogItem`].

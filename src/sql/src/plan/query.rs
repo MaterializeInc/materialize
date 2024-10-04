@@ -289,7 +289,7 @@ pub fn plan_insert_query(
         transform_ast::transform(scx, default)?;
     }
 
-    if table.id().is_system() {
+    if table.item_id().is_system() {
         sql_bail!(
             "cannot insert into system table '{}'",
             table_name.full_name_str()
@@ -465,7 +465,7 @@ pub fn plan_insert_query(
     };
 
     Ok((
-        table.id(),
+        table.global_id(),
         expr.map(map_exprs).project(project_key),
         returning,
     ))
@@ -517,7 +517,7 @@ pub fn plan_copy_item(
         desc = RelationDesc::new(RelationType::new(source_types), names);
     };
 
-    Ok((item.id(), desc, ordering))
+    Ok((item.global_id(), desc, ordering))
 }
 
 pub fn plan_copy_from(
@@ -543,7 +543,7 @@ pub fn plan_copy_from(
         )
     })?;
 
-    if table.id().is_system() {
+    if table.item_id().is_system() {
         sql_bail!(
             "cannot insert into system table '{}'",
             table_name.full_name_str()
@@ -565,7 +565,7 @@ pub fn plan_copy_from_rows(
 ) -> Result<HirRelationExpr, PlanError> {
     let scx = StatementContext::new(Some(pcx), catalog);
 
-    let table = catalog.get_item(&id.into());
+    let table = catalog.resolve_global_id(&id);
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
     let mut defaults = table
@@ -680,14 +680,14 @@ pub fn plan_mutation_query_inner(
     assignments: Vec<Assignment<Aug>>,
     selection: Option<Expr<Aug>>,
 ) -> Result<ReadThenWritePlan, PlanError> {
-    // Get global ID and version of the relation desc.
-    let id = match table_name {
-        ResolvedItemName::Item { id, version: _, .. } => id,
+    // Get ID and version of the relation desc.
+    let (id, version) = match table_name {
+        ResolvedItemName::Item { id, version, .. } => (id, version),
         _ => sql_bail!("cannot mutate non-user table"),
     };
 
     // Perform checks on item with given ID.
-    let item = qcx.scx.get_item(&id);
+    let item = qcx.scx.get_item(&id).at_version(version);
     if item.item_type() != CatalogItemType::Table {
         sql_bail!(
             "cannot mutate {} '{}'",
@@ -6234,14 +6234,19 @@ impl<'a> QueryContext<'a> {
         object: ResolvedItemName,
     ) -> Result<(HirRelationExpr, Scope), PlanError> {
         match object {
-            ResolvedItemName::Item { id, full_name, .. } => {
+            ResolvedItemName::Item {
+                id,
+                full_name,
+                version,
+                ..
+            } => {
                 let name = full_name.into();
-                let item = self.scx.get_item(&id);
+                let item = self.scx.get_item(&id).at_version(version);
                 let desc = item
                     .desc(&self.scx.catalog.resolve_full_name(item.name()))?
                     .clone();
                 let expr = HirRelationExpr::Get {
-                    id: Id::Global(item.id()),
+                    id: Id::Global(item.global_id()),
                     typ: desc.typ().clone(),
                 };
 
