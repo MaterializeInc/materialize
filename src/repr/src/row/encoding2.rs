@@ -1991,7 +1991,7 @@ mod tests {
             .with_column(
                 "a",
                 ScalarType::Record {
-                    fields: vec![
+                    fields: [
                         (ColumnName::from("foo"), ScalarType::Int64.nullable(false)),
                         (ColumnName::from("bar"), ScalarType::String.nullable(true)),
                         (
@@ -2002,7 +2002,8 @@ mod tests {
                             }
                             .nullable(false),
                         ),
-                    ],
+                    ]
+                    .into(),
                     custom_id: None,
                 }
                 .nullable(true),

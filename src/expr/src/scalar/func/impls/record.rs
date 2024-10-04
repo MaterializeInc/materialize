@@ -157,8 +157,9 @@ impl LazyUnaryFunc for RecordGet {
 
     fn output_type(&self, input_type: ColumnType) -> ColumnType {
         match input_type.scalar_type {
-            ScalarType::Record { mut fields, .. } => {
-                let (_name, mut ty) = fields.swap_remove(self.0);
+            ScalarType::Record { fields, .. } => {
+                let (_name, ty) = &fields[self.0];
+                let mut ty = ty.clone();
                 ty.nullable = ty.nullable || input_type.nullable;
                 ty
             }
