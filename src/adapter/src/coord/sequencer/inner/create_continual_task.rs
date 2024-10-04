@@ -166,6 +166,8 @@ impl Coordinator {
         ),
         AdapterError,
     > {
+        let catalog = Arc::new(NoIndexCatalog { delegate: catalog });
+
         let view_id = self.allocate_transient_id();
         let compute_instance = self
             .instance_snapshot(ct.cluster_id)
@@ -283,4 +285,38 @@ fn replace_full_name(create_sql: &str, ct_name: &FullItemName) -> String {
         _ => unreachable!("should be CREATE CONTINUAL TASK statement"),
     }
     ast.to_ast_string_stable()
+}
+
+/// An [OptimizerCatalog] impl that ignores any indexes that exist.
+///
+/// TODO(ct): At the moment, the dataflow rendering for CTs only knows how to
+/// turn persist_sources into CT inputs. If the optimizer decides to use an
+/// existing index in the cluster, it won't work. It seems tricky/invasive to
+/// fix the render bug, so for now pretend indexes don't exist for CTs. Remove
+/// this once we fix the bug.
+#[derive(Debug)]
+struct NoIndexCatalog {
+    delegate: Arc<dyn OptimizerCatalog>,
+}
+
+impl OptimizerCatalog for NoIndexCatalog {
+    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+        self.delegate.get_entry(id)
+    }
+
+    fn resolve_full_name(
+        &self,
+        name: &mz_sql::names::QualifiedItemName,
+        conn_id: Option<&mz_adapter_types::connection::ConnectionId>,
+    ) -> mz_sql::names::FullItemName {
+        self.delegate.resolve_full_name(name, conn_id)
+    }
+
+    fn get_indexes_on(
+        &self,
+        _id: GlobalId,
+        _cluster: mz_controller_types::ClusterId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &mz_catalog::memory::objects::Index)> + '_> {
+        Box::new(std::iter::empty())
+    }
 }

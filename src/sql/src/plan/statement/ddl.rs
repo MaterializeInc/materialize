@@ -2752,14 +2752,18 @@ pub fn plan_create_continual_task(
     let create_sql =
         normalize::create_statement(scx, Statement::CreateContinualTask(stmt.clone()))?;
 
-    let desc = {
+    // It seems desirable for a CT that e.g. simply filters the input to keep
+    // the same nullability. So, start by assuming all columns are non-nullable,
+    // and then make them nullable below if any of the exprs plan them as
+    // nullable.
+    let mut desc = {
         let mut desc_columns = Vec::with_capacity(stmt.columns.capacity());
         for col in stmt.columns.iter() {
             desc_columns.push((
                 normalize::column_name(col.name.clone()),
                 ColumnType {
                     scalar_type: scalar_type_from_sql(scx, &col.data_type)?,
-                    nullable: true,
+                    nullable: false,
                 },
             ));
         }
@@ -2798,12 +2802,30 @@ pub fn plan_create_continual_task(
         expr.bind_parameters(params)?;
         // TODO(ct): Make this error message more closely match the various ones
         // given for INSERT/DELETE.
-        if desc_query.iter_types().ne(desc.iter_types()) {
+        if desc_query
+            .iter_types()
+            .map(|x| &x.scalar_type)
+            .ne(desc.iter_types().map(|x| &x.scalar_type))
+        {
             sql_bail!(
                 "CONTINUAL TASK query columns did not match: {:?} vs {:?}",
                 desc_query.iter().collect::<Vec<_>>(),
                 desc.iter().collect::<Vec<_>>()
             );
+        }
+        // Update ct nullability as necessary. The `ne` above verified that the
+        // types are the same len.
+        let zip_types = || desc.iter_types().zip(desc_query.iter_types());
+        let updated = zip_types().any(|(ct, q)| q.nullable && !ct.nullable);
+        if updated {
+            let new_types = zip_types().map(|(ct, q)| {
+                let mut ct = ct.clone();
+                if q.nullable {
+                    ct.nullable = true;
+                }
+                ct
+            });
+            desc = RelationDesc::from_names_and_types(desc.iter_names().cloned().zip(new_types));
         }
         match stmt {
             ast::ContinualTaskStmt::Insert(_) => exprs.push(expr),

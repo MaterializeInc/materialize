@@ -97,6 +97,13 @@ pub const DEFAULT_SINK_PARTITION_STRATEGY: Config<&str> = Config::new(
     "The default sink partitioning strategy for an environment. It defaults to 'v0'.",
 );
 
+/// Whether to create system builtin continual tasks on boot.
+pub const ENABLE_CONTINUAL_TASK_BUILTINS: Config<bool> = Config::new(
+    "enable_continual_task_builtins",
+    false,
+    "Create system builtin continual tasks on boot.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -112,4 +119,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&DEFAULT_SINK_PARTITION_STRATEGY)
+        .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
 }

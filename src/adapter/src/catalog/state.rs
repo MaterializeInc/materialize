@@ -54,7 +54,7 @@ use mz_repr::{GlobalId, RelationDesc};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
+    BuiltinsConfig, CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
     CatalogRecordField, CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId,
     IdReference, NameReference, SessionCatalog, SystemObjectType, TypeReference,
@@ -183,6 +183,9 @@ impl CatalogState {
                 connection_context: ConnectionContext::for_tests(Arc::new(
                     InMemorySecretsController::new(),
                 )),
+                builtins_cfg: BuiltinsConfig {
+                    include_continual_tasks: true,
+                },
             },
             cluster_replica_sizes: Default::default(),
             availability_zones: Default::default(),
