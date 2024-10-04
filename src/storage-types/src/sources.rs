@@ -1420,7 +1420,7 @@ pub trait ExternalCatalogReference {
     fn item_name(&self) -> &str;
 }
 
-impl ExternalCatalogReference for mz_mysql_util::MySqlTableDesc {
+impl ExternalCatalogReference for &mz_mysql_util::MySqlTableDesc {
     fn schema_name(&self) -> &str {
         &self.schema_name
     }
