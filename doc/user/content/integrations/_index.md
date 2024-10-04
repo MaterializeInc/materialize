@@ -9,6 +9,13 @@ aliases:
     - /third-party/postgres-cloud/
     - /guides/postgres-cloud/
     - /guides/
+
+menu:
+  main:
+    parent: integrations
+    name: "Overview"
+    weight: 5
+
 ---
 
 [//]: # "TODO(morsapaes) Once database-issues#2562 lands, link the page here"
