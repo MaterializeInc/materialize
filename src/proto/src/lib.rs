@@ -549,7 +549,7 @@ impl<'a> RustType<String> for Cow<'a, str> {
     }
 }
 
-impl<'a> RustType<String> for Box<str> {
+impl RustType<String> for Box<str> {
     fn into_proto(&self) -> String {
         self.to_string()
     }
