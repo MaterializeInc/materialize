@@ -95,6 +95,7 @@ def get_default_system_parameters(
         "enable_envelope_debezium_in_subscribe": "true",
         "enable_expressions_in_limit_syntax": "true",
         "enable_introspection_subscribes": "true",
+        "enable_kafka_sink_partition_by": "true",
         "enable_logical_compaction_window": "true",
         "enable_multi_worker_storage_persist_sink": "true",
         "enable_mysql_source": "true",

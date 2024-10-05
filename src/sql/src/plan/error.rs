@@ -347,9 +347,9 @@ impl PlanError {
                 "subsources referencing table: {}",
                 itertools::join(target_names, ", ")
             )),
-            Self::InvalidPartitionByEnvelopeDebezium { .. } => Some(format!(
-                "When using ENVELOPE DEBEZIUM, only columns in the key can be referenced in the PARTITION BY expression.",
-            )),
+            Self::InvalidPartitionByEnvelopeDebezium { .. } => Some(
+                "When using ENVELOPE DEBEZIUM, only columns in the key can be referenced in the PARTITION BY expression.".to_string()
+            ),
             _ => None,
         }
     }

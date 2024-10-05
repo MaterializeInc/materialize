@@ -20,6 +20,7 @@ from materialize.data_ingest.data_type import (
     DATA_TYPES_FOR_AVRO,
     DATA_TYPES_FOR_KEY,
     DATA_TYPES_FOR_MYSQL,
+    NUMBER_TYPES,
     Bytea,
     DataType,
     Jsonb,
@@ -568,14 +569,25 @@ class KafkaSink(DBObject):
         self.envelope = (
             "UPSERT" if self.format == "JSON" else rng.choice(["DEBEZIUM", "UPSERT"])
         )
-        if self.envelope == "UPSERT":
+        if self.envelope == "UPSERT" or rng.choice([True, False]):
             key_cols = [
-                column.name(True)
+                column
                 for column in rng.sample(
                     base_object.columns, k=rng.randint(1, len(base_object.columns))
                 )
             ]
-            self.key = f"KEY ({', '.join(key_cols)}) NOT ENFORCED"
+            key_col_names = [column.name(True) for column in key_cols]
+            self.key = f"KEY ({', '.join(key_col_names)}) NOT ENFORCED"
+
+            potential_partition_keys = [
+                key_col for key_col in key_cols if key_col.data_type in NUMBER_TYPES
+            ]
+            if potential_partition_keys:
+                self.partition_key = rng.choice(potential_partition_keys).name(True)
+                self.partition_count = rng.randint(1, 10)
+            else:
+                self.partition_count = 0
+
             if rng.choice([True, False]):
                 key_formats = universal_formats.copy()
                 if len(key_cols) == 1:
@@ -588,6 +600,7 @@ class KafkaSink(DBObject):
                 )
         else:
             self.key = ""
+            self.partition_count = 0
         self.rename = 0
 
     def name(self) -> str:
@@ -600,7 +613,12 @@ class KafkaSink(DBObject):
 
     def create(self, exe: Executor) -> None:
         topic = f"sink_topic{self.sink_id}"
-        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}) {self.key} {self.format} ENVELOPE {self.envelope}"
+        maybe_partition = (
+            f", TOPIC PARTITION COUNT {self.partition_count}, PARTITION BY {self.partition_key}"
+            if self.partition_count
+            else ""
+        )
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}{maybe_partition}) {self.key} {self.format} ENVELOPE {self.envelope}"
         exe.execute(query)
 
 
