@@ -870,10 +870,6 @@ criteria = "safe-to-deploy"
 version = "0.3.0@git:4d8c406c32260484747c828050016de599b9f3a4"
 criteria = "safe-to-deploy"
 
-[[exemptions.protobuf-native]]
-version = "0.3.1+26.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.psm]]
 version = "0.1.16"
 criteria = "safe-to-deploy"

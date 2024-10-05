@@ -65,7 +65,6 @@ cc_library(
     include_prefix = "protobuf-native",
     deps = [
         ":internal-include",
-        "@cxxbridge//:cxx_cc",
         "@protobuf//src/google/protobuf/compiler:importer",
     ],
 )
@@ -98,5 +97,8 @@ cc_library(
     name = "internal-include",
     hdrs = ["src/internal.h"],
     include_prefix = "protobuf-native",
-    deps = ["@com_google_absl//absl/strings"],
+    deps = [
+        "@com_google_absl//absl/strings",
+        "@crates_io__cxx-1.0.122//:cxx_cc",
+    ],
 )
