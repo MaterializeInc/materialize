@@ -913,6 +913,11 @@ who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "3.4.0"
 
+[[audits.protobuf-native]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.2+26.1"
+
 [[audits.protobuf-parse]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
@@ -927,6 +932,11 @@ version = "2.0.0+26.1"
 who = "Petros Angelatos <petrosagg@gmail.com>"
 criteria = "safe-to-deploy"
 version = "2.0.1+26.1"
+
+[[audits.protobuf-src]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.1.0+27.1"
 
 [[audits.protobuf-support]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
