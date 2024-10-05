@@ -470,7 +470,10 @@ CREATE SINK ... INTO KAFKA CONNECTION <name> (
 
 The expression:
   * Must have a type that can be assignment cast to [`uint8`].
-  * Can refer to any column in the sink's underlying relation.
+  * Can refer to any column in the sink's underlying relation when using the
+    [upsert envelope](#upsert-envelope).
+  * Can refer to any column in the sink's key when using the
+    [Debezium envelope](#debezium-envelope).
 
 Materialize uses the computed hash value to assign a partition to each message
 as follows:
@@ -490,9 +493,6 @@ which are commonly used in Kafka partition assignment:
 
 For a full example of using the `PARTITION BY` option, see [Custom
 partioning](#custom-partitioning).
-
-**Known limitation:** Materialize only supports using the `PARTITION BY`
-option with the [upsert envelope](#upsert-envelope).
 
 ## Required permissions
 

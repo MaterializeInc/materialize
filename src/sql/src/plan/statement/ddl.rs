@@ -3547,17 +3547,33 @@ fn kafka_sink_builder(
         Some(partition_by) => {
             scx.require_feature_flag(&ENABLE_KAFKA_SINK_PARTITION_BY)?;
 
+            let mut scope = Scope::from_source(None, value_desc.iter_names());
+
             match envelope {
                 SinkEnvelope::Upsert => (),
                 SinkEnvelope::Debezium => {
-                    sql_bail!("PARTITION BY option is not supported with ENVELOPE DEBEZIUM")
+                    let key_indices: HashSet<_> = key_desc_and_indices
+                        .as_ref()
+                        .map(|(_desc, indices)| indices.as_slice())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect();
+                    for (i, item) in scope.items.iter_mut().enumerate() {
+                        if !key_indices.contains(&i) {
+                            item.error_if_referenced = Some(|_table, column| {
+                                PlanError::InvalidPartitionByEnvelopeDebezium {
+                                    column_name: column.to_string(),
+                                }
+                            });
+                        }
+                    }
                 }
             };
 
             let ecx = &ExprContext {
                 qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
                 name: "PARTITION BY",
-                scope: &Scope::from_source(None, value_desc.iter_names()),
+                scope: &scope,
                 relation_type: value_desc.typ(),
                 allow_aggregates: false,
                 allow_subqueries: false,

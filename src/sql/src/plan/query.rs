@@ -3455,7 +3455,15 @@ fn plan_join(
     let mut right_qcx = left_qcx.derived_context(left_scope.clone(), left_qcx.relation_type(&left));
     if !kind.can_be_correlated() {
         for item in &mut right_qcx.outer_scopes[0].items {
-            item.lateral_error_if_referenced = true;
+            // Per PostgreSQL (and apparently SQL:2008), we can't simply remove
+            // these items from scope. These items need to *exist* because they
+            // might shadow variables in outer scopes that would otherwise be
+            // valid to reference, but accessing them needs to produce an error.
+            item.error_if_referenced =
+                Some(|table, column| PlanError::WrongJoinTypeForLateralColumn {
+                    table: table.cloned(),
+                    column: column.clone(),
+                });
         }
     }
     let (right, right_scope) = plan_table_factor(&right_qcx, &join.relation)?;

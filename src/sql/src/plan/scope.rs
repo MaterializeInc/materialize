@@ -77,14 +77,16 @@ pub struct ScopeItem {
     /// having three columns in scope named `a` would result in "ambiguous
     /// column reference" errors.
     pub allow_unqualified_references: bool,
-    /// Whether reference the item should produce an error about the item being
-    /// on the wrong side of a lateral join.
+    /// If set, any attempt to reference this item will return the error
+    /// produced by this function.
     ///
-    /// Per PostgreSQL (and apparently SQL:2008), we can't simply make these
-    /// items unnameable. These items need to *exist* because they might shadow
-    /// variables in outer scopes that would otherwise be valid to reference,
-    /// but accessing them needs to produce an error.
-    pub lateral_error_if_referenced: bool,
+    /// The function is provided with the table and column name in the
+    /// reference. It should return a `PlanError` describing why the reference
+    /// is invalid.
+    ///
+    /// This is useful for preventing access to certain columns in specific
+    /// contexts, like columns that are on the wrong side of a `LATERAL` join.
+    pub error_if_referenced: Option<fn(Option<&PartialItemName>, &ColumnName) -> PlanError>,
     /// For table functions in scalar positions, this flag is true for the
     /// ordinality column. If true, then this column represents an "exists" flag
     /// for the entire row of the table function. In that case, this column must
@@ -147,7 +149,7 @@ impl ScopeItem {
             exprs: BTreeSet::new(),
             from_single_column_function: false,
             allow_unqualified_references: true,
-            lateral_error_if_referenced: false,
+            error_if_referenced: None,
             is_exists_column_for_a_table_function_that_was_in_the_target_list: false,
             _private: (),
         }
@@ -374,11 +376,8 @@ impl Scope {
                         column: uc.column_name.clone(),
                     }),
                     ScopeCursorInner::Item { column, item } => {
-                        if item.lateral_error_if_referenced {
-                            return Err(PlanError::WrongJoinTypeForLateralColumn {
-                                table: table_name.cloned(),
-                                column: column_name.clone(),
-                            });
+                        if let Some(error_if_referenced) = item.error_if_referenced {
+                            return Err(error_if_referenced(table_name, column_name));
                         }
                         Ok(column)
                     }
