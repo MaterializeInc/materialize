@@ -217,9 +217,8 @@ if __name__ == "__main__":
     if args.do_release and "NPM_TOKEN" not in os.environ:
         raise ValueError("'NPM_TOKEN' must be set")
     root_workspace = cargo.Workspace(MZ_ROOT)
-    wasm_workspace = cargo.Workspace(MZ_ROOT / "misc" / "wasm")
     crate_version = VersionInfo.parse(
         root_workspace.crates["mz-environmentd"].version_string
     )
     version = generate_version(crate_version, build_id)
-    build_all(wasm_workspace, version, do_release=args.do_release)
+    build_all(root_workspace, version, do_release=args.do_release)
