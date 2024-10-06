@@ -58,8 +58,7 @@ steps:
       # 48h
       timeout_in_minutes: 2880
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -72,8 +71,7 @@ steps:
       # 24h
       timeout_in_minutes: 1440
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -85,8 +83,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -99,8 +96,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1440
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -111,8 +107,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -124,8 +119,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -136,8 +130,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1440
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -149,8 +142,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -162,8 +154,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1440
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
