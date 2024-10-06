@@ -2751,7 +2751,7 @@ Explained Query:
               %1[#0]UK » %0:l15[#4]K
             ArrangeBy keys=[[#4]] // { arity: 5 }
               Project (#0..=#3, #5) // { arity: 5 }
-                Filter (#5) IS NOT NULL // { arity: 6 }
+                Filter (#2{person2id}) IS NOT NULL AND (#5) IS NOT NULL // { arity: 6 }
                   Get l15 // { arity: 6 }
             ArrangeBy keys=[[#0{max}]] // { arity: 1 }
               Filter (#0{max}) IS NOT NULL // { arity: 1 }
@@ -2817,11 +2817,11 @@ Explained Query:
               %0:l11[#0]Kef » %1:l11[#0]Kef
             ArrangeBy keys=[[#0{person2id}]] // { arity: 2 }
               Project (#2, #3) // { arity: 2 }
-                Filter (#0 = false) // { arity: 5 }
+                Filter (#0 = false) AND (#2{person2id}) IS NOT NULL // { arity: 5 }
                   Get l11 // { arity: 5 }
             ArrangeBy keys=[[#0{person2id}]] // { arity: 2 }
               Project (#2, #3) // { arity: 2 }
-                Filter (#0 = true) // { arity: 5 }
+                Filter (#0 = true) AND (#2{person2id}) IS NOT NULL // { arity: 5 }
                   Get l11 // { arity: 5 }
     cte l11 =
       TopK group_by=[#0, #1, #2{person2id}] order_by=[#3 asc nulls_last, #4 desc nulls_first] limit=1 // { arity: 5 }
@@ -2835,7 +2835,8 @@ Explained Query:
                   Get l3 // { arity: 3 }
                 ArrangeBy keys=[[#2]] // { arity: 4 }
                   Project (#0..=#3) // { arity: 4 }
-                    Get l8 // { arity: 5 }
+                    Filter (#2) IS NOT NULL // { arity: 5 }
+                      Get l8 // { arity: 5 }
           Project (#0..=#3, #9) // { arity: 5 }
             Map ((#4 OR #8)) // { arity: 10 }
               Join on=(#0 = #5 AND #1 = #6 AND #2 = #7) type=differential // { arity: 9 }
@@ -2866,11 +2867,13 @@ Explained Query:
           implementation
             %1[#0..=#2]UKKKA » %0:l9[#0..=#2]UKKK
           ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-            Get l9 // { arity: 3 }
+            Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 3 }
+              Get l9 // { arity: 3 }
           ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
             Distinct project=[#0..=#2] // { arity: 3 }
               Project (#0..=#2) // { arity: 3 }
-                Get l8 // { arity: 5 }
+                Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 5 }
+                  Get l8 // { arity: 5 }
     cte l9 =
       Distinct project=[#0..=#2] // { arity: 3 }
         Project (#0..=#2) // { arity: 3 }
@@ -3997,12 +4000,12 @@ Explained Query:
             implementation
               %1[#0..=#2]UKKKA » %0:l1[#0..=#2]UKKK
             ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-              Filter (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 3 }
+              Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 3 }
                 Get l1 // { arity: 3 }
             ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
               Distinct project=[#0..=#2] // { arity: 3 }
                 Project (#0..=#2) // { arity: 3 }
-                  Filter (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 5 }
+                  Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 5 }
                     Get l0 // { arity: 5 }
       cte l1 =
         Distinct project=[#0..=#2] // { arity: 3 }
@@ -4482,7 +4485,7 @@ Explained Query:
                 %1[#0]UK » %0:l9[#4]K
               ArrangeBy keys=[[#4]] // { arity: 5 }
                 Project (#0..=#3, #5) // { arity: 5 }
-                  Filter (#5) IS NOT NULL // { arity: 6 }
+                  Filter (#2{personid}) IS NOT NULL AND (#5) IS NOT NULL // { arity: 6 }
                     Get l9 // { arity: 6 }
               ArrangeBy keys=[[#0{max}]] // { arity: 1 }
                 Filter (#0{max}) IS NOT NULL // { arity: 1 }
@@ -4562,11 +4565,11 @@ Explained Query:
                 %0:l5[#0]Kef » %1:l5[#0]Kef
               ArrangeBy keys=[[#0{dst}]] // { arity: 2 }
                 Project (#2, #3) // { arity: 2 }
-                  Filter (#0 = false) // { arity: 5 }
+                  Filter (#0 = false) AND (#2{dst}) IS NOT NULL // { arity: 5 }
                     Get l5 // { arity: 5 }
               ArrangeBy keys=[[#0{dst}]] // { arity: 2 }
                 Project (#2, #3) // { arity: 2 }
-                  Filter (#0 = true) // { arity: 5 }
+                  Filter (#0 = true) AND (#2{dst}) IS NOT NULL // { arity: 5 }
                     Get l5 // { arity: 5 }
       cte l5 =
         TopK group_by=[#0, #1, #2{dst}] order_by=[#3 asc nulls_last, #4 desc nulls_first] limit=1 // { arity: 5 }
@@ -4580,7 +4583,8 @@ Explained Query:
                     ReadIndex on=pathq20 pathq20_src=[differential join] // { arity: 3 }
                   ArrangeBy keys=[[#2]] // { arity: 4 }
                     Project (#0..=#3) // { arity: 4 }
-                      Get l2 // { arity: 5 }
+                      Filter (#2) IS NOT NULL // { arity: 5 }
+                        Get l2 // { arity: 5 }
             Project (#0..=#3, #9) // { arity: 5 }
               Map ((#4 OR #8)) // { arity: 10 }
                 Join on=(#0 = #5 AND #1 = #6 AND #2 = #7) type=differential // { arity: 9 }
@@ -4611,11 +4615,13 @@ Explained Query:
             implementation
               %1[#0..=#2]UKKKA » %0:l3[#0..=#2]UKKK
             ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-              Get l3 // { arity: 3 }
+              Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 3 }
+                Get l3 // { arity: 3 }
             ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
               Distinct project=[#0..=#2] // { arity: 3 }
                 Project (#0..=#2) // { arity: 3 }
-                  Get l2 // { arity: 5 }
+                  Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 5 }
+                    Get l2 // { arity: 5 }
       cte l3 =
         Distinct project=[#0..=#2] // { arity: 3 }
           Project (#0..=#2) // { arity: 3 }
