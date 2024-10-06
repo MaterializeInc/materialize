@@ -18,7 +18,7 @@ pub struct Args {
     #[clap(long, value_name = "FORMATTER")]
     pub formatter: Option<PathBuf>,
     /// Path to a `Cargo.toml` file to generate a `BUILD.bazel` file for.
-    /// 
+    ///
     /// Can be a path to a single crate or a workspace.
     #[clap(value_name = "CARGO_TOML")]
     pub path: PathBuf,
