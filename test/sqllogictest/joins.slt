@@ -118,12 +118,12 @@ WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
 Explained Query:
   Return // { arity: 3 }
     Project (#0, #2, #4) // { arity: 3 }
-      Join on=(#1 = (#0 + 1) AND #3 = (#0 + #1)) type=delta // { arity: 5 }
+      Join on=(#1 = (#0 + 1) AND #3 = (#0 + #1) = (#0 + (#0 + 1))) type=delta // { arity: 5 }
         implementation
           %0:l0 » %1:l1[#0]K » %2:l1[#0]K
           %1:l1 » %0:l0[(#0 + 1)]K » %2:l1[#0]K
-          %2:l1 » %0:l0[×] » %1:l1[#0]K
-        ArrangeBy keys=[[], [(#0 + 1)]] // { arity: 1 }
+          %2:l1 » %0:l0[(#0 + (#0 + 1))]K » %1:l1[#0]K
+        ArrangeBy keys=[[(#0 + 1)], [(#0 + (#0 + 1))]] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get l0 // { arity: 2 }
         Get l1 // { arity: 2 }
