@@ -40,7 +40,7 @@ pub struct BazelHeader {
 }
 
 impl BazelHeader {
-    pub fn generate(targets: &[&dyn RustTarget]) -> Self {
+    pub fn generate(targets: &[Box<dyn RustTarget>]) -> Self {
         let x = targets
             .iter()
             .flat_map(|t| t.rules().into_iter())

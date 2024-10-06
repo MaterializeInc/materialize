@@ -98,6 +98,14 @@ def gen(path):
     # Note: We build cargo-gazelle with optimizations because the speedup is
     # worth it and Bazel should cache the resulting binary.
 
+    formatter = []
+    if subprocess.run(["which", "bazel"]).returncode != 0:
+        ui.warn("couldn't find 'bazel' skipping formatting of BUILD files")
+    else:
+        paths = output_path("//misc/bazel/tools:buildifier")
+        formatter_path = MZ_ROOT / paths[-1]
+        formatter += ["--formatter", str(formatter_path)]
+
     # TODO(parkmycar): Use Bazel to run this lint.
     cmd_args = [
         "cargo",
@@ -106,14 +114,10 @@ def gen(path):
         "--no-default-features",
         "--manifest-path=misc/bazel/cargo-gazelle/Cargo.toml",
         "--",
-        "--path",
+        *formatter,
         f"{str(path)}",
     ]
     subprocess.run(cmd_args, check=True)
-
-    # Make sure we format everything after generating it so the linter doesn't
-    # conflict with the formatter.
-    fmt(path.parent)
 
 
 def fmt(path):
@@ -141,12 +145,14 @@ def fmt(path):
     subprocess.run(cmd_args, check=True)
 
 
-def output_path(target) -> pathlib.Path:
+def output_path(target) -> list[pathlib.Path]:
     """Returns the absolute path of the Bazel target."""
 
     cmd_args = ["bazel", "cquery", f"{target}", "--output=files"]
-    path = subprocess.check_output(cmd_args, text=True)
-    return pathlib.Path(path)
+    paths = subprocess.check_output(
+        cmd_args, text=True, stderr=subprocess.DEVNULL
+    ).splitlines()
+    return [pathlib.Path(path) for path in paths]
 
 
 if __name__ == "__main__":

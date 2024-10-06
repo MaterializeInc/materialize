@@ -17,7 +17,6 @@ use guppy::graph::{
 use guppy::platform::EnabledTernary;
 use guppy::DependencyKind;
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
 use std::str::FromStr;
@@ -941,22 +940,22 @@ impl ToBazelDefinition for CargoBuildScript {
 
 /// An opaque blob of text that we treat as a target.
 #[derive(Debug)]
-pub struct AdditiveContent<'a>(Cow<'a, str>);
+pub struct AdditiveContent(String);
 
-impl<'a> AdditiveContent<'a> {
-    pub fn new(s: &'a str) -> Self {
-        AdditiveContent(s.into())
+impl AdditiveContent {
+    pub fn new(s: &str) -> Self {
+        AdditiveContent(s.to_string())
     }
 }
 
-impl<'a> ToBazelDefinition for AdditiveContent<'a> {
+impl ToBazelDefinition for AdditiveContent {
     fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
         writeln!(writer, "{}", self.0)?;
         Ok(())
     }
 }
 
-impl<'a> RustTarget for AdditiveContent<'a> {
+impl RustTarget for AdditiveContent {
     fn rules(&self) -> Vec<Rule> {
         vec![]
     }
