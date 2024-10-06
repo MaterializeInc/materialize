@@ -47,6 +47,7 @@ def gen_cmd(args: list[str]):
     parser = argparse.ArgumentParser(
         prog="gen", description="Generate BUILD.bazel files."
     )
+    parser.add_argument("--check", action="store_true")
     parser.add_argument(
         "path",
         type=pathlib.Path,
@@ -60,7 +61,7 @@ def gen_cmd(args: list[str]):
     else:
         path = None
 
-    gen(path)
+    gen(path, gen_args.check)
 
 
 def fmt_cmd(args: list[str]):
@@ -84,7 +85,7 @@ def bazel_cmd(args: list[str]):
     subprocess.run(["bazel"] + args, check=True)
 
 
-def gen(path):
+def gen(path, check):
     """
     Generates BUILD.bazel files from Cargo.toml.
 
@@ -106,6 +107,10 @@ def gen(path):
         formatter_path = MZ_ROOT / paths[-1]
         formatter += ["--formatter", str(formatter_path)]
 
+    check_arg = []
+    if check:
+        check_arg += ["--check"]
+
     # TODO(parkmycar): Use Bazel to run this lint.
     cmd_args = [
         "cargo",
@@ -114,6 +119,7 @@ def gen(path):
         "--no-default-features",
         "--manifest-path=misc/bazel/cargo-gazelle/Cargo.toml",
         "--",
+        *check_arg,
         *formatter,
         f"{str(path)}",
     ]

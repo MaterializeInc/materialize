@@ -32,6 +32,13 @@ fn main() -> Result<(), anyhow::Error> {
     let args = Args::try_parse()?;
     let path = args.path;
 
+    if args.formatter.is_none() {
+        tracing::warn!("Skipping formatting of BUILD.bazel files");
+    }
+    if args.check {
+        tracing::warn!("Running in 'check' mode, won't generate any updates.");
+    }
+
     let graph = guppy::MetadataCommand::new()
         .manifest_path(&path)
         .build_graph()
@@ -117,15 +124,25 @@ fn main() -> Result<(), anyhow::Error> {
             .collect::<Result<_, anyhow::Error>>()
             .context("genrating a BUILD.bazel file")?;
 
-        // If everything succeeded then swap all of our files into their final path.
-        for maybe_temp_file in results {
-            let Some((temp_file, dst_path)) = maybe_temp_file else {
-                continue;
-            };
-            temp_file.persist(dst_path).context("swapping in file")?;
-        }
+        let updates: Vec<_> = results.into_iter().filter_map(|x| x).collect();
 
-        Ok::<_, anyhow::Error>(())
+        if args.check && !updates.is_empty() {
+            // If we're in 'check' mode and have changes, then report an error.
+            let mut changes = Vec::new();
+            for (temp_file, dst_path) in updates {
+                let _ = temp_file.close();
+                changes.push(dst_path);
+            }
+            Err(anyhow::anyhow!(
+                "Generated files would have changed:\n{changes:?}"
+            ))
+        } else {
+            // If everything succeeded then swap all of our files into their final path.
+            for (temp_file, dst_path) in updates {
+                temp_file.persist(dst_path).context("swapping in file")?;
+            }
+            Ok::<_, anyhow::Error>(())
+        }
     })?;
 
     Ok(())
