@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationType};
@@ -75,37 +74,28 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
 }
 
 impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
-    /// Tests if the dataflow refers to a single timestamp, namely
-    /// that `as_of` has a single coordinate and that the `until`
-    /// value corresponds to the `as_of` value plus one, or `as_of`
-    /// is the maximum timestamp and is thus single.
-    pub fn is_single_time(&self) -> bool {
-        // TODO: this would be much easier to check if `until` was a strict lower bound,
-        // and we would be testing that `until == as_of`.
-
-        let until = &self.until;
-
-        // IF `as_of` is not set at all this can't be a single time dataflow.
+    /// Tests if the dataflow refers to a single timestamp or no time at all, that is, whether the
+    /// number of distinct times for which the dataflow will produce updates is one or zero.
+    pub fn is_single_or_empty_time(&self) -> bool {
+        // If `as_of` is not set at all, this can't be a single time dataflow.
         let Some(as_of) = self.as_of.as_ref() else {
             return false;
         };
-        // Ensure that as_of <= until.
-        soft_assert_or_log!(
-            timely::PartialOrder::less_equal(as_of, until),
-            "expected empty `as_of ≤ until`, got `{as_of:?} ≰ {until:?}`",
-        );
-        // IF `as_of` is not a single timestamp this can't be a single time dataflow.
-        let Some(as_of) = as_of.as_option() else {
-            return false;
+        // If `as_of` is empty, the dataflow produces no times.
+        let Some(as_of_ts) = as_of.as_option() else {
+            return true;
         };
-        // Ensure that `as_of = MAX` implies `until.is_empty()`.
-        soft_assert_or_log!(
-            as_of != &mz_repr::Timestamp::MAX || until.is_empty(),
-            "expected `until = {{}}` due to `as_of = MAX`, got `until = {until:?}`",
-        );
-        // Note that the `(as_of = MAX, until = {})` case also returns `true`
-        // here (as expected) since we are going to compare two `None` values.
-        as_of.try_step_forward().as_ref() == until.as_option()
+        // If `as_of_ts` is the maximum timestamp, this is the only time the dataflow can produce.
+        let Some(as_of_ts_1) = as_of_ts.try_step_forward() else {
+            return true;
+        };
+
+        // If the `as_of` is neither empty not the maximum timestamp, this can only be a single (or
+        // empty) time dataflow when the set of times produced is limited by the `until` frontier.
+        // Specifically:
+        //  * if `until = as_of + 1`, the dataflow produces a single time
+        //  * if `until <= as_of`, the dataflow produces no times
+        self.until.less_equal(&as_of_ts_1)
     }
 
     /// Check invariants expected to be true about `DataflowDescription`s.
