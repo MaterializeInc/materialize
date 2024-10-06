@@ -433,13 +433,10 @@ async fn fetch_max_lsn(client: &Client) -> Result<MzOffset, TransientError> {
 // Ensures that the table with oid `oid` and expected schema `expected_schema` is still compatible
 // with the current upstream schema `upstream_info`.
 fn verify_schema(
-    oid: u32,
     expected_desc: &PostgresTableDesc,
-    upstream_info: &BTreeMap<u32, PostgresTableDesc>,
+    current_desc: &PostgresTableDesc,
     casts: &[(CastType, MirScalarExpr)],
 ) -> Result<(), DefiniteError> {
-    let current_desc = upstream_info.get(&oid).ok_or(DefiniteError::TableDropped)?;
-
     let allow_oids_to_change_by_col_num = expected_desc
         .columns
         .iter()
