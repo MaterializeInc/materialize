@@ -17,8 +17,8 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
-use mz_repr::{ColumnType, Datum};
+use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
+use mz_repr::ColumnType;
 
 use crate::analysis::{Analysis, Lattice};
 use crate::analysis::{Arity, RelationType};
@@ -60,7 +60,7 @@ impl Analysis for Equivalences {
                     // Prep initial nullability information.
                     let mut nullable_cols = common
                         .iter()
-                        .map(|datum| datum == &Some(Datum::Null))
+                        .map(|datum| datum == &Some(mz_repr::Datum::Null))
                         .collect::<Vec<_>>();
 
                     for (row, _cnt) in rows.iter() {
@@ -72,7 +72,7 @@ impl Analysis for Equivalences {
                             if Some(datum) != *common {
                                 *common = None;
                             }
-                            if datum == Datum::Null {
+                            if datum == mz_repr::Datum::Null {
                                 *nullable = true;
                             }
                         }
@@ -159,10 +159,7 @@ impl Analysis for Equivalences {
                 let mut equivalences = results.get(index - 1).unwrap().clone();
                 if let Some(equivalences) = &mut equivalences {
                     let mut class = predicates.clone();
-                    class.push(MirScalarExpr::literal_ok(
-                        Datum::True,
-                        mz_repr::ScalarType::Bool,
-                    ));
+                    class.push(MirScalarExpr::literal_true());
                     equivalences.classes.push(class);
                 }
                 equivalences
@@ -201,13 +198,13 @@ impl Analysis for Equivalences {
             }
             MirRelationExpr::Reduce {
                 group_key,
-                aggregates: _,
+                aggregates,
                 ..
             } => {
                 let input_arity = depends.results::<Arity>().unwrap()[index - 1];
                 let mut equivalences = results.get(index - 1).unwrap().clone();
                 if let Some(equivalences) = &mut equivalences {
-                    // Introduce keys column equivalences as a map, then project to them as a projection.
+                    // Introduce keys column equivalences as a map, then project domwn to them.
                     for (pos, expr) in group_key.iter().enumerate() {
                         equivalences
                             .classes
@@ -218,12 +215,46 @@ impl Analysis for Equivalences {
                     // information in before applying the `project`, to set it up for success.
                     equivalences.minimize(&None);
 
+                    let mut result = equivalences.clone();
+                    result.project(input_arity..(input_arity + group_key.len()));
+
                     // TODO: MIN, MAX, ANY, ALL aggregates pass through all certain properties of their columns.
                     // They also pass through equivalences of them and other constant columns (e.g. key columns).
                     // However, it is not correct to simply project onto these columns, as relationships amongst
                     // aggregate columns may no longer be preserved. MAX(col) != MIN(col) even though col = col.
+                    // The correct thing to do is treat the reduce as a join between single-aggregate reductions,
+                    // where each single MIN/MAX/ANY/ALL aggregate propagates equivalences.
+                    for (index, aggregate) in aggregates.iter().enumerate() {
+                        if aggregate_is_input(&aggregate.func) {
+                            let mut temp_equivs = equivalences.clone();
+                            temp_equivs.classes.push(vec![
+                                MirScalarExpr::column(input_arity + group_key.len()),
+                                aggregate.expr.clone(),
+                            ]);
+                            temp_equivs.minimize(&None);
+                            temp_equivs.project(input_arity..(input_arity + group_key.len() + 1));
+                            let columns = (0..group_key.len())
+                                .chain(std::iter::once(group_key.len() + index))
+                                .collect::<Vec<_>>();
+                            temp_equivs.permute(&columns[..]);
+                            result.classes.extend(temp_equivs.classes);
+                        }
+                    }
+
                     // TODO: COUNT ensures a non-null value.
-                    equivalences.project(input_arity..(input_arity + group_key.len()));
+                    let mut non_null_cols = vec![];
+                    for (index, aggregate) in aggregates.iter().enumerate() {
+                        if let AggregateFunc::Count = aggregate.func {
+                            non_null_cols.push(
+                                MirScalarExpr::Column(group_key.len() + index).call_is_null(),
+                            );
+                        }
+                    }
+                    if !non_null_cols.is_empty() {
+                        non_null_cols.push(MirScalarExpr::literal_false());
+                        result.classes.push(non_null_cols);
+                    }
+                    equivalences.clone_from(&result);
                 }
                 equivalences
             }
@@ -241,8 +272,23 @@ impl Analysis for Equivalences {
             MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
 
-        let expr_type = depends.results::<RelationType>().unwrap()[index].clone();
-        equivalences.as_mut().map(|e| e.minimize(&expr_type));
+        let expr_type = &depends.results::<RelationType>().as_ref().unwrap()[index];
+
+        // Any columns announced by the type to be nonnullable should be marked as such.
+        if let Some(equivalences) = &mut equivalences {
+            let mut nullable_cols = Vec::new();
+            for (index, col_type) in expr_type.as_ref().unwrap().iter().enumerate() {
+                if !col_type.nullable {
+                    nullable_cols.push(MirScalarExpr::column(index).call_is_null());
+                }
+            }
+            if !nullable_cols.is_empty() {
+                nullable_cols.push(MirScalarExpr::literal_false());
+                equivalences.classes.push(nullable_cols);
+            }
+        }
+
+        equivalences.as_mut().map(|e| e.minimize(expr_type));
         equivalences
     }
 
@@ -341,6 +387,22 @@ impl EquivalenceClasses {
     ///
     /// Informally this means simplifying constraints, removing redundant constraints, and unifying equivalence classes.
     pub fn minimize(&mut self, columns: &Option<Vec<ColumnType>>) {
+        // Expand columns that must be non-null.
+        // We do this once, outside the loop, to allow it to *minimize* the classes.
+        // It is possible that `non_null_requirements` could learn new facts as expressions
+        // are simplified, but we'll leave that for the moment.
+        let mut non_null_cols = std::collections::BTreeSet::new();
+        self.non_null_requirements(&mut non_null_cols);
+        if !non_null_cols.is_empty() {
+            self.classes.push(
+                non_null_cols
+                    .iter()
+                    .map(|c| MirScalarExpr::Column(*c).call_is_null())
+                    .chain(std::iter::once(MirScalarExpr::literal_false()))
+                    .collect::<Vec<_>>(),
+            );
+        }
+
         // Repeatedly, we reduce each of the classes themselves, then unify the classes.
         // This should strictly reduce complexity, and reach a fixed point.
         // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
@@ -348,76 +410,56 @@ impl EquivalenceClasses {
 
         // We continue as long as any simplification has occurred.
         // An expression can be simplified, a duplication found, or two classes unified.
-        let mut stable = false;
-        while !stable {
-            stable = self.minimize_once(columns);
+        let mut prev = None;
+        let mut counter = 0;
+        while prev.as_ref() != Some(self) {
+            prev = Some(self.clone());
+            if counter < 100 {
+                self.minimize_once(columns);
+                counter += 1;
+            } else {
+                mz_ore::soft_assert_or_log!(false, "EquivalenceClasses::minimize did not converge");
+            }
         }
-
-        // TODO: remove these measures once we are more confident about idempotence.
-        let prev = self.clone();
-        self.minimize_once(columns);
-        mz_ore::soft_assert_eq_or_log!(self, &prev, "Equivalences::minimize() not idempotent");
     }
 
     /// A single iteration of minimization, which we expect to repeat but benefit from factoring out.
-    fn minimize_once(&mut self, columns: &Option<Vec<ColumnType>>) -> bool {
-        // We are complete unless we experience an expression simplification, or an equivalence class unification.
-        let mut stable = true;
-
+    fn minimize_once(&mut self, columns: &Option<Vec<ColumnType>>) {
         // 0. Reduce each expression
         //
         // This is optional in that `columns` may not be provided (`reduce` requires type information).
         if let Some(columns) = columns {
             for class in self.classes.iter_mut() {
                 for expr in class.iter_mut() {
-                    let prev_expr = expr.clone();
                     expr.reduce_safely(columns);
-                    if &prev_expr != expr {
-                        stable = false;
-                    }
                 }
             }
         }
 
-        // 1. Reduce each class.
-        //    Each class can be reduced in the context of *other* classes, which are available for substitution.
-        for class_index in 0..self.classes.len() {
-            for index in 0..self.classes[class_index].len() {
-                let mut cloned = self.classes[class_index][index].clone();
-                // Use `reduce_child` rather than `reduce_expr` to avoid entire expression replacement.
-                let reduced = self.reduce_child(&mut cloned);
-                if reduced {
-                    self.classes[class_index][index] = cloned;
-                    stable = false;
-                }
-            }
-        }
-
-        // 2. Unify classes.
-        //    If the same expression is in two classes, we can unify the classes.
-        //    This element may not be the representative.
-        //    TODO: If all lists are sorted, this could be a linear merge among all.
-        //          They stop being sorted as soon as we make any modification, though.
-        //          But, it would be a fast rejection when faced with lots of data.
-        for index1 in 0..self.classes.len() {
-            for index2 in 0..index1 {
-                if self.classes[index1]
-                    .iter()
-                    .any(|x| self.classes[index2].iter().any(|y| x == y))
-                {
-                    let prior = std::mem::take(&mut self.classes[index2]);
-                    self.classes[index1].extend(prior);
-                    stable = false;
-                }
-            }
-        }
-
-        // 3. Identify idioms
-        //    E.g. If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
+        // 3. Expand and rewrite predicates.
+        //    This includes detecting idioms like `x = y`, but also extracting non-null requirements,
+        //    as well as decomposing variadic AND/OR, and replacing NOT when equated to a literal.
         let mut to_add = Vec::new();
+        let mut to_add_true = Vec::new();
+        let mut to_add_false = Vec::new();
+
         for class in self.classes.iter_mut() {
             if class.iter().any(|c| c.is_literal_true()) {
-                for expr in class.iter() {
+                for expression in class.iter_mut() {
+                    // Take ownership of the expression, to use when we match various patterns.
+                    // We'll swap it back in at the end, in case we do nothing with it.
+                    let mut expr = std::mem::replace(expression, MirScalarExpr::literal_true());
+
+                    // Variadic AND can be decomposed into its parts, which must equal TRUE.
+                    if let MirScalarExpr::CallVariadic {
+                        func: mz_expr::VariadicFunc::And,
+                        exprs,
+                    } = expr
+                    {
+                        to_add_true.extend(exprs);
+                        expr = MirScalarExpr::literal_true();
+                    }
+
                     // If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
                     // This substitution replaces a complex expression with several smaller expressions, and cannot
                     // cycle if we follow that practice.
@@ -427,81 +469,121 @@ impl EquivalenceClasses {
                         expr2,
                     } = expr
                     {
-                        to_add.push(vec![*expr1.clone(), *expr2.clone()]);
-                        to_add.push(vec![
-                            MirScalarExpr::literal_false(),
-                            expr1.clone().call_is_null(),
-                            expr2.clone().call_is_null(),
-                        ]);
-                        stable = false;
+                        to_add.push(vec![(*expr1).clone(), (*expr2).clone()]);
+                        to_add_false.push(expr1.call_is_null());
+                        to_add_false.push(expr2.call_is_null());
+                        expr = MirScalarExpr::literal_true();
                     }
-                }
-                // Remove the more complex form of the expression.
-                class.retain(|expr| {
-                    if let MirScalarExpr::CallBinary {
-                        func: mz_expr::BinaryFunc::Eq,
-                        ..
-                    } = expr
-                    {
-                        false
-                    } else {
-                        true
-                    }
-                });
-                for expr in class.iter() {
+
                     // If TRUE == NOT(X) then FALSE == X is a simpler form.
                     if let MirScalarExpr::CallUnary {
                         func: mz_expr::UnaryFunc::Not(_),
                         expr: e,
                     } = expr
                     {
-                        to_add.push(vec![MirScalarExpr::literal_false(), (**e).clone()]);
-                        stable = false;
+                        to_add_false.push(*e);
+                        expr = MirScalarExpr::literal_true();
                     }
+
+                    // Re-install whatever `expr` ended up as.
+                    *expression = expr;
                 }
-                class.retain(|expr| {
-                    if let MirScalarExpr::CallUnary {
-                        func: mz_expr::UnaryFunc::Not(_),
-                        ..
-                    } = expr
-                    {
-                        false
-                    } else {
-                        true
-                    }
-                });
             }
             if class.iter().any(|c| c.is_literal_false()) {
-                for expr in class.iter() {
+                for expression in class.iter_mut() {
+                    // Take ownership of the expression, to use when we match various patterns.
+                    // We'll swap it back in at the end, in case we do nothing with it.
+                    let mut expr = std::mem::replace(expression, MirScalarExpr::literal_false());
+
+                    // Variadic OR can be decomposed into its parts, which must equal FALSE.
+                    if let MirScalarExpr::CallVariadic {
+                        func: mz_expr::VariadicFunc::Or,
+                        exprs,
+                    } = expr
+                    {
+                        to_add_false.extend(exprs);
+                        expr = MirScalarExpr::literal_false();
+                    }
                     // If FALSE == NOT(X) then TRUE == X is a simpler form.
                     if let MirScalarExpr::CallUnary {
                         func: mz_expr::UnaryFunc::Not(_),
                         expr: e,
                     } = expr
                     {
-                        to_add.push(vec![MirScalarExpr::literal_true(), (**e).clone()]);
-                        stable = false;
+                        to_add_true.push(*e);
+                        expr = MirScalarExpr::literal_false();
                     }
+
+                    *expression = expr;
                 }
-                class.retain(|expr| {
-                    if let MirScalarExpr::CallUnary {
-                        func: mz_expr::UnaryFunc::Not(_),
-                        ..
-                    } = expr
-                    {
-                        false
-                    } else {
-                        true
-                    }
-                });
             }
         }
+
         self.classes.extend(to_add);
+        if !to_add_true.is_empty() {
+            to_add_true.push(MirScalarExpr::literal_true());
+            self.classes.push(to_add_true);
+        }
+        if !to_add_false.is_empty() {
+            to_add_false.push(MirScalarExpr::literal_false());
+            self.classes.push(to_add_false);
+        }
+
+        // 2. Unify classes.
+        //    If the same expression is in two classes, we can unify the classes.
+        //    This element may not be the representative.
+        //    TODO: If all lists are sorted, this could be a linear merge among all.
+        //          They stop being sorted as soon as we make any modification, though.
+        //          But, it would be a fast rejection when faced with lots of data.
+        self.unify_classes();
+
+        // 1. Reduce each class.
+        //    Each class can be reduced in the context of *other* classes, which are available for substitution.
+        self.reduce_classes();
 
         // Tidy up classes, restore representative.
         self.tidy();
+    }
 
-        stable
+    /// Reduces each expression in each classes, using all *other* equivalences. Returns true iff any change.
+    fn reduce_classes(&mut self) -> bool {
+        let mut changed = false;
+        for class_index in 0..self.classes.len() {
+            for index in 0..self.classes[class_index].len() {
+                let mut cloned = self.classes[class_index][index].clone();
+                // Use `reduce_child` rather than `reduce_expr` to avoid entire expression replacement.
+                let reduced = self.reduce_child(&mut cloned);
+                if reduced {
+                    self.classes[class_index][index] = cloned;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.tidy();
+        }
+        changed
+    }
+
+    /// Unifies classes that share an expression. Returns true iff any change.
+    fn unify_classes(&mut self) -> bool {
+        let mut changed = false;
+        for index1 in 0..self.classes.len() {
+            for index2 in 0..index1 {
+                if self.classes[index1]
+                    .iter()
+                    .any(|x| self.classes[index2].iter().any(|y| x == y))
+                {
+                    let prior = std::mem::take(&mut self.classes[index2]);
+                    self.classes[index1].extend(prior);
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.tidy();
+        }
+        changed
     }
 
     /// Produce the equivalences present in both inputs.
@@ -510,22 +592,59 @@ impl EquivalenceClasses {
         //       We may removed non-shared constraints, but ones that remain could take over
         //       and substitute in to retain more equivalences.
 
-        // For each pair of equivalence classes, their intersection.
-        let mut equivalences = EquivalenceClasses {
-            classes: Vec::new(),
-        };
-        for class1 in self.classes.iter() {
-            for class2 in other.classes.iter() {
-                let class = class1
-                    .iter()
-                    .filter(|e1| class2.iter().any(|e2| e1 == &e2))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if class.len() > 1 {
-                    equivalences.classes.push(class);
+        // To accumulate the resulting equivalence classes.
+        let mut equivalences = EquivalenceClasses::default();
+
+        // Extract equivalences from `self` supported by `other`.
+        for class in self.classes.iter() {
+            let mut equivalent = BTreeMap::new();
+            for (index, expr) in class.iter().enumerate() {
+                let mut reduced = expr.clone();
+                other.reduce_expr(&mut reduced);
+                equivalent
+                    .entry(reduced)
+                    .or_insert_with(Vec::new)
+                    .push(index);
+            }
+            for (_expr, indices) in equivalent.into_iter() {
+                if indices.len() > 1 {
+                    let new_class = indices.iter().map(|i| class[*i].clone()).collect();
+                    equivalences.classes.push(new_class);
                 }
             }
         }
+        // Extract equivalences from `other` supported by `self`.
+        for class in other.classes.iter() {
+            let mut equivalent = BTreeMap::new();
+            for (index, expr) in class.iter().enumerate() {
+                let mut reduced = expr.clone();
+                self.reduce_expr(&mut reduced);
+                equivalent
+                    .entry(reduced)
+                    .or_insert_with(Vec::new)
+                    .push(index);
+            }
+            for (_expr, indices) in equivalent.into_iter() {
+                if indices.len() > 1 {
+                    let new_class = indices.iter().map(|i| class[*i].clone()).collect();
+                    equivalences.classes.push(new_class);
+                }
+            }
+        }
+
+        // Look for shared thoughts on non-null columns.
+        let mut non_null_cols_self = std::collections::BTreeSet::new();
+        self.non_null_requirements(&mut non_null_cols_self);
+        let mut non_null_cols_other = std::collections::BTreeSet::new();
+        other.non_null_requirements(&mut non_null_cols_other);
+
+        let non_null_cols = non_null_cols_self
+            .intersection(&non_null_cols_other)
+            .map(|c| MirScalarExpr::Column(*c).call_is_null())
+            .chain(std::iter::once(MirScalarExpr::literal_false()))
+            .collect::<Vec<_>>();
+        equivalences.classes.push(non_null_cols);
+
         equivalences.minimize(&None);
         equivalences
     }
@@ -625,13 +744,15 @@ impl EquivalenceClasses {
     /// Perform any exact replacement for `expr`, report if it had an effect.
     fn replace(&self, expr: &mut MirScalarExpr) -> bool {
         for class in self.classes.iter() {
-            // TODO: If `class` is sorted We only need to iterate through "simpler" expressions;
-            // we can stop once x > expr.
-            // We need to be careful with that reasoning, as it interferes with self-improvement;
-            // if we are modifying `self` we must restore the invariant before relying on it again.
-            if class[1..].iter().any(|x| x == expr) {
-                expr.clone_from(&class[0]);
-                return true;
+            if class.len() > 1 {
+                // TODO: If `class` is sorted We only need to iterate through "simpler" expressions;
+                // we can stop once x > expr.
+                // We need to be careful with that reasoning, as it interferes with self-improvement;
+                // if we are modifying `self` we must restore the invariant before relying on it again.
+                if class[1..].iter().any(|x| x == expr) {
+                    expr.clone_from(&class[0]);
+                    return true;
+                }
             }
         }
         false
@@ -640,8 +761,8 @@ impl EquivalenceClasses {
     /// Perform any simplification, report if effective.
     pub fn reduce_expr(&self, expr: &mut MirScalarExpr) -> bool {
         let mut simplified = false;
-        simplified = simplified || self.reduce_child(expr);
-        simplified = simplified || self.replace(expr);
+        simplified = self.reduce_child(expr) || simplified;
+        simplified = self.replace(expr) || simplified;
         simplified
     }
 
@@ -687,5 +808,72 @@ impl EquivalenceClasses {
             }
         }
         false
+    }
+
+    /// Adds to `columns` all column identifiers that must be non-null to satisfy `self`.
+    fn non_null_requirements(&self, columns: &mut std::collections::BTreeSet<usize>) {
+        use mz_repr::Datum;
+
+        for class in self.classes.iter() {
+            match class[0].as_literal() {
+                Some(Ok(Datum::Null)) => {}
+                Some(Ok(Datum::False)) => {
+                    for expr in class.iter() {
+                        if let MirScalarExpr::CallUnary {
+                            func: mz_expr::UnaryFunc::IsNull(_),
+                            expr,
+                        } = expr
+                        {
+                            expr.non_null_requirements(&mut *columns);
+                        } else {
+                            expr.non_null_requirements(&mut *columns);
+                        }
+                    }
+                }
+                Some(Ok(_)) => {
+                    for expr in class.iter() {
+                        expr.non_null_requirements(&mut *columns);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// True iff the aggregate function returns an input datum.
+fn aggregate_is_input(aggregate: &AggregateFunc) -> bool {
+    match aggregate {
+        AggregateFunc::MaxInt16
+        | AggregateFunc::MaxInt32
+        | AggregateFunc::MaxInt64
+        | AggregateFunc::MaxUInt16
+        | AggregateFunc::MaxUInt32
+        | AggregateFunc::MaxUInt64
+        | AggregateFunc::MaxMzTimestamp
+        | AggregateFunc::MaxFloat32
+        | AggregateFunc::MaxFloat64
+        | AggregateFunc::MaxBool
+        | AggregateFunc::MaxString
+        | AggregateFunc::MaxDate
+        | AggregateFunc::MaxTimestamp
+        | AggregateFunc::MaxTimestampTz
+        | AggregateFunc::MinInt16
+        | AggregateFunc::MinInt32
+        | AggregateFunc::MinInt64
+        | AggregateFunc::MinUInt16
+        | AggregateFunc::MinUInt32
+        | AggregateFunc::MinUInt64
+        | AggregateFunc::MinMzTimestamp
+        | AggregateFunc::MinFloat32
+        | AggregateFunc::MinFloat64
+        | AggregateFunc::MinBool
+        | AggregateFunc::MinString
+        | AggregateFunc::MinDate
+        | AggregateFunc::MinTimestamp
+        | AggregateFunc::MinTimestampTz
+        | AggregateFunc::Any
+        | AggregateFunc::All => true,
+        _ => false,
     }
 }
