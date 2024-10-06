@@ -686,6 +686,69 @@ class TestLagTolerance:
         assert len(result) > 0 and result[0].status == "success"
 
 
+class TestDeploymentEdgeCases:
+    @pytest.fixture(scope="class")
+    def dbt_profile_target(self):
+        return {
+            "type": "materialize",
+            "threads": 1,
+            "host": "{{ env_var('DBT_HOST', 'localhost') }}",
+            "user": "materialize",
+            "pass": "password",
+            "database": "materialize",
+            "port": "{{ env_var('DBT_PORT', 6875) }}",
+            "cluster": "prod",
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "model1.sql": "SELECT 1 AS id",
+            "model2.sql": "{{ config(cluster='prod') }} SELECT 2 AS id",
+        }
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS prod CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql(
+            f"DROP SCHEMA IF EXISTS {project.test_schema}_dbt_deploy CASCADE"
+        )
+
+    def test_deploy_init_with_existing_deployment_cluster(self, project, capsys):
+        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '2'")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        captured = capsys.readouterr()
+        output = captured.out
+
+        assert "Deployment cluster prod_dbt_deploy already exists" in output
+
+    def test_deploy_init_with_different_cluster_sizes(self, project):
+        project.run_sql("CREATE CLUSTER prod SIZE = '4'")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        size = project.run_sql(
+            "SELECT size FROM mz_clusters WHERE name = 'prod_dbt_deploy'", fetch="one"
+        )[0]
+
+        assert (
+            size == "4"
+        ), "Deployment cluster should have the same size as the production cluster"
+
+    def test_deploy_cleanup_idempotency(self, project):
+        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        run_dbt(["run-operation", "deploy_init"])
+
+        run_dbt(["run-operation", "deploy_cleanup"])
+
+        result = run_dbt(["run-operation", "deploy_cleanup"])
+        assert result[0].status == "success"
+
+
 class TestEndToEndDeployment:
     @pytest.fixture(scope="class")
     def dbt_profile_target(self):
