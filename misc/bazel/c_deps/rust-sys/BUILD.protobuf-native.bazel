@@ -59,16 +59,6 @@ rust_cxx_bridge(
     ],
 )
 
-cc_library(
-    name = "io-include",
-    hdrs = ["src/io.h"],
-    include_prefix = "protobuf-native",
-    deps = [
-        ":internal-include",
-        "@protobuf//src/google/protobuf/compiler:importer",
-    ],
-)
-
 rust_cxx_bridge(
     name = "lib-bridge",
     src = "src/lib.rs",
@@ -77,13 +67,6 @@ rust_cxx_bridge(
         ":internal-include",
         ":lib-include",
     ],
-)
-
-cc_library(
-    name = "lib-include",
-    hdrs = ["src/lib.h"],
-    include_prefix = "protobuf-native",
-    deps = ["@protobuf//src/google/protobuf/compiler:code_generator"],
 )
 
 rust_cxx_bridge(
