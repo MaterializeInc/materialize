@@ -103,7 +103,12 @@ def gen(path, check):
     if subprocess.run(["which", "bazel"]).returncode != 0:
         ui.warn("couldn't find 'bazel' skipping formatting of BUILD files")
     else:
-        paths = output_path("//misc/bazel/tools:buildifier")
+        # HACK(parkmycar): Run buildifier to make sure Bazel fetches the binary.
+        buildifier = "//misc/bazel/tools:buildifier"
+        cmd_args = ["bazel", "run", f"{buildifier}", "--", "--help"]
+        subprocess.check_output(cmd_args, stderr=subprocess.DEVNULL)
+
+        paths = output_path(buildifier)
         formatter_path = MZ_ROOT / paths[-1]
         formatter += ["--formatter", str(formatter_path)]
 
@@ -111,7 +116,8 @@ def gen(path, check):
     if check:
         check_arg += ["--check"]
 
-    # TODO(parkmycar): Use Bazel to run this lint.
+    # TODO(parkmycar): Use Bazel to run this lint which should allow us to remove
+    # the HACK from above.
     cmd_args = [
         "cargo",
         "run",

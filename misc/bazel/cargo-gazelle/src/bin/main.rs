@@ -210,7 +210,7 @@ fn generage_build_bazel<'a>(
     }))
 }
 
-/// Returns a [`blake3`] hash of a file, returning `None` if the specified `path` doesn't exist.
+/// Returns an [`md5`] hash of a file, returning `None` if the specified `path` doesn't exist.
 fn hash_file(file: &Path) -> Result<Option<Vec<u8>>, anyhow::Error> {
     if !file.exists() {
         return Ok(None);
