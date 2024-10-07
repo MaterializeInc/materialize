@@ -935,7 +935,7 @@ impl RustType<ProtoDataflowExpirationDesc> for DataflowExpirationDesc<mz_repr::T
         Ok(Self {
             transitive_upper: x.transitive_upper.into_rust()?,
             has_transitive_refresh_schedule: x.has_transitive_refresh_schedule.into_rust()?,
-            is_timeline_epochms: x.has_transitive_refresh_schedule.into_rust()?,
+            is_timeline_epochms: x.is_timeline_epochms.into_rust()?,
         })
     }
 }
