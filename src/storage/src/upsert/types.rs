@@ -1050,6 +1050,8 @@ where
 
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
+    // TODO: While we only have feedback upsert.
+    #[allow(unused)]
     pub async fn multi_put<P>(&mut self, puts: P) -> Result<(), anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<Value<O>>)>,
@@ -1085,6 +1087,58 @@ where
         self.stats.update_records_indexed_by(stats.values_diff);
         self.stats
             .update_envelope_state_tombstones_by(stats.tombstones_diff);
+
+        Ok(())
+    }
+
+    /// Insert or delete for all `puts` keys, prioritizing the last value for
+    /// repeated keys.
+    ///
+    /// Version of `multi_put` that uses the given stats, for when the caller
+    /// has a better way of correctly computing those stats.
+    pub async fn multi_put_with_stats<P>(
+        &mut self,
+        puts: P,
+        precomputed_stats: PutStats,
+    ) -> Result<(), anyhow::Error>
+    where
+        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
+    {
+        fail::fail_point!("fail_state_multi_put", |_| {
+            Err(anyhow::anyhow!("Error putting values into state"))
+        });
+        let now = Instant::now();
+        let stats = self
+            .inner
+            .multi_put(puts.into_iter().map(|(k, pv)| (k, pv)))
+            .await?;
+
+        self.metrics
+            .multi_put_latency
+            .observe(now.elapsed().as_secs_f64());
+
+        // We use `processed_puts`, because the backend has special knowledge
+        // here.
+        self.worker_metrics
+            .multi_put_size
+            .inc_by(stats.processed_puts);
+
+        self.worker_metrics
+            .upsert_inserts
+            .inc_by(precomputed_stats.inserts);
+        self.worker_metrics
+            .upsert_updates
+            .inc_by(precomputed_stats.updates);
+        self.worker_metrics
+            .upsert_deletes
+            .inc_by(precomputed_stats.deletes);
+
+        self.stats
+            .update_bytes_indexed_by(precomputed_stats.size_diff);
+        self.stats
+            .update_records_indexed_by(precomputed_stats.values_diff);
+        self.stats
+            .update_envelope_state_tombstones_by(precomputed_stats.tombstones_diff);
 
         Ok(())
     }
