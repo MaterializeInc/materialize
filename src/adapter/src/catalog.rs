@@ -95,6 +95,7 @@ pub(crate) mod consistency;
 mod migrate;
 
 mod apply;
+mod dataflow_expiration;
 mod open;
 mod state;
 mod transact;
