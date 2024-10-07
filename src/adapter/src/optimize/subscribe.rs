@@ -314,7 +314,7 @@ impl GlobalMirPlan<Unresolved> {
         self.df_desc.set_as_of(as_of);
 
         // Detect the timeline type.
-        self.df_desc.is_timeline_epochms = is_timeline_epochms;
+        self.df_desc.dataflow_expiration_desc.is_timeline_epochms = is_timeline_epochms;
 
         // The only outputs of the dataflow are sinks, so we might be able to
         // turn off the computation early, if they all have non-trivial

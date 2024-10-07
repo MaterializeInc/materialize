@@ -37,7 +37,7 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, error};
+use tracing::{error, info};
 
 use crate::arrangement::manager::SpecializedTraceHandle;
 use crate::compute_state::{ComputeState, HydrationEvent};
@@ -87,9 +87,9 @@ where
     pub(super) hydration_logger: Option<HydrationLogger>,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
-    /// The expiration time for data in this context. The output's frontier should never advance
+    /// The expiration time for dataflows in this context. The output's frontier should never advance
     /// past this frontier, except the empty frontier.
-    pub expire_at: Antichain<T>,
+    pub dataflow_expiration: Antichain<T>,
 }
 
 impl<S: Scope> Context<S>
@@ -102,7 +102,7 @@ where
         scope: S,
         compute_state: &ComputeState,
         until: Antichain<mz_repr::Timestamp>,
-        expire_at: Antichain<mz_repr::Timestamp>,
+        dataflow_expiration: Antichain<mz_repr::Timestamp>,
     ) -> Self {
         use mz_ore::collections::CollectionExt as IteratorExt;
         let dataflow_id = *scope.addr().into_first();
@@ -123,10 +123,9 @@ where
             })
         };
 
-        debug!(
-            "dataflow {dataflow_id}: is_timeline_epochms: {}, expire_at: {expire_at:?}, until: {until:?}",
-            dataflow.is_timeline_epochms
-        );
+        if !dataflow_expiration.is_empty() {
+            info!("enabling dataflow expiration for dataflow {dataflow_id}: expiration: {dataflow_expiration:?}, until: {until:?}");
+        }
 
         Self {
             scope,
@@ -138,7 +137,7 @@ where
             shutdown_token: Default::default(),
             hydration_logger,
             linear_join_spec: compute_state.linear_join_spec,
-            expire_at,
+            dataflow_expiration,
         }
     }
 }
@@ -220,7 +219,7 @@ where
             hydration_logger: self.hydration_logger.clone(),
             linear_join_spec: self.linear_join_spec.clone(),
             bindings,
-            expire_at: self.expire_at.clone(),
+            dataflow_expiration: self.dataflow_expiration.clone(),
         }
     }
 }

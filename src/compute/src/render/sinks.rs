@@ -94,7 +94,7 @@ where
 
         // Ensure that the frontier does not advance past the expiration time, if set. Otherwise,
         // we might write down incorrect data.
-        if let Some(&expiration) = self.expire_at.as_option() {
+        if let Some(&expiration) = self.dataflow_expiration.as_option() {
             ok_collection = ok_collection.expire_collection_at(expiration);
             err_collection = err_collection.expire_collection_at(expiration);
         }

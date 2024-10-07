@@ -226,7 +226,8 @@ impl Optimize<LocalMirPlan> for Optimizer {
             DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
-        df_desc.is_timeline_epochms = self.is_timeline_epochms;
+
+        df_desc.dataflow_expiration_desc.is_timeline_epochms = self.is_timeline_epochms;
 
         df_desc.refresh_schedule.clone_from(&self.refresh_schedule);
 

@@ -141,7 +141,6 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use timely::worker::Worker as TimelyWorker;
 use timely::PartialOrder;
-use tracing::info;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -199,13 +198,10 @@ pub fn build_compute_dataflow<A: Allocate>(
         .collect::<Vec<_>>();
 
     // Determine the dataflow expiration, if any.
-    let expire_at = dataflow.expire_dataflow_at(compute_state.replica_expiration);
-    if !expire_at.is_empty() {
-        info!("enabling dataflow expiration at {expire_at:?}");
-    }
+    let dataflow_expiration = dataflow.expire_dataflow_at(compute_state.replica_expiration);
 
     // Add the dataflow expiration to `until`.
-    let until = dataflow.until.meet(&expire_at);
+    let until = dataflow.until.meet(&dataflow_expiration);
 
     let worker_logging = timely_worker.log_register().get("timely");
 
@@ -311,7 +307,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     region.clone(),
                     compute_state,
                     until,
-                    expire_at,
+                    dataflow_expiration,
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
@@ -386,7 +382,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     region.clone(),
                     compute_state,
                     until,
-                    expire_at,
+                    dataflow_expiration,
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
@@ -550,7 +546,7 @@ where
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
-                if let Some(&expiration) = self.expire_at.as_option() {
+                if let Some(&expiration) = self.dataflow_expiration.as_option() {
                     oks.expire_at(expiration);
                     errs.stream.expire_stream_at(expiration);
                 }
@@ -630,7 +626,7 @@ where
 
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
-                if let Some(&expiration) = self.expire_at.as_option() {
+                if let Some(&expiration) = self.dataflow_expiration.as_option() {
                     oks.expire_at(expiration);
                     errs.stream.expire_stream_at(expiration);
                 }

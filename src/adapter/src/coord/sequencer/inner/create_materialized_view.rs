@@ -677,8 +677,10 @@ impl Coordinator {
                 df_desc.set_initial_as_of(initial_as_of);
                 df_desc.until = until;
 
-                df_desc.transitive_upper = Some(upper);
-                df_desc.has_transitive_refresh_schedule = has_transitive_refresh_schedule;
+                df_desc.dataflow_expiration_desc.transitive_upper = Some(upper);
+                df_desc
+                    .dataflow_expiration_desc
+                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
 
                 let storage_metadata = coord.catalog.state().storage_metadata();
 

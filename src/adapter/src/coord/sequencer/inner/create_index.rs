@@ -477,8 +477,10 @@ impl Coordinator {
                 let since = coord.least_valid_read(&read_holds);
                 df_desc.set_as_of(since);
 
-                df_desc.transitive_upper = Some(upper);
-                df_desc.has_transitive_refresh_schedule = has_transitive_refresh_schedule;
+                df_desc.dataflow_expiration_desc.transitive_upper = Some(upper);
+                df_desc
+                    .dataflow_expiration_desc
+                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
 
                 coord
                     .ship_dataflow_and_notice_builtin_table_updates(
