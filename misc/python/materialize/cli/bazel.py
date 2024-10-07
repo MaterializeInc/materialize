@@ -47,6 +47,7 @@ def gen_cmd(args: list[str]):
     parser = argparse.ArgumentParser(
         prog="gen", description="Generate BUILD.bazel files."
     )
+    parser.add_argument("--check", action="store_true")
     parser.add_argument(
         "path",
         type=pathlib.Path,
@@ -60,7 +61,7 @@ def gen_cmd(args: list[str]):
     else:
         path = None
 
-    gen(path)
+    gen(path, gen_args.check)
 
 
 def fmt_cmd(args: list[str]):
@@ -84,7 +85,7 @@ def bazel_cmd(args: list[str]):
     subprocess.run(["bazel"] + args, check=True)
 
 
-def gen(path):
+def gen(path, check):
     """
     Generates BUILD.bazel files from Cargo.toml.
 
@@ -98,7 +99,25 @@ def gen(path):
     # Note: We build cargo-gazelle with optimizations because the speedup is
     # worth it and Bazel should cache the resulting binary.
 
-    # TODO(parkmycar): Use Bazel to run this lint.
+    formatter = []
+    if subprocess.run(["which", "bazel"]).returncode != 0:
+        ui.warn("couldn't find 'bazel' skipping formatting of BUILD files")
+    else:
+        # HACK(parkmycar): Run buildifier to make sure Bazel fetches the binary.
+        buildifier = "//misc/bazel/tools:buildifier"
+        cmd_args = ["bazel", "run", f"{buildifier}", "--", "--help"]
+        subprocess.check_output(cmd_args, stderr=subprocess.DEVNULL)
+
+        paths = output_path(buildifier)
+        formatter_path = MZ_ROOT / paths[-1]
+        formatter += ["--formatter", str(formatter_path)]
+
+    check_arg = []
+    if check:
+        check_arg += ["--check"]
+
+    # TODO(parkmycar): Use Bazel to run this lint which should allow us to remove
+    # the HACK from above.
     cmd_args = [
         "cargo",
         "run",
@@ -106,14 +125,11 @@ def gen(path):
         "--no-default-features",
         "--manifest-path=misc/bazel/cargo-gazelle/Cargo.toml",
         "--",
-        "--path",
+        *check_arg,
+        *formatter,
         f"{str(path)}",
     ]
     subprocess.run(cmd_args, check=True)
-
-    # Make sure we format everything after generating it so the linter doesn't
-    # conflict with the formatter.
-    fmt(path.parent)
 
 
 def fmt(path):
@@ -141,12 +157,14 @@ def fmt(path):
     subprocess.run(cmd_args, check=True)
 
 
-def output_path(target) -> pathlib.Path:
+def output_path(target) -> list[pathlib.Path]:
     """Returns the absolute path of the Bazel target."""
 
     cmd_args = ["bazel", "cquery", f"{target}", "--output=files"]
-    path = subprocess.check_output(cmd_args, text=True)
-    return pathlib.Path(path)
+    paths = subprocess.check_output(
+        cmd_args, text=True, stderr=subprocess.DEVNULL
+    ).splitlines()
+    return [pathlib.Path(path) for path in paths]
 
 
 if __name__ == "__main__":

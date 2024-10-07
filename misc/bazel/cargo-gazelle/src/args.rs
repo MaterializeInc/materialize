@@ -14,6 +14,15 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 pub struct Args {
-    #[clap(long, value_name = "FILE")]
+    /// Path to an executable that can be used to format `BUILD.bazel` files.
+    #[clap(long, value_name = "FORMATTER")]
+    pub formatter: Option<PathBuf>,
+    /// Doesn't actually update any files, just checks if they would have changed.
+    #[clap(long)]
+    pub check: bool,
+    /// Path to a `Cargo.toml` file to generate a `BUILD.bazel` file for.
+    ///
+    /// Can be a path to a single crate or a workspace.
+    #[clap(value_name = "CARGO_TOML")]
     pub path: PathBuf,
 }

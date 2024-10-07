@@ -94,7 +94,7 @@ impl CrateConfig {
         self.skip_generating
     }
 
-    pub fn additive_content(&self) -> Option<AdditiveContent<'_>> {
+    pub fn additive_content(&self) -> Option<AdditiveContent> {
         self.additive_content
             .as_ref()
             .map(|s| AdditiveContent::new(s.as_str()))

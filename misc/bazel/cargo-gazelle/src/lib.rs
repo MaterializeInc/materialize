@@ -26,12 +26,12 @@ pub mod targets;
 ///
 /// This includes an auto-generated header, `load(...)` statements, and all
 /// Bazel targets.
-pub struct BazelBuildFile<'a> {
+pub struct BazelBuildFile {
     pub header: header::BazelHeader,
-    pub targets: Vec<&'a dyn RustTarget>,
+    pub targets: Vec<Box<dyn RustTarget>>,
 }
 
-impl<'a> fmt::Display for BazelBuildFile<'a> {
+impl fmt::Display for BazelBuildFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.header.format(f)?;
         for target in &self.targets {
