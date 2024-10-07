@@ -4847,17 +4847,26 @@ def workflow_crash_on_replica_expiration(
         c.up("clusterd1")
         c.sql(
             """
-            ALTER SYSTEM SET compute_replica_expiration = 10000;
+            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
+            ALTER SYSTEM SET compute_replica_expiration_offset = '10s';
 
-            DROP CLUSTER IF EXISTS cluster1 CASCADE;
+            DROP CLUSTER IF EXISTS test CASCADE;
             DROP TABLE IF EXISTS t CASCADE;
 
-            CREATE CLUSTER cluster1 ( SIZE = '1');
-            SET CLUSTER TO cluster1;
+            CREATE CLUSTER test REPLICAS (
+                test (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            );
+            SET CLUSTER TO test;
 
             CREATE TABLE t (x int);
-            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
-            SELECT mz_unsafe.mz_sleep(12);
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t WHERE x < 23;
+            SELECT mz_unsafe.mz_sleep(15);
             SELECT * FROM mv;
             """,
             port=6877,
@@ -4865,5 +4874,5 @@ def workflow_crash_on_replica_expiration(
         )
         c1 = c.invoke("logs", "clusterd1", capture=True)
         assert (
-            "replica expired" in c1.stdout
+            "has exceeded expiration" in c1.stdout
         ), "unexpected success in crash-on-replica-expiration"

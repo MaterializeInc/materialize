@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Change compute_replica_expiration to 31 days, should keep retractions
+# Change compute_replica_expiration_offset to 31 days, should keep retractions
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET compute_replica_expiration = 2678400000
+ALTER SYSTEM SET compute_replica_expiration_offset = '31d'
 
 > CREATE CLUSTER test (SIZE = '1')
 > SET CLUSTER TO test
@@ -34,11 +34,11 @@ ALTER SYSTEM SET compute_replica_expiration = 2678400000
 
 > DROP VIEW last_30_days;
 
-# compute_replica_expiration defaults to 22 days, so should have no need for
-# retractions after a 30 day window
+# compute_replica_expiration_offset defaults to 22 days, so should have no need
+# for retractions after a 30 day window
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET compute_replica_expiration = 1900800000
+ALTER SYSTEM SET compute_replica_expiration_offset = '22d'
 
 > DROP CLUSTER test;
 > CREATE CLUSTER test (SIZE = '1')

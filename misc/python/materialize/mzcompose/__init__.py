@@ -79,7 +79,7 @@ def get_default_system_parameters(
         "cluster_always_use_disk": "true",
         "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
         "compute_hydration_concurrency": "2",
-        "compute_replica_expiration": "259200000",  # 3 days, no test should run longer than that
+        "compute_replica_expiration_offset": "3d",
         "disk_cluster_replicas_default": "true",
         "enable_0dt_deployment": "true" if zero_downtime else "false",
         "enable_0dt_deployment_panic_after_timeout": "true",
