@@ -575,6 +575,17 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: testdrive-old-kafka-src-syntax
+        label: "Testdrive %N (before Kafka source versioning)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 40
+        parallelism: 8
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive-old-kafka-src-syntax
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
 
   - group: AWS
     key: aws
