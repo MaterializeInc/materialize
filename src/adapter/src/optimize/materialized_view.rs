@@ -76,7 +76,7 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
-    /// Whether the timeline is [`Timeline::EpochMilliseconds`].
+    /// Whether the timeline is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
     ///
     /// Used to determine if it is safe to enable dataflow expiration.
     is_timeline_epochms: bool,

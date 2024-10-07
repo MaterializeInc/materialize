@@ -742,7 +742,7 @@ pub struct CreateMaterializedViewOptimize {
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
-    /// Whether the timeline is [`Timeline::EpochMilliseconds`].
+    /// Whether the timeline is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
     ///
     /// Used to determine if it is safe to enable dataflow expiration.
     is_timeline_epochms: bool,

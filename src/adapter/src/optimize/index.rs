@@ -90,7 +90,7 @@ pub struct Index {
     name: QualifiedItemName,
     on: GlobalId,
     keys: Vec<mz_expr::MirScalarExpr>,
-    /// Whether the timeline is [`Timeline::EpochMilliseconds`].
+    /// Whether the timeline is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
     ///
     /// Used to determine if it is safe to enable dataflow expiration.
     is_timeline_epochms: bool,
