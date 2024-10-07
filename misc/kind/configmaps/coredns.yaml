@@ -14,22 +14,26 @@ metadata:
     namespace: kube-system
 data:
     Corefile: |
-        # This is the stock EKS configuration for CoreDNS, with modifications
-        # noted inline.
         .:53 {
             errors
-            health
+            health {
+              lameduck 5s
+            }
             ready
             kubernetes cluster.local in-addr.arpa ip6.arpa {
                 pods insecure
                 fallthrough in-addr.arpa ip6.arpa
-                # Set the TTL to 1
-                ttl 1
             }
             prometheus :9153
-            forward . /etc/resolv.conf
+            forward . /etc/resolv.conf {
+              max_concurrent 1000
+            }
             # Set the TTL to 1 in general
-            cache 1
+            cache {
+              success 0
+              denial 0
+            }
             loop
             reload
+            loadbalance
         }
