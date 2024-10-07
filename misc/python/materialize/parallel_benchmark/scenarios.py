@@ -352,6 +352,7 @@ class FlagUpdate(Scenario):
                                 conn_info=conn_infos["mz_system"],
                             ),
                             dist=Periodic(per_second=1),
+                            report_regressions=False,  # We don't care about this query getting slower
                         ),
                     ]
                     + [
