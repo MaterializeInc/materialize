@@ -17,7 +17,7 @@ from pathlib import Path
 import boto3
 
 from materialize import bazel, elf, mzbuild, spawn, ui
-from materialize.mzbuild import CargoBuild, ResolvedImage
+from materialize.mzbuild import CargoBuild, Repository, ResolvedImage
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
 
@@ -71,35 +71,16 @@ def maybe_upload_debuginfo(
     DEBUGINFO_BINS were built."""
 
     # Find all binaries created by the `cargo-bin` pre-image.
-    bins: set[str] = set()
-    bazel_bins: dict[str, str] = dict()
-    for image in built_images:
-        for pre_image in image.image.pre_images:
-            if isinstance(pre_image, CargoBuild):
-                for bin in pre_image.bins:
-                    if bin in DEBUGINFO_BINS:
-                        bins.add(bin)
-                    if repo.rd.bazel:
-                        bazel_bins[bin] = pre_image.bazel_bins[bin]
-
-    if not bins:
+    bins, bazel_bins = find_binaries_created_by_cargo_bin(repo, built_images)
+    if len(bins) == 0:
         return
 
     ui.section(f"Uploading debuginfo for {', '.join(bins)}...")
 
-    s3 = boto3.client("s3")
     is_tag_build = ui.env_is_truthy("BUILDKITE_TAG")
-    polar_signals_api_token = os.environ["POLAR_SIGNALS_API_TOKEN"]
 
     for bin in bins:
-        if repo.rd.bazel:
-            options = repo.rd.bazel_config()
-            paths = bazel.output_paths(bazel_bins[bin], options)
-            assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
-            bin_path = paths[0]
-        else:
-            cargo_profile = "release" if repo.rd.release_mode else "debug"
-            bin_path = repo.rd.cargo_target_dir() / cargo_profile / bin
+        bin_path = get_bin_path(repo, bin, bazel_bins)
 
         dbg_path = bin_path.with_suffix(bin_path.suffix + ".debug")
         spawn.runv(
@@ -113,101 +94,147 @@ def maybe_upload_debuginfo(
 
         # Upload binary and debuginfo to S3 bucket, regardless of whether this
         # is a tag build or not. S3 is cheap.
-        with open(bin_path, "rb") as exe, open(dbg_path, "rb") as dbg:
-            build_id = elf.get_build_id(exe)
-            assert build_id.isalnum()
-            assert len(build_id) > 0
-
-            dbg_build_id = elf.get_build_id(dbg)
-            assert build_id == dbg_build_id
-
-            for fileobj, name in [
-                (exe, "executable"),
-                (dbg, "debuginfo"),
-            ]:
-                key = f"buildid/{build_id}/{name}"
-                print(f"Uploading {name} to s3://{DEBUGINFO_S3_BUCKET}/{key}...")
-                fileobj.seek(0)
-                s3.upload_fileobj(
-                    Fileobj=fileobj,
-                    Bucket=DEBUGINFO_S3_BUCKET,
-                    Key=key,
-                    ExtraArgs={
-                        "Tagging": f"ephemeral={'false' if is_tag_build else 'true'}",
-                    },
-                )
+        build_id = upload_debuginfo_to_s3(bin_path, dbg_path, is_tag_build)
 
         # Upload debuginfo and sources to Polar Signals (our continuous
         # profiling provider), but only if this is a tag build. Polar Signals is
         # expensive, so we don't want to upload development or unstable builds
         # that won't ever be profiled by Polar Signals.
         if is_tag_build:
-            ui.section(f"Uploading debuginfo for {bin} to Polar Signals...")
-            spawn.run_with_retries(
-                lambda: spawn.runv(
-                    [
-                        "parca-debuginfo",
-                        "upload",
-                        "--store-address=grpc.polarsignals.com:443",
-                        "--no-extract",
-                        dbg_path,
-                    ],
-                    cwd=repo.rd.root,
-                    env=dict(
-                        os.environ, PARCA_DEBUGINFO_BEARER_TOKEN=polar_signals_api_token
-                    ),
-                )
+            upload_debuginfo_to_polarsignals(repo, build_id, bin_path, dbg_path)
+
+
+def find_binaries_created_by_cargo_bin(
+    repo: Repository, built_images: set[ResolvedImage]
+) -> tuple[set[str], dict[str, str]]:
+    bins: set[str] = set()
+    bazel_bins: dict[str, str] = dict()
+    for image in built_images:
+        for pre_image in image.image.pre_images:
+            if isinstance(pre_image, CargoBuild):
+                for bin in pre_image.bins:
+                    if bin in DEBUGINFO_BINS:
+                        bins.add(bin)
+                    if repo.rd.bazel:
+                        bazel_bins[bin] = pre_image.bazel_bins[bin]
+
+    return bins, bazel_bins
+
+
+def get_bin_path(repo: Repository, bin: str, bazel_bins: dict[str, str]) -> Path:
+    if repo.rd.bazel:
+        options = repo.rd.bazel_config()
+        paths = bazel.output_paths(bazel_bins[bin], options)
+        assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
+        return paths[0]
+    else:
+        cargo_profile = "release" if repo.rd.release_mode else "debug"
+        return repo.rd.cargo_target_dir() / cargo_profile / bin
+
+
+def upload_debuginfo_to_s3(bin_path: Path, dbg_path: Path, is_tag_build: bool) -> str:
+    s3 = boto3.client("s3")
+
+    with open(bin_path, "rb") as exe, open(dbg_path, "rb") as dbg:
+        build_id = elf.get_build_id(exe)
+        assert build_id.isalnum()
+        assert len(build_id) > 0
+
+        dbg_build_id = elf.get_build_id(dbg)
+        assert build_id == dbg_build_id
+
+        for fileobj, name in [
+            (exe, "executable"),
+            (dbg, "debuginfo"),
+        ]:
+            key = f"buildid/{build_id}/{name}"
+            print(f"Uploading {name} to s3://{DEBUGINFO_S3_BUCKET}/{key}...")
+            fileobj.seek(0)
+            s3.upload_fileobj(
+                Fileobj=fileobj,
+                Bucket=DEBUGINFO_S3_BUCKET,
+                Key=key,
+                ExtraArgs={
+                    "Tagging": f"ephemeral={'false' if is_tag_build else 'true'}",
+                },
             )
 
-            print(f"Constructing source tarball for {bin}...")
-            with tempfile.NamedTemporaryFile() as tarball:
-                p1 = subprocess.Popen(
-                    ["llvm-dwarfdump", "--show-sources", bin_path],
-                    stdout=subprocess.PIPE,
-                )
-                p2 = subprocess.Popen(
-                    [
-                        "tar",
-                        "-cf",
-                        tarball.name,
-                        "--zstd",
-                        "-T",
-                        "-",
-                        "--ignore-failed-read",
-                    ],
-                    stdin=p1.stdout,
-                    # Suppress noisy warnings about missing files.
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+        return build_id
 
-                # This causes p1 to receive SIGPIPE if p2 exits early,
-                # like in the shell.
-                assert p1.stdout
-                p1.stdout.close()
 
-                for p in [p1, p2]:
-                    if p.wait():
-                        raise subprocess.CalledProcessError(p.returncode, p.args)
+def upload_debuginfo_to_polarsignals(
+    repo: Repository,
+    build_id: str,
+    bin_path: Path,
+    dbg_path: Path,
+) -> None:
+    ui.section(f"Uploading debuginfo for {bin_path} to Polar Signals...")
 
-                print(f"Uploading source tarball for {bin} to Polar Signals...")
-                spawn.run_with_retries(
-                    lambda: spawn.runv(
-                        [
-                            "parca-debuginfo",
-                            "upload",
-                            "--store-address=grpc.polarsignals.com:443",
-                            "--type=sources",
-                            f"--build-id={build_id}",
-                            tarball.name,
-                        ],
-                        cwd=repo.rd.root,
-                        env=dict(
-                            os.environ,
-                            PARCA_DEBUGINFO_BEARER_TOKEN=polar_signals_api_token,
-                        ),
-                    )
-                )
+    polar_signals_api_token = os.environ["POLAR_SIGNALS_API_TOKEN"]
+
+    spawn.run_with_retries(
+        lambda: spawn.runv(
+            [
+                "parca-debuginfo",
+                "upload",
+                "--store-address=grpc.polarsignals.com:443",
+                "--no-extract",
+                dbg_path,
+            ],
+            cwd=repo.rd.root,
+            env=dict(os.environ, PARCA_DEBUGINFO_BEARER_TOKEN=polar_signals_api_token),
+        )
+    )
+
+    print(f"Constructing source tarball for {bin_path}...")
+    with tempfile.NamedTemporaryFile() as tarball:
+        p1 = subprocess.Popen(
+            ["llvm-dwarfdump", "--show-sources", bin_path],
+            stdout=subprocess.PIPE,
+        )
+        p2 = subprocess.Popen(
+            [
+                "tar",
+                "-cf",
+                tarball.name,
+                "--zstd",
+                "-T",
+                "-",
+                "--ignore-failed-read",
+            ],
+            stdin=p1.stdout,
+            # Suppress noisy warnings about missing files.
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        # This causes p1 to receive SIGPIPE if p2 exits early,
+        # like in the shell.
+        assert p1.stdout
+        p1.stdout.close()
+
+        for p in [p1, p2]:
+            if p.wait():
+                raise subprocess.CalledProcessError(p.returncode, p.args)
+
+        print(f"Uploading source tarball for {bin_path} to Polar Signals...")
+        spawn.run_with_retries(
+            lambda: spawn.runv(
+                [
+                    "parca-debuginfo",
+                    "upload",
+                    "--store-address=grpc.polarsignals.com:443",
+                    "--type=sources",
+                    f"--build-id={build_id}",
+                    tarball.name,
+                ],
+                cwd=repo.rd.root,
+                env=dict(
+                    os.environ,
+                    PARCA_DEBUGINFO_BEARER_TOKEN=polar_signals_api_token,
+                ),
+            )
+        )
 
 
 if __name__ == "__main__":
