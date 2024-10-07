@@ -109,7 +109,12 @@ struct Args {
     /// Which log messages to emit.
     ///
     /// See environmentd's `--startup-log-filter` option for details.
-    #[clap(long, env = "LOG_FILTER", value_name = "FILTER", default_value = "off")]
+    #[clap(
+        long,
+        env = "LOG_FILTER",
+        value_name = "FILTER",
+        default_value = "librdkafka=off,mz_kafka_util::client=off,warn"
+    )]
     log_filter: EnvFilter,
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
