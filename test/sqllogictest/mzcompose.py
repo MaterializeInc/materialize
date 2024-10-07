@@ -130,7 +130,7 @@ class SltRunStepConfig:
     ) -> list[str]:
         sqllogictest_config = [
             f"--junit-report={junit_report_path}",
-            f"--postgres-url=postgres://postgres:postgres@postgres:5432",
+            "--postgres-url=postgres://postgres:postgres@postgres:5432",
             f"--replicas={replicas}",
             f"--shard={shard}",
             f"--shard-count={shard_count}",

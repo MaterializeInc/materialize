@@ -1722,7 +1722,7 @@ class BackupRestoreAction(Action):
                 "--commit",
                 "restore-blob",
                 f"--blob-uri={minio_blob_uri()}",
-                "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
+                "--consensus-uri=postgres://postgres:postgres@postgres:5432?options=--search_path=consensus",
             )
             self.composition.up("materialized")
         return True

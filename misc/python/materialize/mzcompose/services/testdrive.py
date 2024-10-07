@@ -48,6 +48,7 @@ class Testdrive(Service):
         aws_secret_access_key: str | None = "minioadmin",
         no_consistency_checks: bool = False,
         external_cockroach: bool = False,
+        external_postgres: bool = False,
         external_minio: bool = False,
         fivetran_destination: bool = False,
         fivetran_destination_url: str = "http://fivetran-destination:6874",
@@ -149,14 +150,19 @@ class Testdrive(Service):
         else:
             entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
 
-        if external_cockroach:
+        if external_postgres:
+            depends_graph["cockroach"] = {"condition": "service_healthy"}
+            entrypoint.append(
+                f"--persist-consensus-url=postgres://postgres:postgres@postgres:5432?options=--search_path=consensus"
+            )
+        elif external_cockroach:
             depends_graph["cockroach"] = {"condition": "service_healthy"}
             entrypoint.append(
                 "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus"
             )
         else:
             entrypoint.append(
-                f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus"
+                f"--persist-consensus-url=postgres://postgres:postgres@{mz_service}:5432?options=--search_path=consensus"
             )
 
         entrypoint.extend(entrypoint_extra)
