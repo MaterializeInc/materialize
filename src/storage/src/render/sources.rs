@@ -280,11 +280,15 @@ where
 
                             let grace_period = dyncfgs::CLUSTER_SHUTDOWN_GRACE_PERIOD
                                 .get(storage_state.storage_configuration.config_set());
+                            let storage_metadata = description.source_exports[&export_id]
+                                .storage_metadata
+                                .clone();
+
                             let (stream, tok) = persist_source::persist_source_core(
                                 scope,
                                 export_id,
                                 persist_clients,
-                                description.ingestion_metadata,
+                                storage_metadata,
                                 Some(as_of),
                                 SnapshotMode::Include,
                                 Antichain::new(),
