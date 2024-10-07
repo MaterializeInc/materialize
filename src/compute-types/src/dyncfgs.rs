@@ -48,7 +48,7 @@ pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
 /// Enable the chunked stack implementation.
 pub const ENABLE_CHUNKED_STACK: Config<bool> = Config::new(
     "enable_compute_chunked_stack",
-    false,
+    true,
     "Enable the chunked stack implementation in compute.",
 );
 
