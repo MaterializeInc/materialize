@@ -205,6 +205,8 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             # create the table here because dbt creates it as materialized view, which will not allow inserts
             > CREATE TABLE IF NOT EXISTS public_table.table (c INT);
+
+            > GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public_table.table TO "infra+qacanaryload@materialize.io"
             """
             )
         )
