@@ -591,7 +591,7 @@ pub(crate) async fn initialize(
         ));
     }
 
-    tx.insert_cluster_replica(
+    tx.insert_cluster_replica_with_id(
         DEFAULT_USER_CLUSTER_ID,
         DEFAULT_USER_REPLICA_ID,
         DEFAULT_USER_REPLICA_NAME,
