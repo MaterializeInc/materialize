@@ -2273,7 +2273,7 @@ impl Coordinator {
         // Run all of our final steps concurrently.
         let final_steps_start = Instant::now();
         info!(
-            "startup: coordinator init: bootstrap: concurrently update builtin tables and cleanup secrets beginning"
+            "startup: coordinator init: bootstrap: concurrently update builtin tables, migrate builtin tables, and cleanup secrets beginning"
         );
         futures::future::join_all([
             migrated_updates_fut,
@@ -2291,7 +2291,7 @@ impl Coordinator {
         self.bootstrap_introspection_subscribes().await;
 
         info!(
-            "startup: coordinator init: bootstrap: concurrently update builtin tables and cleanup secrets complete in {:?}", final_steps_start.elapsed()
+            "startup: coordinator init: bootstrap: concurrently update builtin tables, migrate builtin tables, and cleanup secrets complete in {:?}", final_steps_start.elapsed()
         );
 
         info!(
