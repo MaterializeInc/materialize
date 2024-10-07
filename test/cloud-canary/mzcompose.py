@@ -299,7 +299,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
-    c.run("mz", "region", "disable")
+    c.run("mz", "region", "disable", "--hard")
 
 
 def wait_for_cloud(c: Composition) -> None:
