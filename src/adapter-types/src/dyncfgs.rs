@@ -100,7 +100,7 @@ pub const DEFAULT_SINK_PARTITION_STRATEGY: Config<&str> = Config::new(
 /// Whether to create system builtin continual tasks on boot.
 pub const ENABLE_CONTINUAL_TASK_BUILTINS: Config<bool> = Config::new(
     "enable_continual_task_builtins",
-    false,
+    true,
     "Create system builtin continual tasks on boot.",
 );
 
