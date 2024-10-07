@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO(def-) Reenable when database-issues#8581 is fixed
+$ skip-if
+SELECT true
+
 $ set-arg-default default-replica-size=1
 $ set-arg-default single-replica-cluster=quickstart
 

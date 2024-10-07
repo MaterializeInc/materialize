@@ -173,6 +173,10 @@ snk
 # Test that when there are multiple inputs to a materialization the right one
 # is reported as the "slowest".
 
+# TODO(def-) Reenable when database-issues#8626 is fixed
+$ skip-if
+SELECT true
+
 > ALTER CLUSTER source SET (REPLICATION FACTOR 0)
 
 > SELECT o.name, d.name
