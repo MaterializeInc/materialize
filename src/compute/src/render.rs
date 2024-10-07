@@ -547,7 +547,7 @@ where
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    oks.expire_at(expiration);
+                    oks.expire_arrangement_at(expiration);
                     errs.stream.expire_stream_at(expiration);
                 }
 
@@ -627,7 +627,7 @@ where
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    oks.expire_at(expiration);
+                    oks.expire_arrangement_at(expiration);
                     errs.stream.expire_stream_at(expiration);
                 }
 

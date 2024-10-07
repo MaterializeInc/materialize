@@ -311,7 +311,7 @@ where
     }
 
     /// Panic if the frontier of the underlying arrangement's stream exceeds `expiration` time.
-    pub fn expire_at(&self, expiration: S::Timestamp) {
+    pub fn expire_arrangement_at(&self, expiration: S::Timestamp) {
         match self {
             MzArrangement::RowRow(inner) => {
                 inner.stream.expire_stream_at(expiration);
