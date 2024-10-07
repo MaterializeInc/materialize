@@ -175,7 +175,7 @@ pub const STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING: Config<bool> = Config::new(
 /// Whether to enable the merge operator in upsert for the RocksDB backend.
 pub const STORAGE_ROCKSDB_USE_MERGE_OPERATOR: Config<bool> = Config::new(
     "storage_rocksdb_use_merge_operator",
-    false,
+    true,
     "Use the native rocksdb merge operator where possible.",
 );
 
