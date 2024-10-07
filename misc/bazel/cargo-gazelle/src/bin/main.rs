@@ -153,7 +153,7 @@ fn generage_build_bazel<'a>(
     config: &'a GlobalConfig,
     package: &'a PackageMetadata<'a>,
 ) -> Result<Option<BazelBuildFile>, anyhow::Error> {
-    let crate_config = CrateConfig::new(&package);
+    let crate_config = CrateConfig::new(package);
     tracing::debug!(?crate_config, "found config");
     if crate_config.skip_generating() {
         tracing::info!(path = ?package.manifest_path(), "skipping, because crate config");
@@ -166,22 +166,22 @@ fn generage_build_bazel<'a>(
 
     let error_context = format!("generating {}", package.name());
     let crate_context =
-        CrateContext::generate(&config, &crate_config, &package).context(error_context)?;
+        CrateContext::generate(config, &crate_config, package).context(error_context)?;
 
     let build_script =
-        CargoBuildScript::generate(&config, &crate_context, &crate_config, &package)?;
-    let library = RustLibrary::generate(&config, &package, &crate_config, build_script.as_ref())?;
+        CargoBuildScript::generate(config, &crate_context, &crate_config, package)?;
+    let library = RustLibrary::generate(config, package, &crate_config, build_script.as_ref())?;
 
     let integration_tests: Vec<_> = package
         .build_targets()
         .filter(|target| matches!(target.id(), BuildTargetId::Test(_)))
-        .map(|target| RustTest::integration(&config, &package, &crate_config, &target))
+        .map(|target| RustTest::integration(config, package, &crate_config, &target))
         .collect::<Result<_, _>>()?;
 
     let binaries: Vec<_> = package
         .build_targets()
         .filter(|target| matches!(target.id(), BuildTargetId::Binary(_)))
-        .map(|target| RustBinary::generate(&config, &package, &crate_config, &target))
+        .map(|target| RustBinary::generate(config, package, &crate_config, &target))
         .collect::<Result<_, _>>()?;
 
     #[allow(clippy::as_conversions)]
