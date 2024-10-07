@@ -1,0 +1,27 @@
+operator:
+  image:
+    repository: materialized/operator
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 1024Mi
+    limits:
+      memory: 2056Mi
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  name: ""
+
+observability:
+  enabled: false
+  prometheus:
+    enabled: false
+
+networkPolicies:
+  enabled: false
+  useNativeKubernetesPolicy: true

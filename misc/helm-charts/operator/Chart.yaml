@@ -1,0 +1,7 @@
+apiVersion: v2
+name: materialize-operator
+description: Materialize Kubernetes Operator Helm Chart
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+icon: https://materialize.com/favicon.ico
