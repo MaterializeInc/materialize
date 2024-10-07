@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
+use std::num::NonZeroU64;
 use std::{fmt, mem};
 
 use itertools::Itertools;
@@ -151,7 +152,7 @@ pub enum HirRelationExpr {
         input: Box<HirRelationExpr>,
         group_key: Vec<usize>,
         aggregates: Vec<AggregateExpr>,
-        expected_group_size: Option<u64>,
+        expected_group_size: Option<NonZeroU64>,
     },
     Distinct {
         input: Box<HirRelationExpr>,
@@ -169,7 +170,7 @@ pub enum HirRelationExpr {
         /// Number of records to skip
         offset: usize,
         /// User-supplied hint: how many rows will have the same group key.
-        expected_group_size: Option<u64>,
+        expected_group_size: Option<NonZeroU64>,
     },
     Negate {
         input: Box<HirRelationExpr>,
@@ -1589,7 +1590,7 @@ impl HirRelationExpr {
         self,
         group_key: Vec<usize>,
         aggregates: Vec<AggregateExpr>,
-        expected_group_size: Option<u64>,
+        expected_group_size: Option<NonZeroU64>,
     ) -> Self {
         HirRelationExpr::Reduce {
             input: Box::new(self),
@@ -1605,7 +1606,7 @@ impl HirRelationExpr {
         order_key: Vec<ColumnOrder>,
         limit: Option<HirScalarExpr>,
         offset: usize,
-        expected_group_size: Option<u64>,
+        expected_group_size: Option<NonZeroU64>,
     ) -> Self {
         HirRelationExpr::TopK {
             input: Box::new(self),

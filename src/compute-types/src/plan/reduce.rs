@@ -61,6 +61,7 @@
 //! return the output arrangement directly and avoid the extra collation arrangement.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
 use mz_expr::{
     permutation_for_arrangement, AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr,
@@ -173,8 +174,8 @@ proptest::prop_compose! {
         (integer in (((1_u64) << bits) - 1)
             ..(if bits == (u64::BITS - 1){ u64::MAX }
                 else { (1_u64) << (bits + 1) - 1 }))
-    -> u64 {
-        integer
+    -> NonZeroU64 {
+        NonZeroU64::new(integer).unwrap_or(NonZeroU64::new(1).unwrap())
     }
 }
 
@@ -215,7 +216,7 @@ impl Arbitrary for ReducePlan {
                         fused_unnest_list = false;
                     }
                     ReducePlan::create_from(
-                        exprs,
+                        &exprs,
                         monotonic,
                         expected_group_size,
                         fused_unnest_list,
@@ -625,9 +626,9 @@ impl ReducePlan {
     /// The resulting plan summarizes what the dataflow to be created
     /// and how the aggregations will be executed.
     pub fn create_from(
-        aggregates: Vec<AggregateExpr>,
+        aggregates: &[AggregateExpr],
         monotonic: bool,
-        expected_group_size: Option<u64>,
+        expected_group_size: Option<NonZeroU64>,
         fused_unnest_list: bool,
     ) -> Self {
         // If we don't have any aggregations we are just computing a distinct.
@@ -715,7 +716,7 @@ impl ReducePlan {
         typ: ReductionType,
         aggregates_list: Vec<(usize, AggregateExpr)>,
         monotonic: bool,
-        expected_group_size: Option<u64>,
+        expected_group_size: Option<NonZeroU64>,
         fused_unnest_list: bool,
     ) -> Self {
         if fused_unnest_list {

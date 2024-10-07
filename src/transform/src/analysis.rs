@@ -1260,6 +1260,7 @@ mod explain {
 /// Definition and helper structs for the [`Cardinality`] attribute.
 mod cardinality {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::num::NonZeroU64;
 
     use mz_expr::{
         BinaryFunc, Id, JoinImplementation, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
@@ -1649,14 +1650,14 @@ mod cardinality {
 
         fn reduce(
             &self,
-            group_key: &Vec<MirScalarExpr>,
-            expected_group_size: &Option<u64>,
+            group_key: &[MirScalarExpr],
+            expected_group_size: Option<NonZeroU64>,
             input: CardinalityEstimate,
         ) -> CardinalityEstimate {
             // TODO(mgree): if no `group_key` is present, we can do way better
 
             if let Some(group_size) = expected_group_size {
-                input / f64::cast_lossy(*group_size)
+                input / f64::cast_lossy(group_size.get())
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(1.0)
             } else {
@@ -1667,9 +1668,9 @@ mod cardinality {
 
         fn topk(
             &self,
-            group_key: &Vec<usize>,
+            group_key: &[usize],
             limit: &Option<MirScalarExpr>,
-            expected_group_size: &Option<u64>,
+            expected_group_size: Option<NonZeroU64>,
             input: CardinalityEstimate,
         ) -> CardinalityEstimate {
             // TODO: support simple arithmetic expressions
@@ -1679,7 +1680,7 @@ mod cardinality {
                 .map_or(1, |l| std::cmp::max(0, l));
 
             if let Some(group_size) = expected_group_size {
-                input * (f64::cast_lossy(k) / f64::cast_lossy(*group_size))
+                input * (f64::cast_lossy(k) / f64::cast_lossy(group_size.get()))
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(f64::cast_lossy(k))
             } else {
@@ -1801,7 +1802,7 @@ mod cardinality {
                     ..
                 } => {
                     let input = results[index - 1];
-                    self.reduce(group_key, expected_group_size, input)
+                    self.reduce(group_key, *expected_group_size, input)
                 }
                 TopK {
                     group_key,
@@ -1810,7 +1811,7 @@ mod cardinality {
                     ..
                 } => {
                     let input = results[index - 1];
-                    self.topk(group_key, limit, expected_group_size, input)
+                    self.topk(group_key, limit, *expected_group_size, input)
                 }
                 Threshold { .. } => {
                     let input = results[index - 1];

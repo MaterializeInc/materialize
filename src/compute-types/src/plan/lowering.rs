@@ -10,6 +10,7 @@
 //! Lowering [`DataflowDescription`]s from MIR ([`MirRelationExpr`]) to LIR ([`Plan`]).
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
@@ -492,8 +493,8 @@ impl Context {
                             input,
                             group_key,
                             aggregates,
-                            monotonic,
-                            expected_group_size,
+                            *monotonic,
+                            *expected_group_size,
                             &mut project_and_tweaked_mfp,
                             true,
                         )?;
@@ -702,8 +703,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input,
                     group_key,
                     aggregates,
-                    monotonic,
-                    expected_group_size,
+                    *monotonic,
+                    *expected_group_size,
                     &mut mfp,
                     false,
                 )?
@@ -987,10 +988,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
     fn lower_reduce<T: Timestamp>(
         &mut self,
         input: &MirRelationExpr,
-        group_key: &Vec<MirScalarExpr>,
-        aggregates: &Vec<AggregateExpr>,
-        monotonic: &bool,
-        expected_group_size: &Option<u64>,
+        group_key: &[MirScalarExpr],
+        aggregates: &[AggregateExpr],
+        monotonic: bool,
+        expected_group_size: Option<NonZeroU64>,
         mfp_on_top: &mut MapFilterProject,
         fused_unnest_list: bool,
     ) -> Result<(Plan<T>, AvailableCollections), String> {
@@ -1012,9 +1013,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
             permutation_and_new_arity,
         );
         let reduce_plan = ReducePlan::create_from(
-            aggregates.clone(),
-            *monotonic,
-            *expected_group_size,
+            aggregates,
+            monotonic,
+            expected_group_size,
             fused_unnest_list,
         );
         // Return the plan, and the keys it produces.

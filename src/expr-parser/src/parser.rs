@@ -69,6 +69,7 @@ pub fn try_parse_def(catalog: &TestCatalog, s: &str) -> Result<Def, String> {
 /// Support for parsing [mz_expr::MirRelationExpr].
 mod relation {
     use std::collections::BTreeMap;
+    use std::num::NonZeroU64;
 
     use mz_expr::{AccessStrategy, Id, JoinImplementation, LocalId, MirRelationExpr};
     use mz_repr::{Diff, RelationType, Row, ScalarType};
@@ -410,7 +411,7 @@ mod relation {
 
         let expected_group_size = if input.eat(kw::exp_group_size) {
             input.parse::<syn::Token![=]>()?;
-            Some(input.parse::<syn::LitInt>()?.base10_parse::<u64>()?)
+            NonZeroU64::new(input.parse::<syn::LitInt>()?.base10_parse::<u64>()?)
         } else {
             None
         };
@@ -451,7 +452,7 @@ mod relation {
 
         let expected_group_size = if input.eat(kw::exp_group_size) {
             input.parse::<syn::Token![=]>()?;
-            Some(input.parse::<syn::LitInt>()?.base10_parse::<u64>()?)
+            NonZeroU64::new(input.parse::<syn::LitInt>()?.base10_parse::<u64>()?)
         } else {
             None
         };
@@ -507,7 +508,7 @@ mod relation {
 
         let expected_group_size = if input.eat(kw::exp_group_size) {
             input.parse::<syn::Token![=]>()?;
-            Some(input.parse::<syn::LitInt>()?.base10_parse::<u64>()?)
+            NonZeroU64::new(input.parse::<syn::LitInt>()?.base10_parse::<u64>()?)
         } else {
             None
         };

@@ -17,6 +17,8 @@
 //! * A [MonotonicTopKPlan] maintains up to K rows per key and is suitable for monotonic inputs.
 //! * A [BasicTopKPlan] maintains up to K rows per key and can handle retractions.
 
+use std::num::NonZeroU64;
+
 use mz_expr::ColumnOrder;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
@@ -55,7 +57,7 @@ impl TopKPlan {
         limit: Option<mz_expr::MirScalarExpr>,
         arity: usize,
         monotonic: bool,
-        expected_group_size: Option<u64>,
+        expected_group_size: Option<NonZeroU64>,
     ) -> Self {
         // Capture whether the limit is a literal integer first.
         let limit_as_int64 = limit.as_ref().and_then(|l| l.as_literal_int64());

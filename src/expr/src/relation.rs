@@ -251,7 +251,7 @@ pub enum MirRelationExpr {
         monotonic: bool,
         /// User hint: expected number of values per group key. Used to optimize physical rendering.
         #[serde(default)]
-        expected_group_size: Option<u64>,
+        expected_group_size: Option<NonZeroU64>,
     },
     /// Groups and orders within each group, limiting output.
     ///
@@ -274,7 +274,7 @@ pub enum MirRelationExpr {
         monotonic: bool,
         /// User-supplied hint: how many rows will have the same group key.
         #[serde(default)]
-        expected_group_size: Option<u64>,
+        expected_group_size: Option<NonZeroU64>,
     },
     /// Return a dataflow where the row counts are negated
     ///
@@ -1324,7 +1324,7 @@ impl MirRelationExpr {
         self,
         group_key: Vec<usize>,
         aggregates: Vec<AggregateExpr>,
-        expected_group_size: Option<u64>,
+        expected_group_size: Option<NonZeroU64>,
     ) -> Self {
         MirRelationExpr::Reduce {
             input: Box::new(self),
@@ -1347,7 +1347,7 @@ impl MirRelationExpr {
         order_key: Vec<ColumnOrder>,
         limit: Option<MirScalarExpr>,
         offset: usize,
-        expected_group_size: Option<u64>,
+        expected_group_size: Option<NonZeroU64>,
     ) -> Self {
         MirRelationExpr::TopK {
             input: Box::new(self),
