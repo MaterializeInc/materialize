@@ -910,6 +910,18 @@ pub struct DataflowExpirationDesc<T> {
     pub is_timeline_epochms: bool,
 }
 
+impl<T> Default for DataflowExpirationDesc<T> {
+    fn default() -> Self {
+        Self {
+            transitive_upper: None,
+            // Assume present unless explicitly checked.
+            has_transitive_refresh_schedule: true,
+            // Assume any timeline type possible unless explicitly checked.
+            is_timeline_epochms: false,
+        }
+    }
+}
+
 impl RustType<ProtoDataflowExpirationDesc> for DataflowExpirationDesc<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoDataflowExpirationDesc {
         ProtoDataflowExpirationDesc {
@@ -958,18 +970,6 @@ impl Arbitrary for DataflowExpirationDesc<mz_repr::Timestamp> {
                 },
             )
             .boxed()
-    }
-}
-
-impl<T> Default for DataflowExpirationDesc<T> {
-    fn default() -> Self {
-        Self {
-            transitive_upper: None,
-            // Assume present unless explicitly checked.
-            has_transitive_refresh_schedule: true,
-            // Assume any timeline type possible unless explicitly checked.
-            is_timeline_epochms: false,
-        }
     }
 }
 

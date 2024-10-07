@@ -340,6 +340,7 @@ impl Coordinator {
         // We want to reject queries that depend on log sources, for example,
         // even if we can *technically* optimize that reference away.
         let expr_depends_on = expr.depends_on();
+        let timeline_ctx = self.validate_timeline_context(expr_depends_on.iter().cloned())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
         // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.
@@ -391,17 +392,13 @@ impl Coordinator {
             }
         }
 
-        let is_timeline_epochms = self
-            .validate_timeline_context(expr_depends_on.iter().cloned())?
-            .is_timeline_epochms();
-
         Ok(CreateMaterializedViewStage::Optimize(
             CreateMaterializedViewOptimize {
                 validity,
                 plan,
                 resolved_ids,
                 explain_ctx,
-                is_timeline_epochms,
+                is_timeline_epochms: timeline_ctx.is_timeline_epochms(),
             },
         ))
     }
@@ -577,7 +574,7 @@ impl Coordinator {
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
         // Collect properties for `DataflowExpirationDesc`.
-        let upper = self.least_valid_write(&id_bundle);
+        let transitive_upper = self.least_valid_write(&id_bundle);
         let has_transitive_refresh_schedule = refresh_schedule.is_some()
             || raw_expr
                 .depends_on()
@@ -677,7 +674,7 @@ impl Coordinator {
                 df_desc.set_initial_as_of(initial_as_of);
                 df_desc.until = until;
 
-                df_desc.dataflow_expiration_desc.transitive_upper = Some(upper);
+                df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
                 df_desc
                     .dataflow_expiration_desc
                     .has_transitive_refresh_schedule = has_transitive_refresh_schedule;

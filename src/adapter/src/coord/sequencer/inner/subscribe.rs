@@ -336,7 +336,7 @@ impl Coordinator {
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
         // Collect properties for `DataflowExpirationDesc`.
-        let upper = self.least_valid_write(&id_bundle);
+        let transitive_upper = self.least_valid_write(&id_bundle);
         let has_transitive_refresh_schedule = from
             .depends_on()
             .into_iter()
@@ -363,7 +363,7 @@ impl Coordinator {
 
         let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
-        df_desc.dataflow_expiration_desc.transitive_upper = Some(upper);
+        df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
         df_desc
             .dataflow_expiration_desc
             .has_transitive_refresh_schedule = has_transitive_refresh_schedule;

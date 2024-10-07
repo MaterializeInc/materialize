@@ -422,7 +422,6 @@ impl Coordinator {
             ..
         }: CreateIndexFinish,
     ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
-        // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
         let ops = vec![catalog::Op::CreateItem {
@@ -442,7 +441,7 @@ impl Coordinator {
         }];
 
         // Collect properties for `DataflowExpirationDesc`.
-        let upper = self.least_valid_write(&id_bundle);
+        let transitive_upper = self.least_valid_write(&id_bundle);
         let has_transitive_refresh_schedule = self.catalog.item_has_transitive_refresh_schedule(on);
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
@@ -477,7 +476,7 @@ impl Coordinator {
                 let since = coord.least_valid_read(&read_holds);
                 df_desc.set_as_of(since);
 
-                df_desc.dataflow_expiration_desc.transitive_upper = Some(upper);
+                df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
                 df_desc
                     .dataflow_expiration_desc
                     .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
