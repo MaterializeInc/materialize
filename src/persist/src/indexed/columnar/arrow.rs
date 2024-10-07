@@ -18,6 +18,7 @@ use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow::datatypes::{DataType, Field, Schema, ToByteSlice};
 use mz_dyncfg::Config;
 use mz_ore::iter::IteratorExt;
+use mz_ore::soft_assert_eq_no_log;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::metrics::ColumnarMetrics;
@@ -100,7 +101,7 @@ pub(crate) const ENABLE_ARROW_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
     "A feature flag to enable copying decoded arrow data into lgalloc on non-cc sized clusters.",
 );
 
-fn realloc_data(data: ArrayData, metrics: &ColumnarMetrics) -> ArrayData {
+fn realloc_data(data: ArrayData, nullable: bool, metrics: &ColumnarMetrics) -> ArrayData {
     // NB: Arrow generally aligns buffers very coarsely: see arrow::alloc::ALIGNMENT.
     // However, lgalloc aligns buffers even more coarsely - to the page boundary -
     // so we never expect alignment issues in practice. If that changes, build()
@@ -110,16 +111,34 @@ fn realloc_data(data: ArrayData, metrics: &ColumnarMetrics) -> ArrayData {
         .iter()
         .map(|b| realloc_buffer(b, metrics))
         .collect();
-    let child_data = data
-        .child_data()
-        .iter()
-        .cloned()
-        .map(|d| realloc_data(d, metrics))
-        .collect();
-    let nulls = data.nulls().map(|n| {
-        let buffer = realloc_buffer(n.buffer(), metrics);
-        NullBuffer::new(BooleanBuffer::new(buffer, n.offset(), n.len()))
-    });
+    let child_data = {
+        let field_iter = mz_persist_types::arrow::fields_for_type(data.data_type()).iter();
+        let child_iter = data.child_data().iter();
+        field_iter
+            .zip(child_iter)
+            .map(|(f, d)| realloc_data(d.clone(), f.is_nullable(), metrics))
+            .collect()
+    };
+    let nulls = if nullable {
+        data.nulls().map(|n| {
+            let buffer = realloc_buffer(n.buffer(), metrics);
+            NullBuffer::new(BooleanBuffer::new(buffer, n.offset(), n.len()))
+        })
+    } else {
+        if data.nulls().is_some() {
+            // This is a workaround for: https://github.com/apache/arrow-rs/issues/6510
+            // It should always be safe to drop the null buffer for a non-nullable field, since
+            // any nulls cannot possibly represent real data and thus must be masked off at
+            // some higher level. We always realloc data we get back from parquet, so this is
+            // a convenient and efficient place to do the rewrite.
+            // Why does this help? Parquet decoding can generate nulls in non-nullable fields
+            // that are only masked by eg. a grandparent, not the direct parent... but some arrow
+            // code expects the parent to mask any nulls in its non-nullable children. Dropping
+            // the buffer here prevents those validations from failing.
+            metrics.parquet.elided_null_buffers.inc();
+        }
+        None
+    };
 
     data.into_builder()
         .buffers(buffers)
@@ -132,14 +151,16 @@ fn realloc_data(data: ArrayData, metrics: &ColumnarMetrics) -> ArrayData {
 /// Re-allocate the backing storage for a specific array using lgalloc, if it's configured.
 pub fn realloc_array<A: Array + From<ArrayData>>(array: &A, metrics: &ColumnarMetrics) -> A {
     let data = array.to_data();
-    let data = realloc_data(data, metrics);
+    let data = realloc_data(data, true, metrics);
+    soft_assert_eq_no_log!(data.validate_full().expect("realloc output"), ());
     A::from(data)
 }
 
 /// Re-allocate the backing storage for an array ref using lgalloc, if it's configured.
-pub fn realloc_any(array: &ArrayRef, metrics: &ColumnarMetrics) -> ArrayRef {
-    let data = array.to_data();
-    let data = realloc_data(data, metrics);
+pub fn realloc_any(array: ArrayRef, metrics: &ColumnarMetrics) -> ArrayRef {
+    let data = array.into_data();
+    let data = realloc_data(data, true, metrics);
+    soft_assert_eq_no_log!(data.validate_full().expect("realloc output"), ());
     make_array(data)
 }
 

@@ -203,6 +203,7 @@ pub struct ParquetMetrics {
     pub(crate) d_metrics: ParquetColumnMetrics,
     pub(crate) k_s_metrics: ParquetColumnMetrics,
     pub(crate) v_s_metrics: ParquetColumnMetrics,
+    pub(crate) elided_null_buffers: IntCounter,
 }
 
 impl ParquetMetrics {
@@ -233,6 +234,10 @@ impl ParquetMetrics {
             d_metrics: ParquetColumnMetrics::new("d", &column_size),
             k_s_metrics: ParquetColumnMetrics::new("k_s", &column_size),
             v_s_metrics: ParquetColumnMetrics::new("v_s", &column_size),
+            elided_null_buffers: registry.register(metric!(
+                name: "mz_persist_parquet_elided_null_buffer_count",
+                help: "times we dropped an unnecessary null buffer returned by parquet decoding",
+            )),
         }
     }
 }

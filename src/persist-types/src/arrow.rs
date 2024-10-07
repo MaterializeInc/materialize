@@ -42,7 +42,7 @@ use crate::arrow::proto::data_type;
 pub use proto::ProtoArrayData;
 
 /// Extract the list of fields for our recursive datatypes.
-fn fields_for_type(data_type: &DataType) -> &[FieldRef] {
+pub fn fields_for_type(data_type: &DataType) -> &[FieldRef] {
     match data_type {
         DataType::Struct(fields) => fields,
         DataType::List(field) => std::slice::from_ref(field),
