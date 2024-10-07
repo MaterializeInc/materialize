@@ -168,8 +168,7 @@ fn generage_build_bazel<'a>(
     let crate_context =
         CrateContext::generate(config, &crate_config, package).context(error_context)?;
 
-    let build_script =
-        CargoBuildScript::generate(config, &crate_context, &crate_config, package)?;
+    let build_script = CargoBuildScript::generate(config, &crate_context, &crate_config, package)?;
     let library = RustLibrary::generate(config, package, &crate_config, build_script.as_ref())?;
 
     let integration_tests: Vec<_> = package
