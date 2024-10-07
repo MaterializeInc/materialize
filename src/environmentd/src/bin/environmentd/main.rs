@@ -463,6 +463,9 @@ pub struct Args {
         parse(try_from_str = humantime::parse_duration),
     )]
     config_sync_loop_interval: Option<Duration>,
+    /// A scratch directory that can be used for ephemeral storage.
+    #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
+    scratch_directory: Option<PathBuf>,
 
     // === Bootstrap options. ===
     #[clap(
