@@ -32,7 +32,7 @@ use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatM
 use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::columnar::arrow::{
     decode_arrow_batch_kvtd, decode_arrow_batch_kvtd_ks_vs, encode_arrow_batch_kvtd,
-    encode_arrow_batch_kvtd_ks_vs, SCHEMA_ARROW_RS_KVTD,
+    encode_arrow_batch_kvtd_ks_vs, realloc_any, SCHEMA_ARROW_RS_KVTD,
 };
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
@@ -224,12 +224,12 @@ pub fn decode_parquet_file_kvtd(
                 .fields()
                 .iter()
                 .position(|field| field.name() == "k_s")
-                .map(|idx| Arc::clone(&columns[idx]));
+                .map(|idx| realloc_any(Arc::clone(&columns[idx]), metrics));
             let v_s_column = schema
                 .fields()
                 .iter()
                 .position(|field| field.name() == "v_s")
-                .map(|idx| Arc::clone(&columns[idx]));
+                .map(|idx| realloc_any(Arc::clone(&columns[idx]), metrics));
 
             match (k_s_column, v_s_column) {
                 (Some(ks), Some(vs)) => {

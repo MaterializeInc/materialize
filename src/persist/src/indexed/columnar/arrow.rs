@@ -18,7 +18,6 @@ use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow::datatypes::{DataType, Field, Schema, ToByteSlice};
 use mz_dyncfg::Config;
 use mz_ore::iter::IteratorExt;
-use mz_ore::soft_assert_eq_no_log;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::metrics::ColumnarMetrics;
@@ -140,6 +139,9 @@ fn realloc_data(data: ArrayData, nullable: bool, metrics: &ColumnarMetrics) -> A
         None
     };
 
+    // Note that `build` only performs shallow validations, but since we rebuild the array
+    // recursively we will have performed the equivalent of `ArrayData::validation_full` on
+    // the output.
     data.into_builder()
         .buffers(buffers)
         .child_data(child_data)
@@ -152,7 +154,6 @@ fn realloc_data(data: ArrayData, nullable: bool, metrics: &ColumnarMetrics) -> A
 pub fn realloc_array<A: Array + From<ArrayData>>(array: &A, metrics: &ColumnarMetrics) -> A {
     let data = array.to_data();
     let data = realloc_data(data, true, metrics);
-    soft_assert_eq_no_log!(data.validate_full().expect("realloc output"), ());
     A::from(data)
 }
 
@@ -160,7 +161,6 @@ pub fn realloc_array<A: Array + From<ArrayData>>(array: &A, metrics: &ColumnarMe
 pub fn realloc_any(array: ArrayRef, metrics: &ColumnarMetrics) -> ArrayRef {
     let data = array.into_data();
     let data = realloc_data(data, true, metrics);
-    soft_assert_eq_no_log!(data.validate_full().expect("realloc output"), ());
     make_array(data)
 }
 
