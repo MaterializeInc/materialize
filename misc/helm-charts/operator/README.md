@@ -44,9 +44,9 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
 | `operator.image.repository` |  | ``"materialized/operator"`` |
 | `operator.image.tag` |  | ``"latest"`` |
-| `operator.resources.limits.memory` |  | ``"256Mi"`` |
-| `operator.resources.requests.cpu` |  | ``"100m"`` |
-| `operator.resources.requests.memory` |  | ``"128Mi"`` |
+| `operator.resources.limits.memory` |  | ``"2056Mi"`` |
+| `operator.resources.requests.cpu` |  | ``"1000m"`` |
+| `operator.resources.requests.memory` |  | ``"1024Mi"`` |
 | `rbac.create` |  | ``true`` |
 | `serviceAccount.create` |  | ``true`` |
 | `serviceAccount.name` |  | ``""`` |
