@@ -311,9 +311,7 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/cloudtest:
               # Uses .td-file based parallelism instead
@@ -840,9 +838,7 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_upgrade.py]
@@ -863,9 +859,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         inputs:
           - test/cloudtest
           - misc/python/materialize/cloudtest
@@ -889,9 +883,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         inputs:
           - test/cloudtest
           - misc/python/materialize/cloudtest
@@ -915,9 +907,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         inputs:
           - test/cloudtest
           - misc/python/materialize/cloudtest
@@ -941,9 +931,7 @@ steps:
             - exit_status: 255
               limit: 2
         agents:
-          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         inputs:
           - test/cloudtest
           - misc/python/materialize/cloudtest
@@ -1525,9 +1513,7 @@ steps:
                   test/cloudtest/,
                 ]
         agents:
-          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64
+          queue: hetzner-aarch64-8cpu-16gb
         sanitizer: skip
 
 
@@ -1538,9 +1524,7 @@ steps:
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         agents:
-          # TODO: Debezium DNS flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64-medium
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_storage_shared_fate.py]
