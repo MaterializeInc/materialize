@@ -325,7 +325,11 @@ def run_once(
                 conn_infos = {"materialized": target}
                 conn = target.connect()
                 with conn.cursor() as cur:
-                    cur.execute("SELECT mz_version()")
+                    cur.execute(
+                        "SELECT version()"
+                        if args.pure_postgres
+                        else "SELECT mz_version()"
+                    )
                     mz_version = cur.fetchall()[0][0]
                 conn.close()
                 mz_string = f"{mz_version} ({target.host})"
@@ -613,6 +617,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument("--mz-url", type=str, help="Remote Mz instance to run against")
+
+    parser.add_argument(
+        "--pure-postgres",
+        action="store_true",
+        help="Don't run any Materialize-specific preparation commands",
+    )
 
     parser.add_argument(
         "--canary-env",
