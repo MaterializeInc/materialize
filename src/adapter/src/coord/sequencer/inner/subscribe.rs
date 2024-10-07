@@ -333,10 +333,9 @@ impl Coordinator {
             replica_id,
         }: SubscribeFinish,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
-        // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
-        // For temporal expiration checks
+        // Determine if it is safe to drop data for this plan when replica expiration is enabled.
         let upper = self.least_valid_write(&id_bundle);
         let has_transitive_refresh_schedule = from
             .depends_on()

@@ -80,7 +80,7 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub is_timeline_epochms: bool,
 }
 
-impl<P: fmt::Debug, S> DataflowDescription<P, S, mz_repr::Timestamp> {
+impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
     /// Tests if the dataflow refers to a single timestamp, namely
     /// that `as_of` has a single coordinate and that the `until`
     /// value corresponds to the `as_of` value plus one, or `as_of`
@@ -114,29 +114,44 @@ impl<P: fmt::Debug, S> DataflowDescription<P, S, mz_repr::Timestamp> {
         as_of.try_step_forward().as_ref() == until.as_option()
     }
 
-    /// TODO
-    pub fn temporal_expiration(
+    /// Returns the dataflow expiration, i.e, the timestamp beyond which diffs can be
+    /// dropped.
+    ///
+    /// Returns an empty timestamp if `replica_expiration` is unset or fails conditions under
+    /// which dataflow expiration should be disabled.
+    pub fn expire_dataflow_at(
         &self,
-        expiration: Option<mz_repr::Timestamp>,
+        replica_expiration: Option<mz_repr::Timestamp>,
     ) -> Antichain<mz_repr::Timestamp> {
-        if expiration.is_none()
-            || (self.refresh_schedule.is_some() || self.has_transitive_refresh_schedule)
+        if
+        // The current dataflow has a refresh schedule.
+        self.refresh_schedule.is_some()
+            // The dataflow has a transitive dependency with a refresh schedule.
+            || self.has_transitive_refresh_schedule
+            // The dataflow's timeline is not `Timeline::EpochMilliSeconds`.
             || !self.is_timeline_epochms
         {
-            return Antichain::default();
+            return Antichain::default(); // Disables dataflow expiration.
         }
 
-        let expiration = expiration.unwrap();
-        if let Some(upper) = &self.transitive_upper {
-            if upper.is_empty() || upper == &Antichain::from_elem(mz_repr::Timestamp::from(0)) {
-                return Antichain::default();
+        if let Some(replica_expiration) = replica_expiration {
+            if let Some(upper) = &self.transitive_upper {
+                if upper.is_empty() || upper == &Antichain::from_elem(mz_repr::Timestamp::from(0)) {
+                    // When the `upper` of a dataflow is empty, reads are valid at all times, including
+                    // times beyond the replica expiration. Disable dataflow expiration in this case.
+                    return Antichain::default();
+                }
+                if !upper.less_than(&replica_expiration) {
+                    // Move up the dataflow expiration to `upper` when `upper` is greater than the
+                    // configured replica expiration.
+                    return upper.clone();
+                }
             }
-            if !upper.less_than(&expiration) {
-                return upper.clone();
-            }
-        }
 
-        Antichain::from_elem(expiration)
+            Antichain::from_elem(replica_expiration)
+        } else {
+            Antichain::default()
+        }
     }
 }
 
@@ -175,8 +190,10 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             refresh_schedule: None,
             debug_name: name,
             transitive_upper: None,
-            has_transitive_refresh_schedule: true, // Assume present unless explicitly checked.
-            is_timeline_epochms: false, // Assume any timeline type possible unless explicitly checked.
+            // Assume present unless explicitly checked.
+            has_transitive_refresh_schedule: true,
+            // Assume any timeline type possible unless explicitly checked.
+            is_timeline_epochms: false,
         }
     }
 
@@ -762,6 +779,10 @@ proptest::prop_compose! {
         initial_as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
         refresh_schedule_some in any::<bool>(),
         refresh_schedule in any::<RefreshSchedule>(),
+        has_transitive_refresh_schedule in any::<bool>(),
+        transitive_upper_some in any::<bool>(),
+        transitive_upper in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
+        is_timeline_epochms in any::<bool>(),
     ) -> DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
             source_imports: BTreeMap::from_iter(source_imports.into_iter()),
@@ -788,9 +809,13 @@ proptest::prop_compose! {
                 None
             },
             debug_name,
-            has_transitive_refresh_schedule: true,
-            transitive_upper: None,
-            is_timeline_epochms: false,
+            has_transitive_refresh_schedule,
+            transitive_upper: if transitive_upper_some {
+                Some(Antichain::from(transitive_upper))
+            } else {
+                None
+            },
+            is_timeline_epochms,
         }
     }
 }

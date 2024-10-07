@@ -122,13 +122,16 @@ pub const COPY_TO_S3_MULTIPART_PART_SIZE_BYTES: Config<usize> = Config::new(
     "The size of each part in a multipart upload to S3.",
 );
 
-/// Sets the max lifetime for replicas configured as an offset to the replica start time.
-/// Diffs generated at timestamps beyond the expiration time are dropped.
-pub const COMPUTE_REPLICA_EXPIRATION: Config<Duration> = Config::new(
-    "compute_replica_expiration",
-    Duration::from_secs(22 * 24 * 60 * 60), // 22 days
-    "The expiration time for replicas. Zero disables expiration.",
+/// The maximum lifetime of a replica configured as an offset to the replica start time.
+/// Used in temporal filters to drop diffs generated at timestamps beyond the expiration time.
+pub const COMPUTE_REPLICA_EXPIRATION_OFFSET: Config<Duration> = Config::new(
+    "compute_replica_expiration_offset",
+    // Default is 3 weeks to account for 2 skipped DB releases + 1 day buffer.
+    Duration::from_secs(22 * SECONDS_IN_A_DAY),
+    "The expiration time offset for replicas. Zero disables expiration.",
 );
+// Number of seconds in a day.
+const SECONDS_IN_A_DAY: u64 = 24 * 60 * 60;
 
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
@@ -147,5 +150,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO)
         .add(&COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO)
         .add(&COPY_TO_S3_MULTIPART_PART_SIZE_BYTES)
-        .add(&COMPUTE_REPLICA_EXPIRATION)
+        .add(&COMPUTE_REPLICA_EXPIRATION_OFFSET)
 }

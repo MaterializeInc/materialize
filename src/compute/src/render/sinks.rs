@@ -29,7 +29,6 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
 use crate::compute_state::SinkToken;
-use crate::expiration::expire_collection_at;
 use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::Context;
 use crate::render::{RenderTimestamp, StartSignal};
@@ -96,8 +95,8 @@ where
         // Ensure that the frontier does not advance past the expiration time, if set. Otherwise,
         // we might write down incorrect data.
         if let Some(&expiration) = self.expire_at.as_option() {
-            ok_collection = expire_collection_at(&ok_collection, expiration);
-            err_collection = expire_collection_at(&err_collection, expiration);
+            ok_collection = ok_collection.expire_collection_at(expiration);
+            err_collection = err_collection.expire_collection_at(expiration);
         }
 
         let non_null_assertions = sink.non_null_assertions.clone();

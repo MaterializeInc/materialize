@@ -742,6 +742,8 @@ pub struct CreateMaterializedViewOptimize {
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
+    /// Used to determine if it is safe to drop data for this plan when replica expiration
+    /// is enabled.
     timeline_context: TimelineContext,
 }
 
@@ -2702,7 +2704,7 @@ impl Coordinator {
                             debug_name,
                             optimizer_config.clone(),
                             self.optimizer_metrics(),
-                            self.get_timeline_context(id.clone()),
+                            self.get_timeline_context(entry.id()),
                         );
 
                         // MIR ⇒ MIR optimization (global)

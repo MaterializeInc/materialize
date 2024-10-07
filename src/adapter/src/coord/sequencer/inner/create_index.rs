@@ -441,7 +441,7 @@ impl Coordinator {
             owner_id: *self.catalog().get_entry(&on).owner_id(),
         }];
 
-        // For temporal expiration checks
+        // Determine if it is safe to drop data for this plan when replica expiration is enabled.
         let upper = self.least_valid_write(&id_bundle);
         let has_transitive_refresh_schedule = self.catalog.item_has_transitive_refresh_schedule(on);
 

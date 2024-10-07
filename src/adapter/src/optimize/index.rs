@@ -91,6 +91,8 @@ pub struct Index {
     name: QualifiedItemName,
     on: GlobalId,
     keys: Vec<mz_expr::MirScalarExpr>,
+    /// Used to determine if it is safe to drop data from this index when replica expiration
+    /// is enabled.
     timeline_ctx: TimelineContext,
 }
 

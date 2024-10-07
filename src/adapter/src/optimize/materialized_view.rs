@@ -77,7 +77,8 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
-    /// The timeline context.
+    /// Used to determine if it is safe to drop data from this materialized view when replica
+    /// expiration is enabled.
     timeline_ctx: TimelineContext,
 }
 

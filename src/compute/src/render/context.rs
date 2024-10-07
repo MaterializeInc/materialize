@@ -27,21 +27,20 @@ use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::columnation::Columnation;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, ScopeParent};
+use timely::dataflow::{Scope, ScopeParent, StreamCore};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error};
 
 use crate::arrangement::manager::SpecializedTraceHandle;
 use crate::compute_state::{ComputeState, HydrationEvent};
-use crate::expiration::expire_stream_at;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
@@ -312,10 +311,11 @@ where
         }
     }
 
+    /// Panic if the frontier of the underlying arrangement's stream exceeds `expiration` time.
     pub fn expire_at(&self, expiration: S::Timestamp) {
         match self {
             MzArrangement::RowRow(inner) => {
-                expire_stream_at(&inner.stream, expiration);
+                inner.stream.expire_stream_at(expiration);
             }
         }
     }

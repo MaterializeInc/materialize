@@ -164,7 +164,9 @@ pub struct ComputeState {
     /// perform maintenance with every `step_or_park` invocation.
     pub server_maintenance_interval: Duration,
 
-    /// The time at which to expire replicas.
+    /// The maximum time for which the replica is expected to live. If set, dataflows in the replica
+    /// can be configured to drop diffs associated with timestamps beyond the replica expiration.
+    /// The replica will panic if such dataflows are not dropped before the replica has expired.
     pub replica_expiration: Option<Timestamp>,
 }
 
@@ -300,7 +302,7 @@ impl ComputeState {
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
 
-        let offset = COMPUTE_REPLICA_EXPIRATION.get(&self.worker_config);
+        let offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.worker_config);
         if offset.is_zero() {
             if self.replica_expiration.is_some() {
                 info!("replica expiration disabled");

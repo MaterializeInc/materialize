@@ -14,6 +14,10 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 use std::rc::Weak;
 
+use crate::builder_async::{
+    AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
+    OperatorBuilder as OperatorBuilderAsync,
+};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
@@ -27,14 +31,11 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as Operato
 use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputHandleCore};
 use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::InspectCore;
 use timely::dataflow::{Scope, StreamCore};
+use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, Data, ExchangeData, PartialOrder};
-
-use crate::builder_async::{
-    AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
-    OperatorBuilder as OperatorBuilderAsync,
-};
 
 /// Extension methods for timely [`StreamCore`]s.
 pub trait StreamExt<G, C1>
@@ -159,6 +160,9 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: for<'a> FnMut(C1::Item<'a>) -> I + 'static;
 
+    /// Panic if the frontier of a [`StreamCore`] exceeds `expiration` time.
+    fn expire_stream_at(&self, expiration: G::Timestamp) -> StreamCore<G, C1>;
+
     /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
     /// and each time is the current Timely timestamp.
     fn pass_through<CB, R>(&self, name: &str, unit: R) -> StreamCore<G, CB::Container>
@@ -229,6 +233,9 @@ where
         E: Data,
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
+
+    /// Panic if the frontier of a [`Collection`] exceeds `expiration` time.
+    fn expire_collection_at(&self, expiration: G::Timestamp) -> Collection<G, D1, R>;
 
     /// Replaces each record with another, with a new difference type.
     ///
@@ -454,6 +461,17 @@ where
         })
     }
 
+    fn expire_stream_at(&self, expiration: G::Timestamp) -> StreamCore<G, C1> {
+        self.inspect_container(move |data_or_frontier| {
+            if let Err(frontier) = data_or_frontier {
+                assert!(
+                    frontier.is_empty() || AntichainRef::new(frontier).less_than(&expiration),
+                    "frontier {frontier:?} has exceeded expiration {expiration:?}!",
+                );
+            }
+        })
+    }
+
     fn pass_through<CB, R>(&self, name: &str, unit: R) -> StreamCore<G, CB::Container>
     where
         CB: ContainerBuilder + for<'a> PushInto<(C1::Item<'a>, G::Timestamp, R)>,
@@ -540,6 +558,10 @@ where
                     })
                 });
         (ok_stream.as_collection(), err_stream.as_collection())
+    }
+
+    fn expire_collection_at(&self, expiration: G::Timestamp) -> Collection<G, D1, R> {
+        self.inner.expire_stream_at(expiration).as_collection()
     }
 
     fn explode_one<D2, R2, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>

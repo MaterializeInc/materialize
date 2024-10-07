@@ -33,7 +33,6 @@ use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
-use crate::catalog;
 use crate::command::ExecuteResponse;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
@@ -41,6 +40,7 @@ use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
 use crate::util::ResultExt;
+use crate::{catalog, TimelineContext};
 
 impl Coordinator {
     #[instrument]
@@ -159,7 +159,7 @@ impl Coordinator {
         output_id: GlobalId,
         catalog: Arc<dyn OptimizerCatalog>,
         debug_name: String,
-        timeline_context: crate::TimelineContext,
+        timeline_context: TimelineContext,
     ) -> Result<
         (
             DataflowDescription<OptimizedMirRelationExpr>,

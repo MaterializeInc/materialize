@@ -110,17 +110,6 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::Poll;
 
-use crate::arrangement::manager::TraceBundle;
-use crate::compute_state::ComputeState;
-use crate::expiration::expire_stream_at;
-use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::extensions::reduce::MzReduce;
-use crate::logging::compute::LogDataflowErrors;
-use crate::render::context::{
-    ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
-};
-use crate::render::continual_task::ContinualTaskCtx;
-use crate::typedefs::{ErrSpine, KeyBatcher};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -138,7 +127,7 @@ use mz_repr::{Datum, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
@@ -152,7 +141,18 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use timely::worker::Worker as TimelyWorker;
 use timely::PartialOrder;
-use tracing::warn;
+use tracing::info;
+
+use crate::arrangement::manager::TraceBundle;
+use crate::compute_state::ComputeState;
+use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::reduce::MzReduce;
+use crate::logging::compute::LogDataflowErrors;
+use crate::render::context::{
+    ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
+};
+use crate::render::continual_task::ContinualTaskCtx;
+use crate::typedefs::{ErrSpine, KeyBatcher};
 
 pub mod context;
 pub(crate) mod continual_task;
@@ -198,13 +198,14 @@ pub fn build_compute_dataflow<A: Allocate>(
         .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
         .collect::<Vec<_>>();
 
-    let expire_at = dataflow.temporal_expiration(compute_state.replica_expiration);
-
-    let until = dataflow.until.meet(&expire_at);
-
+    // Determine the dataflow expiration, if any.
+    let expire_at = dataflow.expire_dataflow_at(compute_state.replica_expiration);
     if !expire_at.is_empty() {
-        warn!("Enabling replica expiration at {expire_at:?}");
+        info!("enabling dataflow expiration at {expire_at:?}");
     }
+
+    // Add the dataflow expiration to `until`.
+    let until = dataflow.until.meet(&expire_at);
 
     let worker_logging = timely_worker.log_register().get("timely");
 
@@ -551,7 +552,7 @@ where
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.expire_at.as_option() {
                     oks.expire_at(expiration);
-                    expire_stream_at(&errs.stream, expiration);
+                    errs.stream.expire_stream_at(expiration);
                 }
 
                 // Obtain a specialized handle matching the specialized arrangement.
@@ -631,7 +632,7 @@ where
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.expire_at.as_option() {
                     oks.expire_at(expiration);
-                    expire_stream_at(&errs.stream, expiration);
+                    errs.stream.expire_stream_at(expiration);
                 }
 
                 let oks_trace = oks.trace_handle();

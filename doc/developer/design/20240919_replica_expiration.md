@@ -59,7 +59,7 @@ replica is restarted.
 
 More concretely, we make the following changes:
 
-* Introduce a new dyncfg `compute_replica_expiration` to set an offset `Duration`
+* Introduce a new dyncfg `compute_replica_expiration_offset` to set an offset `Duration`
   for each environment using LaunchDarkly.
 * If the offset is configured with a non-zero value, compute the
   `replica_expiration` time as `now() + offset`. This value specifies the maximum
