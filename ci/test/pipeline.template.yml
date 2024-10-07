@@ -621,6 +621,7 @@ steps:
             [
               --scenario=KafkaUpsertUnique,
               --other-tag=common-ancestor,
+              --ignore-other-tag-missing,
             ]
     coverage: skip
     agents:
