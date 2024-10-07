@@ -21,10 +21,10 @@ from pathlib import Path
 
 from materialize import MZ_ROOT, buildkite, ci_util, file_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
 
-SERVICES = [Cockroach(in_memory=True), SqlLogicTest()]
+SERVICES = [Postgres(), SqlLogicTest()]
 
 COCKROACH_DEFAULT_PORT = 26257
 
@@ -81,7 +81,7 @@ def run_sqllogictest(
     parser.add_argument("--replicas", default=2, type=int)
     args = parser.parse_args()
 
-    c.up("cockroach")
+    c.up("postgres")
 
     container_name = "sqllogictest"
 
@@ -130,7 +130,7 @@ class SltRunStepConfig:
     ) -> list[str]:
         sqllogictest_config = [
             f"--junit-report={junit_report_path}",
-            f"--postgres-url=postgres://root@cockroach:{cockroach_port}",
+            f"--postgres-url=postgres://postgres:postgres@postgres:5432",
             f"--replicas={replicas}",
             f"--shard={shard}",
             f"--shard-count={shard_count}",

@@ -36,7 +36,7 @@ SERVICES = [
     Postgres(),
     MySql(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
-    Materialized(external_minio=True),
+    Materialized(external_minio=True, external_postgres=True),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_minio=True),
 ]

@@ -44,6 +44,7 @@ class Materialized(Service):
         environment_id: str | None = None,
         propagate_crashes: bool = True,
         external_cockroach: str | bool = False,
+        external_postgres: str | bool = True,
         external_minio: str | bool = False,
         unsafe_mode: bool = True,
         restart: str | None = None,
@@ -170,7 +171,20 @@ class Materialized(Service):
             f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
         ]
 
-        if external_cockroach:
+        if external_postgres:
+            # assert (
+            #     external_cockroach is False
+            # ), "Can't set both external postgres and cockroach"
+            address = "postgres" if external_postgres == True else external_postgres
+            depends_graph["postgres"] = {"condition": "service_healthy"}
+            command += [
+                f"--persist-consensus-url=postgres://postgres:postgres@{address}:5432?options=--search_path=consensus",
+            ]
+            environment += [
+                f"MZ_TIMESTAMP_ORACLE_URL=postgres://postgres:postgres@{address}:5432?options=--search_path=tsoracle",
+                "MZ_NO_BUILTIN_COCKROACH=1",
+            ]
+        elif external_cockroach:
             address = "cockroach" if external_cockroach == True else external_cockroach
             depends_graph["cockroach"] = {"condition": "service_healthy"}
             command += [

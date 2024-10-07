@@ -19,7 +19,6 @@ import subprocess
 from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import Postgres
@@ -42,7 +41,6 @@ SERVICES = [
     ),
     SchemaRegistry(),
     Postgres(image="postgres:14.2"),
-    Cockroach(),
     Minio(
         # We need a stable port exposed to the host since we can't pass any arguments
         # to the .pt files used in the tests.
@@ -62,13 +60,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--miri-fast", action="store_true")
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
-    c.up("zookeeper", "kafka", "schema-registry", "postgres", "cockroach", "minio")
+    c.up("zookeeper", "kafka", "schema-registry", "postgres", "minio")
     # Heads up: this intentionally runs on the host rather than in a Docker
     # image. See database-issues#3739.
     postgres_url = (
         f"postgres://postgres:postgres@localhost:{c.default_port('postgres')}"
     )
-    cockroach_url = f"postgres://root@localhost:{c.default_port('cockroach')}"
 
     env = dict(
         os.environ,
@@ -76,11 +73,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         KAFKA_ADDRS="localhost:30123",
         SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
         POSTGRES_URL=postgres_url,
-        COCKROACH_URL=cockroach_url,
+        COCKROACH_URL=postgres_url,
         MZ_SOFT_ASSERTIONS="1",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mz-test-persist-1d-lifecycle-delete",
         MZ_S3_UPLOADER_TEST_S3_BUCKET="mz-test-1d-lifecycle-delete",
-        MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=cockroach_url,
+        MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=postgres_url,
     )
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
