@@ -1128,3 +1128,111 @@ class SinkFormat(Check):
             """
             )
         )
+
+
+@externally_idempotent(False)
+class SinkPartitionByDebezium(Check):
+    """Check SINK with ENVELOPE DEBEZIUM and PARTITION BY"""
+
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.120.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            schemas()
+            + dedent(
+                """
+                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_table_keys = true;
+                > CREATE TABLE sink_partition_by_debezium_table (f1 INTEGER, f2 TEXT, PRIMARY KEY (f1));
+                > CREATE DEFAULT INDEX ON sink_partition_by_debezium_table;
+
+                > INSERT INTO sink_partition_by_debezium_table SELECT generate_series, REPEAT('x', 1024) FROM generate_series(1, 100000);
+
+                > CREATE MATERIALIZED VIEW sink_partition_by_debezium_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_partition_by_debezium_table;
+
+                > CREATE CLUSTER sink_partition_by_debezium_sink1_cluster SIZE '4';
+
+                > CREATE SINK sink_partition_by_debezium_sink1
+                  IN CLUSTER sink_partition_by_debezium_sink1_cluster
+                  FROM sink_partition_by_debezium_view
+                  INTO KAFKA CONNECTION kafka_conn (
+                    TOPIC 'testdrive-sink-partition-by-debezium-sink-${testdrive.seed}',
+                    TOPIC PARTITION COUNT 4,
+                    PARTITION BY f1
+                  )
+                  KEY (f1) NOT ENFORCED
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM;
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(schemas() + dedent(s))
+            for s in [
+                """
+                > UPDATE sink_partition_by_debezium_table SET f2 = REPEAT('y', 1024)
+                """,
+                """
+                > UPDATE sink_partition_by_debezium_table SET f2 = REPEAT('z', 1024)
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                $ schema-registry-verify schema-type=avro subject=testdrive-sink-partition-by-debezium-sink-${testdrive.seed}-value
+                {"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"f1","type":"int"},{"name":"f2","type":["null","string"]}]}]},{"name":"after","type":["null","row"]}]}
+
+                # We check the contents of the sink topics by re-ingesting them.
+                > CREATE SOURCE sink_partition_by_debezium_source
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-partition-by-debezium-sink-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                > CREATE MATERIALIZED VIEW sink_partition_by_debezium_view2
+                  AS
+                  SELECT COUNT(*) AS c1 , COUNT(f1) AS c2, COUNT(DISTINCT f1) AS c3 , MIN(f1), MAX(f1)
+                  FROM (
+                    SELECT (before).f1, (before).f2 FROM sink_partition_by_debezium_source
+                  )
+
+                > CREATE MATERIALIZED VIEW sink_partition_by_debezium_view3
+                  AS
+                  SELECT COUNT(*) AS c1 , COUNT(f1) AS c2, COUNT(DISTINCT f1) AS c3 , MIN(f1), MAX(f1)
+                  FROM (
+                    SELECT (after).f1, (after).f2 FROM sink_partition_by_debezium_source
+                  )
+
+                > CREATE MATERIALIZED VIEW sink_partition_by_debezium_view4
+                  AS
+                  SELECT LEFT(f2, 1), SUM(c)
+                  FROM (
+                    SELECT (after).f2, COUNT(*) AS c FROM sink_partition_by_debezium_source GROUP BY (after).f2
+                    UNION ALL
+                    SELECT (before).f2, -COUNT(*) AS c  FROM sink_partition_by_debezium_source GROUP BY (before).f2
+                  )
+                  GROUP BY f2
+
+                > SELECT * FROM sink_partition_by_debezium_view2
+                300000 200000 100000 0 99999
+
+                > SELECT * FROM sink_partition_by_debezium_view3
+                300000 300000 100000 0 99999
+
+                > SELECT * FROM sink_partition_by_debezium_view4
+                <null> -100000
+                x 0
+                y 0
+                z 100000
+
+                > DROP SOURCE sink_partition_by_debezium_source CASCADE;
+
+                # TODO: kafka-verify-data when it can deal with being run twice, to check the actual partitioning
+            """
+            )
+        )

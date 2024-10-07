@@ -1360,28 +1360,30 @@ fn encode_collection<G: Scope>(
                         let mut headers = vec![];
                         if connection.headers_index.is_some() || connection.partition_by.is_some() {
                             // Header values and partition by values are derived from the row that
-                            // produces an event. But only the upsert envelope makes it unambiguous
-                            // as to whether to use the `before` or `after` from the event. The rule
-                            // is simple: use `after` if it exists (insertions and updates),
-                            // otherwise fall back to `before` (deletions).
+                            // produces an event. But it is ambiguous whether to use the `before` or
+                            // `after` from the event. The rule applied here is simple: use `after`
+                            // if it exists (insertions and updates), otherwise fall back to `before`
+                            // (deletions).
                             //
-                            // The assertions and unwrapping are safe here because the SQL planner
-                            // ensures that neither `headers_index` nor `partition_by` is set with
-                            // non-upsert envelopes.
-                            assert!(envelope == SinkEnvelope::Upsert);
-                            let unambiguous_row = value
+                            // It is up to the SQL planner to ensure this produces sensible results.
+                            // (When using the upsert envelope and both `before` and `after` are
+                            // present, it's always unambiguous to use `after` because that's all
+                            // that will be present in the Kafka message; when using the Debezium
+                            // envelope, it's okay to refer to columns in the key because those
+                            // are guaranteed to be the same in both `before` and `after`.)
+                            let row = value
                                 .after
                                 .as_ref()
                                 .or(value.before.as_ref())
                                 .expect("one of before or after must be set");
-                            let unambiguous_row = datums.borrow_with(unambiguous_row);
+                            let row = datums.borrow_with(row);
 
                             if let Some(i) = connection.headers_index {
-                                headers = encode_headers(unambiguous_row[i]);
+                                headers = encode_headers(row[i]);
                             }
 
                             if let Some(partition_by) = &connection.partition_by {
-                                hash = Some(evaluate_partition_by(partition_by, &unambiguous_row));
+                                hash = Some(evaluate_partition_by(partition_by, &row));
                             }
                         }
                         let (key, hash) = match key {
