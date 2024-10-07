@@ -742,9 +742,10 @@ pub struct CreateMaterializedViewOptimize {
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
-    /// Used to determine if it is safe to drop data for this plan when replica expiration
-    /// is enabled.
-    timeline_context: TimelineContext,
+    /// Whether the timeline is [`Timeline::EpochMilliseconds`].
+    ///
+    /// Used to determine if it is safe to enable dataflow expiration.
+    is_timeline_epochms: bool,
 }
 
 #[derive(Debug)]
@@ -2619,6 +2620,7 @@ impl Coordinator {
 
         for entry in ordered_catalog_entries {
             let id = entry.id();
+            let is_timeline_epochms = self.get_timeline_context(id).is_timeline_epochms();
             match entry.item() {
                 CatalogItem::Index(idx) => {
                     // Collect optimizer parameters.
@@ -2649,7 +2651,7 @@ impl Coordinator {
                             entry.name().clone(),
                             idx.on,
                             idx.keys.to_vec(),
-                            self.get_timeline_context(id),
+                            is_timeline_epochms,
                         );
                         let global_mir_plan = optimizer.optimize(index_plan)?;
                         let optimized_plan = global_mir_plan.df_desc().clone();
@@ -2704,7 +2706,7 @@ impl Coordinator {
                             debug_name,
                             optimizer_config.clone(),
                             self.optimizer_metrics(),
-                            self.get_timeline_context(entry.id()),
+                            is_timeline_epochms,
                         );
 
                         // MIR ⇒ MIR optimization (global)
@@ -2753,7 +2755,7 @@ impl Coordinator {
                             id,
                             self.owned_catalog(),
                             debug_name,
-                            self.get_timeline_context(id.clone()),
+                            is_timeline_epochms,
                         )?;
 
                     let catalog = self.catalog_mut();

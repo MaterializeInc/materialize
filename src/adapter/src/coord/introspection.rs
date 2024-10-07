@@ -43,7 +43,6 @@ use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{Params, Plan, SubscribePlan};
 use mz_sql::session::user::{RoleMetadata, MZ_SYSTEM_ROLE_ID};
 use mz_storage_client::controller::{IntrospectionType, StorageWriteOp};
-use mz_storage_types::sources::Timeline;
 use tracing::{info, Span};
 
 use crate::coord::{
@@ -260,7 +259,7 @@ impl Coordinator {
             as_of,
             // Introspection subscribes only read from system collections, which are always in
             // the `EpochMilliseconds` timeline.
-            Some(Timeline::EpochMilliseconds),
+            true,
         );
 
         let span = Span::current();

@@ -34,7 +34,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, ScopeParent, StreamCore};
+use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error};

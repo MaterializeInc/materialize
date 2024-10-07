@@ -47,7 +47,6 @@ use crate::optimize::{
     trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
     OptimizerCatalog, OptimizerConfig, OptimizerError,
 };
-use crate::TimelineContext;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
@@ -91,9 +90,10 @@ pub struct Index {
     name: QualifiedItemName,
     on: GlobalId,
     keys: Vec<mz_expr::MirScalarExpr>,
-    /// Used to determine if it is safe to drop data from this index when replica expiration
-    /// is enabled.
-    timeline_ctx: TimelineContext,
+    /// Whether the timeline is [`Timeline::EpochMilliseconds`].
+    ///
+    /// Used to determine if it is safe to enable dataflow expiration.
+    is_timeline_epochms: bool,
 }
 
 impl Index {
@@ -101,13 +101,13 @@ impl Index {
         name: QualifiedItemName,
         on: GlobalId,
         keys: Vec<mz_expr::MirScalarExpr>,
-        timeline_ctx: TimelineContext,
+        is_timeline_epochms: bool,
     ) -> Self {
         Self {
             name,
             on,
             keys,
-            timeline_ctx,
+            is_timeline_epochms,
         }
     }
 }
@@ -167,7 +167,7 @@ impl Optimize<Index> for Optimizer {
         };
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 
-        df_desc.is_timeline_epochms = index.timeline_ctx.is_timeline_epochms();
+        df_desc.is_timeline_epochms = index.is_timeline_epochms;
 
         df_builder.import_into_dataflow(&index.on, &mut df_desc, &self.config.features)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;

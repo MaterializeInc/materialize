@@ -33,6 +33,7 @@ use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
+use crate::catalog;
 use crate::command::ExecuteResponse;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
@@ -40,7 +41,6 @@ use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
 use crate::util::ResultExt;
-use crate::{catalog, TimelineContext};
 
 impl Coordinator {
     #[instrument]
@@ -82,6 +82,10 @@ impl Coordinator {
             },
         };
 
+        let is_timeline_epochms = self
+            .validate_timeline_context(resolved_ids.0.clone())?
+            .is_timeline_epochms();
+
         // Construct the CatalogItem for this CT and optimize it.
         let mut item = crate::continual_task::ct_item_from_plan(plan, sink_id, resolved_ids)?;
         let full_name = bootstrap_catalog.resolve_full_name(&name, Some(session.conn_id()));
@@ -90,7 +94,7 @@ impl Coordinator {
             sink_id,
             Arc::new(bootstrap_catalog),
             full_name.to_string(),
-            timeline_context,
+            is_timeline_epochms,
         )?;
 
         // Timestamp selection
@@ -159,7 +163,7 @@ impl Coordinator {
         output_id: GlobalId,
         catalog: Arc<dyn OptimizerCatalog>,
         debug_name: String,
-        timeline_context: TimelineContext,
+        is_timeline_epochms: bool,
     ) -> Result<
         (
             DataflowDescription<OptimizedMirRelationExpr>,
@@ -189,7 +193,7 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
-            timeline_context,
+            is_timeline_epochms,
         );
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)

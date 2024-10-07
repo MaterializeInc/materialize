@@ -4663,7 +4663,7 @@ impl Coordinator {
 }
 
 impl Catalog {
-    /// Whether catalog entry `id` or any of its transitive dependencies is a materialized view
+    /// Whether the catalog entry `id` or any of its transitive dependencies is a materialized view
     /// with a refresh schedule. Used to disable dataflow expiration if found.
     pub(super) fn item_has_transitive_refresh_schedule(&self, id: GlobalId) -> bool {
         let test_has_transitive_refresh_schedule = |dep: GlobalId| -> bool {

@@ -340,7 +340,6 @@ impl Coordinator {
         // We want to reject queries that depend on log sources, for example,
         // even if we can *technically* optimize that reference away.
         let expr_depends_on = expr.depends_on();
-        let timeline_context = self.validate_timeline_context(expr_depends_on.iter().cloned())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
         // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.
@@ -392,13 +391,17 @@ impl Coordinator {
             }
         }
 
+        let is_timeline_epochms = self
+            .validate_timeline_context(expr_depends_on.iter().cloned())?
+            .is_timeline_epochms();
+
         Ok(CreateMaterializedViewStage::Optimize(
             CreateMaterializedViewOptimize {
                 validity,
                 plan,
                 resolved_ids,
                 explain_ctx,
-                timeline_context,
+                is_timeline_epochms,
             },
         ))
     }
@@ -411,7 +414,7 @@ impl Coordinator {
             plan,
             resolved_ids,
             explain_ctx,
-            timeline_context,
+            is_timeline_epochms,
         }: CreateMaterializedViewOptimize,
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         let plan::CreateMaterializedViewPlan {
@@ -454,7 +457,7 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
-            timeline_context,
+            is_timeline_epochms,
         );
 
         let span = Span::current();

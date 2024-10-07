@@ -49,7 +49,6 @@ use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
     OptimizeMode, OptimizerCatalog, OptimizerConfig, OptimizerError,
 };
-use crate::TimelineContext;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
@@ -77,9 +76,10 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
-    /// Used to determine if it is safe to drop data from this materialized view when replica
-    /// expiration is enabled.
-    timeline_ctx: TimelineContext,
+    /// Whether the timeline is [`Timeline::EpochMilliseconds`].
+    ///
+    /// Used to determine if it is safe to enable dataflow expiration.
+    is_timeline_epochms: bool,
 }
 
 impl Optimizer {
@@ -94,7 +94,7 @@ impl Optimizer {
         debug_name: String,
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
-        timeline_ctx: TimelineContext,
+        is_timeline_epochms: bool,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -109,7 +109,7 @@ impl Optimizer {
             config,
             metrics,
             duration: Default::default(),
-            timeline_ctx,
+            is_timeline_epochms,
         }
     }
 }
@@ -226,7 +226,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
             DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
-        df_desc.is_timeline_epochms = self.timeline_ctx.is_timeline_epochms();
+        df_desc.is_timeline_epochms = self.is_timeline_epochms;
 
         df_desc.refresh_schedule.clone_from(&self.refresh_schedule);
 

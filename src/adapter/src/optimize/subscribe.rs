@@ -23,7 +23,6 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::SubscribeFrom;
-use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
@@ -302,7 +301,7 @@ impl GlobalMirPlan<Unresolved> {
     pub fn resolve(
         mut self,
         as_of: Antichain<Timestamp>,
-        timeline_ctx: Option<Timeline>,
+        is_timeline_epochms: bool,
     ) -> GlobalMirPlan<Resolved> {
         // A dataflow description for a `SUBSCRIBE` statement should not have
         // index exports.
@@ -315,7 +314,7 @@ impl GlobalMirPlan<Unresolved> {
         self.df_desc.set_as_of(as_of);
 
         // Detect the timeline type.
-        self.df_desc.is_timeline_epochms = timeline_ctx == Some(Timeline::EpochMilliseconds);
+        self.df_desc.is_timeline_epochms = is_timeline_epochms;
 
         // The only outputs of the dataflow are sinks, so we might be able to
         // turn off the computation early, if they all have non-trivial
