@@ -314,7 +314,7 @@ impl Coordinator {
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 CreateViewStage::Explain(CreateViewExplain {
                                     validity,
-                                    id,
+                                    id: id.to_global_id(),
                                     plan,
                                     explain_ctx,
                                 })
@@ -343,7 +343,7 @@ impl Coordinator {
                                 tracing::error!("error while handling EXPLAIN statement: {}", err);
                                 CreateViewStage::Explain(CreateViewExplain {
                                     validity,
-                                    id,
+                                    id: id.to_global_id(),
                                     plan,
                                     explain_ctx,
                                 })

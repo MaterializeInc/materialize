@@ -431,11 +431,14 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let sink_id = if let ExplainContext::None = explain_ctx {
+        let item_id = if let ExplainContext::None = explain_ctx {
             self.catalog_mut().allocate_user_id().await?
         } else {
-            self.allocate_transient_id()
+            self.allocate_transient_item_id()
         };
+        // TODO(alter_table): Allocate a unique GlobalId.
+        let collection_id = item_id.to_global_id();
+
         let view_id = self.allocate_transient_id();
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
@@ -446,7 +449,7 @@ impl Coordinator {
         let mut optimizer = optimize::materialized_view::Optimizer::new(
             self.owned_catalog().as_optimizer_catalog(),
             compute_instance,
-            sink_id,
+            collection_id,
             view_id,
             column_names.clone(),
             non_null_assertions.clone(),
@@ -487,7 +490,7 @@ impl Coordinator {
                                 CreateMaterializedViewStage::Explain(
                                     CreateMaterializedViewExplain {
                                         validity,
-                                        sink_id,
+                                        collection_id,
                                         plan,
                                         df_meta,
                                         explain_ctx,
@@ -495,8 +498,9 @@ impl Coordinator {
                                 )
                             } else {
                                 CreateMaterializedViewStage::Finish(CreateMaterializedViewFinish {
+                                    item_id,
+                                    collection_id,
                                     validity,
-                                    sink_id,
                                     plan,
                                     resolved_ids,
                                     local_mir_plan,
@@ -520,8 +524,8 @@ impl Coordinator {
                                 tracing::error!("error while handling EXPLAIN statement: {}", err);
                                 CreateMaterializedViewStage::Explain(
                                     CreateMaterializedViewExplain {
+                                        collection_id,
                                         validity,
-                                        sink_id,
                                         plan,
                                         df_meta: Default::default(),
                                         explain_ctx,
@@ -545,7 +549,8 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateMaterializedViewFinish {
-            sink_id,
+            item_id,
+            collection_id,
             plan:
                 plan::CreateMaterializedViewPlan {
                     name,
@@ -630,13 +635,14 @@ impl Coordinator {
                     .collect(),
             ),
             catalog::Op::CreateItem {
-                id: sink_id,
+                id: item_id,
                 name: name.clone(),
                 item: CatalogItem::MaterializedView(MaterializedView {
                     create_sql,
                     raw_expr: raw_expr.into(),
                     optimized_expr: local_mir_plan.expr().into(),
                     desc: global_lir_plan.desc().clone(),
+                    collection_id,
                     resolved_ids,
                     cluster_id,
                     non_null_assertions,
@@ -658,16 +664,16 @@ impl Coordinator {
                 // Save plan structures.
                 coord
                     .catalog_mut()
-                    .set_optimized_plan(sink_id, global_mir_plan.df_desc().clone());
+                    .set_optimized_plan(collection_id, global_mir_plan.df_desc().clone());
                 coord
                     .catalog_mut()
-                    .set_physical_plan(sink_id, global_lir_plan.df_desc().clone());
+                    .set_physical_plan(collection_id, global_lir_plan.df_desc().clone());
 
                 let output_desc = global_lir_plan.desc().clone();
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 let notice_builtin_updates_fut = coord
-                    .process_dataflow_metainfo(df_meta, sink_id, session, notice_ids)
+                    .process_dataflow_metainfo(df_meta, collection_id, session, notice_ids)
                     .await;
 
                 df_desc.set_as_of(dataflow_as_of.clone());
@@ -689,7 +695,7 @@ impl Coordinator {
                         storage_metadata,
                         None,
                         vec![(
-                            sink_id,
+                            collection_id,
                             CollectionDescription {
                                 desc: output_desc,
                                 data_source: DataSource::Other,
@@ -703,7 +709,7 @@ impl Coordinator {
 
                 coord
                     .initialize_storage_read_policies(
-                        btreeset![sink_id],
+                        btreeset![collection_id],
                         compaction_window.unwrap_or(CompactionWindow::Default),
                     )
                     .await;
@@ -814,7 +820,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateMaterializedViewExplain {
-            sink_id,
+            collection_id,
             plan:
                 plan::CreateMaterializedViewPlan {
                     name,
@@ -842,7 +848,7 @@ impl Coordinator {
         let expr_humanizer = {
             let full_name = self.catalog().resolve_full_name(&name, None);
             let transient_items = btreemap! {
-                sink_id => TransientItem::new(
+                collection_id => TransientItem::new(
                     Some(full_name.into_parts()),
                     Some(column_names.iter().map(|c| c.to_string()).collect()),
                 )

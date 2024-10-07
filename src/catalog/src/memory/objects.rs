@@ -781,6 +781,7 @@ impl From<CatalogEntry> for durable::Item {
 pub struct Table {
     pub create_sql: Option<String>,
     pub desc: RelationDesc,
+    pub collection_id: GlobalId,
     #[serde(skip)]
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
@@ -929,6 +930,8 @@ pub struct Source {
     #[serde(skip)]
     pub data_source: DataSourceDesc,
     pub desc: RelationDesc,
+    /// Durable pTVC backing this Source.
+    pub collection_id: GlobalId,
     pub timeline: Timeline,
     pub resolved_ids: ResolvedIds,
     /// This value is ignored for subsources, i.e. for
@@ -949,6 +952,7 @@ impl Source {
     /// - If a non-ingestion-based source is given a cluster_id.
     pub fn new(
         plan: CreateSourcePlan,
+        collection_id: GlobalId,
         resolved_ids: ResolvedIds,
         custom_logical_compaction_window: Option<CompactionWindow>,
         is_retained_metrics_object: bool,
@@ -1002,6 +1006,7 @@ impl Source {
                 },
             },
             desc: plan.source.desc,
+            collection_id,
             timeline: plan.timeline,
             resolved_ids,
             custom_logical_compaction_window: plan
@@ -1152,6 +1157,7 @@ pub struct MaterializedView {
     pub raw_expr: Arc<HirRelationExpr>,
     pub optimized_expr: Arc<OptimizedMirRelationExpr>,
     pub desc: RelationDesc,
+    pub collection_id: GlobalId,
     pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,

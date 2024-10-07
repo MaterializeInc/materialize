@@ -1212,7 +1212,7 @@ pub enum CatalogError {
     /// Unknown item.
     UnknownItem(String),
     /// Item already exists.
-    ItemAlreadyExists(GlobalId, String),
+    ItemAlreadyExists(CatalogItemId, String),
     /// Unknown function.
     UnknownFunction {
         /// The identifier of the function we couldn't find

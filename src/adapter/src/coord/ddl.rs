@@ -36,7 +36,7 @@ use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::plan::ConnectionDetails;
@@ -400,7 +400,7 @@ impl Coordinator {
             if let Some(id) = sink
                 .depends_on()
                 .iter()
-                .find(|id| relations_to_drop.contains(id))
+                .find(|id| relations_to_drop.contains(&id.to_item_id()))
             {
                 let entry = self.catalog().get_entry(id);
                 let name = self
@@ -431,7 +431,7 @@ impl Coordinator {
             if let Some(id) = pending_peek
                 .depends_on
                 .iter()
-                .find(|id| relations_to_drop.contains(id))
+                .find(|id| relations_to_drop.contains(&id.to_item_id()))
             {
                 let entry = self.catalog().get_entry(id);
                 let name = self
@@ -452,11 +452,11 @@ impl Coordinator {
             .chain(storage_sinks_to_drop.iter())
             .chain(tables_to_drop.iter())
             .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
-            .cloned();
+            .map(|id| id.to_global_id());
         let compute_ids_to_drop = indexes_to_drop
             .iter()
             .chain(materialized_views_to_drop.iter())
-            .cloned();
+            .map(|(storage_id, item_id)| (*storage_id, item_id.to_global_id()));
 
         // Check if any Timelines would become empty, if we dropped the specified storage or
         // compute resources.
@@ -741,7 +741,7 @@ impl Coordinator {
                     // startup.
                     fail_point!("drop_secrets");
                     for secret in secrets_to_drop {
-                        if let Err(e) = secrets_controller.delete(secret.to_item_id()).await {
+                        if let Err(e) = secrets_controller.delete(secret).await {
                             warn!("Dropping secrets has encountered an error: {}", e);
                         }
                     }
@@ -840,19 +840,21 @@ impl Coordinator {
     }
 
     /// A convenience method for dropping sources.
-    fn drop_sources(&mut self, sources: Vec<GlobalId>) {
+    fn drop_sources(&mut self, sources: Vec<CatalogItemId>) {
         for id in &sources {
-            self.active_webhooks.remove(id);
+            self.active_webhooks.remove(&id.to_global_id());
         }
         let storage_metadata = self.catalog.state().storage_metadata();
+        let sources = sources.into_iter().map(|id| id.to_global_id()).collect();
         self.controller
             .storage
             .drop_sources(storage_metadata, sources)
             .unwrap_or_terminate("cannot fail to drop sources");
     }
 
-    fn drop_tables(&mut self, tables: Vec<GlobalId>, ts: Timestamp) {
+    fn drop_tables(&mut self, tables: Vec<CatalogItemId>, ts: Timestamp) {
         let storage_metadata = self.catalog.state().storage_metadata();
+        let tables = tables.into_iter().map(|id| id.to_global_id()).collect();
         self.controller
             .storage
             .drop_tables(storage_metadata, tables, ts)
@@ -1030,17 +1032,21 @@ impl Coordinator {
             .clear();
     }
 
-    pub(crate) fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
+    pub(crate) fn drop_storage_sinks(&mut self, sinks: Vec<CatalogItemId>) {
+        let sinks = sinks.into_iter().map(|id| id.to_global_id()).collect();
         self.controller
             .storage
             .drop_sinks(sinks)
             .unwrap_or_terminate("cannot fail to drop sinks");
     }
 
-    pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ClusterId, GlobalId)>) {
+    pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ClusterId, CatalogItemId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for (cluster_id, id) in indexes {
-            by_cluster.entry(cluster_id).or_default().push(id);
+            by_cluster
+                .entry(cluster_id)
+                .or_default()
+                .push(id.to_global_id());
         }
         for (cluster_id, ids) in by_cluster {
             let compute = &mut self.controller.compute;
@@ -1054,11 +1060,14 @@ impl Coordinator {
     }
 
     /// A convenience method for dropping materialized views.
-    fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
+    fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, CatalogItemId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut source_ids = Vec::new();
         for (cluster_id, id) in mviews {
-            by_cluster.entry(cluster_id).or_default().push(id);
+            by_cluster
+                .entry(cluster_id)
+                .or_default()
+                .push(id.to_global_id());
             source_ids.push(id);
         }
 
@@ -1077,7 +1086,7 @@ impl Coordinator {
         self.drop_sources(source_ids)
     }
 
-    fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<GlobalId>) {
+    fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<CatalogItemId>) {
         let cloud_resource_controller = Arc::clone(self.cloud_resource_controller
             .as_ref()
             .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))
@@ -1100,7 +1109,7 @@ impl Coordinator {
                                 Err(anyhow::anyhow!("Fail point error {:?}", r))
                             });
                             match cloud_resource_controller
-                                .delete_vpc_endpoint(vpc_endpoint.to_item_id())
+                                .delete_vpc_endpoint(vpc_endpoint)
                                 .await
                             {
                                 Ok(_) => Ok(()),

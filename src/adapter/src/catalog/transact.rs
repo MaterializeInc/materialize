@@ -107,7 +107,7 @@ pub enum Op {
         reason: ReplicaCreateDropReason,
     },
     CreateItem {
-        id: GlobalId,
+        id: CatalogItemId,
         name: QualifiedItemName,
         item: CatalogItem,
         owner_id: RoleId,
@@ -221,7 +221,7 @@ pub enum DropObjectInfo {
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Role(RoleId),
-    Item(GlobalId),
+    Item(CatalogItemId),
 }
 
 impl DropObjectInfo {
@@ -238,7 +238,7 @@ impl DropObjectInfo {
             ObjectId::Database(database_id) => DropObjectInfo::Database(database_id),
             ObjectId::Schema(schema) => DropObjectInfo::Schema(schema),
             ObjectId::Role(role_id) => DropObjectInfo::Role(role_id),
-            ObjectId::Item(item_id) => DropObjectInfo::Item(item_id.to_global_id()),
+            ObjectId::Item(item_id) => DropObjectInfo::Item(item_id),
         }
     }
 
@@ -253,7 +253,7 @@ impl DropObjectInfo {
             DropObjectInfo::Database(database_id) => ObjectId::Database(database_id.clone()),
             DropObjectInfo::Schema(schema) => ObjectId::Schema(schema.clone()),
             DropObjectInfo::Role(role_id) => ObjectId::Role(role_id.clone()),
-            DropObjectInfo::Item(global_id) => ObjectId::Item(global_id.to_item_id()),
+            DropObjectInfo::Item(item_id) => ObjectId::Item(*item_id),
         }
     }
 }
@@ -304,15 +304,15 @@ impl Catalog {
         !item.is_temporary()
     }
 
-    /// Gets GlobalIds of temporary items to be created, checks for name collisions
+    /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
     /// within a connection id.
     fn temporary_ids(
         &self,
         ops: &[Op],
         temporary_drops: BTreeSet<(&ConnectionId, String)>,
-    ) -> Result<Vec<GlobalId>, Error> {
+    ) -> Result<BTreeSet<CatalogItemId>, Error> {
         let mut creating = BTreeSet::new();
-        let mut temporary_ids = Vec::with_capacity(ops.len());
+        let mut temporary_ids = BTreeSet::new();
         for op in ops.iter() {
             if let Op::CreateItem {
                 id,
@@ -331,7 +331,7 @@ impl Catalog {
                         );
                     } else {
                         creating.insert((conn_id, &name.item));
-                        temporary_ids.push(id.clone());
+                        temporary_ids.insert(id.clone());
                     }
                 }
             }
@@ -449,7 +449,7 @@ impl Catalog {
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         mut ops: Vec<Op>,
-        temporary_ids: Vec<GlobalId>,
+        temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
@@ -555,7 +555,7 @@ impl Catalog {
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         op: Op,
-        temporary_ids: &Vec<GlobalId>,
+        temporary_ids: &BTreeSet<CatalogItemId>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &CatalogState,
@@ -942,7 +942,8 @@ impl Catalog {
                 state.check_unstable_dependencies(&item)?;
 
                 if item.is_storage_collection() {
-                    storage_collections_to_create.insert(id);
+                    // TODO(alter_table): Each item should declare their storage collections.
+                    storage_collections_to_create.insert(id.to_global_id());
                 }
 
                 let system_user = session.map_or(false, |s| s.user().is_system_user());
@@ -995,7 +996,7 @@ impl Catalog {
                     }
                     let oid = tx.allocate_oid(&temporary_oids)?;
                     let item = TemporaryItem {
-                        id: id.to_item_id(),
+                        id,
                         oid,
                         name: name.clone(),
                         item: item.clone(),
@@ -1007,7 +1008,7 @@ impl Catalog {
                     if let Some(temp_id) =
                         item.uses().iter().find(|id| match state.try_get_entry(id) {
                             Some(entry) => entry.item().is_temporary(),
-                            None => temporary_ids.contains(id),
+                            None => temporary_ids.contains(&id.to_item_id()),
                         })
                     {
                         let temp_item = state.get_entry(temp_id);
@@ -1172,8 +1173,8 @@ impl Catalog {
                     delta
                         .items
                         .iter()
-                        .map(|id| id.to_item_id())
-                        .partition(|id| !state.get_entry(id).item().is_temporary());
+                        .map(|id| id)
+                        .partition(|id| !state.get_entry(*id).item().is_temporary());
                 tx.remove_items(&durable_items_to_drop)?;
                 temporary_item_updates.extend(temporary_items_to_drop.into_iter().map(|id| {
                     let entry = state.get_entry(&id);
@@ -1184,7 +1185,7 @@ impl Catalog {
                     let entry = state.get_entry(&item_id);
 
                     if entry.item().is_storage_collection() {
-                        storage_collections_to_drop.insert(item_id);
+                        storage_collections_to_drop.insert(item_id.to_global_id());
                     }
 
                     if state.source_references.contains_key(&item_id) {
@@ -2202,7 +2203,7 @@ pub(crate) struct ObjectsToDrop {
     pub clusters: BTreeSet<ClusterId>,
     pub replicas: BTreeMap<ReplicaId, (ClusterId, ReplicaCreateDropReason)>,
     pub roles: BTreeSet<RoleId>,
-    pub items: Vec<GlobalId>,
+    pub items: Vec<CatalogItemId>,
 }
 
 impl ObjectsToDrop {

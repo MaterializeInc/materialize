@@ -2384,7 +2384,7 @@ pub fn plan_create_view(
             definition.name.clone(),
             cascade,
         )? {
-            if view.expr.depends_on().contains(&id) {
+            if view.expr.depends_on().contains(&id.to_global_id()) {
                 let item = scx.catalog.get_item(&id.into());
                 sql_bail!(
                     "cannot replace view {0}: depended upon by new {0} definition",
@@ -2401,7 +2401,7 @@ pub fn plan_create_view(
     let drop_ids = replace
         .map(|id| {
             scx.catalog
-                .item_dependents(id.to_item_id())
+                .item_dependents(id)
                 .into_iter()
                 .map(|id| id.unwrap_item_id().into())
                 .collect()
@@ -2657,8 +2657,8 @@ pub fn plan_create_materialized_view(
                 cascade,
             )?;
             if let Some(id) = replace_id {
-                if expr.depends_on().contains(&id) {
-                    let item = scx.catalog.get_item(&id.into());
+                if expr.depends_on().contains(&id.to_global_id()) {
+                    let item = scx.catalog.get_item(&id);
                     sql_bail!(
                         "cannot replace materialized view {0}: depended upon by new {0} definition",
                         scx.catalog.resolve_full_name(item.name())
@@ -2673,9 +2673,9 @@ pub fn plan_create_materialized_view(
     let drop_ids = replace
         .map(|id| {
             scx.catalog
-                .item_dependents(id.to_item_id())
+                .item_dependents(id)
                 .into_iter()
-                .map(|id| id.unwrap_item_id().into())
+                .map(|id| id.unwrap_item_id())
                 .collect()
         })
         .unwrap_or_default();
@@ -4972,7 +4972,7 @@ fn plan_drop_item(
     if_exists: bool,
     name: UnresolvedItemName,
     cascade: bool,
-) -> Result<Option<GlobalId>, PlanError> {
+) -> Result<Option<CatalogItemId>, PlanError> {
     let resolved = match resolve_item_or_type(scx, object_type, name, if_exists) {
         Ok(r) => r,
         // Return a more helpful error on `DROP VIEW <materialized-view>`.
@@ -5016,7 +5016,7 @@ fn plan_drop_item(
                 // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
                 //  relies on entry. Unfortunately, we don't have that information readily available.
             }
-            Some(catalog_item.item_id().to_global_id())
+            Some(catalog_item.item_id())
         }
         None => None,
     })

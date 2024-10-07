@@ -124,7 +124,7 @@ pub struct CatalogState {
     pub(super) system_privileges: PrivilegeMap,
     pub(super) comments: CommentsMap,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) source_references: BTreeMap<GlobalId, SourceReferences>,
+    pub(super) source_references: BTreeMap<CatalogItemId, SourceReferences>,
     pub(super) storage_metadata: StorageMetadata,
 
     // Mutable state not derived from the durable catalog.
@@ -712,7 +712,7 @@ impl CatalogState {
     /// source.
     ///
     /// Note: Identifiers for the source, e.g. item name, are URL encoded.
-    pub fn try_get_webhook_url(&self, id: &GlobalId) -> Option<url::Url> {
+    pub fn try_get_webhook_url(&self, id: &CatalogItemId) -> Option<url::Url> {
         let entry = self.try_get_entry(id)?;
         // Note: Webhook sources can never be created in the temporary schema, hence passing None.
         let name = self.resolve_full_name(entry.name(), None);
@@ -805,6 +805,8 @@ impl CatalogState {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: Some(table.create_sql),
                 desc: table.desc,
+                // TODO(alter_table): Allocate unique GlobalId.
+                collection_id: id.to_global_id(),
                 conn_id: None,
                 resolved_ids,
                 custom_logical_compaction_window: custom_logical_compaction_window
@@ -882,6 +884,8 @@ impl CatalogState {
                     },
                 },
                 desc: source.desc,
+                // TODO(alter_table): Allocate unique GlobalId.
+                collection_id: id.to_global_id(),
                 timeline,
                 resolved_ids,
                 custom_logical_compaction_window: source
@@ -935,6 +939,8 @@ impl CatalogState {
                     raw_expr: raw_expr.into(),
                     optimized_expr: optimized_expr.into(),
                     desc,
+                    // TODO(alter_table): Allocate unique GlobalId.
+                    collection_id: id.to_global_id(),
                     resolved_ids,
                     cluster_id: materialized_view.cluster_id,
                     non_null_assertions: materialized_view.non_null_assertions,

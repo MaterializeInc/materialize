@@ -43,7 +43,9 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
+use mz_repr::{
+    CatalogItemId, ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp,
+};
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
     SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value,
@@ -653,7 +655,10 @@ pub struct SourceReference {
 /// A [`CreateSourcePlan`] and the metadata necessary to sequence it.
 #[derive(Debug)]
 pub struct CreateSourcePlanBundle {
-    pub source_id: GlobalId,
+    /// The ID of this Source in the Catalog.
+    pub item_id: CatalogItemId,
+    /// The ID of the backing durable pTVC.
+    pub collection_id: GlobalId,
     pub plan: CreateSourcePlan,
     pub resolved_ids: ResolvedIds,
     /// All the available upstream references for this source.
@@ -705,9 +710,9 @@ pub struct CreateViewPlan {
     pub name: QualifiedItemName,
     pub view: View,
     /// The ID of the object that this view is replacing, if any.
-    pub replace: Option<GlobalId>,
+    pub replace: Option<CatalogItemId>,
     /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
-    pub drop_ids: Vec<GlobalId>,
+    pub drop_ids: Vec<CatalogItemId>,
     pub if_not_exists: bool,
     /// True if the view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
@@ -719,9 +724,9 @@ pub struct CreateMaterializedViewPlan {
     pub name: QualifiedItemName,
     pub materialized_view: MaterializedView,
     /// The ID of the object that this view is replacing, if any.
-    pub replace: Option<GlobalId>,
+    pub replace: Option<CatalogItemId>,
     /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
-    pub drop_ids: Vec<GlobalId>,
+    pub drop_ids: Vec<CatalogItemId>,
     pub if_not_exists: bool,
     /// True if the materialized view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.

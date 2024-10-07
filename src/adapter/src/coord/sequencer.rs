@@ -17,7 +17,7 @@ use futures::FutureExt;
 use inner::return_if_err;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Diff, GlobalId, RowCollection};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RowCollection};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
@@ -140,13 +140,15 @@ impl Coordinator {
 
             match plan {
                 Plan::CreateSource(plan) => {
-                    let source_id =
-                        return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+                    let item_id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+                    // TODO(alter_table): Allocate a unique GlobalId.
+                    let collection_id = item_id.to_global_id();
                     let result = self
                         .sequence_create_source(
                             ctx.session_mut(),
                             vec![CreateSourcePlanBundle {
-                                source_id,
+                                item_id,
+                                collection_id,
                                 plan,
                                 resolved_ids,
                                 available_source_references: None,
@@ -715,6 +717,10 @@ impl Coordinator {
 
     pub(crate) fn allocate_transient_id(&self) -> GlobalId {
         self.transient_id_gen.allocate_id()
+    }
+
+    pub(crate) fn allocate_transient_item_id(&self) -> CatalogItemId {
+        self.transient_id_gen.allocate_item_id()
     }
 
     fn should_emit_rbac_notice(&self, session: &Session) -> Option<AdapterNotice> {

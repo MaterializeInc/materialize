@@ -589,6 +589,8 @@ impl CatalogState {
                     CatalogItem::Table(Table {
                         create_sql: None,
                         desc: table.desc.clone(),
+                        // TODO(alter_table): Allocate a unique GlobalId.
+                        collection_id: id.to_global_id(),
                         conn_id: None,
                         resolved_ids: ResolvedIds(BTreeSet::new()),
                         custom_logical_compaction_window: table.is_retained_metrics_object.then(
@@ -718,6 +720,8 @@ impl CatalogState {
                         create_sql: None,
                         data_source: DataSourceDesc::Introspection(coll.data_source),
                         desc: coll.desc.clone(),
+                        // TODO(alter_table): Allocate a unique GlobalId.
+                        collection_id: id.to_global_id(),
                         timeline: Timeline::EpochMilliseconds,
                         resolved_ids: ResolvedIds(BTreeSet::new()),
                         custom_logical_compaction_window: coll.is_retained_metrics_object.then(
@@ -990,16 +994,19 @@ impl CatalogState {
     ) {
         match diff {
             StateDiff::Addition => {
-                let prev = self
-                    .source_references
-                    .insert(source_references.source_id, source_references.into());
+                let prev = self.source_references.insert(
+                    source_references.source_id.to_item_id(),
+                    source_references.into(),
+                );
                 assert!(
                     prev.is_none(),
                     "values must be explicitly retracted before inserting a new value: {prev:?}"
                 );
             }
             StateDiff::Retraction => {
-                let prev = self.source_references.remove(&source_references.source_id);
+                let prev = self
+                    .source_references
+                    .remove(&source_references.source_id.to_item_id());
                 assert!(
                     prev.is_some(),
                     "retraction for a non-existent existing value: {source_references:?}"

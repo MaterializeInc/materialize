@@ -124,7 +124,7 @@ impl Coordinator {
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "create secret ensure",
             async move {
-                secrets_controller.ensure(id.to_item_id(), &payload).await?;
+                secrets_controller.ensure(id, &payload).await?;
                 let stage = SecretStage::CreateFinish(CreateSecretFinish { validity, id, plan });
                 Ok(Box::new(stage))
             }
@@ -202,7 +202,7 @@ impl Coordinator {
         };
 
         let ops = vec![catalog::Op::CreateItem {
-            id,
+            id: id,
             name: name.clone(),
             item: CatalogItem::Secret(secret),
             owner_id: *session.current_role_id(),
@@ -221,7 +221,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedSecret)
             }
             Err(err) => {
-                if let Err(e) = self.secrets_controller.delete(id.to_item_id()).await {
+                if let Err(e) = self.secrets_controller.delete(id).await {
                     warn!(
                         "Dropping newly created secrets has encountered an error: {}",
                         e

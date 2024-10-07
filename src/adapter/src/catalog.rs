@@ -608,13 +608,12 @@ impl Catalog {
         self.storage.lock().await
     }
 
-    pub async fn allocate_user_id(&self) -> Result<GlobalId, Error> {
+    pub async fn allocate_user_id(&self) -> Result<CatalogItemId, Error> {
         self.storage()
             .await
             .allocate_user_id()
             .await
             .maybe_terminate("allocating user ids")
-            .map(|item_id| item_id.to_global_id())
             .err_into()
     }
 
@@ -628,14 +627,14 @@ impl Catalog {
     }
 
     #[cfg(test)]
-    pub async fn allocate_system_id(&self) -> Result<GlobalId, Error> {
+    pub async fn allocate_system_id(&self) -> Result<CatalogItemId, Error> {
         use mz_ore::collections::CollectionExt;
         self.storage()
             .await
             .allocate_system_ids(1)
             .await
             .maybe_terminate("allocating system ids")
-            .map(|ids| ids.into_element().into())
+            .map(|ids| ids.into_element())
             .err_into()
     }
 
@@ -2352,7 +2351,7 @@ mod tests {
                             },
                             item: "v".to_string(),
                         },
-                        id: id.to_global_id(),
+                        id,
                         owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
                 )
@@ -3232,7 +3231,7 @@ mod tests {
                 .expect("unable to allocate id");
             let mv = catalog
                 .state()
-                .deserialize_item(mv_id.to_item_id(), &format!(
+                .deserialize_item(mv_id, &format!(
                     "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
                 ))
                 .expect("unable to deserialize item");
@@ -3266,7 +3265,7 @@ mod tests {
                 .entries()
                 .find(|entry| &entry.name.item == mv_name && entry.is_materialized_view())
                 .unwrap_or_else(|| panic!("{mv_name} doesn't exist"))
-                .id();
+                .item_id();
             assert_eq!(check_mv_id, mv_id);
             catalog.expire().await;
             (mz_tables_id, mv_id)
@@ -3299,7 +3298,7 @@ mod tests {
                 .entries()
                 .find(|entry| &entry.name.item == mv_name && entry.is_materialized_view())
                 .unwrap_or_else(|| panic!("{mv_name} doesn't exist"))
-                .id();
+                .item_id();
             // Assert that the materialized view was migrated and got a new ID.
             assert_ne!(new_mv_id, mv_id);
 

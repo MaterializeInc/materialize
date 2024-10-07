@@ -653,7 +653,7 @@ impl CatalogState {
                         }
                     }
                     DataSourceDesc::Webhook { .. } => {
-                        vec![self.pack_webhook_source_update(id, diff)]
+                        vec![self.pack_webhook_source_update(id.to_item_id(), diff)]
                     }
                     _ => vec![],
                 });
@@ -2159,15 +2159,15 @@ impl CatalogState {
 
     pub fn pack_webhook_source_update(
         &self,
-        source_id: GlobalId,
+        item_id: CatalogItemId,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         let url = self
-            .try_get_webhook_url(&source_id)
+            .try_get_webhook_url(&item_id)
             .expect("webhook source should exist");
         let url = url.to_string();
-        let name = &self.get_entry(&source_id).name().item;
-        let id_str = source_id.to_string();
+        let name = &self.get_entry(&item_id).name().item;
+        let id_str = item_id.to_string();
 
         BuiltinTableUpdate {
             id: &*MZ_WEBHOOKS_SOURCES,

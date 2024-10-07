@@ -1400,6 +1400,8 @@ mod builtin_migration_tests {
                         .with_column("a", ScalarType::Int32.nullable(true))
                         .with_key(vec![0])
                         .finish(),
+                    // TODO(alter_table)
+                    collection_id: GlobalId::User(1),
                     conn_id: None,
                     resolved_ids: ResolvedIds(BTreeSet::new()),
                     custom_logical_compaction_window: None,
@@ -1420,6 +1422,8 @@ mod builtin_migration_tests {
                         .join(",");
                     let resolved_ids = convert_names_to_ids(referenced_names, id_mapping);
                     CatalogItem::MaterializedView(MaterializedView {
+                        // TODO(alter_table).
+                        collection_id: GlobalId::User(1),
                         create_sql: format!(
                             "CREATE MATERIALIZED VIEW materialize.public.mv ({column_list}) AS SELECT * FROM {table_list}"
                         ),
@@ -1493,7 +1497,6 @@ mod builtin_migration_tests {
                 .await
                 .expect("cannot fail to allocate system ids"),
         };
-        let id = id.to_item_id();
         let database_id = catalog
             .resolve_database(DEFAULT_DATABASE_NAME)
             .expect("failed to resolve default database")
@@ -1510,7 +1513,7 @@ mod builtin_migration_tests {
                 mz_repr::Timestamp::MIN,
                 None,
                 vec![Op::CreateItem {
-                    id: id.to_global_id(),
+                    id,
                     name: QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec,

@@ -155,4 +155,8 @@ impl TransientIdGen {
     pub fn allocate_id(&self) -> GlobalId {
         GlobalId::Transient(self.0.allocate_id())
     }
+
+    pub fn allocate_item_id(&self) -> CatalogItemId {
+        CatalogItemId::Transient(self.0.allocate_id())
+    }
 }
