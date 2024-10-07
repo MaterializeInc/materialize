@@ -44,7 +44,7 @@ class Materialized(Service):
         environment_id: str | None = None,
         propagate_crashes: bool = True,
         external_cockroach: str | bool = False,
-        external_postgres: str | bool = True,
+        external_postgres: str | bool = False,
         external_minio: str | bool = False,
         unsafe_mode: bool = True,
         restart: str | None = None,
@@ -178,11 +178,11 @@ class Materialized(Service):
             address = "postgres" if external_postgres == True else external_postgres
             depends_graph["postgres"] = {"condition": "service_healthy"}
             command += [
-                f"--persist-consensus-url=postgres://postgres:postgres@{address}:5432?options=--search_path=consensus",
+                f"--persist-consensus-url=postgres://postgres:postgres@{address}:5432",
             ]
             environment += [
-                f"MZ_TIMESTAMP_ORACLE_URL=postgres://postgres:postgres@{address}:5432?options=--search_path=tsoracle",
-                "MZ_NO_BUILTIN_COCKROACH=1",
+                f"MZ_TIMESTAMP_ORACLE_URL=postgres://postgres:postgres@{address}:5432",
+                "MZ_NO_BUILTIN_POSTGRES=1",
             ]
         elif external_cockroach:
             address = "cockroach" if external_cockroach == True else external_cockroach
@@ -192,7 +192,7 @@ class Materialized(Service):
             ]
             environment += [
                 f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
-                "MZ_NO_BUILTIN_COCKROACH=1",
+                "MZ_NO_BUILTIN_POSTGRES=1",
                 # Set the adapter stash URL for older environments that need it (versions before
                 # v0.92.0).
                 f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
@@ -262,7 +262,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_graph,
                 "command": command,
-                "ports": [6875, 6876, 6877, 6878, 6880, 6881, 26257],
+                "ports": [6875, 6876, 6877, 6878, 6880, 6881, 5432],
                 "environment": environment,
                 "volumes": volumes,
                 "tmpfs": ["/tmp"],
