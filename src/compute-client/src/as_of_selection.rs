@@ -877,7 +877,7 @@ mod tests {
 
         async fn alter_ingestion_export_data_configs(
             &self,
-            _source_exports: BTreeMap<GlobalId, (GlobalId, SourceExportDataConfig)>,
+            _source_exports: Vec<(GlobalId, GlobalId, SourceExportDataConfig)>,
         ) -> Result<(), StorageError<Self::Timestamp>> {
             unimplemented!()
         }

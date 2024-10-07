@@ -3526,7 +3526,7 @@ impl Coordinator {
 
         let mut source_connections = BTreeMap::new();
         let mut sink_connections = BTreeMap::new();
-        let mut source_export_data_configs = BTreeMap::new();
+        let mut source_export_data_configs = Vec::new();
 
         while let Some(id) = connections.pop_front() {
             for id in self.catalog.get_entry(&id).used_by() {
@@ -3561,13 +3561,11 @@ impl Coordinator {
                             entry.source_export_details()
                         {
                             let data_config = export_data_config.clone();
-                            source_export_data_configs.insert(
+                            source_export_data_configs.push((
                                 ingestion_id,
-                                (
-                                    *id,
-                                    data_config.into_inline_connection(self.catalog().state()),
-                                ),
-                            );
+                                *id,
+                                data_config.into_inline_connection(self.catalog().state()),
+                            ));
                         }
                     }
                     t => unreachable!("connection dependency not expected on {}", t),

@@ -245,8 +245,8 @@ pub trait StorageCollections: Debug {
     /// Alters the data config for the specified source exports of the specified ingestions.
     async fn alter_ingestion_export_data_configs(
         &self,
-        // Map from primary ingestion id to source-export id and new data config
-        source_exports: BTreeMap<GlobalId, (GlobalId, SourceExportDataConfig)>,
+        // Primary ingestion id, source-export id, and new data config
+        source_exports: Vec<(GlobalId, GlobalId, SourceExportDataConfig)>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Alters each identified collection to use the correlated
@@ -1707,12 +1707,12 @@ where
 
     async fn alter_ingestion_export_data_configs(
         &self,
-        // Map from primary ingestion id to source-export id and new data config
-        source_exports: BTreeMap<GlobalId, (GlobalId, SourceExportDataConfig)>,
+        // Primary ingestion id, source-export id, and new data config
+        source_exports: Vec<(GlobalId, GlobalId, SourceExportDataConfig)>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
-        for (ingestion_id, (source_export_id, data_config)) in source_exports {
+        for (ingestion_id, source_export_id, data_config) in source_exports {
             let ingestion_collection = self_collections
                 .get_mut(&ingestion_id)
                 .ok_or_else(|| StorageError::IdentifierMissing(ingestion_id))?;

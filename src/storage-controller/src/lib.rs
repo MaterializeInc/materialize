@@ -979,8 +979,8 @@ where
 
     async fn alter_ingestion_export_data_configs(
         &mut self,
-        // Map from primary ingestion id to source-export id and new data config
-        source_exports: BTreeMap<GlobalId, (GlobalId, SourceExportDataConfig)>,
+        // Primary ingestion id, source-export id, and new data config
+        source_exports: Vec<(GlobalId, GlobalId, SourceExportDataConfig)>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         // Also have to let StorageCollections know!
         self.storage_collections
@@ -989,7 +989,7 @@ where
 
         let mut ingestions_to_run = BTreeSet::new();
 
-        for (ingestion_id, (source_export_id, data_config)) in source_exports {
+        for (ingestion_id, source_export_id, data_config) in source_exports {
             let ingestion_collection = self
                 .collections
                 .get_mut(&ingestion_id)
