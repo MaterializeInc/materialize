@@ -255,7 +255,7 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
         return f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        filters = [{"id": "issue", "value": f"materialize/{self.issue_number} "}]
+        filters = [{"id": "issue", "value": f"database-issues/{self.issue_number} "}]
         ci_failures_url = f"https://ci-failures.dev.materialize.com/?key=test-failures&tfFilters={urllib.parse.quote(json.dumps(filters), safe='')}"
         return f'<a href="{ci_failures_url}">{self.error_type}</a> <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
@@ -940,7 +940,7 @@ def store_annotation_in_test_analytics(
             error_type=error.internal_error_type,
             message=error.to_text(),
             issue=(
-                f"materialize/{error.issue_number}"
+                f"database-issues/{error.issue_number}"
                 if isinstance(error, WithIssue)
                 else None
             ),
