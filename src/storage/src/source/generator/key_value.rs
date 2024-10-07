@@ -7,17 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use futures::stream::StreamExt;
 use mz_ore::cast::CastFrom;
-use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::load_generator::{KeyValueLoadGenerator, LoadGeneratorOutput};
+use mz_storage_types::sources::load_generator::KeyValueLoadGenerator;
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
@@ -27,7 +25,6 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::{Concat, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use tracing::info;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{Probe, ProgressStatisticsUpdate, SignaledFuture, StackedCollection};
@@ -38,7 +35,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     scope: &mut G,
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
-    output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
+    start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Option<Stream<G, Infallible>>,
@@ -64,29 +61,18 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                 caps.try_into().unwrap();
 
             let resume_upper = Antichain::from_iter(
-                config
-                    .source_resume_uppers
-                    .values()
-                    .flat_map(|f| f.iter().map(MzOffset::decode_row)),
+                config.source_resume_uppers[&config.id]
+                    .iter()
+                    .map(MzOffset::decode_row),
             );
 
             let Some(resume_offset) = resume_upper.into_option() else {
                 return;
             };
 
-            // The key-value load generator only has one 'output' stream, which is the default output
-            // that needs to be emitted to all output indexes.
-            let output_indexes = output_map
-                .get(&LoadGeneratorOutput::Default)
-                .expect("default output");
-
-            info!(
-                ?config.worker_id,
-                "starting key-value load generator at {}",
-                resume_offset.offset,
-            );
             cap.downgrade(&resume_offset);
             progress_cap.downgrade(&resume_offset);
+            start_signal.await;
 
             let snapshotting = resume_offset.offset == 0;
 
@@ -146,7 +132,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                 );
                 while local_partitions.iter().any(|si| !si.finished()) {
                     for sp in local_partitions.iter_mut() {
-                        for u in sp.produce_batch(&mut value_buffer, output_indexes) {
+                        for u in sp.produce_batch(&mut value_buffer) {
                             data_output.give_fueled(&cap, u).await;
                             emitted += 1;
                         }
@@ -198,7 +184,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                     }
 
                     for up in local_partitions.iter_mut() {
-                        let (new_upper, iter) = up.produce_batch(&mut value_buffer, output_indexes);
+                        let (new_upper, iter) = up.produce_batch(&mut value_buffer);
                         upper_offset = new_upper;
                         for u in iter {
                             data_output.give_fueled(&cap, u).await;
@@ -347,7 +333,6 @@ impl TransactionalSnapshotProducer {
     fn produce_batch<'a>(
         &'a mut self,
         value_buffer: &'a mut Vec<u8>,
-        output_indexes: &'a [usize],
     ) -> impl Iterator<
         Item = (
             (usize, Result<SourceMessage, DataflowError>),
@@ -371,21 +356,24 @@ impl TransactionalSnapshotProducer {
             } else {
                 usize::cast_from(self.batch_size)
             })
-            .flat_map(move |key| {
+            .map(move |key| {
                 rng.fill_bytes(value_buffer.as_mut_slice());
-                let msg = Ok(SourceMessage {
-                    key: Row::pack_slice(&[Datum::UInt64(key)]),
-                    value: Row::pack_slice(&[Datum::UInt64(partition), Datum::Bytes(value_buffer)]),
-                    metadata: if include_offset {
-                        Row::pack(&[Datum::UInt64(iter_round)])
-                    } else {
-                        Row::default()
-                    },
-                });
-                output_indexes
-                    .iter()
-                    .repeat_clone(msg)
-                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_round), 1))
+                let msg = (
+                    0,
+                    Ok(SourceMessage {
+                        key: Row::pack_slice(&[Datum::UInt64(key)]),
+                        value: Row::pack_slice(&[
+                            Datum::UInt64(partition),
+                            Datum::Bytes(value_buffer),
+                        ]),
+                        metadata: if include_offset {
+                            Row::pack(&[Datum::UInt64(iter_round)])
+                        } else {
+                            Row::default()
+                        },
+                    }),
+                );
+                (msg, MzOffset::from(iter_round), 1)
             });
 
         if !finished {
@@ -467,7 +455,6 @@ impl UpdateProducer {
     fn produce_batch<'a>(
         &'a mut self,
         value_buffer: &'a mut Vec<u8>,
-        output_indexes: &'a [usize],
     ) -> (
         u64,
         impl Iterator<
@@ -486,21 +473,24 @@ impl UpdateProducer {
         let iter = self
             .pi
             .take(usize::cast_from(self.batch_size))
-            .flat_map(move |key| {
+            .map(move |key| {
                 rng.fill_bytes(value_buffer.as_mut_slice());
-                let msg = Ok(SourceMessage {
-                    key: Row::pack_slice(&[Datum::UInt64(key)]),
-                    value: Row::pack_slice(&[Datum::UInt64(partition), Datum::Bytes(value_buffer)]),
-                    metadata: if include_offset {
-                        Row::pack(&[Datum::UInt64(iter_offset)])
-                    } else {
-                        Row::default()
-                    },
-                });
-                output_indexes
-                    .iter()
-                    .repeat_clone(msg)
-                    .map(move |(idx, msg)| ((*idx, msg), MzOffset::from(iter_offset), 1))
+                let msg = (
+                    0,
+                    Ok(SourceMessage {
+                        key: Row::pack_slice(&[Datum::UInt64(key)]),
+                        value: Row::pack_slice(&[
+                            Datum::UInt64(partition),
+                            Datum::Bytes(value_buffer),
+                        ]),
+                        metadata: if include_offset {
+                            Row::pack(&[Datum::UInt64(iter_offset)])
+                        } else {
+                            Row::default()
+                        },
+                    }),
+                );
+                (msg, MzOffset::from(iter_offset), 1)
             });
 
         // Advance to the next offset.
