@@ -62,10 +62,10 @@ trait ExpressionCache {
     /// Durably remove and return all entries in `deploy_generation` that depend on an ID in
     /// `dropped_ids`.
     fn invalidate_entries(&mut self, deploy_generation: u64, dropped_ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ExpressionType)>;
-    
+
     /// Durably removes all entries in `deploy_generation`.
     fn remove_deploy_generation(&mut self, deploy_generation: u64);
-    
+
     /// Remove all entries that depend on a global ID that is not present in `txn`.
     fn reconcile(&mut self, txn: mz_catalog::durable::Transaction);
 }
@@ -81,23 +81,23 @@ Below is a detailed set of steps that will happen in startup.
        `ExpressionCache::get_durable_expression`.
     b. Else generate the optimized expressions and insert the expressions via
        `ExpressionCache::insert_expression`.
-3. If in read-write mode, call `ExpressionCache::remove_deploy_generation` to remove the previous 
+3. If in read-write mode, call `ExpressionCache::remove_deploy_generation` to remove the previous
    deploy generation.
 
 ### DDL - Create
 
 1. Execute catalog transaction.
-2. Update cache via `ExpressionCache::insert_expression`. 
+2. Update cache via `ExpressionCache::insert_expression`.
 
 ### DDL - Drop
 1. Execute catalog transaction.
 2. Invalidate cache entries via `ExpressionCache::invalidate_entries`.
-3. Re-compute and repopulate cache entries that depended on dropped entries via 
+3. Re-compute and repopulate cache entries that depended on dropped entries via
    `ExpressionCache::insert_expression`.
 
 ### File System Implementation
 
-One potential implementation is via the filesystem of an attached durable storage to environmentd.
+One potential implementation is via the filesystem of an attached durable storage to `environmentd`.
 Each cache entry would be saved as a file of the format
 `/path/to/cache/<deploy_generation>/<global_id>/<expression_type>`.
 
