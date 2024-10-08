@@ -10,11 +10,12 @@
 """
 Postgres source tests with interruptions, test that Materialize can recover.
 """
-
+import re
 import time
 
 import pg8000
 from pg8000 import Connection
+from pg8000.dbapi import ProgrammingError
 
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition
@@ -65,6 +66,7 @@ def workflow_disruptions(c: Composition) -> None:
         verify_no_snapshot_reingestion,
         restart_mz_after_initial_snapshot,
         restart_mz_while_cdc_changes,
+        drop_replication_slot_when_mz_is_on,
     ]
 
     scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
@@ -293,6 +295,30 @@ def pg_out_of_disk_space(c: Composition) -> None:
     c.exec("postgres", "bash", "-c", f"rm {fill_file}")
 
     c.run_testdrive_files("delete-rows-t2.td", "alter-table.td", "alter-mz.td")
+
+
+def drop_replication_slot_when_mz_is_on(c: Composition) -> None:
+    c.run_testdrive_files(
+        "wait-for-snapshot.td",
+        "delete-rows-t1.td",
+    )
+
+    pg_conn = _create_pg_connection(c)
+    slot_names = _get_all_pg_replication_slots(pg_conn)
+
+    try:
+        _drop_pg_replication_slots(pg_conn, slot_names)
+        assert False, "active replication slot is not expected to allow drop action"
+    except ProgrammingError as e:
+        assert re.search(
+            'replication slot "materialize_[a-f0-9]+" is active', (str(e))
+        ), f"Got: {str(e)}"
+
+    c.run_testdrive_files(
+        "delete-rows-t2.td",
+        "alter-table.td",
+        "alter-mz.td",
+    )
 
 
 def _create_pg_connection(c: Composition) -> Connection:
