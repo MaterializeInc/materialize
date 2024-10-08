@@ -63,6 +63,7 @@ def workflow_disruptions(c: Composition) -> None:
         restart_mz_during_replication,
         fix_pg_schema_while_mz_restarts,
         verify_no_snapshot_reingestion,
+        restart_mz_after_initial_snapshot,
     ]
 
     scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
@@ -163,6 +164,23 @@ def restart_mz_during_snapshot(c: Composition) -> None:
     restart_mz(c)
 
     c.run_testdrive_files("delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
+
+
+def restart_mz_after_initial_snapshot(c: Composition) -> None:
+    c.run_testdrive_files(
+        "wait-for-snapshot.td",
+        "delete-rows-t1.td",
+    )
+
+    restart_mz(c)
+
+    c.run_testdrive_files(
+        "delete-rows-t2.td",
+        "alter-table.td",
+        "alter-mz.td",
+        "verify-data.td",
+        "alter-table-fix.td",
+    )
 
 
 def disconnect_pg_during_replication(c: Composition) -> None:
