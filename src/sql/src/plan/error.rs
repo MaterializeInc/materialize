@@ -353,7 +353,7 @@ impl PlanError {
             ),
             Self::NoTablesFoundForSchemas(schemas) => Some(format!(
                 "missing schemas: {}",
-                itertools::join(schemas.iter(), ", ")
+                separated(", ", schemas.iter().map(|c| c.quoted()))
             )),
             _ => None,
         }
@@ -612,7 +612,9 @@ impl fmt::Display for PlanError {
                 write!(f, "multiple subsources refer to table {}", name)
             },
             Self::NoTablesFoundForSchemas(schemas) => {
-                write!(f, "no tables found in referenced schemas: {}", schemas.join(", "))
+                write!(f, "no tables found in referenced schemas: {}",
+                    separated(", ", schemas.iter().map(|c| c.quoted()))
+                )
             },
             Self::InvalidProtobufSchema { .. } => {
                 write!(f, "invalid protobuf schema")
