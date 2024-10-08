@@ -23,8 +23,11 @@ The cache will present similarly as a key-value value store where the key is a c
   - object global ID
   - expression type (local MIR, global MIR, LIR, etc)
 
-The value will be a serialized version of the optimized expression. The cache will also be made
-durable so that it's available after a restart, at least within the same deployment generation.
+The value will be a serialized version of the optimized expression. An `environmentd` process with 
+deploy generation `n`, will never be expected to look at a serialized expression with a deploy 
+generation `m` s.t. `n != m`. Therefore, there are no forwards or backwards compatibility needed on
+the serialized representation of expressions. The cache will also be made  durable so that it's
+available after a restart, at least within the same deployment generation.
 
 Upgrading an environment will look something like this:
 
