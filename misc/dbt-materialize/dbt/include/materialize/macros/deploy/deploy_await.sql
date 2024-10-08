@@ -30,15 +30,12 @@
 #}
 
 {% set current_target_name = target.name %}
-{% set deployment = var('deployment') %}
-{% set target_config = deployment[current_target_name] %}
+{% set deployment = var('deployment', {}) %}
+{% set target_config = deployment.get(current_target_name, {}) %}
 
--- Check if the target-specific configuration exists
-{% if not target_config %}
-    {{ exceptions.raise_compiler_error("No deployment configuration found for target " ~ current_target_name) }}
-{% endif %}
-
-{% set clusters = target_config.get('clusters', []) %}
+-- Get clusters and schemas using deploy_get_objects
+{% set objects = deploy_get_objects() %}
+{% set clusters = objects.clusters %}
 
 {% for cluster in clusters %}
     {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
