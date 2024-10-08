@@ -67,6 +67,7 @@ def workflow_disruptions(c: Composition) -> None:
         restart_mz_after_initial_snapshot,
         restart_mz_while_cdc_changes,
         drop_replication_slot_when_mz_is_on,
+        drop_replication_slot_when_mz_is_off,
     ]
 
     scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
@@ -319,6 +320,36 @@ def drop_replication_slot_when_mz_is_on(c: Composition) -> None:
         "alter-table.td",
         "alter-mz.td",
     )
+
+
+def drop_replication_slot_when_mz_is_off(c: Composition) -> None:
+    c.run_testdrive_files(
+        "wait-for-snapshot.td",
+        "delete-rows-t1.td",
+    )
+
+    time.sleep(5)
+
+    c.kill("materialized")
+
+    pg_conn = _create_pg_connection(c)
+    slot_names = _get_all_pg_replication_slots(pg_conn)
+    _drop_pg_replication_slots(pg_conn, slot_names)
+
+    assert (
+        len(_get_all_pg_replication_slots(pg_conn)) == 0
+    ), "Not all slots were dropped"
+
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "delete-rows-t2.td",
+        "alter-table.td",
+        "alter-mz.td",
+    )
+
+    slot_names = _get_all_pg_replication_slots(pg_conn)
+    assert len(slot_names) > 0, "No replication slot was recreated"
 
 
 def _create_pg_connection(c: Composition) -> Connection:
