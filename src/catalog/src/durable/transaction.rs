@@ -968,33 +968,6 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    /// Removes the cluster `id` from the transaction.
-    ///
-    /// Returns an error if `id` is not found.
-    ///
-    /// Runtime is linear with respect to the total number of clusters in the catalog.
-    /// DO NOT call this function in a loop, use [`Self::remove_clusters`] instead.
-    pub fn remove_cluster(&mut self, id: ClusterId) -> Result<(), CatalogError> {
-        let deleted = self
-            .clusters
-            .delete_by_key(ClusterKey { id }, self.op_id)
-            .is_some();
-        if deleted {
-            Err(SqlCatalogError::UnknownCluster(id.to_string()).into())
-        } else {
-            // Cascade delete introspection sources and cluster replicas.
-            //
-            // TODO(benesch): this doesn't seem right. Cascade deletions should
-            // be entirely the domain of the higher catalog layer, not the
-            // storage layer.
-            self.cluster_replicas
-                .delete(|_k, v| v.cluster_id == id, self.op_id);
-            self.introspection_sources
-                .delete(|k, _v| k.cluster_id == id, self.op_id);
-            Ok(())
-        }
-    }
-
     /// Removes all cluster in `clusters` from the transaction.
     ///
     /// Returns an error if any id in `clusters` is not found.
