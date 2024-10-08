@@ -119,9 +119,10 @@ pub enum ComputeSinkConnection<S: 'static = ()> {
     Subscribe(SubscribeSinkConnection),
     /// TODO(database-issues#7533): Add documentation.
     Persist(PersistSinkConnection<S>),
-    /// TODO(database-issues#7533): Add documentation.
+    /// ContinualTask-specific information necessary for rendering a
+    /// ContinualTask sink.
     ///
-    /// TODO(ct): This also writes to persist, but with different behavior
+    /// TODO(ct2): This also writes to persist, but with different behavior
     /// (conflict resolution, only at input times, etc). It might be time to
     /// rename PersistSink to something that reflects the differences.
     ContinualTask(ContinualTaskConnection<S>),
@@ -257,15 +258,16 @@ impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMe
     }
 }
 
-/// TODO(ct): Add documentation.
+/// ContinualTask-specific information necessary for rendering a ContinualTask
+/// sink. (Shared-sink information is instead stored on ComputeSinkConnection.)
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContinualTaskConnection<S> {
-    /// TODO(database-issues#7533): Add documentation.
+    /// The id of the (for now) single input to this CT.
     //
-    // TODO(ct): This can be removed once we render the "input" sources without
+    // TODO(ct3): This can be removed once we render the "input" sources without
     // the hack.
     pub input_id: GlobalId,
-    /// TODO(ct): Add documentation.
+    /// The necessary storage information for writing to the output collection.
     pub storage_metadata: S,
 }
 
