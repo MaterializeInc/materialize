@@ -133,7 +133,8 @@ fn realloc_data(data: ArrayData, nullable: bool, metrics: &ColumnarMetrics) -> A
             // Why does this help? Parquet decoding can generate nulls in non-nullable fields
             // that are only masked by eg. a grandparent, not the direct parent... but some arrow
             // code expects the parent to mask any nulls in its non-nullable children. Dropping
-            // the buffer here prevents those validations from failing.
+            // the buffer here prevents those validations from failing. (Top-level arrays are always
+            // marked nullable, but since they don't have parents that's not a problem either.)
             metrics.parquet.elided_null_buffers.inc();
         }
         None
@@ -151,15 +152,19 @@ fn realloc_data(data: ArrayData, nullable: bool, metrics: &ColumnarMetrics) -> A
 }
 
 /// Re-allocate the backing storage for a specific array using lgalloc, if it's configured.
+/// (And hopefully-temporarily work around a parquet decoding issue upstream.)
 pub fn realloc_array<A: Array + From<ArrayData>>(array: &A, metrics: &ColumnarMetrics) -> A {
     let data = array.to_data();
+    // Top-level arrays are always nullable.
     let data = realloc_data(data, true, metrics);
     A::from(data)
 }
 
 /// Re-allocate the backing storage for an array ref using lgalloc, if it's configured.
+/// (And hopefully-temporarily work around a parquet decoding issue upstream.)
 pub fn realloc_any(array: ArrayRef, metrics: &ColumnarMetrics) -> ArrayRef {
     let data = array.into_data();
+    // Top-level arrays are always nullable.
     let data = realloc_data(data, true, metrics);
     make_array(data)
 }
