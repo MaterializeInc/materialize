@@ -62,7 +62,6 @@ use crate::internal::state::{
 use crate::stats::{
     encode_updates, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
 };
-use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.batch.rs"));
@@ -398,6 +397,15 @@ pub(crate) const STRUCTURED_ORDER: Config<bool> = Config::new(
     "If enabled, output compaction batches in structured-data order.",
 );
 
+pub(crate) const STRUCTURED_ORDER_UNTIL_SHARD: Config<&'static str> = Config::new(
+    "persist_batch_structured_order_from_shard",
+    "sz",
+    "Restrict shards using structured ordering to those shards with formatted ids less than \
+    the given string. (For example, `s0` will disable it for all shards, `s8` will enable it for \
+    half of all shards, `s8888` will enable it for slightly more shards, and `sz` will enable it \
+    for everyone.)",
+);
+
 pub(crate) const STRUCTURED_KEY_LOWER_LEN: Config<usize> = Config::new(
     "persist_batch_structured_key_lower_len",
     0,
@@ -433,7 +441,7 @@ pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
 
 impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.
-    pub fn new(value: &PersistConfig, _writer_id: &WriterId, expect_consolidated: bool) -> Self {
+    pub fn new(value: &PersistConfig, shard_id: ShardId, expect_consolidated: bool) -> Self {
         let writer_key = WriterKey::for_version(&value.build_version);
 
         let batch_columnar_format =
@@ -441,10 +449,13 @@ impl BatchBuilderConfig {
         let batch_columnar_format_percent = BATCH_COLUMNAR_FORMAT_PERCENT.get(value);
 
         let record_run_meta = RECORD_RUN_META.get(value);
+        let structured_order = STRUCTURED_ORDER.get(value) && {
+            shard_id.to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(value)
+        };
         let expected_order = if expect_consolidated {
             // We never generate structured-order runs when we're not also generating metadata,
             // or the reader couldn't recognize them.
-            if record_run_meta && STRUCTURED_ORDER.get(value) {
+            if record_run_meta && structured_order {
                 RunOrder::Structured
             } else {
                 RunOrder::Codec

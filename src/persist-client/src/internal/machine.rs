@@ -1747,7 +1747,7 @@ pub mod datadriven {
             .collect();
 
         let mut cfg =
-            BatchBuilderConfig::new(&datadriven.client.cfg, &WriterId::new(), consolidate);
+            BatchBuilderConfig::new(&datadriven.client.cfg, datadriven.shard_id, consolidate);
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
@@ -1935,7 +1935,6 @@ pub mod datadriven {
         let lower = args.expect_antichain("lower");
         let upper = args.expect_antichain("upper");
         let since = args.expect_antichain("since");
-        let writer_id = args.optional("writer_id");
         let target_size = args.optional("target_size");
         let memory_bound = args.optional("memory_bound");
 
@@ -1962,14 +1961,13 @@ pub mod datadriven {
             desc: Description::new(lower, upper, since),
             inputs,
         };
-        let writer_id = writer_id.unwrap_or_else(WriterId::new);
         let schemas = Schemas {
             id: None,
             key: Arc::new(StringSchema),
             val: Arc::new(UnitSchema),
         };
         let res = Compactor::<String, (), u64, i64>::compact(
-            CompactConfig::new(&cfg, &writer_id),
+            CompactConfig::new(&cfg, datadriven.shard_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
@@ -2366,7 +2364,8 @@ pub mod datadriven {
                 }
                 CompareAndAppendRes::InlineBackpressure => {
                     let mut b = datadriven.to_batch(batch.clone());
-                    let cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &writer_id, false);
+                    let cfg =
+                        BatchBuilderConfig::new(&datadriven.client.cfg, datadriven.shard_id, false);
                     let schemas = Schemas::<String, ()> {
                         id: None,
                         key: Arc::new(StringSchema),
@@ -2476,7 +2475,7 @@ pub mod tests {
                 .await;
             // Flush this batch out so the CaA doesn't get inline writes
             // backpressure.
-            let cfg = BatchBuilderConfig::new(&client.cfg, &write.writer_id, false);
+            let cfg = BatchBuilderConfig::new(&client.cfg, write.shard_id(), false);
             batch
                 .flush_to_blob(
                     &cfg,
