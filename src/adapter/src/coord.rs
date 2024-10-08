@@ -66,15 +66,6 @@
 //! ```
 //!
 
-use anyhow::Context;
-use chrono::{DateTime, Utc};
-use ipnet::IpNet;
-use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
-use mz_compute_client::as_of_selection;
-use mz_ore::channel::trigger::Trigger;
-use mz_sql::names::{ResolvedIds, SchemaSpecifier};
-use mz_sql::session::user::User;
-use mz_storage_types::read_holds::ReadHold;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -86,17 +77,20 @@ use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use thiserror::Error;
 
+use anyhow::Context;
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
 use http::Uri;
+use ipnet::IpNet;
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_STORAGE_USAGE_BY_SHARD};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
@@ -106,16 +100,19 @@ use mz_catalog::memory::objects::{
     DataSourceDesc, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
+use mz_compute_client::as_of_selection;
 use mz_compute_client::controller::error::InstanceMissing;
+use mz_compute_client::controller::ComputeControllerResponse;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, ProcessId};
-use mz_controller::ControllerConfig;
+use mz_controller::{ControllerConfig, ControllerResponse};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -133,11 +130,13 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
+use mz_sql::names::{ResolvedIds, SchemaSpecifier};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, OnTimeoutAction, Params,
     QueryWhen,
 };
+use mz_sql::session::user::User;
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
@@ -146,6 +145,7 @@ use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sinks::S3SinkFormat;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::postgres_oracle::{
@@ -155,10 +155,12 @@ use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
+use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
+use tokio::time;
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -177,6 +179,7 @@ use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::peek::PendingPeek;
+use crate::coord::statement_logging::{StatementLogging, StatementLoggingId};
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::coord::validity::PlanValidity;
@@ -191,8 +194,6 @@ use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycle
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, ReadHolds};
-
-use self::statement_logging::{StatementLogging, StatementLoggingId};
 
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
@@ -221,6 +222,9 @@ mod validity;
 pub enum Message<T = mz_repr::Timestamp> {
     Command(OpenTelemetryContext, Command),
     ControllerReady,
+    Controller(ControllerResponse<T>),
+    Compute(ComputeControllerResponse<T>),
+    Maintenance,
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     AlterConnectionValidationReady(AlterConnectionValidationReady),
@@ -337,6 +341,9 @@ impl Message {
                 Command::Dump { .. } => "command-dump",
             },
             Message::ControllerReady => "controller_ready",
+            Message::Controller(..) => "controller",
+            Message::Compute(..) => "compute",
+            Message::Maintenance => "maintenance",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::WriteLockGrant(_) => "write_lock_grant",
@@ -1563,6 +1570,7 @@ pub struct Coordinator {
     /// The controller for the storage and compute layers.
     #[derivative(Debug = "ignore")]
     controller: mz_controller::Controller,
+    controller_rxs: mz_controller::ControllerReceivers,
     /// The catalog in an Arc suitable for readonly references. The Arc allows
     /// us to hand out cheap copies of the catalog to functions that can use it
     /// off of the main coordinator thread. If the coordinator needs to mutate
@@ -2824,10 +2832,15 @@ impl Coordinator {
                 .system_config()
                 .coord_slow_message_warn_threshold();
 
+            let mut maintenance_ticker = time::interval(Duration::from_secs(1));
+            maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
             // How many messages we'd like to batch up before processing them. Must be > 0.
             const MESSAGE_BATCH: usize = 64;
             let mut messages = Vec::with_capacity(MESSAGE_BATCH);
             let mut cmd_messages = Vec::with_capacity(MESSAGE_BATCH);
+            let mut controller_messages = Vec::with_capacity(MESSAGE_BATCH);
+            let mut compute_messages = Vec::with_capacity(MESSAGE_BATCH);
 
             let message_batch = self.metrics
                 .message_batch
@@ -2857,6 +2870,32 @@ impl Coordinator {
                     // Receive a single command.
                     () = self.controller.ready() => {
                         messages.push(Message::ControllerReady);
+                    }
+                    // `tick` documented to be cancellation safe.
+                    // Receive a regular maintenance message.
+                    _ = maintenance_ticker.tick() => {
+                        messages.push(Message::Maintenance);
+                        maintenance_ticker.reset();
+                    }
+                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
+                    // Receive a batch of compute controller responses.
+                    count = self.controller_rxs.compute_controller_rx.recv_many(&mut compute_messages, MESSAGE_BATCH) => {
+                        if count == 0 {
+                            break;
+                        } else {
+                            messages.extend(compute_messages.drain(..).map(Message::Compute));
+                        }
+                    }
+                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
+                    // Receive a batch of controller responses.
+                    count = self.controller_rxs.immediate_rx.recv_many(&mut controller_messages, MESSAGE_BATCH) => {
+                        if count == 0 {
+                            break;
+                        } else {
+                            messages.extend(controller_messages.drain(..).map(Message::Controller));
+                        }
                     }
                     // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
                     // Receive a single command.
@@ -2964,7 +3003,7 @@ impl Coordinator {
                     let msg_kind = msg.kind();
                     let span = span!(
                         target: "mz_adapter::coord::handle_message_loop",
-                        Level::INFO,
+                        Level::DEBUG,
                         "coord::handle_message",
                         kind = msg_kind
                     );
@@ -3634,7 +3673,7 @@ pub fn serve(
             .spawn(move || {
                 let span = info_span!(parent: parent_span, "coord::coordinator").entered();
 
-                let controller = handle
+                let (controller, controller_rxs) = handle
                     .block_on({
                         catalog.initialize_controller(
                             controller_config,
@@ -3650,6 +3689,7 @@ pub fn serve(
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let mut coord = Coordinator {
                     controller,
+                    controller_rxs,
                     catalog,
                     internal_cmd_tx,
                     group_commit_tx,
