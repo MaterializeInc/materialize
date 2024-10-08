@@ -716,6 +716,11 @@ pub struct BatchWriteMetrics {
     pub(crate) write_stalls: IntCounter,
     pub(crate) key_lower_too_big: IntCounter,
 
+    pub(crate) unordered: IntCounter,
+    pub(crate) codec_order: IntCounter,
+    pub(crate) structured_order: IntCounter,
+    _order_counts: IntCounterVec,
+
     pub(crate) step_stats: Counter,
     pub(crate) step_part_writing: Counter,
     pub(crate) step_inline: Counter,
@@ -723,6 +728,15 @@ pub struct BatchWriteMetrics {
 
 impl BatchWriteMetrics {
     fn new(registry: &MetricsRegistry, name: &str) -> Self {
+        let order_counts: IntCounterVec = registry.register(metric!(
+                name: format!("mz_persist_{}_write_batch_order", name),
+                help: "count of batches by the data ordering",
+                var_labels: ["order"],
+        ));
+        let unordered = order_counts.with_label_values(&["unordered"]);
+        let codec_order = order_counts.with_label_values(&["codec"]);
+        let structured_order = order_counts.with_label_values(&["structured"]);
+
         BatchWriteMetrics {
             bytes: registry.register(metric!(
                 name: format!("mz_persist_{}_bytes", name),
@@ -750,6 +764,10 @@ impl BatchWriteMetrics {
                     name
                 ),
             )),
+            unordered,
+            codec_order,
+            structured_order,
+            _order_counts: order_counts,
             step_stats: registry.register(metric!(
                 name: format!("mz_persist_{}_step_stats", name),
                 help: format!("time spent computing {} update stats", name),
