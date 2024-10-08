@@ -330,7 +330,7 @@ def drop_replication_slot_when_mz_is_off(c: Composition) -> None:
         "delete-rows-t1.td",
     )
 
-    time.sleep(5)
+    time.sleep(12)
 
     c.kill("materialized")
 
@@ -360,7 +360,7 @@ def drop_replication_slot_and_change_data_when_mz_is_off(c: Composition) -> None
         "delete-rows-t1.td",
     )
 
-    time.sleep(5)
+    time.sleep(12)
 
     c.kill("materialized")
 
