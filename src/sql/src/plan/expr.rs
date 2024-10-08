@@ -228,21 +228,21 @@ pub enum HirScalarExpr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-/// Represents the invocation of a window function over a partition with an optional
+/// Represents the invocation of a window function over an optional partitioning with an optional
 /// order.
 pub struct WindowExpr {
     pub func: WindowExprType,
     pub partition_by: Vec<HirScalarExpr>,
-    // ORDER BY is represented in a complicated way: `plan_function_order_by` gave us two things:
-    //  - the `ColumnOrder`s we have put in the `order_by` fields in the `WindowExprType` in `func`
-    //    above,
-    //  - the `HirScalarExpr`s we have put in the following `order_by` field.
-    // These are separated because they are used in different places: the outer `order_by` is used
-    // in the lowering: based on it, we create a Row constructor that collects the scalar exprs;
-    // the inner `order_by` is used in the rendering to actually execute the ordering on these Rows.
-    // (`WindowExpr` exists only in HIR, but not in MIR.)
-    // Note that the `column` field in the `ColumnOrder`s point into the Row constructed in the
-    // lowering, and not to original input columns.
+    /// ORDER BY is represented in a complicated way: `plan_function_order_by` gave us two things:
+    ///  - the `ColumnOrder`s we have put in the `order_by` fields in the `WindowExprType` in `func`
+    ///    above,
+    ///  - the `HirScalarExpr`s we have put in the following `order_by` field.
+    /// These are separated because they are used in different places: the outer `order_by` is used
+    /// in the lowering: based on it, we create a Row constructor that collects the scalar exprs;
+    /// the inner `order_by` is used in the rendering to actually execute the ordering on these Rows.
+    /// (`WindowExpr` exists only in HIR, but not in MIR.)
+    /// Note that the `column` field in the `ColumnOrder`s point into the Row constructed in the
+    /// lowering, and not to original input columns.
     pub order_by: Vec<HirScalarExpr>,
 }
 
@@ -340,17 +340,19 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
 /// A window function with its parameters.
 ///
 /// There are three types of window functions:
-/// - scalar window functions, that return a different scalar value for each
-/// row within a partition that depends exclusively on the position of the row
-/// within the partition;
-/// - value window functions, that return a scalar value for each row within a
-/// partition that might be computed based on a single previous, current or
-/// following row;
-/// - aggregate window functions, that return a computed value for the row that
-/// depends on multiple other rows within the same partition. Aggregate window
-/// functions can be in some cases be computed by joining the input relation
-/// with a reduction over the same relation that computes the aggregation using
-/// the partition key as its grouping key.
+/// - scalar window functions, which return a different scalar value for each
+///   row within a partition that depends exclusively on the position of the row
+///   within the partition;
+/// - value window functions, which return a scalar value for each row within a
+///   partition that might be computed based on a single row, which is usually not
+///   the current row (e.g., previous or following row; first or last row of the
+///   partition);
+/// - aggregate window functions, which compute a traditional aggregation as a
+///   window function (e.g. `sum(x) OVER (...)`).
+///   (Aggregate window  functions can in some cases be computed by joining the
+///   input relation with a reduction over the same relation that computes the
+///   aggregation using the partition key as its grouping key, but we don't
+///   automatically do this currently.)
 pub enum WindowExprType {
     Scalar(ScalarWindowExpr),
     Value(ValueWindowExpr),
