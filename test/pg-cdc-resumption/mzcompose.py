@@ -64,6 +64,7 @@ def workflow_disruptions(c: Composition) -> None:
         fix_pg_schema_while_mz_restarts,
         verify_no_snapshot_reingestion,
         restart_mz_after_initial_snapshot,
+        restart_mz_while_cdc_changes,
     ]
 
     scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
@@ -176,6 +177,29 @@ def restart_mz_after_initial_snapshot(c: Composition) -> None:
 
     c.run_testdrive_files(
         "delete-rows-t2.td",
+        "alter-table.td",
+        "alter-mz.td",
+        "verify-data.td",
+        "alter-table-fix.td",
+    )
+
+
+def restart_mz_while_cdc_changes(c: Composition) -> None:
+    c.run_testdrive_files(
+        "wait-for-snapshot.td",
+        "delete-rows-t1.td",
+    )
+
+    c.kill("materialized")
+
+    # run delete-rows-t2.td in pg
+    pg_conn = _create_pg_connection(c)
+    cursor = pg_conn.cursor()
+    cursor.execute("DELETE FROM t2 WHERE f1 % 2 = 1;")
+
+    c.up("materialized")
+
+    c.run_testdrive_files(
         "alter-table.td",
         "alter-mz.td",
         "verify-data.td",
