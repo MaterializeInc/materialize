@@ -1401,6 +1401,7 @@ pub struct CreateContinualTaskStatement<T: AstInfo> {
     pub name: T::ItemName,
     pub columns: Vec<CteMutRecColumnDef<T>>,
     pub in_cluster: Option<T::ClusterName>,
+    pub as_of: Option<u64>,
 
     // The thing we get input diffs from
     pub input: T::ItemName,
@@ -1443,6 +1444,11 @@ impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
             }
         }
         f.write_str(")");
+
+        if let Some(time) = &self.as_of {
+            f.write_str(" AS OF ");
+            f.write_str(time);
+        }
     }
 }
 impl_display_t!(CreateContinualTaskStatement);

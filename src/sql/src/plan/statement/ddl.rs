@@ -2865,6 +2865,7 @@ pub fn plan_create_continual_task(
         ResolvedItemName::Error => unreachable!("error should be returned in name resolution"),
     };
 
+    let as_of = stmt.as_of.map(Timestamp::from);
     Ok(Plan::CreateContinualTask(CreateContinualTaskPlan {
         name,
         placeholder_id,
@@ -2878,7 +2879,7 @@ pub fn plan_create_continual_task(
             non_null_assertions: Vec::new(),
             compaction_window: None,
             refresh_schedule: None,
-            as_of: None,
+            as_of,
         },
     }))
 }

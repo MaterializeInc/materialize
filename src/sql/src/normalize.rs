@@ -422,6 +422,7 @@ pub fn create_statement(
             input,
             stmts,
             in_cluster: _,
+            as_of: _,
         }) => {
             let mut normalizer = QueryNormalizer::new();
             normalizer.visit_item_name_mut(name);

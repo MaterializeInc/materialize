@@ -982,6 +982,7 @@ fn humanize_sql_for_show_create(
     match &mut resolved {
         // Strip internal `AS OF` syntax.
         Statement::CreateMaterializedView(stmt) => stmt.as_of = None,
+        Statement::CreateContinualTask(stmt) => stmt.as_of = None,
         // `CREATE SOURCE` statements should roundtrip. However, sources and
         // their subsources have a complex relationship, so we need to do a lot
         // of work to reconstruct the statement for multi-output sources.
