@@ -1303,6 +1303,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
         batch_metrics.bytes.inc_by(u64::cast_from(payload_len));
         batch_metrics.goodbytes.inc_by(u64::cast_from(goodbytes));
+        match cfg.expected_order {
+            RunOrder::Unordered => batch_metrics.unordered.inc(),
+            RunOrder::Codec => batch_metrics.codec_order.inc(),
+            RunOrder::Structured => batch_metrics.structured_order.inc(),
+        }
         let stats = stats.map(|(stats, stats_step_timing, trimmed_bytes)| {
             batch_metrics
                 .step_stats
