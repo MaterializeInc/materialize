@@ -1414,7 +1414,6 @@ pub struct CreateContinualTaskStatement<T: AstInfo> {
 pub enum ContinualTaskStmt<T: AstInfo> {
     Delete(DeleteStatement<T>),
     Insert(InsertStatement<T>),
-    // TODO(ct): Update/upsert?
 }
 
 impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {

@@ -42,7 +42,6 @@ use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
 use crate::util::ResultExt;
 
-// TODO(ct): Big oof. Dedup a bunch of this with MVs.
 impl Coordinator {
     #[instrument]
     pub(crate) async fn sequence_create_continual_task(
@@ -295,7 +294,7 @@ fn update_create_sql(
 
 /// An [OptimizerCatalog] impl that ignores any indexes that exist.
 ///
-/// TODO(ct): At the moment, the dataflow rendering for CTs only knows how to
+/// TODO(ct3): At the moment, the dataflow rendering for CTs only knows how to
 /// turn persist_sources into CT inputs. If the optimizer decides to use an
 /// existing index in the cluster, it won't work. It seems tricky/invasive to
 /// fix the render bug, so for now pretend indexes don't exist for CTs. Remove

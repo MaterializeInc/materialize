@@ -2789,7 +2789,7 @@ pub fn plan_create_continual_task(
 
     let mut exprs = Vec::new();
     for stmt in &stmt.stmts {
-        let query = continual_task_query(&ct_name, stmt).ok_or_else(|| sql_err!("TODO(ct)"))?;
+        let query = continual_task_query(&ct_name, stmt).ok_or_else(|| sql_err!("TODO(ct2)"))?;
         let query::PlannedRootQuery {
             mut expr,
             desc: desc_query,
@@ -2798,9 +2798,9 @@ pub fn plan_create_continual_task(
         } = query::plan_ct_query(&mut qcx, query)?;
         // We get back a trivial finishing, see comment in `plan_view`.
         assert!(finishing.is_trivial(expr.arity()));
-        // TODO(ct): Is this right?
+        // TODO(ct2): Is this right?
         expr.bind_parameters(params)?;
-        // TODO(ct): Make this error message more closely match the various ones
+        // TODO(ct2): Make this error message more closely match the various ones
         // given for INSERT/DELETE.
         if desc_query
             .iter_types()
@@ -2832,12 +2832,12 @@ pub fn plan_create_continual_task(
             ast::ContinualTaskStmt::Delete(_) => exprs.push(expr.negate()),
         }
     }
-    // TODO(ct): Collect things by output and assert that there is only one (or
+    // TODO(ct2): Collect things by output and assert that there is only one (or
     // support multiple outputs).
     let expr = exprs
         .into_iter()
         .reduce(|acc, expr| acc.union(expr))
-        .ok_or_else(|| sql_err!("TODO(ct)"))?;
+        .ok_or_else(|| sql_err!("TODO(ct2)"))?;
 
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
     if let Some(dup) = column_names.iter().duplicates().next() {

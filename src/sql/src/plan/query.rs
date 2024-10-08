@@ -165,7 +165,7 @@ pub fn plan_root_query(
     })
 }
 
-/// TODO(ct): Dedup this with [plan_root_query].
+/// TODO(ct2): Dedup this with [plan_root_query].
 #[mz_ore::instrument(target = "compiler", level = "trace", name = "ast_to_hir")]
 pub fn plan_ct_query(
     qcx: &mut QueryContext,

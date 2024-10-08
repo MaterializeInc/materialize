@@ -3580,14 +3580,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_continual_task(&mut self) -> Result<Statement<Raw>, ParserError> {
-        // TODO(ct): If exists.
+        // TODO(ct3): OR REPLACE/IF NOT EXISTS.
         self.expect_keywords(&[CONTINUAL, TASK])?;
 
-        // TODO(ct): Multiple outputs.
+        // TODO(ct3): Multiple outputs.
         let name = RawItemName::Name(self.parse_item_name()?);
         self.expect_token(&Token::LParen)?;
         let columns = self.parse_comma_separated(|parser| {
-            // TODO(ct): NOT NULL, etc.
             Ok(CteMutRecColumnDef {
                 name: parser.parse_identifier()?,
                 data_type: parser.parse_data_type()?,
@@ -3596,10 +3595,10 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::RParen)?;
         let in_cluster = self.parse_optional_in_cluster()?;
 
-        // TODO(ct): Multiple inputs.
+        // TODO(ct3): Multiple inputs.
         self.expect_keywords(&[ON, INPUT])?;
         let input_table = self.parse_raw_name()?;
-        // TODO(ct): Allow renaming the inserts/deletes so that we can use
+        // TODO(ct3): Allow renaming the inserts/deletes so that we can use
         // something as both an "input" and a "reference".
 
         self.expect_keyword(AS)?;
@@ -3607,7 +3606,7 @@ impl<'a> Parser<'a> {
         let mut stmts = Vec::new();
         let mut expecting_statement_delimiter = false;
         self.expect_token(&Token::LParen)?;
-        // TODO(ct): Dedup this with parse_statements?
+        // TODO(ct2): Dedup this with parse_statements?
         loop {
             // ignore empty statements (between successive statement delimiters)
             while self.consume_token(&Token::Semicolon) {
