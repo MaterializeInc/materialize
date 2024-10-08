@@ -487,7 +487,7 @@ where
             };
 
             let res = Compactor::<K, V, T, D>::compact(
-                CompactConfig::new(&cfg, &writer_id),
+                CompactConfig::new(&cfg, shard_id),
                 Arc::clone(&blob),
                 Arc::clone(&metrics),
                 Arc::clone(&machine.applier.shard_metrics),
@@ -735,7 +735,6 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
             let res = Compactor::<K, V, T, D>::compact_and_apply(
                 &mut machine,
                 req,
-                write.writer_id.clone(),
                 write.write_schemas.clone(),
             )
             .await;
