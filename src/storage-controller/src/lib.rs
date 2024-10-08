@@ -21,8 +21,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::stream::BoxStream;
+use futures::stream::{BoxStream, FuturesUnordered};
 use futures::FutureExt;
+use futures::StreamExt;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
@@ -31,6 +32,7 @@ use mz_controller_types::dyncfgs::{ENABLE_0DT_DEPLOYMENT_SOURCES, WALLCLOCK_LAG_
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::task::AbortOnDropHandle;
 use mz_ore::{assert_none, instrument, soft_panic_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
@@ -228,6 +230,40 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     instance_response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
     /// Receive end for replica responses.
     instance_response_rx: mpsc::UnboundedReceiver<StorageResponse<T>>,
+
+    /// Background task run at startup to warm persist state.
+    persist_warm_task: Option<AbortOnDropHandle<Box<dyn Debug + Send>>>,
+}
+
+/// Warm up persist state for `shard_ids` in a background task.
+///
+/// With better parallelism during startup this would likely be unnecessary, but empirically we see
+/// some nice speedups with this relatively simple function.
+fn warm_persist_state_in_background(
+    client: PersistClient,
+    shard_ids: impl Iterator<Item = ShardId> + Send + 'static,
+) -> mz_ore::task::JoinHandle<Box<dyn Debug + Send>> {
+    let logic = async move {
+        let fetchers = FuturesUnordered::new();
+        for shard_id in shard_ids {
+            let client = client.clone();
+            fetchers.push(async move {
+                client
+                    .create_batch_fetcher::<SourceData, (), mz_repr::Timestamp, Diff>(
+                        shard_id,
+                        Arc::new(RelationDesc::empty()),
+                        Arc::new(UnitSchema),
+                        true,
+                        Diagnostics::from_purpose("warm persist load state"),
+                    )
+                    .await
+            })
+        }
+        let fetchers = fetchers.collect::<Vec<_>>().await;
+        let fetchers: Box<dyn Debug + Send> = Box::new(fetchers);
+        fetchers
+    };
+    mz_ore::task::spawn(|| "warm_persist_load_state", logic)
 }
 
 #[async_trait(?Send)]
@@ -443,6 +479,10 @@ where
                 migrated_storage_collections,
             )
             .await?;
+
+        // At this point we're connected to all the collection shards in persist. Our warming task
+        // is no longer useful, so abort it if it's still running.
+        drop(self.persist_warm_task.take());
 
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
@@ -2177,6 +2217,17 @@ where
         txn: &dyn StorageTxn<T>,
         storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     ) -> Self {
+        let txns_client = persist_clients
+            .open(persist_location.clone())
+            .await
+            .expect("location should be valid");
+
+        let persist_warm_task = warm_persist_state_in_background(
+            txns_client.clone(),
+            txn.get_collection_metadata().into_values(),
+        );
+        let persist_warm_task = Some(persist_warm_task.abort_on_drop());
+
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         // This value must be already installed because we must ensure it's
@@ -2185,11 +2236,6 @@ where
         let txns_id = txn
             .get_txn_wal_shard()
             .expect("must call prepare initialization before creating storage controller");
-
-        let txns_client = persist_clients
-            .open(persist_location.clone())
-            .await
-            .expect("location should be valid");
 
         let persist_table_worker = if read_only {
             let txns_write = txns_client
@@ -2275,6 +2321,7 @@ where
             maintenance_scheduled: false,
             instance_response_rx,
             instance_response_tx,
+            persist_warm_task,
         }
     }
 
