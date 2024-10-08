@@ -204,7 +204,8 @@ Materialize supports the use of an AWS Connection to perform:
 
 - IAM authentication with an Amazon MSK cluster.
 
-- Bulk exports to Amazon S3 [(Private Preview)](#support-amazon-s3-as-a-sink).
+- Bulk exports to Amazon S3. See [Bulk exports to object
+  storage](#bulk-exports-to-object-storage).
 
 For more information, see [`CREATE Connection:
 AWS`](/sql/create-connection/#aws).
