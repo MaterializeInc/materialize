@@ -52,6 +52,7 @@ from materialize.output_consistency.validation.validation_message import (
 )
 
 AGGREGATION_SHORTCUT_FUNCTION_NAMES = {"count", "string_agg"}
+DIFFERENT_EVALUATION_ORDER_FUNCTION_NAMES = {"map_agg"}
 
 
 class InternalOutputInconsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -239,6 +240,15 @@ class PostExecutionInternalOutputInconsistencyIgnoreFilter(
             return YesIgnore(
                 "Table function rows executed in different order, resulting in different error messages"
             )
+
+        if query_template.matches_any_expression(
+            partial(
+                matches_fun_by_any_name,
+                function_names_in_lower_case=DIFFERENT_EVALUATION_ORDER_FUNCTION_NAMES,
+            ),
+            True,
+        ):
+            return YesIgnore("database-issues#4972: evaluation order")
 
         return NoIgnore()
 
