@@ -44,6 +44,13 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '22d'
 > CREATE CLUSTER test (SIZE = '1')
 > SET CLUSTER TO test
 
+> DROP TABLE events
+
+> CREATE TABLE events (
+    content TEXT,
+    event_ts TIMESTAMP
+  );
+
 > CREATE VIEW last_30_days AS
   SELECT event_ts, content
   FROM events
