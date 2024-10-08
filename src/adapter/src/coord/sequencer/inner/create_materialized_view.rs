@@ -398,7 +398,7 @@ impl Coordinator {
                 plan,
                 resolved_ids,
                 explain_ctx,
-                is_timeline_epochms: timeline_ctx.is_timeline_epochms(),
+                is_timeline_epoch_ms: timeline_ctx.is_timeline_epoch_ms(),
             },
         ))
     }
@@ -411,7 +411,7 @@ impl Coordinator {
             plan,
             resolved_ids,
             explain_ctx,
-            is_timeline_epochms,
+            is_timeline_epoch_ms,
         }: CreateMaterializedViewOptimize,
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         let plan::CreateMaterializedViewPlan {
@@ -454,7 +454,7 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
-            is_timeline_epochms,
+            is_timeline_epoch_ms,
         );
 
         let span = Span::current();

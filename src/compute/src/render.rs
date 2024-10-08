@@ -543,12 +543,12 @@ where
         });
 
         match bundle.arrangement(&idx.key) {
-            Some(ArrangementFlavor::Local(oks, errs)) => {
+            Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
                     oks.expire_arrangement_at(expiration);
-                    errs.stream.expire_stream_at(expiration);
+                    errs.stream = errs.stream.expire_stream_at(expiration);
                 }
 
                 // Obtain a specialized handle matching the specialized arrangement.
@@ -617,9 +617,9 @@ where
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                let oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
+                let mut oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
 
-                let errs = errs
+                let mut errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
                     .mz_arrange("Arrange export iterative err");
@@ -628,7 +628,7 @@ where
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
                     oks.expire_arrangement_at(expiration);
-                    errs.stream.expire_stream_at(expiration);
+                    errs.stream = errs.stream.expire_stream_at(expiration);
                 }
 
                 let oks_trace = oks.trace_handle();

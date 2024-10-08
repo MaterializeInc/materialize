@@ -128,14 +128,14 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
             // The dataflow has a transitive dependency with a refresh schedule.
             || dataflow_expiration_desc.has_transitive_refresh_schedule
             // The dataflow's timeline is not `Timeline::EpochMilliSeconds`.
-            || !dataflow_expiration_desc.is_timeline_epochms
+            || !dataflow_expiration_desc.is_timeline_epoch_ms
         {
             return Antichain::default(); // Disables dataflow expiration.
         }
 
         if let Some(replica_expiration) = replica_expiration {
             if let Some(upper) = &dataflow_expiration_desc.transitive_upper {
-                if upper.is_empty() || upper == &Antichain::from_elem(mz_repr::Timestamp::from(0)) {
+                if upper.is_empty() {
                     // When the `upper` of a dataflow is empty, reads are valid at all times, including
                     // times beyond the replica expiration. Disable dataflow expiration in this case.
                     return Antichain::default();
@@ -907,7 +907,7 @@ pub struct DataflowExpirationDesc<T> {
     /// Whether the dataflow has a transitive dependency with a refresh schedule.
     pub has_transitive_refresh_schedule: bool,
     /// Whether the timeline of the dataflow is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
-    pub is_timeline_epochms: bool,
+    pub is_timeline_epoch_ms: bool,
 }
 
 impl<T> Default for DataflowExpirationDesc<T> {
@@ -917,7 +917,7 @@ impl<T> Default for DataflowExpirationDesc<T> {
             // Assume present unless explicitly checked.
             has_transitive_refresh_schedule: true,
             // Assume any timeline type possible unless explicitly checked.
-            is_timeline_epochms: false,
+            is_timeline_epoch_ms: false,
         }
     }
 }
@@ -927,7 +927,7 @@ impl RustType<ProtoDataflowExpirationDesc> for DataflowExpirationDesc<mz_repr::T
         ProtoDataflowExpirationDesc {
             transitive_upper: self.transitive_upper.into_proto(),
             has_transitive_refresh_schedule: self.has_transitive_refresh_schedule.into_proto(),
-            is_timeline_epochms: self.is_timeline_epochms.into_proto(),
+            is_timeline_epoch_ms: self.is_timeline_epoch_ms.into_proto(),
         }
     }
 
@@ -935,7 +935,7 @@ impl RustType<ProtoDataflowExpirationDesc> for DataflowExpirationDesc<mz_repr::T
         Ok(Self {
             transitive_upper: x.transitive_upper.into_rust()?,
             has_transitive_refresh_schedule: x.has_transitive_refresh_schedule.into_rust()?,
-            is_timeline_epochms: x.is_timeline_epochms.into_rust()?,
+            is_timeline_epoch_ms: x.is_timeline_epoch_ms.into_rust()?,
         })
     }
 }
@@ -956,7 +956,7 @@ impl Arbitrary for DataflowExpirationDesc<mz_repr::Timestamp> {
                     has_transitive_refresh_schedule,
                     transitive_upper_some,
                     transitive_upper,
-                    is_timeline_epochms,
+                    is_timeline_epoch_ms,
                 )| {
                     DataflowExpirationDesc {
                         transitive_upper: if transitive_upper_some {
@@ -965,7 +965,7 @@ impl Arbitrary for DataflowExpirationDesc<mz_repr::Timestamp> {
                             None
                         },
                         has_transitive_refresh_schedule,
-                        is_timeline_epochms,
+                        is_timeline_epoch_ms,
                     }
                 },
             )

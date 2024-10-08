@@ -14,6 +14,7 @@ anyhow = "1.0.66"
 async-stream = "0.3.3"
 async-trait = "0.1.68"
 bytesize = "1.1.0"
+chrono = { version = "0.4.35", default-features = false }
 clap = { version = "3.2.24", features = ["derive", "env"] }
 crossbeam-channel = "0.5.8"
 dec = { version = "0.4.8", features = ["serde"] }

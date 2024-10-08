@@ -53,7 +53,7 @@ added to the start time of the replica. Dataflows matching certain
 criteria (detailed below) are then configured with a _dataflow expiration_
 derived from the replica expiration. Diffs generated in these dataflows beyond
 the dataflow expiration are dropped. To ensure correctness, panic checks are
-added to these dataflows that ensure that the frontier does not exceed the 
+added to these dataflows that ensure that the frontier does not exceed the
 dataflow expiration before the replica is restarted.
 
 An overview of the logic used for these features is as follows:
@@ -88,7 +88,7 @@ else for dataflows of type in [materialized view, index, subscribe]:
 dataflow_until := dataflow_until.meet(dataflow_expiration)
 ```
 
-Note that we only consider dataflows representing materialized views, indexes, 
+Note that we only consider dataflows representing materialized views, indexes,
 and subscribes. These are long-running dataflows that maintain state during
 their lifetime. Other dataflows such as peeks are transient and do not need to
 explicitly drop retraction diffs.
@@ -102,7 +102,7 @@ More concretely, we make the following changes:
   associated with timestamps beyond this limit do not have to be stored and can
   be dropped.
 * When building a dataflow, compute `dataflow_expiration` as per the logic
-  described above. If non-empty, the `dataflow_expiration` is added to the 
+  described above. If non-empty, the `dataflow_expiration` is added to the
   dataflow `until` that ensures that any diff beyond this limit is dropped in
   `mfp.evaluate()`.
 * To ensure correctness, we attach checks in `Context::export_index` and

@@ -286,7 +286,7 @@ impl Coordinator {
 
         let global_mir_plan = global_mir_plan.resolve(
             Antichain::from_elem(as_of),
-            determination.timestamp_context.is_timeline_epochms(),
+            determination.timestamp_context.is_timeline_epoch_ms(),
         );
 
         // Optimize LIR

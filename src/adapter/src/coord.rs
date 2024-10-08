@@ -745,7 +745,7 @@ pub struct CreateMaterializedViewOptimize {
     /// Whether the timeline is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
     ///
     /// Used to determine if it is safe to enable dataflow expiration.
-    is_timeline_epochms: bool,
+    is_timeline_epoch_ms: bool,
 }
 
 #[derive(Debug)]
@@ -2620,7 +2620,7 @@ impl Coordinator {
 
         for entry in ordered_catalog_entries {
             let id = entry.id();
-            let is_timeline_epochms = self.get_timeline_context(id).is_timeline_epochms();
+            let is_timeline_epoch_ms = self.get_timeline_context(id).is_timeline_epoch_ms();
             match entry.item() {
                 CatalogItem::Index(idx) => {
                     // Collect optimizer parameters.
@@ -2651,7 +2651,7 @@ impl Coordinator {
                             entry.name().clone(),
                             idx.on,
                             idx.keys.to_vec(),
-                            is_timeline_epochms,
+                            is_timeline_epoch_ms,
                         );
                         let global_mir_plan = optimizer.optimize(index_plan)?;
                         let optimized_plan = global_mir_plan.df_desc().clone();
@@ -2706,7 +2706,7 @@ impl Coordinator {
                             debug_name,
                             optimizer_config.clone(),
                             self.optimizer_metrics(),
-                            is_timeline_epochms,
+                            is_timeline_epoch_ms,
                         );
 
                         // MIR ⇒ MIR optimization (global)
@@ -2755,7 +2755,7 @@ impl Coordinator {
                             id,
                             self.owned_catalog(),
                             debug_name,
-                            is_timeline_epochms,
+                            is_timeline_epoch_ms,
                         )?;
 
                     let catalog = self.catalog_mut();

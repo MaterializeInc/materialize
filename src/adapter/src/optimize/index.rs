@@ -93,7 +93,7 @@ pub struct Index {
     /// Whether the timeline is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
     ///
     /// Used to determine if it is safe to enable dataflow expiration.
-    is_timeline_epochms: bool,
+    is_timeline_epoch_ms: bool,
 }
 
 impl Index {
@@ -101,13 +101,13 @@ impl Index {
         name: QualifiedItemName,
         on: GlobalId,
         keys: Vec<mz_expr::MirScalarExpr>,
-        is_timeline_epochms: bool,
+        is_timeline_epoch_ms: bool,
     ) -> Self {
         Self {
             name,
             on,
             keys,
-            is_timeline_epochms,
+            is_timeline_epoch_ms,
         }
     }
 }
@@ -167,7 +167,7 @@ impl Optimize<Index> for Optimizer {
         };
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 
-        df_desc.dataflow_expiration_desc.is_timeline_epochms = index.is_timeline_epochms;
+        df_desc.dataflow_expiration_desc.is_timeline_epoch_ms = index.is_timeline_epoch_ms;
 
         df_builder.import_into_dataflow(&index.on, &mut df_desc, &self.config.features)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;

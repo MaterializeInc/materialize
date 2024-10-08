@@ -51,7 +51,7 @@ message ProtoDataflowDescription {
     message ProtoDataflowExpirationDesc {
       optional mz_repr.antichain.ProtoU64Antichain transitive_upper = 1;
       bool has_transitive_refresh_schedule = 2;
-      bool is_timeline_epochms = 3;
+      bool is_timeline_epoch_ms = 3;
     }
 
     repeated ProtoSourceImport source_imports = 1;

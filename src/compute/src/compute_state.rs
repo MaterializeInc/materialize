@@ -15,6 +15,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
+use chrono::DateTime;
 use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Hashable;
@@ -302,21 +303,27 @@ impl ComputeState {
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
 
-        let offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.worker_config);
-        if offset.is_zero() {
-            if self.replica_expiration.is_some() {
-                info!("replica expiration disabled");
-                self.replica_expiration = None;
+        if self.replica_expiration.is_none() {
+            let offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.worker_config);
+            if !offset.is_zero() {
+                let now = mz_ore::now::SYSTEM_TIME.clone()();
+                let offset: EpochMillis = offset
+                    .as_millis()
+                    .try_into()
+                    .expect("duration did not fit within u64");
+                let replica_expiration = now + offset;
+                info!(
+                    "setting replica_expiration = {:?} [{}]",
+                    replica_expiration,
+                    DateTime::from_timestamp_millis(
+                        replica_expiration
+                            .try_into()
+                            .expect("replica_expiration did not fit within i64")
+                    )
+                    .expect("could not construct DateTime from replica_expiration"),
+                );
+                self.replica_expiration = Some(Timestamp::from(replica_expiration));
             }
-        } else {
-            let now = mz_ore::now::SYSTEM_TIME.clone()();
-            let offset: EpochMillis = offset
-                .as_millis()
-                .try_into()
-                .expect("Duration did not fit within u64");
-            let replica_expiration = Timestamp::new(now + offset);
-            info!("replica will expire at {:?}", replica_expiration);
-            self.replica_expiration = Some(replica_expiration)
         }
     }
 

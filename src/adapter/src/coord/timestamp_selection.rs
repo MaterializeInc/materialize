@@ -134,7 +134,7 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     }
 
     /// Whether the context contains a timestamp of type [`Timeline::EpochMilliseconds`].
-    pub fn is_timeline_epochms(&self) -> bool {
+    pub fn is_timeline_epoch_ms(&self) -> bool {
         matches!(
             self,
             &Self::TimelineTimestamp {

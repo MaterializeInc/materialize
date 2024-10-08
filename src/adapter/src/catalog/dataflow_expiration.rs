@@ -1,5 +1,13 @@
-use crate::catalog::Catalog;
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+
+//! Helper function for dataflow expiration checks.
+
 use mz_repr::GlobalId;
+
+use crate::catalog::Catalog;
 
 impl Catalog {
     /// Whether the catalog entry `id` or any of its transitive dependencies is a materialized view

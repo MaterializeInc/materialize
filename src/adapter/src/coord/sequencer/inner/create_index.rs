@@ -321,7 +321,7 @@ impl Coordinator {
             self.optimizer_metrics(),
         );
         let span = Span::current();
-        let is_timeline_epochms = self.get_timeline_context(*on).is_timeline_epochms();
+        let is_timeline_epoch_ms = self.get_timeline_context(*on).is_timeline_epoch_ms();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create index",
             move || {
@@ -333,7 +333,7 @@ impl Coordinator {
                     let _dispatch_guard = explain_ctx.dispatch_guard();
 
                     let index_plan =
-                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone(), is_timeline_epochms);
+                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone(), is_timeline_epoch_ms);
 
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(index_plan)?;
