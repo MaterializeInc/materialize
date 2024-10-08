@@ -905,6 +905,18 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    pub fn remove_source_references(&mut self, source_id: GlobalId) -> Result<(), CatalogError> {
+        let deleted = self
+            .source_references
+            .delete_by_key(SourceReferencesKey { source_id }, self.op_id)
+            .is_some();
+        if deleted {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownItem(source_id.to_string()).into())
+        }
+    }
+
     /// Removes the role `name` from the transaction.
     ///
     /// Returns an error if `name` is not found.

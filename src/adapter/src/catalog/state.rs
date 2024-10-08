@@ -30,7 +30,7 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
     Database, DefaultPrivileges, Index, MaterializedView, Role, Schema, Secret, Sink, Source,
-    Table, TableDataSource, Type, View,
+    SourceReferences, Table, TableDataSource, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -123,6 +123,8 @@ pub struct CatalogState {
     pub(super) default_privileges: DefaultPrivileges,
     pub(super) system_privileges: PrivilegeMap,
     pub(super) comments: CommentsMap,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) source_references: BTreeMap<GlobalId, SourceReferences>,
     pub(super) storage_metadata: StorageMetadata,
 
     // Mutable state not derived from the durable catalog.
@@ -197,6 +199,7 @@ impl CatalogState {
             default_privileges: Default::default(),
             system_privileges: Default::default(),
             comments: Default::default(),
+            source_references: Default::default(),
             storage_metadata: Default::default(),
         }
     }
@@ -903,8 +906,6 @@ impl CatalogState {
                     .compaction_window
                     .or(custom_logical_compaction_window),
                 is_retained_metrics_object,
-                // This will be populated separately
-                available_source_references: None,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 // Collect optimizer parameters.

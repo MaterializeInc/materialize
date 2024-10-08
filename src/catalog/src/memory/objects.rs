@@ -722,8 +722,6 @@ pub struct Source {
     /// Whether the source's logical compaction window is controlled by
     /// METRICS_RETENTION
     pub is_retained_metrics_object: bool,
-    /// An optional list of all available source references for this source.
-    pub available_source_references: Option<SourceReferences>,
 }
 
 impl Source {
@@ -738,7 +736,6 @@ impl Source {
         resolved_ids: ResolvedIds,
         custom_logical_compaction_window: Option<CompactionWindow>,
         is_retained_metrics_object: bool,
-        available_source_references: Option<mz_sql::plan::SourceReferences>,
     ) -> Source {
         Source {
             create_sql: Some(plan.source.create_sql),
@@ -796,7 +793,6 @@ impl Source {
                 .compaction_window
                 .or(custom_logical_compaction_window),
             is_retained_metrics_object,
-            available_source_references: available_source_references.map(Into::into),
         }
     }
 
@@ -1818,16 +1814,6 @@ impl CatalogEntry {
                 _ => None,
             },
             _ => None,
-        }
-    }
-
-    /// Update the available references for a source from the durable catalog
-    pub fn update_source_available_references(
-        &mut self,
-        available_source_references: Option<SourceReferences>,
-    ) {
-        if let CatalogItem::Source(source) = &mut self.item {
-            source.available_source_references = available_source_references;
         }
     }
 

@@ -1176,6 +1176,10 @@ impl Catalog {
                         storage_collections_to_drop.insert(item_id);
                     }
 
+                    if state.source_references.contains_key(&item_id) {
+                        tx.remove_source_references(item_id)?;
+                    }
+
                     if Self::should_audit_log_item(entry.item()) {
                         CatalogState::add_to_audit_log(
                             &state.system_configuration,
