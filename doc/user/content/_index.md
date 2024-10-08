@@ -24,7 +24,7 @@ Emulator](/get-started/install-materialize-emulator/).
 
 - [Release Notes/Changelogs](/releases/)
 
-- [Private/Public Previews](/releases/previews/)
+- [Previews features](/releases/previews/)
 
 {{</ callout >}}
 

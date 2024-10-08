@@ -210,7 +210,7 @@ weight = 15
 
 [[menu.main]]
 identifier = "releases-previews"
-name = "Releases and Previews"
+name = "Releases and previews"
 weight = 65
 
 #

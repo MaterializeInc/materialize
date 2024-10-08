@@ -1,5 +1,5 @@
 ---
-title: "Previews"
+title: "Preview features"
 description: ""
 disable_list: true
 menu:
@@ -49,23 +49,6 @@ to physical time.
 
 For more information, see [Real-time
 recency](/get-started/isolation-level/#real-time-recency).
-
-### Support Amazon S3 as a sink
-
-Materialize supports exporting results to Amazon S3.
-
-For more information, see:
-
-- [Serve results: Amazon S3](/serve-results/s3/).
-
-- [Copy to Amazon S3](/sql/copy-to/#copy-to-s3).
-
-### Support Snowflake as a sink
-
-Materialize supports exporting results to Snowflake, using Amazon S3 ([Private
-Preview](#support-amazon-s3-as-a-sink)) as the intermediate object store.
-
-For more information, see [Serve results: Snowflake](/serve-results/snowflake/).
 
 ### Refresh strategies for materialized views
 
@@ -169,6 +152,29 @@ For more information, see:
 
 ## Public preview
 
+### Bulk exports to object storage
+
+Bulk exports allow you to periodically dump results computed in Materialize to
+object storage. This is useful to perform tasks like periodic **backups for
+auditing**, and additional downstream processing in **analytical data
+warehouses** like Snowflake, Databricks or BigQuery.
+
+| Object storage service                      | Supported? |
+| ------------------------------------------- |:----------:|
+| Amazon S3                                   | ✓          |
+| Google Cloud Storage                        | ✓          |
+| Azure Blob Storage                          |            |
+
+For more information on bulk exports to object storage, see the
+[reference documentation](/sql/copy-to/#copy-to-s3) and the warehouse-specific
+integration guides:
+
+| Cloud data warehouse service                | Integration guide                                                                     |
+| ------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Snowflake                                   | [Snowflake via object storage](https://materialize.com/docs/serve-results/snowflake/) |
+| BigQuery                                    | Coming soon!                                                                          |
+| Databricks                                  | Coming soon!                                                                          |
+
 ### Health Dashboard
 
 [Materialize Console](https://console.materialize.com/) introduces an
@@ -198,7 +204,8 @@ Materialize supports the use of an AWS Connection to perform:
 
 - IAM authentication with an Amazon MSK cluster.
 
-- Bulk exports to Amazon S3 [(Private Preview)](#support-amazon-s3-as-a-sink).
+- Bulk exports to Amazon S3. See [Bulk exports to object
+  storage](#bulk-exports-to-object-storage).
 
 For more information, see [`CREATE Connection:
 AWS`](/sql/create-connection/#aws).
