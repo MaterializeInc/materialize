@@ -483,6 +483,19 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("database-issues#8068: casting bpchar or char")
 
+        if (
+            db_operation.pattern == "$ IS NULL"
+            and ExpressionCharacteristics.NULL in all_involved_characteristics
+            and expression.matches(
+                partial(
+                    involves_data_type_category,
+                    data_type_category=DataTypeCategory.RECORD,
+                ),
+                True,
+            )
+        ):
+            return YesIgnore("database-issues#8632: IS NULL on record with NULL value")
+
         return NoIgnore()
 
 
