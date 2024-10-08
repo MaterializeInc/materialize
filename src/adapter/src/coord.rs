@@ -165,7 +165,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::active_compute_sink::ActiveComputeSink;
-use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
+use crate::catalog::{BuiltinTableUpdate, Catalog, Op, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
@@ -184,7 +184,9 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
-use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
+use crate::optimize::dataflows::{
+    dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
+};
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycleEvent};
@@ -2460,48 +2462,53 @@ impl Coordinator {
             }
         };
 
-        let collections: Vec<_> = catalog
-            .entries()
-            .filter_map(|entry| {
-                let id = entry.id();
-                match entry.item() {
-                    CatalogItem::Source(source) => {
-                        Some((id, source_desc(&source.data_source, &source.desc)))
-                    }
-                    CatalogItem::Table(table) => {
-                        let collection_desc = match &table.data_source {
-                            TableDataSource::TableWrites { defaults: _ } => {
-                                CollectionDescription::for_table(table.desc.clone())
-                            }
-                            TableDataSource::DataSource(data_source_desc) => {
-                                source_desc(data_source_desc, &table.desc)
-                            }
-                        };
-                        Some((id, collection_desc))
-                    }
-                    CatalogItem::MaterializedView(mv) => {
-                        let collection_desc = CollectionDescription {
-                            desc: mv.desc.clone(),
-                            data_source: DataSource::Other,
-                            since: mv.initial_as_of.clone(),
-                            status_collection_id: None,
-                        };
-                        Some((id, collection_desc))
-                    }
-                    CatalogItem::ContinualTask(ct) => {
-                        let collection_desc = CollectionDescription {
-                            desc: ct.desc.clone(),
-                            data_source: DataSource::Other,
-                            since: ct.initial_as_of.clone(),
-                            status_collection_id: None,
-                        };
-                        Some((id, collection_desc))
-                    }
-                    _ => None,
-                }
-            })
-            .collect();
+        let mut collections = vec![];
+        let mut new_builtin_continual_tasks = vec![];
 
+        for entry in catalog.entries() {
+            let id = entry.id();
+            match entry.item() {
+                CatalogItem::Source(source) => {
+                    collections.push((id, source_desc(&source.data_source, &source.desc)));
+                }
+                CatalogItem::Table(table) => {
+                    let collection_desc = match &table.data_source {
+                        TableDataSource::TableWrites { defaults: _ } => {
+                            CollectionDescription::for_table(table.desc.clone())
+                        }
+                        TableDataSource::DataSource(data_source_desc) => {
+                            source_desc(data_source_desc, &table.desc)
+                        }
+                    };
+                    collections.push((id, collection_desc));
+                }
+                CatalogItem::MaterializedView(mv) => {
+                    let collection_desc = CollectionDescription {
+                        desc: mv.desc.clone(),
+                        data_source: DataSource::Other,
+                        since: mv.initial_as_of.clone(),
+                        status_collection_id: None,
+                    };
+                    // TODO: assign initial as-of for any new built-in
+                    // materialized views.
+                    collections.push((id, collection_desc));
+                }
+                CatalogItem::ContinualTask(ct) => {
+                    let collection_desc = CollectionDescription {
+                        desc: ct.desc.clone(),
+                        data_source: DataSource::Other,
+                        since: ct.initial_as_of.clone(),
+                        status_collection_id: None,
+                    };
+                    if id.is_system() && collection_desc.since.is_none() {
+                        new_builtin_continual_tasks.push((id, collection_desc));
+                    } else {
+                        collections.push((id, collection_desc));
+                    }
+                }
+                _ => (),
+            }
+        }
         let register_ts = if self.controller.read_only() {
             self.get_local_read_ts().await
         } else {
@@ -2510,18 +2517,77 @@ impl Coordinator {
             self.get_local_write_ts().await.timestamp
         };
 
-        let storage_metadata = self.catalog.state().storage_metadata();
-
         self.controller
             .storage
             .create_collections_for_bootstrap(
-                storage_metadata,
+                self.catalog.state().storage_metadata(),
                 Some(register_ts),
                 collections,
                 migrated_storage_collections,
             )
             .await
             .unwrap_or_terminate("cannot fail to create collections");
+
+        if !new_builtin_continual_tasks.is_empty() {
+            let mut ops = Vec::new();
+            for (id, collection_desc) in &mut new_builtin_continual_tasks {
+                let ct = self
+                    .catalog()
+                    .get_entry(&id)
+                    .continual_task()
+                    .expect("known to be continual task")
+                    .clone();
+                let cluster_id = ct.cluster_id.clone();
+                let (optimized_plan, physical_plan, metainfo) = self
+                    .optimize_create_continual_task(&ct, *id, self.owned_catalog(), "WIP".into())
+                    .expect("WIP");
+
+                // Determine an as of for the new continual task.
+                let mut id_bundle = dataflow_import_id_bundle(&physical_plan, cluster_id.clone());
+                // Can't acquire a read hold on ourselves because we don't exist yet.
+                id_bundle.storage_ids.remove(&id);
+                let read_holds = self.acquire_read_holds(&id_bundle);
+                let as_of = read_holds.least_valid_read();
+
+                collection_desc.since = Some(as_of.clone());
+                ops.push(Op::UpdateBuiltinAsOf { id: *id, as_of });
+
+                let catalog = self.catalog_mut();
+                catalog.set_optimized_plan(*id, optimized_plan);
+                catalog.set_physical_plan(*id, physical_plan);
+                catalog.set_dataflow_metainfo(*id, metainfo);
+            }
+
+            self.catalog_transact_with_side_effects(None, ops, |coord| async {
+                for (id, collection_desc) in &new_builtin_continual_tasks {
+                    let as_of = collection_desc
+                        .since
+                        .as_ref()
+                        .expect("since known to exist")
+                        .clone();
+                    let mut physical_plan = coord
+                        .catalog()
+                        .try_get_physical_plan(&id)
+                        .expect("physical plan must exist")
+                        .clone();
+                    physical_plan.set_as_of(as_of);
+                    coord.catalog_mut().set_physical_plan(*id, physical_plan);
+                }
+
+                coord
+                    .controller
+                    .storage
+                    .create_collections(
+                        coord.catalog.state().storage_metadata(),
+                        Some(register_ts),
+                        new_builtin_continual_tasks,
+                    )
+                    .await
+                    .unwrap_or_terminate("cannot fail to create collections")
+            })
+            .await
+            .unwrap_or_terminate("cannot fail to update builtin continual tasks's as ofs");
+        }
 
         if !self.controller.read_only() {
             self.apply_local_write(register_ts).await;

@@ -666,6 +666,7 @@ impl Catalog {
                         unique_identifier: SystemObjectUniqueIdentifier {
                             id: new_id,
                             fingerprint: fingerprint.clone(),
+                            initial_as_of: None,
                         },
                     },
                 );
@@ -947,7 +948,11 @@ fn add_new_remove_old_builtin_items_migration(
                         object_type: builtin.catalog_item_type(),
                         object_name: builtin.name().to_string(),
                     },
-                    unique_identifier: SystemObjectUniqueIdentifier { id, fingerprint },
+                    unique_identifier: SystemObjectUniqueIdentifier {
+                        id,
+                        fingerprint,
+                        initial_as_of: None,
+                    },
                 });
                 new_builtin_ids.push(id);
 

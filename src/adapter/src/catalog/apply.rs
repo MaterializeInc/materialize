@@ -56,6 +56,7 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
+use timely::progress::Antichain;
 use tracing::{error, info_span, warn, Instrument};
 
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
@@ -742,7 +743,7 @@ impl CatalogState {
                 )];
                 acl_items.extend_from_slice(&ct.access);
 
-                let item = self
+                let mut item = self
                     .parse_item(
                         id,
                         &ct.create_sql(),
@@ -760,9 +761,19 @@ impl CatalogState {
                             ct.name, e
                         )
                     });
-                let CatalogItem::ContinualTask(_) = &item else {
+                let CatalogItem::ContinualTask(inner) = &mut item else {
                     panic!("internal error: builtin continual task {}'s SQL does not begin with \"CREATE CONTINUAL TASK\".", ct.name);
                 };
+
+                assert!(
+                    inner.initial_as_of.is_none(),
+                    "builtin continual task {} unexpectedly has initial as_of set in SQL",
+                    ct.name
+                );
+                inner.initial_as_of = system_object_mapping
+                    .unique_identifier
+                    .initial_as_of
+                    .map(|as_of| Antichain::from_iter(as_of));
 
                 self.insert_item(
                     id,
