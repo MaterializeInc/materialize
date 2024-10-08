@@ -13,6 +13,9 @@ Postgres source tests with interruptions, test that Materialize can recover.
 
 import time
 
+import pg8000
+from pg8000 import Connection
+
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.alpine import Alpine
@@ -248,6 +251,35 @@ def pg_out_of_disk_space(c: Composition) -> None:
     c.exec("postgres", "bash", "-c", f"rm {fill_file}")
 
     c.run_testdrive_files("delete-rows-t2.td", "alter-table.td", "alter-mz.td")
+
+
+def _create_pg_connection(c: Composition) -> Connection:
+    connection = pg8000.connect(
+        host="localhost",
+        user="postgres",
+        password="postgres",
+        port=c.default_port("postgres"),
+    )
+    connection.autocommit = True
+    return connection
+
+
+def _get_all_pg_replication_slots(pg_conn: Connection) -> list[str]:
+    cursor = pg_conn.cursor()
+    cursor.execute("SELECT slot_name FROM pg_replication_slots;")
+
+    slot_names = []
+    for row in cursor.fetchall():
+        slot_names.append(row[0])
+
+    return slot_names
+
+
+def _drop_pg_replication_slots(pg_conn: Connection, slot_names: list[str]) -> None:
+    cursor = pg_conn.cursor()
+    for slot_name in slot_names:
+        print(f"Dropping replication slot {slot_name}")
+        cursor.execute(f"SELECT pg_drop_replication_slot('{slot_name}');")
 
 
 def backup_restore_pg(c: Composition) -> None:
