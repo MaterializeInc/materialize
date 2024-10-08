@@ -76,6 +76,31 @@ Apache License, Version 2.0. */}}
 
     <div class="backdrop"></div>
 
+  <script type="module">
+    // Pretty print all SQL blocks to the width of their parent container, including on window
+    // resize.
+    import init, { pretty_str } from '{{ .Site.BaseURL }}/pretty/web.js';
+    init().then(() => {
+      const sqlBlocks = $('code[data-lang=sql]');
+      // TODO: Calculate this for real. Not clear how to do that correctly.
+      let chWidth = 8;
+      function pretty_sql() {
+        sqlBlocks.each(function () {
+          const text = $(this).text();
+          // We want the width of the parent `pre` because this (a `code`) has a horizontal scroll,
+          // so initial long overflowing text would have an incorrect width. We may also need to
+          // subtract margin/border/padding from this to get the actual usable number of pixels.
+          const width = $(this).parent().width();
+          const chars = Math.floor(width / chWidth);
+          const pretty = pretty_str(text, chars);
+          $(this).text(pretty);
+        });
+      }
+      window.addEventListener("resize", pretty_sql);
+      pretty_sql();
+    });
+  </script>
+
     <script>
       /* Add anchor links to headings */
       anchors.add(
