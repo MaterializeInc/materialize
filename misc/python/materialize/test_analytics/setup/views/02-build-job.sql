@@ -28,7 +28,7 @@ INNER JOIN build_job bj
 WHERE bj.success = TRUE
   AND bj.is_latest_retry = TRUE;
 
-CREATE OR REPLACE VIEW v_build_step_success AS
+CREATE OR REPLACE VIEW v_monthly_build_step_success AS
 SELECT
     EXTRACT(YEAR FROM b.date) AS year,
     EXTRACT(MONTH FROM b.date) AS month,
@@ -109,7 +109,7 @@ SELECT * FROM (
 ;
 
 ALTER VIEW v_successful_build_jobs OWNER TO qa;
-ALTER VIEW v_build_step_success OWNER TO qa;
+ALTER VIEW v_monthly_build_step_success OWNER TO qa;
 ALTER VIEW v_build_step_success_unsharded OWNER TO qa;
 ALTER MATERIALIZED VIEW mv_recent_build_job_success_on_main_v2 OWNER TO qa;
 GRANT SELECT ON TABLE mv_recent_build_job_success_on_main_v2 TO "hetzner-ci";
