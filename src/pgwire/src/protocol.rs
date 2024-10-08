@@ -1311,7 +1311,22 @@ where
         M: Into<BackendMessage>,
     {
         let message: BackendMessage = message.into();
-        self.conn.send(message).await
+        let is_error =
+            matches!(&message, BackendMessage::ErrorResponse(e) if e.severity.is_error());
+
+        self.conn.send(message).await?;
+
+        // Flush immediately after sending an error response, as some clients
+        // expect to be able to read the error response before sending a Sync
+        // message. This is arguably in violation of the protocol specification,
+        // but the specification is somewhat ambiguous, and easier to match
+        // PostgreSQL here than to fix all the clients that have this
+        // expectation.
+        if is_error {
+            self.conn.flush().await?;
+        }
+
+        Ok(())
     }
 
     #[instrument(level = "debug")]
@@ -2223,14 +2238,6 @@ where
         );
         let is_fatal = err.severity.is_fatal();
         self.send(BackendMessage::ErrorResponse(err)).await?;
-
-        // Flush immediately after sending an error response, as some clients
-        // expect to be able to read the error response before sending a Sync
-        // message. This is arguably in violation of the protocol specification,
-        // but the specification is somewhat ambiguous, and easier to match
-        // PostgreSQL here than to fix all the clients that have this
-        // expectation.
-        self.conn.flush().await?;
 
         let txn = self.adapter_client.session().transaction();
         match txn {
