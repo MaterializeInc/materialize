@@ -3635,6 +3635,8 @@ impl<'a> Parser<'a> {
             expecting_statement_delimiter = true;
         }
 
+        let as_of = self.parse_optional_internal_as_of()?;
+
         Ok(Statement::CreateContinualTask(
             CreateContinualTaskStatement {
                 name,
@@ -3642,6 +3644,7 @@ impl<'a> Parser<'a> {
                 in_cluster,
                 input: input_table,
                 stmts,
+                as_of,
             },
         ))
     }

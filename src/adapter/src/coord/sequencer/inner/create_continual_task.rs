@@ -22,7 +22,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::optimize::OverrideFrom;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::{ContinualTaskStmt, RawItemName};
 use mz_sql::names::{FullItemName, PartialItemName, ResolvedIds};
 use mz_sql::plan;
@@ -48,7 +48,7 @@ impl Coordinator {
     pub(crate) async fn sequence_create_continual_task(
         &mut self,
         session: &Session,
-        mut plan: plan::CreateContinualTaskPlan,
+        plan: plan::CreateContinualTaskPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let desc = plan.desc.clone();
@@ -83,15 +83,9 @@ impl Coordinator {
             },
         };
 
-        // Rewrite `create_sql` to reference self with the fully qualified name.
-        // This is normally done when `create_sql` is created at plan time, but
-        // we didn't have the necessary info in name resolution.
-        let full_name = bootstrap_catalog.resolve_full_name(&name, Some(session.conn_id()));
-        plan.continual_task.create_sql =
-            replace_full_name(&plan.continual_task.create_sql, &full_name);
-
         // Construct the CatalogItem for this CT and optimize it.
-        let item = crate::continual_task::ct_item_from_plan(plan, sink_id, resolved_ids)?;
+        let mut item = crate::continual_task::ct_item_from_plan(plan, sink_id, resolved_ids)?;
+        let full_name = bootstrap_catalog.resolve_full_name(&name, Some(session.conn_id()));
         let (optimized_plan, mut physical_plan, metainfo) = self.optimize_create_continual_task(
             &item,
             sink_id,
@@ -112,6 +106,11 @@ impl Coordinator {
         let read_holds = self.acquire_read_holds(&id_bundle);
         let as_of = read_holds.least_valid_read();
         physical_plan.set_as_of(as_of.clone());
+
+        // Rewrite `create_sql` to reference self with the fully qualified name.
+        // This is normally done when `create_sql` is created at plan time, but
+        // we didn't have the necessary info in name resolution.
+        item.create_sql = update_create_sql(&item.create_sql, &full_name, as_of.as_option());
 
         let ops = vec![catalog::Op::CreateItem {
             id: sink_id,
@@ -264,7 +263,11 @@ impl OptimizerCatalog for ContinualTaskCatalogBootstrap {
     }
 }
 
-fn replace_full_name(create_sql: &str, ct_name: &FullItemName) -> String {
+fn update_create_sql(
+    create_sql: &str,
+    ct_name: &FullItemName,
+    as_of: Option<&Timestamp>,
+) -> String {
     let f =
         |x: &mut RawItemName| *x = RawItemName::Name(PartialItemName::from(ct_name.clone()).into());
 
@@ -280,6 +283,9 @@ fn replace_full_name(create_sql: &str, ct_name: &FullItemName) -> String {
                     ContinualTaskStmt::Delete(stmt) => f(&mut stmt.table_name),
                     ContinualTaskStmt::Insert(stmt) => f(&mut stmt.table_name),
                 }
+            }
+            if let Some(as_of) = as_of {
+                stmt.as_of = Some(as_of.into());
             }
         }
         _ => unreachable!("should be CREATE CONTINUAL TASK statement"),
