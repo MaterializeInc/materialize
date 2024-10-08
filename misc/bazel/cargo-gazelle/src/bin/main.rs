@@ -139,7 +139,11 @@ fn main() -> Result<(), anyhow::Error> {
         } else {
             // If everything succeeded then swap all of our files into their final path.
             for (temp_file, dst_path) in updates {
-                temp_file.persist(dst_path).context("swapping in file")?;
+                // Note: Moving this file into place isn't atomic because some
+                // of our CI jobs run across multiple volumes where atomic
+                // moves are not possible.
+                let (_file, temp_path) = temp_file.keep().context("keeping temp file")?;
+                std::fs::copy(temp_path, dst_path).context("copying over temp file")?;
             }
             Ok::<_, anyhow::Error>(())
         }
