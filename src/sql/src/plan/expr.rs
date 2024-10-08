@@ -21,7 +21,7 @@ use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{func, CollectionPlan, Id, LetRecLimit, RowSetFinishing};
 // these happen to be unchanged at the moment, but there might be additions later
-use mz_expr::AggregateFunc::WindowAggregate;
+use mz_expr::AggregateFunc::{FusedWindowAggregate, WindowAggregate};
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
 };
@@ -740,14 +740,25 @@ impl AggregateWindowExpr {
     }
 
     pub fn into_expr(self) -> (Box<HirScalarExpr>, mz_expr::AggregateFunc) {
-        (
-            self.aggregate_expr.expr,
-            WindowAggregate {
-                wrapped_aggregate: Box::new(self.aggregate_expr.func.into_expr()),
-                order_by: self.order_by,
-                window_frame: self.window_frame,
-            },
-        )
+        if let AggregateFunc::FusedWindowAgg { funcs } = &self.aggregate_expr.func {
+            (
+                self.aggregate_expr.expr,
+                FusedWindowAggregate {
+                    wrapped_aggregates: funcs.iter().map(|f| f.clone().into_expr()).collect(),
+                    order_by: self.order_by,
+                    window_frame: self.window_frame,
+                },
+            )
+        } else {
+            (
+                self.aggregate_expr.expr,
+                WindowAggregate {
+                    wrapped_aggregate: Box::new(self.aggregate_expr.func.into_expr()),
+                    order_by: self.order_by,
+                    window_frame: self.window_frame,
+                },
+            )
+        }
     }
 }
 
@@ -1165,6 +1176,14 @@ pub enum AggregateFunc {
     StringAgg {
         order_by: Vec<ColumnOrder>,
     },
+    /// A bundle of fused window aggregations: its input is a record, whose each
+    /// component will be the input to one of the `AggregateFunc`s.
+    ///
+    /// Importantly, this aggregation can only be present inside a `WindowExpr`,
+    /// more specifically an `AggregateWindowExpr`.
+    FusedWindowAgg {
+        funcs: Vec<AggregateFunc>,
+    },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -1240,12 +1259,21 @@ impl AggregateFunc {
                 mz_expr::AggregateFunc::ListConcat { order_by }
             }
             AggregateFunc::StringAgg { order_by } => mz_expr::AggregateFunc::StringAgg { order_by },
+            // `AggregateFunc::FusedWindowAgg` should be specially handled in
+            // `AggregateWindowExpr::into_expr`.
+            AggregateFunc::FusedWindowAgg { funcs: _ } => {
+                panic!("into_expr called on FusedWindowAgg")
+            }
             AggregateFunc::Dummy => mz_expr::AggregateFunc::Dummy,
         }
     }
 
     /// Returns a datum whose inclusion in the aggregation will not change its
     /// result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a `FusedWindowAgg`.
     pub fn identity_datum(&self) -> Datum<'static> {
         match self {
             AggregateFunc::Any => Datum::False,
@@ -1301,6 +1329,18 @@ impl AggregateFunc {
             | AggregateFunc::JsonbObjectAgg { .. }
             | AggregateFunc::MapAgg { .. }
             | AggregateFunc::StringAgg { .. } => Datum::Null,
+            AggregateFunc::FusedWindowAgg { funcs: _ } => {
+                // `identity_datum` is used only in HIR planning, and `FusedWindowAgg` can't occur
+                // in HIR planning, because it is introduced only during HIR transformation.
+                //
+                // The implementation could be something like the following, except that we need to
+                // return a `Datum<'static>`, so we can't actually dynamically compute this.
+                // ```
+                // let temp_storage = RowArena::new();
+                // temp_storage.make_datum(|packer| packer.push_list(funcs.iter().map(|f| f.identity_datum())))
+                // ```
+                panic!("FusedWindowAgg doesn't have an identity_datum")
+            }
         }
     }
 
@@ -1374,6 +1414,17 @@ impl AggregateFunc {
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
             | AggregateFunc::Dummy => input_type.scalar_type,
+            AggregateFunc::FusedWindowAgg { funcs } => {
+                let input_types = input_type.scalar_type.unwrap_record_element_column_type();
+                ScalarType::Record {
+                    fields: funcs
+                        .iter()
+                        .zip_eq(input_types)
+                        .map(|(f, t)| (ColumnName::from(""), f.output_type(t.clone())))
+                        .collect(),
+                    custom_id: None,
+                }
+            }
         };
         // max/min/sum return null on empty sets
         let nullable = !matches!(self, AggregateFunc::Count);

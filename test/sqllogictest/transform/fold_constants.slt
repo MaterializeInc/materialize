@@ -159,8 +159,8 @@ statement ok
 DROP TABLE t2;
 
 ###
-# These tests are mostly the same as in from window_funcs.slt, but here it's WITH VALUES. These are good to have,
-# because constant folding is a different code path from the normal execution.
+# These tests were mostly copied (at some point) from `window_funcs.slt`, but here they have `WITH ... VALUES ...`, i.e.
+# constant inputs. These are good to have because constant folding is a different code path from the normal execution.
 ###
 
 mode cockroach
@@ -4196,3 +4196,24 @@ WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
+
+# Test window aggregations with and without fusion
+query III
+WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
+SELECT
+  sum(f1)   OVER (ORDER BY f2) s,
+  max(f1)   OVER (ORDER BY f2) m,
+  count(f1) OVER (ORDER BY f3) c
+FROM t
+ORDER BY s, m, c;
+----
+8  3  1
+8  3  2
+8  3  3
+8  3  4
+16  4  5
+16  4  6
+22  4  7
+22  4  8
+22  4  9
+29  7  10

@@ -39,7 +39,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::explain::{HumanizedExpr, HumanizerMode};
-use crate::relation::proto_aggregate_func::{self, ProtoColumnOrders, ProtoFusedValueWindowFunc};
+use crate::relation::proto_aggregate_func::{
+    self, ProtoColumnOrders, ProtoFusedValueWindowFunc, ProtoFusedWindowAggregate,
+};
 use crate::relation::proto_table_func::ProtoTabletizedScalar;
 use crate::relation::{
     compare_columns, proto_table_func, ColumnOrder, ProtoAggregateFunc, ProtoTableFunc,
@@ -1275,21 +1277,55 @@ where
     let datums = order_aggregate_datums_with_rank(input_datums, order_by);
 
     // Decode the input (OriginalRow, InputValue) into separate datums, while keeping the OrderByRow
-    let mut input_datums = datums
+    let size_hint = datums.size_hint().0;
+    let mut args: Vec<Datum> = Vec::with_capacity(size_hint);
+    let mut original_rows: Vec<Datum> = Vec::with_capacity(size_hint);
+    let mut order_by_rows = Vec::with_capacity(size_hint);
+    for (d, order_by_row) in datums.into_iter() {
+        let mut iter = d.unwrap_list().iter();
+        let original_row = iter.next().unwrap();
+        let input_value = iter.next().unwrap();
+        order_by_rows.push(order_by_row);
+        original_rows.push(original_row);
+        args.push(input_value);
+    }
+
+    let results = window_aggr_inner::<A>(
+        args,
+        &order_by_rows,
+        wrapped_aggregate,
+        order_by,
+        window_frame,
+        callers_temp_storage,
+    );
+
+    callers_temp_storage.reserve(results.len());
+    results
         .into_iter()
-        .map(|(d, order_by_row)| {
-            let mut iter = d.unwrap_list().iter();
-            let original_row = iter.next().unwrap();
-            let input_value = iter.next().unwrap();
-
-            (input_value, original_row, order_by_row)
+        .zip_eq(original_rows)
+        .map(|(result_value, original_row)| {
+            callers_temp_storage.make_datum(|packer| {
+                packer.push_list_with(|packer| {
+                    packer.push(result_value);
+                    packer.push(original_row);
+                });
+            })
         })
-        .collect_vec();
+}
 
-    let length = input_datums.len();
-    let mut result: Vec<(Datum, Datum)> = Vec::with_capacity(length);
-
-    callers_temp_storage.reserve(length);
+fn window_aggr_inner<'a, A>(
+    mut args: Vec<Datum<'a>>,
+    order_by_rows: &Vec<Row>,
+    wrapped_aggregate: &AggregateFunc,
+    order_by: &[ColumnOrder],
+    window_frame: &WindowFrame,
+    temp_storage: &'a RowArena,
+) -> Vec<Datum<'a>>
+where
+    A: OneByOneAggr,
+{
+    let length = args.len();
+    let mut result: Vec<Datum> = Vec::with_capacity(length);
 
     // In this degenerate case, all results would be `wrapped_aggregate.default()` (usually null).
     // However, this currently can't happen, because
@@ -1318,85 +1354,76 @@ where
         //    (The current peer group will be the whole partition if there is no ORDER BY.)
         // We simply need to compute the aggregate once, on the entire partition, and each input
         // row will get this one aggregate value as result.
-        let input_values = input_datums
-            .iter()
-            .map(|(input_value, _original_row, _order_by_row)| input_value.clone())
-            .collect_vec(); // I'm open to suggestions on how to remove this `collect_vec()`...
-        let result_value = wrapped_aggregate.eval(input_values, callers_temp_storage);
+        let result_value = wrapped_aggregate.eval(args, temp_storage);
         // Every row will get the above aggregate as result.
-        for (_current_datum, original_row, _order_by_row) in input_datums.iter() {
-            result.push((result_value, *original_row));
+        for _ in 0..length {
+            result.push(result_value);
         }
     } else {
-        fn rows_between_unbounded_preceding_and_current_row<'a, 'b, A>(
-            input_datums: Vec<(Datum<'a>, Datum<'b>, Row)>,
-            result: &mut Vec<(Datum<'a>, Datum<'b>)>,
+        fn rows_between_unbounded_preceding_and_current_row<'a, A>(
+            args: Vec<Datum<'a>>,
+            result: &mut Vec<Datum<'a>>,
             mut one_by_one_aggr: A,
             temp_storage: &'a RowArena,
         ) where
             A: OneByOneAggr,
         {
-            for (current_datum, original_row, _order_by_row) in input_datums.into_iter() {
-                one_by_one_aggr.give(&current_datum);
+            for current_arg in args.into_iter() {
+                one_by_one_aggr.give(&current_arg);
                 let result_value = one_by_one_aggr.get_current_aggregate(temp_storage);
-                result.push((result_value, original_row));
+                result.push(result_value);
             }
         }
 
-        fn groups_between_unbounded_preceding_and_current_row<'a, 'b, A>(
-            input_datums: Vec<(Datum<'a>, Datum<'b>, Row)>,
-            result: &mut Vec<(Datum<'a>, Datum<'b>)>,
+        fn groups_between_unbounded_preceding_and_current_row<'a, A>(
+            args: Vec<Datum<'a>>,
+            order_by_rows: &Vec<Row>,
+            result: &mut Vec<Datum<'a>>,
             mut one_by_one_aggr: A,
             temp_storage: &'a RowArena,
         ) where
             A: OneByOneAggr,
         {
             let mut peer_group_start = 0;
-            while peer_group_start < input_datums.len() {
+            while peer_group_start < args.len() {
                 // Find the boundaries of the current peer group.
                 // peer_group_start will point to the first element of the peer group,
                 // peer_group_end will point to _just after_ the last element of the peer group.
                 let mut peer_group_end = peer_group_start + 1;
-                while peer_group_end < input_datums.len()
-                    && input_datums[peer_group_start].2 == input_datums[peer_group_end].2
+                while peer_group_end < args.len()
+                    && order_by_rows[peer_group_start] == order_by_rows[peer_group_end]
                 {
                     // The peer group goes on while the OrderByRows not differ.
                     peer_group_end += 1;
                 }
                 // Let's compute the aggregate (which will be the same for all records in this
                 // peer group).
-                for (current_datum, _original_row, _order_by_row) in
-                    input_datums[peer_group_start..peer_group_end].iter()
-                {
-                    one_by_one_aggr.give(current_datum);
+                for current_arg in args[peer_group_start..peer_group_end].iter() {
+                    one_by_one_aggr.give(current_arg);
                 }
                 let agg_for_peer_group = one_by_one_aggr.get_current_aggregate(temp_storage);
                 // Put the above aggregate into each record in the peer group.
-                for (_current_datum, original_row, _order_by_row) in
-                    input_datums[peer_group_start..peer_group_end].iter()
-                {
-                    result.push((agg_for_peer_group, *original_row));
+                for _ in args[peer_group_start..peer_group_end].iter() {
+                    result.push(agg_for_peer_group);
                 }
                 // Point to the start of the next peer group.
                 peer_group_start = peer_group_end;
             }
         }
 
-        fn rows_between_offset_and_offset<'a, 'b>(
-            input_datums: Vec<(Datum<'a>, Datum<'b>, Row)>,
-            result: &mut Vec<(Datum<'a>, Datum<'b>)>,
+        fn rows_between_offset_and_offset<'a>(
+            args: Vec<Datum<'a>>,
+            result: &mut Vec<Datum<'a>>,
             wrapped_aggregate: &AggregateFunc,
             temp_storage: &'a RowArena,
             offset_start: i64,
             offset_end: i64,
         ) {
-            let len = input_datums
+            let len = args
                 .len()
                 .to_i64()
                 .expect("window partition's len should fit into i64");
-            for (i, (_current_datum, original_row, _order_by_row)) in
-                input_datums.iter().enumerate()
-            {
+            for i in 0..len {
                 let i = i.to_i64().expect("window partition shouldn't be super big");
                 // Trim the start of the frame to make it not reach over the start of the window
                 // partition.
@@ -1411,29 +1438,27 @@ where
                         if frame_start <= frame_end {
                             // Compute the aggregate on the frame.
                             // TODO:
-                            // This implementation is quite slow: we do an inner loop over the
-                            // entire frame, and compute the aggregate from scratch. We could do
-                            // better:
+                            // This implementation is quite slow if the frame is large: we do an
+                            // inner loop over the entire frame, and compute the aggregate from
+                            // scratch. We could do better:
                             //  - For invertible aggregations we could do a rolling aggregation.
                             //  - There are various tricks for min/max as well, making use of either
                             //    the fixed size of the window, or that we are not retracting
                             //    arbitrary elements but doing queue operations. E.g., see
                             //    http://codercareer.blogspot.com/2012/02/no-33-maximums-in-sliding-windows.html
-                            let frame_values = input_datums[frame_start..=frame_end].iter().map(
-                                |(input_value, _original_row, _order_by_row)| input_value.clone(),
-                            );
+                            let frame_values = args[frame_start..=frame_end].iter().cloned();
                             let result_value = wrapped_aggregate.eval(frame_values, temp_storage);
-                            result.push((result_value, original_row.clone()));
+                            result.push(result_value);
                         } else {
                             // frame_start > frame_end, so this is an empty frame.
                             let result_value = wrapped_aggregate.default();
-                            result.push((result_value, original_row.clone()));
+                            result.push(result_value);
                         }
                     }
                     None => {
                         // frame_end would be negative, so this is an empty frame.
                         let result_value = wrapped_aggregate.default();
-                        result.push((result_value, original_row.clone()));
+                        result.push(result_value);
                     }
                 }
             }
@@ -1450,20 +1475,20 @@ where
             // of user queries, so let's make this simple and fast.
             (Rows, UnboundedPreceding, CurrentRow) => {
                 rows_between_unbounded_preceding_and_current_row::<A>(
-                    input_datums,
+                    args,
                     &mut result,
                     A::new(wrapped_aggregate, false),
-                    callers_temp_storage,
+                    temp_storage,
                 );
             }
             (Rows, CurrentRow, UnboundedFollowing) => {
                 // Same as above, but reverse.
-                input_datums.reverse();
+                args.reverse();
                 rows_between_unbounded_preceding_and_current_row::<A>(
-                    input_datums,
+                    args,
                     &mut result,
                     A::new(wrapped_aggregate, true),
-                    callers_temp_storage,
+                    temp_storage,
                 );
                 result.reverse();
             }
@@ -1471,10 +1496,11 @@ where
                 // Note that for the default frame, the RANGE frame mode is identical to the GROUPS
                 // frame mode.
                 groups_between_unbounded_preceding_and_current_row::<A>(
-                    input_datums,
+                    args,
+                    order_by_rows,
                     &mut result,
                     A::new(wrapped_aggregate, false),
-                    callers_temp_storage,
+                    temp_storage,
                 );
             }
             // The next several cases all call `rows_between_offset_and_offset`. Note that the
@@ -1488,10 +1514,10 @@ where
                     "window frame end OFFSET shouldn't be super big (the planning ensured this)",
                 );
                 rows_between_offset_and_offset(
-                    input_datums,
+                    args,
                     &mut result,
                     wrapped_aggregate,
-                    callers_temp_storage,
+                    temp_storage,
                     -start_prec,
                     -end_prec,
                 );
@@ -1504,10 +1530,10 @@ where
                     "window frame end OFFSET shouldn't be super big (the planning ensured this)",
                 );
                 rows_between_offset_and_offset(
-                    input_datums,
+                    args,
                     &mut result,
                     wrapped_aggregate,
-                    callers_temp_storage,
+                    temp_storage,
                     -start_prec,
                     end_fol,
                 );
@@ -1520,10 +1546,10 @@ where
                     "window frame end OFFSET shouldn't be super big (the planning ensured this)",
                 );
                 rows_between_offset_and_offset(
-                    input_datums,
+                    args,
                     &mut result,
                     wrapped_aggregate,
-                    callers_temp_storage,
+                    temp_storage,
                     start_fol,
                     end_fol,
                 );
@@ -1537,10 +1563,10 @@ where
                 );
                 let end_fol = 0;
                 rows_between_offset_and_offset(
-                    input_datums,
+                    args,
                     &mut result,
                     wrapped_aggregate,
-                    callers_temp_storage,
+                    temp_storage,
                     -start_prec,
                     end_fol,
                 );
@@ -1551,10 +1577,10 @@ where
                     "window frame end OFFSET shouldn't be super big (the planning ensured this)",
                 );
                 rows_between_offset_and_offset(
-                    input_datums,
+                    args,
                     &mut result,
                     wrapped_aggregate,
-                    callers_temp_storage,
+                    temp_storage,
                     start_fol,
                     end_fol,
                 );
@@ -1565,10 +1591,10 @@ where
                 let start_fol = 0;
                 let end_fol = 0;
                 rows_between_offset_and_offset(
-                    input_datums,
+                    args,
                     &mut result,
                     wrapped_aggregate,
-                    callers_temp_storage,
+                    temp_storage,
                     start_fol,
                     end_fol,
                 );
@@ -1610,14 +1636,98 @@ where
         }
     }
 
-    result.into_iter().map(|(result_value, original_row)| {
-        callers_temp_storage.make_datum(|packer| {
-            packer.push_list_with(|packer| {
-                packer.push(result_value);
-                packer.push(original_row);
-            });
-        })
+    result
+}
+
+/// Computes a bundle of fused window aggregations.
+/// The input is similar to `window_aggr`, but `InputValue` is not just a single value, but a record
+/// where each component is the input to one of the aggregations.
+fn fused_window_aggr<'a, I, A>(
+    input_datums: I,
+    callers_temp_storage: &'a RowArena,
+    wrapped_aggregates: &Vec<AggregateFunc>,
+    order_by: &Vec<ColumnOrder>,
+    window_frame: &WindowFrame,
+) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+    A: OneByOneAggr,
+{
+    let temp_storage = RowArena::new();
+    let iter = fused_window_aggr_no_list::<_, A>(
+        input_datums,
+        &temp_storage,
+        wrapped_aggregates,
+        order_by,
+        window_frame,
+    );
+    callers_temp_storage.make_datum(|packer| {
+        packer.push_list(iter);
     })
+}
+
+/// Like `fused_window_aggr`, but doesn't perform the final wrapping in a list, returning an
+/// Iterator instead.
+fn fused_window_aggr_no_list<'a: 'b, 'b, I, A>(
+    input_datums: I,
+    callers_temp_storage: &'b RowArena,
+    wrapped_aggregates: &Vec<AggregateFunc>,
+    order_by: &Vec<ColumnOrder>,
+    window_frame: &WindowFrame,
+) -> impl Iterator<Item = Datum<'b>>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+    A: OneByOneAggr,
+{
+    // Sort the datums according to the ORDER BY expressions and return the ((OriginalRow, InputValue), OrderByRow) record
+    // The OrderByRow is kept around because it is required to compute the peer groups in RANGE mode
+    let datums = order_aggregate_datums_with_rank(input_datums, order_by);
+
+    let size_hint = datums.size_hint().0;
+    let mut argss = vec![Vec::with_capacity(size_hint); wrapped_aggregates.len()];
+    let mut original_rows = Vec::with_capacity(size_hint);
+    let mut order_by_rows = Vec::with_capacity(size_hint);
+    for (d, order_by_row) in datums {
+        let mut iter = d.unwrap_list().iter();
+        let original_row = iter.next().unwrap();
+        original_rows.push(original_row);
+        let mut args_iter = iter.next().unwrap().unwrap_list().iter();
+        for i in 0..wrapped_aggregates.len() {
+            let arg = args_iter.next().unwrap();
+            argss[i].push(arg);
+        }
+        order_by_rows.push(order_by_row);
+    }
+
+    let mut results_per_row =
+        vec![Vec::with_capacity(wrapped_aggregates.len()); original_rows.len()];
+    for (wrapped_aggr, args) in wrapped_aggregates.iter().zip_eq(argss) {
+        let results = window_aggr_inner::<A>(
+            args,
+            &order_by_rows,
+            wrapped_aggr,
+            order_by,
+            window_frame,
+            callers_temp_storage,
+        );
+        for (i, r) in results.into_iter().enumerate() {
+            results_per_row[i].push(r);
+        }
+    }
+
+    callers_temp_storage.reserve(2 * original_rows.len());
+    results_per_row
+        .into_iter()
+        .enumerate()
+        .map(move |(i, results)| {
+            callers_temp_storage.make_datum(|packer| {
+                packer.push_list_with(|packer| {
+                    packer
+                        .push(callers_temp_storage.make_datum(|packer| packer.push_list(results)));
+                    packer.push(original_rows[i]);
+                });
+            })
+        })
 }
 
 /// An implementation of an aggregation where we can send in the input elements one-by-one, and
@@ -1795,17 +1905,22 @@ pub enum AggregateFunc {
         order_by: Vec<ColumnOrder>,
         window_frame: WindowFrame,
     },
-    WindowAggregate {
-        wrapped_aggregate: Box<AggregateFunc>,
-        order_by: Vec<ColumnOrder>,
-        window_frame: WindowFrame,
-    },
     /// Several value window functions fused into one function, to amortize overheads.
     FusedValueWindowFunc {
         funcs: Vec<AggregateFunc>,
         /// Currently, all the fused functions must have the same `order_by`. (We can later
         /// eliminate this limitation.)
         order_by: Vec<ColumnOrder>,
+    },
+    WindowAggregate {
+        wrapped_aggregate: Box<AggregateFunc>,
+        order_by: Vec<ColumnOrder>,
+        window_frame: WindowFrame,
+    },
+    FusedWindowAggregate {
+        wrapped_aggregates: Vec<AggregateFunc>,
+        order_by: Vec<ColumnOrder>,
+        window_frame: WindowFrame,
     },
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
@@ -2064,6 +2179,15 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                         order_by: Some(order_by.into_proto()),
                     })
                 }
+                AggregateFunc::FusedWindowAggregate {
+                    wrapped_aggregates,
+                    order_by,
+                    window_frame,
+                } => Kind::FusedWindowAggregate(ProtoFusedWindowAggregate {
+                    wrapped_aggregates: wrapped_aggregates.into_proto(),
+                    order_by: Some(order_by.into_proto()),
+                    window_frame: Some(window_frame.into_proto()),
+                }),
                 AggregateFunc::Dummy => Kind::Dummy(()),
             }),
         }
@@ -2201,6 +2325,15 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                     .order_by
                     .into_rust_if_some("ProtoFusedValueWindowFunc::order_by")?,
             },
+            Kind::FusedWindowAggregate(fwa) => AggregateFunc::FusedWindowAggregate {
+                wrapped_aggregates: fwa.wrapped_aggregates.into_rust()?,
+                order_by: fwa
+                    .order_by
+                    .into_rust_if_some("ProtoFusedWindowAggregate::order_by")?,
+                window_frame: fwa
+                    .window_frame
+                    .into_rust_if_some("ProtoFusedWindowAggregate::window_frame")?,
+            },
             Kind::Dummy(()) => AggregateFunc::Dummy,
         })
     }
@@ -2307,6 +2440,17 @@ impl AggregateFunc {
             AggregateFunc::FusedValueWindowFunc { funcs, order_by } => {
                 fused_value_window_func(datums, temp_storage, funcs, order_by)
             }
+            AggregateFunc::FusedWindowAggregate {
+                wrapped_aggregates,
+                order_by,
+                window_frame,
+            } => fused_window_aggr::<_, NaiveOneByOneAggr>(
+                datums,
+                temp_storage,
+                wrapped_aggregates,
+                order_by,
+                window_frame,
+            ),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -2332,6 +2476,17 @@ impl AggregateFunc {
                 datums,
                 temp_storage,
                 wrapped_aggregate,
+                order_by,
+                window_frame,
+            ),
+            AggregateFunc::FusedWindowAggregate {
+                wrapped_aggregates,
+                order_by,
+                window_frame,
+            } => fused_window_aggr::<_, W>(
+                datums,
+                temp_storage,
+                wrapped_aggregates,
                 order_by,
                 window_frame,
             ),
@@ -2389,6 +2544,18 @@ impl AggregateFunc {
                 window_frame,
             )
             .collect_vec(),
+            AggregateFunc::FusedWindowAggregate {
+                wrapped_aggregates,
+                order_by,
+                window_frame,
+            } => fused_window_aggr_no_list::<_, W>(
+                datums,
+                temp_storage,
+                wrapped_aggregates,
+                order_by,
+                window_frame,
+            )
+            .collect_vec(),
             _ => unreachable!("asserted above that `can_fuse_with_unnest_list`"),
         }
         .into_iter()
@@ -2415,14 +2582,15 @@ impl AggregateFunc {
             AggregateFunc::Dummy => Datum::Dummy,
             AggregateFunc::ArrayConcat { .. } => Datum::empty_array(),
             AggregateFunc::ListConcat { .. } => Datum::empty_list(),
-            AggregateFunc::RowNumber { .. } => Datum::empty_list(),
-            AggregateFunc::Rank { .. } => Datum::empty_list(),
-            AggregateFunc::DenseRank { .. } => Datum::empty_list(),
-            AggregateFunc::LagLead { .. } => Datum::empty_list(),
-            AggregateFunc::FirstValue { .. } => Datum::empty_list(),
-            AggregateFunc::LastValue { .. } => Datum::empty_list(),
-            AggregateFunc::WindowAggregate { .. } => Datum::empty_list(),
-            AggregateFunc::FusedValueWindowFunc { .. } => Datum::empty_list(),
+            AggregateFunc::RowNumber { .. }
+            | AggregateFunc::Rank { .. }
+            | AggregateFunc::DenseRank { .. }
+            | AggregateFunc::LagLead { .. }
+            | AggregateFunc::FirstValue { .. }
+            | AggregateFunc::LastValue { .. }
+            | AggregateFunc::WindowAggregate { .. }
+            | AggregateFunc::FusedValueWindowFunc { .. }
+            | AggregateFunc::FusedWindowAggregate { .. } => Datum::empty_list(),
             AggregateFunc::MaxNumeric
             | AggregateFunc::MaxInt16
             | AggregateFunc::MaxInt32
@@ -2483,7 +2651,8 @@ impl AggregateFunc {
             | AggregateFunc::FirstValue { .. }
             | AggregateFunc::LastValue { .. }
             | AggregateFunc::WindowAggregate { .. }
-            | AggregateFunc::FusedValueWindowFunc { .. } => true,
+            | AggregateFunc::FusedValueWindowFunc { .. }
+            | AggregateFunc::FusedWindowAggregate { .. } => true,
             AggregateFunc::ArrayConcat { .. }
             | AggregateFunc::ListConcat { .. }
             | AggregateFunc::Any
@@ -2662,6 +2831,38 @@ impl AggregateFunc {
                     element_type: Box::new(ScalarType::Record {
                         fields: [
                             (ColumnName::from("?window_agg?"), wrapped_aggr_out_type),
+                            (ColumnName::from("?orig_row?"), original_row_type),
+                        ].into(),
+                        custom_id: None,
+                    }),
+                    custom_id: None,
+                }
+            }
+            AggregateFunc::FusedWindowAggregate {
+                wrapped_aggregates, ..
+            } => {
+                // The input type for a fused window aggregate is ((OriginalRow, Args), OrderByExprs...)
+                // where `Args` is a record.
+                let fields = input_type.scalar_type.unwrap_record_element_type();
+                let original_row_type = fields[0].unwrap_record_element_type()[0]
+                    .clone()
+                    .nullable(false);
+                let args_type = fields[0].unwrap_record_element_type()[1];
+                let arg_types = args_type.unwrap_record_element_type();
+                let out_fields = arg_types.iter().zip(wrapped_aggregates).map(|(arg_type, wrapped_agg)| {
+                    (
+                        ColumnName::from(wrapped_agg.name()),
+                        wrapped_agg.output_type((**arg_type).clone().nullable(true)),
+                    )
+                }).collect_vec();
+
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
+                        fields: [
+                            (ColumnName::from("?fused_window_agg?"), ScalarType::Record {
+                                fields: out_fields.into(),
+                                custom_id: None,
+                            }.nullable(false)),
                             (ColumnName::from("?orig_row?"), original_row_type),
                         ].into(),
                         custom_id: None,
@@ -3135,6 +3336,7 @@ impl AggregateFunc {
             Self::LastValue { .. } => "last_value",
             Self::WindowAggregate { .. } => "window_agg",
             Self::FusedValueWindowFunc { .. } => "fused_value_window_func",
+            Self::FusedWindowAggregate { .. } => "fused_window_agg",
             Self::Dummy => "dummy",
         }
     }

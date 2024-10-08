@@ -21,10 +21,10 @@ use mz_ore::stack::RecursionLimitError;
 use mz_repr::{ColumnName, ColumnType, RelationType, ScalarType};
 
 use crate::plan::expr::{
-    AbstractExpr, AggregateFunc, ColumnRef, HirRelationExpr, HirScalarExpr, ValueWindowExpr,
-    ValueWindowFunc, WindowExpr,
+    AbstractExpr, AggregateFunc, AggregateWindowExpr, ColumnRef, HirRelationExpr, HirScalarExpr,
+    ValueWindowExpr, ValueWindowFunc, WindowExpr,
 };
-use crate::plan::WindowExprType;
+use crate::plan::{AggregateExpr, WindowExprType};
 
 /// Rewrites predicates that contain subqueries so that the subqueries
 /// appear in their own later predicate when possible.
@@ -296,17 +296,14 @@ fn column_type(
 /// that each group can be performed by one instance of the window function MIR
 /// pattern.
 ///
-/// For now, we fuse only value window function calls (`WindowExprType::Value`).
-/// TODO: We should consider fusing the other types later:
-/// - `WindowExprType::Aggregate`: Would be great to also fuse these soon, see e.g.
-///   <https://github.com/MaterializeInc/database-issues/issues/6247#issuecomment-2231723718>
-/// - `WindowExprType::Scalar`: probably won't need to fuse these for a long time.)
+/// For now, we fuse only value window function calls and window aggregations.
+/// (We probably won't need to fuse scalar window functions for a long time.)
 ///
-/// For now, we can fuse value window function calls where the
+/// For now, we can fuse value window function calls and window aggregations where the
 /// A. partition by
 /// B. order by
 /// C. window frame
-/// D. ignore nulls
+/// D. ignore nulls for value window functions and distinct for window aggregations
 /// are all the same. (See `extract_options`.)
 /// (Later, we could improve this to only need A. to be the same. This would require
 /// much more code changes, because then we'd have to blow up `ValueWindowExpr`.
@@ -314,6 +311,7 @@ fn column_type(
 /// don't matter. For example, we should be able to fuse a `lag` that has a default
 /// frame with a `first_value` that has some custom frame, because `lag` is not
 /// affected by the frame.)
+/// Note that we fuse value window function calls and window aggregations separately.
 ///
 /// # Implementation
 ///
@@ -327,7 +325,7 @@ fn column_type(
 ///   removing and inserting expressions.
 /// - insert a Project above the matched Map to permute columns back to their original places.
 ///
-/// It would be tempting to find groups simply by taking a list of all value window function calls
+/// It would be tempting to find groups simply by taking a list of all window function calls
 /// and calling `group_by` with a key function that extracts the above A. B. C. D. properties,
 /// but a complication is that the possible groups that we could theoretically fuse overlap.
 /// This is because when forming groups we need to also take into account column references
@@ -357,7 +355,9 @@ pub fn fuse_window_functions(
     root: &mut HirRelationExpr,
     context: &crate::plan::lowering::Context,
 ) -> Result<(), RecursionLimitError> {
-    if !context.config.enable_value_window_function_fusion {
+    if !(context.config.enable_value_window_function_fusion
+        || context.config.enable_window_aggregation_fusion)
+    {
         return Ok(());
     }
 
@@ -383,6 +383,11 @@ pub fn fuse_window_functions(
 
     /// Those options of a window function call that are relevant for fusion.
     #[derive(PartialEq, Eq)]
+    enum WindowFuncCallOptions {
+        Value(ValueWindowFuncCallOptions),
+        Agg(AggregateWindowFuncCallOptions),
+    }
+    #[derive(PartialEq, Eq)]
     struct ValueWindowFuncCallOptions {
         partition_by: Vec<HirScalarExpr>,
         outer_order_by: Vec<HirScalarExpr>,
@@ -390,9 +395,17 @@ pub fn fuse_window_functions(
         window_frame: WindowFrame,
         ignore_nulls: bool,
     }
+    #[derive(PartialEq, Eq)]
+    struct AggregateWindowFuncCallOptions {
+        partition_by: Vec<HirScalarExpr>,
+        outer_order_by: Vec<HirScalarExpr>,
+        inner_order_by: Vec<ColumnOrder>,
+        window_frame: WindowFrame,
+        distinct: bool,
+    }
 
     /// Helper function to extract the above options.
-    fn extract_options(call: &HirScalarExpr) -> ValueWindowFuncCallOptions {
+    fn extract_options(call: &HirScalarExpr) -> WindowFuncCallOptions {
         match call {
             HirScalarExpr::Windowing(WindowExpr {
                 func:
@@ -405,14 +418,34 @@ pub fn fuse_window_functions(
                     }),
                 partition_by,
                 order_by: outer_order_by,
-            }) => ValueWindowFuncCallOptions {
+            }) => WindowFuncCallOptions::Value(ValueWindowFuncCallOptions {
                 partition_by: partition_by.clone(),
                 outer_order_by: outer_order_by.clone(),
                 inner_order_by: inner_order_by.clone(),
                 window_frame: window_frame.clone(),
                 ignore_nulls: ignore_nulls.clone(),
-            },
-            _ => panic!("extract_options should only be called on value window functions"),
+            }),
+            HirScalarExpr::Windowing(WindowExpr {
+                func:
+                    WindowExprType::Aggregate(AggregateWindowExpr {
+                        aggregate_expr: AggregateExpr {
+                            distinct,
+                            func: _,
+                            expr: _,
+                        },
+                        order_by: inner_order_by,
+                        window_frame,
+                    }),
+                partition_by,
+                order_by: outer_order_by,
+            }) => WindowFuncCallOptions::Agg(AggregateWindowFuncCallOptions {
+                partition_by: partition_by.clone(),
+                outer_order_by: outer_order_by.clone(),
+                inner_order_by: inner_order_by.clone(),
+                window_frame: window_frame.clone(),
+                distinct: distinct.clone(),
+            }),
+            _ => panic!("extract_options should only be called on value window functions or window aggregations"),
         }
     }
 
@@ -422,7 +455,7 @@ pub fn fuse_window_functions(
         first_col: usize,
         /// The options of all the window function calls in the group. (Must be the same for all the
         /// calls.)
-        options: ValueWindowFuncCallOptions,
+        options: WindowFuncCallOptions,
         /// The calls in the group, with their original column indexes.
         calls: Vec<(usize, HirScalarExpr)>,
     }
@@ -431,51 +464,104 @@ pub fn fuse_window_functions(
         /// Creates a window function call that is a fused version of all the calls in the group.
         /// `new_col` is the column index where the fused call will be inserted at.
         fn fuse(self, new_col: usize) -> (HirScalarExpr, Vec<HirScalarExpr>) {
-            let (fused_funcs, fused_args): (Vec<_>, Vec<_>) = self
-                .calls
-                .iter()
-                .map(|(_idx, call)| {
-                    if let HirScalarExpr::Windowing(WindowExpr {
-                        func:
-                            WindowExprType::Value(ValueWindowExpr {
-                                func,
-                                args,
+            let fused = match self.options {
+                WindowFuncCallOptions::Value(options) => {
+                    let (fused_funcs, fused_args): (Vec<_>, Vec<_>) = self
+                        .calls
+                        .iter()
+                        .map(|(_idx, call)| {
+                            if let HirScalarExpr::Windowing(WindowExpr {
+                                func:
+                                    WindowExprType::Value(ValueWindowExpr {
+                                        func,
+                                        args,
+                                        order_by: _,
+                                        window_frame: _,
+                                        ignore_nulls: _,
+                                    }),
+                                partition_by: _,
                                 order_by: _,
-                                window_frame: _,
-                                ignore_nulls: _,
-                            }),
-                        partition_by: _,
-                        order_by: _,
-                    }) = call
-                    {
-                        (func.clone(), (**args).clone())
-                    } else {
-                        panic!("unknown window function in FusionGroup")
-                    }
-                })
-                .unzip();
-            let fused_args = HirScalarExpr::CallVariadic {
-                func: VariadicFunc::RecordCreate {
-                    // These field names are not important, because this record will only be an
-                    // intermediate expression, which we'll manipulate further before it ends up
-                    // anywhere where a column name would be visible.
-                    field_names: iter::repeat(ColumnName::from(""))
-                        .take(fused_args.len())
-                        .collect(),
-                },
-                exprs: fused_args,
+                            }) = call
+                            {
+                                (func.clone(), (**args).clone())
+                            } else {
+                                panic!("unknown window function in FusionGroup")
+                            }
+                        })
+                        .unzip();
+                    let fused_args = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            // These field names are not important, because this record will only be an
+                            // intermediate expression, which we'll manipulate further before it ends up
+                            // anywhere where a column name would be visible.
+                            field_names: iter::repeat(ColumnName::from(""))
+                                .take(fused_args.len())
+                                .collect(),
+                        },
+                        exprs: fused_args,
+                    };
+                    HirScalarExpr::Windowing(WindowExpr {
+                        func: WindowExprType::Value(ValueWindowExpr {
+                            func: ValueWindowFunc::Fused(fused_funcs),
+                            args: Box::new(fused_args),
+                            order_by: options.inner_order_by,
+                            window_frame: options.window_frame,
+                            ignore_nulls: options.ignore_nulls,
+                        }),
+                        partition_by: options.partition_by,
+                        order_by: options.outer_order_by,
+                    })
+                }
+                WindowFuncCallOptions::Agg(options) => {
+                    let (fused_funcs, fused_args): (Vec<_>, Vec<_>) = self
+                        .calls
+                        .iter()
+                        .map(|(_idx, call)| {
+                            if let HirScalarExpr::Windowing(WindowExpr {
+                                func:
+                                    WindowExprType::Aggregate(AggregateWindowExpr {
+                                        aggregate_expr:
+                                            AggregateExpr {
+                                                func,
+                                                expr,
+                                                distinct: _,
+                                            },
+                                        order_by: _,
+                                        window_frame: _,
+                                    }),
+                                partition_by: _,
+                                order_by: _,
+                            }) = call
+                            {
+                                (func.clone(), (**expr).clone())
+                            } else {
+                                panic!("unknown window function in FusionGroup")
+                            }
+                        })
+                        .unzip();
+                    let fused_args = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: iter::repeat(ColumnName::from(""))
+                                .take(fused_args.len())
+                                .collect(),
+                        },
+                        exprs: fused_args,
+                    };
+                    HirScalarExpr::Windowing(WindowExpr {
+                        func: WindowExprType::Aggregate(AggregateWindowExpr {
+                            aggregate_expr: AggregateExpr {
+                                func: AggregateFunc::FusedWindowAgg { funcs: fused_funcs },
+                                expr: Box::new(fused_args),
+                                distinct: options.distinct,
+                            },
+                            order_by: options.inner_order_by,
+                            window_frame: options.window_frame,
+                        }),
+                        partition_by: options.partition_by,
+                        order_by: options.outer_order_by,
+                    })
+                }
             };
-            let fused = HirScalarExpr::Windowing(WindowExpr {
-                func: WindowExprType::Value(ValueWindowExpr {
-                    func: ValueWindowFunc::Fused(fused_funcs),
-                    args: Box::new(fused_args),
-                    order_by: self.options.inner_order_by,
-                    window_frame: self.options.window_frame,
-                    ignore_nulls: self.options.ignore_nulls,
-                }),
-                partition_by: self.options.partition_by,
-                order_by: self.options.outer_order_by,
-            });
 
             let decompositions = (0..self.calls.len())
                 .map(|field| HirScalarExpr::CallUnary {
@@ -491,6 +577,35 @@ pub fn fuse_window_functions(
         }
     }
 
+    let is_value_or_agg_window_func_call = |scalar_expr: &HirScalarExpr| -> bool {
+        // Look for calls only at the root of scalar expressions. This is enough
+        // because they are always there, see 72e84bb78.
+        match scalar_expr {
+            HirScalarExpr::Windowing(WindowExpr {
+                func: WindowExprType::Value(ValueWindowExpr { func, .. }),
+                ..
+            }) => {
+                // Exclude those calls that are already fused. (We shouldn't currently
+                // encounter these, because we just do one pass, but it's better to be
+                // robust against future code changes.)
+                !matches!(func, ValueWindowFunc::Fused(..))
+                    && context.config.enable_value_window_function_fusion
+            }
+            HirScalarExpr::Windowing(WindowExpr {
+                func:
+                    WindowExprType::Aggregate(AggregateWindowExpr {
+                        aggregate_expr: AggregateExpr { func, .. },
+                        ..
+                    }),
+                ..
+            }) => {
+                !matches!(func, AggregateFunc::FusedWindowAgg { .. })
+                    && context.config.enable_window_aggregation_fusion
+            }
+            _ => false,
+        }
+    };
+
     root.try_visit_mut_post(&mut |rel_expr| {
         match rel_expr {
             HirRelationExpr::Map { input, scalars } => {
@@ -501,30 +616,16 @@ pub fn fuse_window_functions(
                 let arity_before_map = input.arity();
                 let orig_num_scalars = scalars.len();
 
-                // Collect all value window function calls with their column indexes.
-                let value_window_function_calls = scalars
+                // Collect all value window function calls and window aggregations with their column
+                // indexes.
+                let value_or_agg_window_func_calls = scalars
                     .iter()
                     .enumerate()
-                    .filter(|(_idx, scalar_expr)| {
-                        // Look for calls only at the root of scalar expressions. This is enough
-                        // because they are always there, see 72e84bb78.
-                        if let HirScalarExpr::Windowing(WindowExpr {
-                            func: WindowExprType::Value(ValueWindowExpr { func, .. }),
-                            ..
-                        }) = scalar_expr
-                        {
-                            // Exclude those calls that are already fused. (We shouldn't currently
-                            // encounter these, because we just do one pass, but it's better to be
-                            // robust against future code changes.)
-                            !matches!(func, ValueWindowFunc::Fused(..))
-                        } else {
-                            false
-                        }
-                    })
+                    .filter(|(_idx, scalar_expr)| is_value_or_agg_window_func_call(scalar_expr))
                     .map(|(idx, call)| (idx + arity_before_map, call.clone()))
                     .collect_vec();
                 // Exit early if obviously no chance for fusion.
-                if value_window_function_calls.len() <= 1 {
+                if value_or_agg_window_func_calls.len() <= 1 {
                     // Note that we are doing this only for performance. All plans should be exactly
                     // the same even if we comment out the following line.
                     return Ok(());
@@ -532,11 +633,10 @@ pub fn fuse_window_functions(
 
                 // Determine the fusion groups. (Each group will later be fused into one window
                 // function call.)
-                // Note that this has a quadratic run time in the number of value window function
-                // calls in the worst case. However, this is fine even with 1000 window function
-                // calls.
+                // Note that this has a quadratic run time with value_or_agg_window_func_calls in
+                // the worst case. However, this is fine even with 1000 window function calls.
                 let mut groups: Vec<FusionGroup> = Vec::new();
-                for (col, call) in value_window_function_calls {
+                for (col, call) in value_or_agg_window_func_calls {
                     let options = extract_options(&call);
                     let support = call.support();
                     let to_fuse_with = groups
@@ -566,7 +666,7 @@ pub fn fuse_window_functions(
 
                 // Mutate `scalars`.
                 // We do this by simultaneously iterating through `scalars` and `groups`. (Note that
-                // `groups` is already sorted by `first_col` due to way it was constructed.)
+                // `groups` is already sorted by `first_col` due to the way it was constructed.)
                 // We also compute a remapping of old indexes to new indexes as we go.
                 let mut groups_it = groups.drain(..).peekable();
                 let mut group = groups_it.next();
