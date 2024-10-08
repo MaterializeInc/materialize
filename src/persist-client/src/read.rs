@@ -37,7 +37,7 @@ use tokio::runtime::Handle;
 use tracing::{debug_span, warn, Instrument};
 use uuid::Uuid;
 
-use crate::batch::{BLOB_TARGET_SIZE, STRUCTURED_ORDER};
+use crate::batch::{BLOB_TARGET_SIZE, STRUCTURED_ORDER, STRUCTURED_ORDER_UNTIL_SHARD};
 use crate::cfg::RetryParameters;
 use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart};
 use crate::internal::encoding::Schemas;
@@ -1053,7 +1053,10 @@ where
         };
         let lease = self.lease_seqno();
 
-        let consolidator = if STRUCTURED_ORDER.get(&self.cfg) {
+        let structured_order = STRUCTURED_ORDER.get(&self.cfg) && {
+            self.shard_id().to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(&self.cfg)
+        };
+        let consolidator = if structured_order {
             let mut consolidator = Consolidator::new(
                 context,
                 self.shard_id(),

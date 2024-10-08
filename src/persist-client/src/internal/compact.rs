@@ -42,7 +42,7 @@ use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{BatchPart, HollowBatch, RunMeta, RunOrder};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::{CodecSort, Consolidator, StructuredSort};
-use crate::{Metrics, PersistConfig, ShardId, WriterId};
+use crate::{Metrics, PersistConfig, ShardId};
 
 /// A request for compaction.
 ///
@@ -79,12 +79,12 @@ pub struct CompactConfig {
 
 impl CompactConfig {
     /// Initialize the compaction config from Persist configuration.
-    pub fn new(value: &PersistConfig, writer_id: &WriterId) -> Self {
+    pub fn new(value: &PersistConfig, shard_id: ShardId) -> Self {
         let mut ret = CompactConfig {
             compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
-            batch: BatchBuilderConfig::new(value, writer_id, true),
+            batch: BatchBuilderConfig::new(value, shard_id, true),
         };
         // Use compaction as a method of getting inline writes out of state, to
         // make room for more inline writes. We could instead do this at the end
@@ -145,7 +145,6 @@ where
     pub fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
-        writer_id: WriterId,
         write_schemas: Schemas<K, V>,
         gc: GarbageCollector<K, V, T, D>,
     ) -> Self {
@@ -194,7 +193,6 @@ where
                     .queued_seconds
                     .inc_by(enqueued.elapsed().as_secs_f64());
 
-                let writer_id = writer_id.clone();
                 let write_schemas = write_schemas.clone();
 
                 let compact_span =
@@ -202,7 +200,7 @@ where
                 compact_span.follows_from(&Span::current());
                 let gc = gc.clone();
                 mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
-                    let res = Self::compact_and_apply(&mut machine, req, writer_id, write_schemas)
+                    let res = Self::compact_and_apply(&mut machine, req, write_schemas)
                         .instrument(compact_span)
                         .await;
                     let res = res.map(|(res, maintenance)| {
@@ -278,7 +276,6 @@ where
     pub(crate) async fn compact_and_apply(
         machine: &mut Machine<K, V, T, D>,
         req: CompactReq<T>,
-        writer_id: WriterId,
         write_schemas: Schemas<K, V>,
     ) -> Result<(ApplyMergeResult, RoutineMaintenance), anyhow::Error> {
         let metrics = Arc::clone(&machine.applier.metrics);
@@ -315,7 +312,7 @@ where
                 .spawn_named(
                     || "persist::compact::consolidate",
                     Self::compact(
-                        CompactConfig::new(&machine.applier.cfg, &writer_id),
+                        CompactConfig::new(&machine.applier.cfg, machine.shard_id()),
                         Arc::clone(&machine.applier.state_versions.blob),
                         Arc::clone(&metrics),
                         Arc::clone(&machine.applier.shard_metrics),
@@ -965,7 +962,7 @@ mod tests {
             val: Arc::new(StringSchema),
         };
         let res = Compactor::<String, String, u64, i64>::compact(
-            CompactConfig::new(&write.cfg, &write.writer_id),
+            CompactConfig::new(&write.cfg, write.shard_id()),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
@@ -1045,7 +1042,7 @@ mod tests {
             val: Arc::new(StringSchema),
         };
         let res = Compactor::<String, String, Product<u32, u32>, i64>::compact(
-            CompactConfig::new(&write.cfg, &write.writer_id),
+            CompactConfig::new(&write.cfg, write.shard_id()),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
