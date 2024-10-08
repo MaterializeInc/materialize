@@ -37,7 +37,7 @@ use mz_storage_types::instances::StorageInstanceId;
 use std::time::Duration;
 
 use crate::durable::objects::serialization::proto::{
-    cluster_schedule, ClusterScheduleRefreshOptions, Empty,
+    cluster_schedule, Antichain, ClusterScheduleRefreshOptions, Empty,
 };
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
@@ -328,6 +328,9 @@ impl RustType<proto::GidMappingValue> for GidMappingValue {
         proto::GidMappingValue {
             id: self.id,
             fingerprint: self.fingerprint.to_string(),
+            initial_as_of: self.initial_as_of.map(|ts| Antichain {
+                timestamp: ts.into_proto(),
+            }),
         }
     }
 
@@ -335,6 +338,10 @@ impl RustType<proto::GidMappingValue> for GidMappingValue {
         Ok(GidMappingValue {
             id: proto.id,
             fingerprint: proto.fingerprint,
+            initial_as_of: proto
+                .initial_as_of
+                .map(|antichain| antichain.timestamp.into_rust())
+                .transpose()?,
         })
     }
 }

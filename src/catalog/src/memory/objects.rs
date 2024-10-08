@@ -1719,6 +1719,14 @@ impl CatalogEntry {
         self.item.desc_opt().is_some()
     }
 
+    /// Returns the inner [`ContinualTask`] if this entry is a continual task, else `None`.
+    pub fn continual_task(&self) -> Option<&ContinualTask> {
+        match self.item() {
+            CatalogItem::ContinualTask(ct) => Some(ct),
+            _ => None,
+        }
+    }
+
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
     pub fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
         self.item.func(self)

@@ -1517,6 +1517,7 @@ impl Coordinator {
                 | Op::UpdateClusterReplicaConfig { .. }
                 | Op::UpdateSourceReferences { .. }
                 | Op::UpdateSystemConfiguration { .. }
+                | Op::UpdateBuiltinAsOf { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }

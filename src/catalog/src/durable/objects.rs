@@ -37,7 +37,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
@@ -557,6 +557,7 @@ pub struct SystemObjectDescription {
 pub struct SystemObjectUniqueIdentifier {
     pub id: GlobalId,
     pub fingerprint: String,
+    pub initial_as_of: Option<Option<Timestamp>>,
 }
 
 impl SystemObjectUniqueIdentifier {
@@ -597,6 +598,7 @@ impl DurableType for SystemObjectMapping {
                     GlobalId::Explain => unreachable!("GID mapping cannot use an Explain ID"),
                 },
                 fingerprint: self.unique_identifier.fingerprint,
+                initial_as_of: self.unique_identifier.initial_as_of,
             },
         )
     }
@@ -611,6 +613,7 @@ impl DurableType for SystemObjectMapping {
             unique_identifier: SystemObjectUniqueIdentifier {
                 id: GlobalId::System(value.id),
                 fingerprint: value.fingerprint,
+                initial_as_of: value.initial_as_of,
             },
         }
     }
@@ -1041,6 +1044,7 @@ pub struct GidMappingKey {
 pub struct GidMappingValue {
     pub(crate) id: u64,
     pub(crate) fingerprint: String,
+    pub(crate) initial_as_of: Option<Option<Timestamp>>,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

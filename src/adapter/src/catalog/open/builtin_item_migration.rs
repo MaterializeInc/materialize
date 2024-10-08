@@ -213,6 +213,7 @@ async fn migrate_builtin_items_0dt(
                 unique_identifier: SystemObjectUniqueIdentifier {
                     id: *id,
                     fingerprint: fingerprint.clone(),
+                    initial_as_of: None,
                 },
             },
         );
