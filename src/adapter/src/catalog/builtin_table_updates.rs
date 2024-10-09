@@ -582,15 +582,6 @@ impl CatalogState {
                     source.create_sql.as_ref(),
                 );
 
-                // Emit available source reference table updates here
-                // so that we can retract them when a source is removed correctly.
-                if let Some(source_references) = &source.available_source_references {
-                    updates.extend(self.pack_source_references_update(
-                        &source_references.clone().to_durable(id),
-                        diff,
-                    ));
-                }
-
                 updates.extend(match &source.data_source {
                     DataSourceDesc::Ingestion { ingestion_desc, .. } => {
                         match &ingestion_desc.desc.connection {

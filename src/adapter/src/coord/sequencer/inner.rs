@@ -340,7 +340,7 @@ impl Coordinator {
                 });
             }
 
-            let source = Source::new(plan, resolved_ids, None, false, available_source_references);
+            let source = Source::new(plan, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 name,
@@ -3779,10 +3779,6 @@ impl Coordinator {
                     resolved_ids,
                     cur_source.custom_logical_compaction_window,
                     cur_source.is_retained_metrics_object,
-                    cur_source
-                        .available_source_references
-                        .clone()
-                        .map(Into::into),
                 );
 
                 let source_compaction_window = source.custom_logical_compaction_window;

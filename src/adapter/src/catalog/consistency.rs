@@ -110,6 +110,12 @@ impl CatalogState {
             }
         }
 
+        for (source_id, _references) in &self.source_references {
+            if !self.entry_by_id.contains_key(source_id) {
+                inconsistencies.push(InternalFieldsInconsistency::SourceReferences(*source_id));
+            }
+        }
+
         if inconsistencies.is_empty() {
             Ok(())
         } else {
@@ -590,6 +596,7 @@ enum InternalFieldsInconsistency {
     AmbientSchema(String, SchemaId),
     Cluster(String, ClusterId),
     Role(String, RoleId),
+    SourceReferences(GlobalId),
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]
