@@ -2234,6 +2234,7 @@ impl Coordinator {
             // that would be easy to miss adding here.
             let catalog_ids: BTreeSet<GlobalId> =
                 catalog.entries().map(|entry| entry.id()).collect();
+            let secrets_controller = Arc::clone(secrets_controller);
 
             spawn(|| "cleanup-orphaned-secrets", async move {
                 if read_only {
