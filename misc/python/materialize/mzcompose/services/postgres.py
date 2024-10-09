@@ -49,7 +49,6 @@ class Postgres(Service):
                 MZ_ROOT / "misc" / "postgres" / "setup_materialize.sql",
                 loader.composition_path,
             )
-            # TODO: I don't think this works for Postgres, how to make it work?
             volumes += [f"{path}:/docker-entrypoint-initdb.d/setup_materialize.sql"]
 
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}

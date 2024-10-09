@@ -178,10 +178,10 @@ class Materialized(Service):
             address = "postgres" if external_postgres == True else external_postgres
             depends_graph["postgres"] = {"condition": "service_healthy"}
             command += [
-                f"--persist-consensus-url=postgres://postgres:postgres@{address}:5432",
+                f"--persist-consensus-url=postgres://materialize:materialize@{address}:5432",
             ]
             environment += [
-                f"MZ_TIMESTAMP_ORACLE_URL=postgres://postgres:postgres@{address}:5432",
+                f"MZ_TIMESTAMP_ORACLE_URL=postgres://materialize:materialize@{address}:5432",
                 "MZ_NO_BUILTIN_POSTGRES=1",
             ]
         elif external_cockroach:
