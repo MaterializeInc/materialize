@@ -25,10 +25,19 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 use tokio_postgres::error::SqlState;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
+
+const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS consensus (
+    shard text NOT NULL,
+    sequence_number bigint NOT NULL,
+    data bytea NOT NULL,
+    PRIMARY KEY(shard, sequence_number)
+)
+";
 
 // These `sql_stats_automatic_collection_enabled` are for the cost-based
 // optimizer but all the queries against this table are single-table and very
@@ -36,14 +45,15 @@ use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, 
 // really get us anything. OTOH, the background jobs that crdb creates to
 // collect these stats fill up the jobs table (slowing down all sorts of
 // things).
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS consensus (
-    shard text NOT NULL,
-    sequence_number bigint NOT NULL,
-    data bytea NOT NULL,
-    PRIMARY KEY(shard, sequence_number)
-) WITH (sql_stats_automatic_collection_enabled = false);
-";
+const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled = false);";
+// The `consensus` table creates and deletes rows at a high frequency, generating many
+// tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
+// these tombstones accumulate, scanning over the table will take increasingly and
+// prohibitively long.
+//
+// See: https://github.com/MaterializeInc/database-issues/issues/4001
+// See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+const CRDB_CONFIGURE_ZONE: &str = "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;";
 
 impl ToSql for SeqNo {
     fn to_sql(
@@ -189,25 +199,30 @@ impl PostgresConsensus {
 
         let client = postgres_client.get_connection().await?;
 
-        // The `consensus` table creates and deletes rows at a high frequency, generating many
-        // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
-        // these tombstones accumulate, scanning over the table will take increasingly and
-        // prohibitively long.
-        //
-        // See: https://github.com/MaterializeInc/database-issues/issues/4001
-        // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-        match client
+        let crdb_mode = match client
             .batch_execute(&format!(
-                "{} {}",
-                SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;",
+                "{}{} {}",
+                SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
             ))
             .await
         {
-            Ok(()) => {}
+            Ok(()) => true,
             Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
                 warn!("unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user");
+                true
+            }
+            Err(e)
+                if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
+                    || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
+            {
+                info!("unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}", e);
+                false
             }
             Err(e) => return Err(e.into()),
+        };
+
+        if !crdb_mode {
+            client.execute(SCHEMA, &[]).await?;
         }
 
         Ok(PostgresConsensus { postgres_client })
