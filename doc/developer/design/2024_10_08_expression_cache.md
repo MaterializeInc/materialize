@@ -21,7 +21,6 @@ The cache will present similarly as a key-value value store where the key is a c
 
   - deployment generation
   - object global ID
-  - expression type (local MIR, global MIR, LIR, etc)
 
 The value will be a serialized version of the optimized expression. An `environmentd` process with
 deploy generation `n`, will never be expected to look at a serialized expression with a deploy
@@ -61,32 +60,45 @@ take care of serializing and deserializing bytes. Additionally, we probably don'
 implementing.
 
 ```Rust
-trait ExpressionCache<T: Serialize + Deserialize> {
+
+
+/// All the cached expressions for a single `GlobalId`.
+///
+/// Note: This is just a placeholder for now, don't index too hard on the exact fields. I haven't
+/// done the necessary research to figure out what they are.
+struct Expressions {
+    local_mir: OptimizedMirRelationExpr,
+    global_mir: DataflowDescription<OptimizedMirRelationExpr>,
+    physical_plan: DataflowDescription<mz_compute_types::plan::Plan>,
+    dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
+    notices: SmallVec<[Arc<OptimizerNotice>; 4]>,
+}
+
+trait ExpressionCache {
     /// Opens a new [`ExpressionCache`] for `deploy_generation`.
     fn open(deploy_generation: u64) -> Self;
     
-    /// Returns the `expression_type` of `global_id` that is currently deployed in a cluster. This
-    /// will not change in-between restarts as result of DDL, as long as `global_id` exists.
+    /// Returns the optimized expressions of `global_id` that is currently deployed in a cluster.
+    /// This will not change in-between restarts as result of DDL, as long as `global_id` exists.
     /// 
     /// This is useful for serving `EXPLAIN` queries.
-    fn get_deployed_expression(&self, global_id: GlobalId, expression_type: ExpressionType) -> Option<T>;
+    fn get_deployed_expressions(&self, global_id: GlobalId) -> Option<&Expressions>;
 
-    /// Returns the `expression_type` of `global_id` based on the current catalog contents. This
+    /// Returns the optimized expressions of `global_id` based on the current catalog contents. This
     /// may change in-between restarts as result of DDL.
-    fn get_durable_expression(&self, global_id: GlobalId, expression_type: ExpressionType) -> Option<T>;
+    fn get_durable_expressions(&self, global_id: GlobalId) -> Option<&Expressions>;
 
-    /// Durably inserts `expression`, with key `(deploy_generation, global_id, expression_type)`.
+    /// Durably inserts `expressions`.
     ///
     /// Returns a [`Future`] that completes once `expressions` have been made durable.
     ///
-    /// Panics if any `(GlobalId, ExpressionType)` pair already exists in the cache.
-    fn insert_expressions(&mut self, expressions: Vec<(GlobalId, ExpressionType, T)>) -> impl Future<Output = ()>;
+    /// Panics if any `GlobalId` already exists in the cache.
+    fn insert_expressions(&mut self, expressions: Vec<(GlobalId, Expressions)>) -> impl Future<Output = ()>;
 
-    /// Durably remove and return all entries in `deploy_generation` that depend on an ID in
-    /// `dropped_ids`.
+    /// Durably remove and return all entries that depend on an ID in `dropped_ids`.
     ///
     /// Optional for v1.
-    fn invalidate_entries(&mut self, dropped_ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ExpressionType)>;
+    fn invalidate_entries(&mut self, dropped_ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, Expressions)>;
 
     /// Durably removes all entries with a deploy generation less than this cache's deploy
     /// generation.
@@ -117,7 +129,7 @@ Below is a detailed set of steps that will happen in startup.
 
 ### DDL - Drop
 
-This is optional for v1, `ExpressionCache::reconcile` on startup will update the cache to the
+This is optional for v1, on startup `ExpressionCache::reconcile` will update the cache to the
 correct state.
 
 1. Execute catalog transaction.
@@ -129,7 +141,7 @@ correct state.
 
 One potential implementation is via the filesystem of an attached durable storage to `environmentd`.
 Each cache entry would be saved as a file of the format
-`/path/to/cache/<deploy_generation>/<global_id>/<expression_type>`.
+`/path/to/cache/<deploy_generation>/<global_id>`.
 
 #### Pros
 - No need to worry about coordination across K8s pods.
@@ -145,7 +157,7 @@ Each cache entry would be saved as a file of the format
 ### Persist implementation
 
 Another potential implementation is via persist. Each cache entry would be keyed by
-`(deploy_generation, global_id, expression_type)` and the value would be a serialized version of the
+`(deploy_generation, global_id)` and the value would be a serialized version of the
 expression.
 
 #### Pros
