@@ -66,8 +66,8 @@ trait ExpressionCache {
     /// `dropped_ids`.
     fn invalidate_entries(&mut self, deploy_generation: u64, dropped_ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ExpressionType)>;
 
-    /// Durably removes all entries in `deploy_generation`.
-    fn remove_deploy_generation(&mut self, deploy_generation: u64);
+    /// Durably removes all entries with a deploy generation <= `deploy_generation`.
+    fn remove_deploy_generations(&mut self, deploy_generation: u64);
 
     /// Remove all entries that depend on a global ID that is not present in `txn`.
     fn reconcile(&mut self, txn: mz_catalog::durable::Transaction);
