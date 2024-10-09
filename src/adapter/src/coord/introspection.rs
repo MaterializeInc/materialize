@@ -257,7 +257,9 @@ impl Coordinator {
 
         // Introspection subscribes only read from system collections, which are always in
         // the `EpochMilliseconds` timeline.
-        let global_mir_plan = global_mir_plan.resolve(as_of, true);
+        let is_timeline_epoch_ms = true;
+
+        let global_mir_plan = global_mir_plan.resolve(as_of, is_timeline_epoch_ms);
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
