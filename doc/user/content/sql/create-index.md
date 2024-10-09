@@ -21,6 +21,7 @@ both when serving results and maintaining resource-heavy operations like joins.
 
 #### Indexes on views vs. materialized views
 
+{{% views-indexes/table-usage-pattern-intro %}}
 {{% views-indexes/table-usage-pattern %}}
 
 #### Indexes and query optimizations

@@ -107,6 +107,7 @@ CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
 
 ### Indexes on views vs. materialized views
 
+{{% views-indexes/table-usage-pattern-intro %}}
 {{% views-indexes/table-usage-pattern %}}
 
 ### Indexes and query optimizations
