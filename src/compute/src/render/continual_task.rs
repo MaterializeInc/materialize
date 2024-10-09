@@ -393,11 +393,22 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
             debug!("ct_sink got write {:?}: {:?}", new_upper, to_append);
 
             let mut expected_upper = write_handle.shared_upper();
-            while PartialOrder::less_than(&expected_upper, &new_upper) {
+            loop {
+                if !PartialOrder::less_than(&expected_upper, &new_upper) {
+                    state.output_progress = expected_upper.clone();
+                    debug!("ct_sink skipping {:?}", new_upper.elements());
+                    break;
+                }
                 let res = write_handle
                     .compare_and_append(&to_append, expected_upper.clone(), new_upper.clone())
                     .await
                     .expect("usage was valid");
+                debug!(
+                    "ct_sink write res {:?}-{:?}: {:?}",
+                    expected_upper.elements(),
+                    new_upper.elements(),
+                    res
+                );
                 match res {
                     Ok(()) => {
                         state.output_progress = new_upper;
