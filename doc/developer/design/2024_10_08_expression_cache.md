@@ -61,7 +61,7 @@ take care of serializing and deserializing bytes. Additionally, we probably don'
 implementing.
 
 ```Rust
-trait ExpressionCache {
+trait ExpressionCache<T: Serialize + Deserialize> {
     /// Opens a new [`ExpressionCache`] for `deploy_generation`.
     fn open(deploy_generation: u64) -> Self;
     
@@ -69,16 +69,18 @@ trait ExpressionCache {
     /// will not change in-between restarts as result of DDL, as long as `global_id` exists.
     /// 
     /// This is useful for serving `EXPLAIN` queries.
-    fn get_deployed_expression(&self, global_id: GlobalId, expression_type: ExpressionType) -> Option<Bytes>;
+    fn get_deployed_expression(&self, global_id: GlobalId, expression_type: ExpressionType) -> Option<T>;
 
     /// Returns the `expression_type` of `global_id` based on the current catalog contents. This
     /// may change in-between restarts as result of DDL.
-    fn get_durable_expression(&self, global_id: GlobalId, expression_type: ExpressionType) -> Option<Bytes>;
+    fn get_durable_expression(&self, global_id: GlobalId, expression_type: ExpressionType) -> Option<T>;
 
     /// Durably inserts `expression`, with key `(deploy_generation, global_id, expression_type)`.
     ///
-    /// Panics if `(deploy_generation, global_id, expression_type)` already exists.
-    fn insert_expression(&mut self, global_id: GlobalId, expression_type: ExpressionType, expression: Bytes);
+    /// Returns a [`Future`] that completes once `expressions` have been made durable.
+    ///
+    /// Panics if any `(GlobalId, ExpressionType)` pair already exists in the cache.
+    fn insert_expressions(&mut self, expressions: Vec<(GlobalId, ExpressionType, T)>) -> impl Future<Output = ()>;
 
     /// Durably remove and return all entries in `deploy_generation` that depend on an ID in
     /// `dropped_ids`.
