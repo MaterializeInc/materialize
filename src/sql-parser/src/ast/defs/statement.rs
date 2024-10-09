@@ -102,6 +102,7 @@ pub enum Statement<T: AstInfo> {
     Execute(ExecuteStatement<T>),
     Deallocate(DeallocateStatement),
     Raise(RaiseStatement),
+    RefreshSourceReferences(RefreshSourceReferencesStatement<T>),
     GrantRole(GrantRoleStatement<T>),
     RevokeRole(RevokeRoleStatement<T>),
     GrantPrivileges(GrantPrivilegesStatement<T>),
@@ -176,6 +177,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Execute(stmt) => f.write_node(stmt),
             Statement::Deallocate(stmt) => f.write_node(stmt),
             Statement::Raise(stmt) => f.write_node(stmt),
+            Statement::RefreshSourceReferences(stmt) => f.write_node(stmt),
             Statement::GrantRole(stmt) => f.write_node(stmt),
             Statement::RevokeRole(stmt) => f.write_node(stmt),
             Statement::GrantPrivileges(stmt) => f.write_node(stmt),
@@ -253,6 +255,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Execute => "execute",
         StatementKind::Deallocate => "deallocate",
         StatementKind::Raise => "raise",
+        StatementKind::RefreshSourceReferences => "refresh_source_references",
         StatementKind::GrantRole => "grant_role",
         StatementKind::RevokeRole => "revoke_role",
         StatementKind::GrantPrivileges => "grant_privileges",
@@ -1188,6 +1191,20 @@ impl<T: AstInfo> AstDisplay for CreateSubsourceStatement<T> {
     }
 }
 impl_display_t!(CreateSubsourceStatement);
+
+/// REFRESH SOURCE REFERENCES
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RefreshSourceReferencesStatement<T: AstInfo> {
+    pub source: T::ItemName,
+}
+
+impl<T: AstInfo> AstDisplay for RefreshSourceReferencesStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("REFRESH SOURCE REFERENCES ");
+        f.write_node(&self.source);
+    }
+}
+impl_display_t!(RefreshSourceReferencesStatement);
 
 /// An option in a `CREATE SINK` statement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

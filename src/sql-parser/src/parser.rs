@@ -446,6 +446,7 @@ impl<'a> Parser<'a> {
                     Ok(self.parse_raise().map_parser_err(StatementKind::Raise)?)
                 }
                 Token::Keyword(GRANT) => Ok(self.parse_grant()?),
+                Token::Keyword(REFRESH) => Ok(self.parse_refresh()?),
                 Token::Keyword(REVOKE) => Ok(self.parse_revoke()?),
                 Token::Keyword(REASSIGN) => Ok(self
                     .parse_reassign_owned()
@@ -8539,6 +8540,24 @@ impl<'a> Parser<'a> {
             role_names,
             member_names,
         }))
+    }
+
+    /// Parse a `REFRESH` statement, assuming that the `REFRESH` token
+    /// has already been consumed.
+    fn parse_refresh(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        self.expect_keywords(&[SOURCE, REFERENCES])
+            .map_parser_err(StatementKind::RefreshSourceReferences)?;
+        self.parse_refresh_source_references()
+            .map_parser_err(StatementKind::RefreshSourceReferences)
+    }
+
+    /// Parse a `REFRESH SOURCE REFERENCES` statement, assuming that the `REFRESH`,
+    /// `SOURCE`, and `REFERENCES` tokens have already been consumed.
+    fn parse_refresh_source_references(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let source = self.parse_raw_name()?;
+        Ok(Statement::RefreshSourceReferences(
+            RefreshSourceReferencesStatement { source },
+        ))
     }
 
     /// Parse a `REVOKE` statement, assuming that the `REVOKE` token

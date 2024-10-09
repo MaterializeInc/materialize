@@ -222,6 +222,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::Inserted(_)
             | ExecuteResponse::Prepare
             | ExecuteResponse::Raised
+            | ExecuteResponse::Refreshed
             | ExecuteResponse::ReassignOwned
             | ExecuteResponse::RevokedPrivilege
             | ExecuteResponse::RevokedRole

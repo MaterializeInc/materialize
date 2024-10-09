@@ -135,6 +135,8 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::Execute(_)
         | Plan::Deallocate(_)
         | Plan::Raise(_)
+        | Plan::RefreshSourceReferencesPlan(_)
+        | Plan::RefreshSourceReferencesPlanWrapper(_)
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
         | Plan::GrantPrivileges(_)

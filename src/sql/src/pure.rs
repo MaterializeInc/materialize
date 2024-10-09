@@ -46,8 +46,9 @@ use mz_sql_parser::ast::{
     KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption, LoadGeneratorOptionName,
     MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
     PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy,
-    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, Statement,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, UnresolvedItemName,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
+    RefreshSourceReferencesStatement, SourceEnvelope, Statement, TableFromSourceColumns,
+    TableFromSourceOption, TableFromSourceOptionName, UnresolvedItemName,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -216,6 +217,11 @@ pub enum PurifiedStatement {
     PurifiedCreateTableFromSource {
         stmt: CreateTableFromSourceStatement<Aug>,
     },
+    PurifiedRefreshSourceReferences {
+        stmt: RefreshSourceReferencesStatement<Aug>,
+        /// The updated available upstream references for the primary source.
+        available_source_references: SourceReferences,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,6 +285,10 @@ pub async fn purify_statement(
         }
         Statement::CreateTableFromSource(stmt) => (
             purify_create_table_from_source(catalog, stmt, storage_configuration).await,
+            None,
+        ),
+        Statement::RefreshSourceReferences(stmt) => (
+            purify_refresh_source_references(catalog, stmt, storage_configuration).await,
             None,
         ),
         o => unreachable!("{:?} does not need to be purified", o),
@@ -1816,6 +1826,92 @@ async fn purify_create_table_from_source(
     // available references table in the catalog, so plumb this through.
     // available_source_references: retrieved_source_references.available_source_references(),
     Ok(PurifiedStatement::PurifiedCreateTableFromSource { stmt })
+}
+
+async fn purify_refresh_source_references(
+    catalog: impl SessionCatalog,
+    mut stmt: RefreshSourceReferencesStatement<Aug>,
+    storage_configuration: &StorageConfiguration,
+) -> Result<PurifiedStatement, PlanError> {
+    let scx = StatementContext::new(None, &catalog);
+    let RefreshSourceReferencesStatement { source } = &mut stmt;
+
+    // Get the source item
+    let item = match scx.get_item_by_resolved_name(source) {
+        Ok(item) => item,
+        Err(e) => return Err(e),
+    };
+
+    // Ensure it's an ingestion-based source.
+    let desc = match item.source_desc()? {
+        Some(desc) => desc.clone().into_inline_connection(scx.catalog),
+        None => {
+            sql_bail!("cannot REFRESH this type of source")
+        }
+    };
+    let retrieved_source_references = match desc.connection {
+        GenericSourceConnection::Postgres(pg_source_connection) => {
+            // Get PostgresConnection for generating subsources.
+            let pg_connection = &pg_source_connection.connection;
+
+            let config = pg_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+
+            let client = config
+                .connect(
+                    "postgres_purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+            let reference_client = SourceReferenceClient::Postgres {
+                client: &client,
+                publication: &pg_source_connection.publication,
+                database: &pg_connection.database,
+            };
+            reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::MySql(mysql_source_connection) => {
+            let mysql_connection = &mysql_source_connection.connection;
+            let config = mysql_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+
+            let mut conn = config
+                .connect(
+                    "mysql purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            let reference_client = SourceReferenceClient::MySql { conn: &mut conn };
+            reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::LoadGenerator(load_gen_connection) => {
+            let reference_client = SourceReferenceClient::LoadGenerator {
+                generator: &load_gen_connection.load_generator,
+            };
+            reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::Kafka(kafka_conn) => {
+            let reference_client = SourceReferenceClient::Kafka {
+                topic: &kafka_conn.topic,
+            };
+            reference_client.get_source_references().await?
+        }
+    };
+    Ok(PurifiedStatement::PurifiedRefreshSourceReferences {
+        stmt,
+        available_source_references: retrieved_source_references.available_source_references(),
+    })
 }
 
 enum SourceFormatOptions {

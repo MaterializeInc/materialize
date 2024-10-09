@@ -357,6 +357,8 @@ pub enum ExecuteResponse {
     Prepare,
     /// A user-requested warning was raised.
     Raised,
+    /// The requested object was refreshed.
+    Refreshed,
     /// The requested objects were reassigned.
     ReassignOwned,
     /// The requested privilege was revoked.
@@ -502,6 +504,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::Inserted => Err(()),
             ExecuteResponseKind::Prepare => Ok(ExecuteResponse::Prepare),
             ExecuteResponseKind::Raised => Ok(ExecuteResponse::Raised),
+            ExecuteResponseKind::Refreshed => Ok(ExecuteResponse::Refreshed),
             ExecuteResponseKind::ReassignOwned => Ok(ExecuteResponse::ReassignOwned),
             ExecuteResponseKind::RevokedPrivilege => Ok(ExecuteResponse::RevokedPrivilege),
             ExecuteResponseKind::RevokedRole => Ok(ExecuteResponse::RevokedRole),
@@ -573,6 +576,7 @@ impl ExecuteResponse {
             }
             Prepare => Some("PREPARE".into()),
             Raised => Some("RAISE".into()),
+            Refreshed => Some("REFRESH".into()),
             ReassignOwned => Some("REASSIGN OWNED".into()),
             RevokedPrivilege => Some("REVOKE".into()),
             RevokedRole => Some("REVOKE ROLE".into()),
@@ -666,6 +670,8 @@ impl ExecuteResponse {
             Insert => &[Inserted, SendingRowsImmediate],
             PlanKind::Prepare => &[ExecuteResponseKind::Prepare],
             PlanKind::Raise => &[ExecuteResponseKind::Raised],
+            PlanKind::RefreshSourceReferencesPlan
+            | PlanKind::RefreshSourceReferencesPlanWrapper => &[ExecuteResponseKind::Refreshed],
             PlanKind::ReassignOwned => &[ExecuteResponseKind::ReassignOwned],
             RevokePrivileges => &[RevokedPrivilege],
             RevokeRole => &[RevokedRole],

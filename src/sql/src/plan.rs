@@ -194,6 +194,8 @@ pub enum Plan {
     Execute(ExecutePlan),
     Deallocate(DeallocatePlan),
     Raise(RaisePlan),
+    RefreshSourceReferencesPlan(RefreshSourceReferencesPlan),
+    RefreshSourceReferencesPlanWrapper(RefreshSourceReferencesPlanWrapper),
     GrantRole(GrantRolePlan),
     RevokeRole(RevokeRolePlan),
     GrantPrivileges(GrantPrivilegesPlan),
@@ -289,6 +291,7 @@ impl Plan {
             StatementKind::Insert => &[PlanKind::Insert],
             StatementKind::Prepare => &[PlanKind::Prepare],
             StatementKind::Raise => &[PlanKind::Raise],
+            StatementKind::RefreshSourceReferences => &[PlanKind::RefreshSourceReferencesPlan],
             StatementKind::ReassignOwned => &[PlanKind::ReassignOwned],
             StatementKind::ResetVariable => &[PlanKind::ResetVariable],
             StatementKind::RevokePrivileges => &[PlanKind::RevokePrivileges],
@@ -441,6 +444,9 @@ impl Plan {
             Plan::Execute(_) => "execute",
             Plan::Deallocate(_) => "deallocate",
             Plan::Raise(_) => "raise",
+            Plan::RefreshSourceReferencesPlan(_) | Plan::RefreshSourceReferencesPlanWrapper(_) => {
+                "refresh source references"
+            }
             Plan::GrantRole(_) => "grant role",
             Plan::RevokeRole(_) => "revoke role",
             Plan::GrantPrivileges(_) => "grant privilege",
@@ -668,6 +674,17 @@ pub struct CreateConnectionPlan {
     pub if_not_exists: bool,
     pub connection: Connection,
     pub validate: bool,
+}
+
+#[derive(Debug)]
+pub struct RefreshSourceReferencesPlan {
+    pub source_id: GlobalId,
+}
+
+#[derive(Debug)]
+pub struct RefreshSourceReferencesPlanWrapper {
+    pub plan: RefreshSourceReferencesPlan,
+    pub available_source_references: SourceReferences,
 }
 
 #[derive(Debug)]

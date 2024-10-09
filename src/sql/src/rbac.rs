@@ -29,7 +29,7 @@ use crate::names::{
     CommentObjectId, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     SystemObjectId,
 };
-use crate::plan::{self, PlanKind};
+use crate::plan::{self, PlanKind, RefreshSourceReferencesPlan};
 use crate::plan::{
     DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, UpdatePrivilege,
 };
@@ -1415,6 +1415,15 @@ fn generate_rbac_requirements(
                 ..Default::default()
             }
         }
+        Plan::RefreshSourceReferencesPlan(plan::RefreshSourceReferencesPlan { source_id })
+        | Plan::RefreshSourceReferencesPlanWrapper(plan::RefreshSourceReferencesPlanWrapper {
+            plan: RefreshSourceReferencesPlan { source_id },
+            ..
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*source_id)],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::EmptyQuery

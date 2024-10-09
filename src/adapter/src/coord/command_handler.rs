@@ -687,6 +687,7 @@ impl Coordinator {
                     | Statement::ReassignOwned(_)
                     | Statement::RevokePrivileges(_)
                     | Statement::RevokeRole(_)
+                    | Statement::RefreshSourceReferences(_)
                     | Statement::Update(_)
                     | Statement::ValidateConnection(_)
                     | Statement::Comment(_) => {
@@ -1012,6 +1013,7 @@ impl Coordinator {
                 | Statement::AlterSource(_)
                 | Statement::CreateSink(_)
                 | Statement::CreateTableFromSource(_)
+                | Statement::RefreshSourceReferences(_)
         ) {
             return false;
         }
