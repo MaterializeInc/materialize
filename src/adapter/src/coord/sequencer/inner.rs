@@ -4631,7 +4631,8 @@ impl Coordinator {
             Some(
                 self.builtin_table_update()
                     .execute(builtin_table_updates)
-                    .await,
+                    .await
+                    .0,
             )
         } else {
             // Save the metainfo.

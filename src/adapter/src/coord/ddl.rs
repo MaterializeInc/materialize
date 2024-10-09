@@ -588,7 +588,7 @@ impl Coordinator {
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
-        let builtin_update_notify = self
+        let (builtin_update_notify, _) = self
             .builtin_table_update()
             .execute(builtin_table_updates)
             .await;
