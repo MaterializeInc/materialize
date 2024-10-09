@@ -307,7 +307,7 @@ def run_once(
                 image=f"materialize/materialized:{tag}" if tag else None,
                 default_size=args.size,
                 soft_assertions=False,
-                external_cockroach=True,
+                external_postgres=True,
                 external_minio=True,
                 sanity_restart=False,
                 additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS

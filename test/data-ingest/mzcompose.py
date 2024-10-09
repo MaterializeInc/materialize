@@ -55,7 +55,7 @@ SERVICES = [
     Materialized(
         ports=["16875:6875"],
         external_minio=True,
-        external_cockroach=True,
+        external_postgres=True,
         system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
         additional_system_parameter_defaults={"enable_table_keys": "true"},
         sanity_restart=False,
@@ -64,7 +64,7 @@ SERVICES = [
         name="materialized2",
         ports=["26875:6875"],
         external_minio=True,
-        external_cockroach=True,
+        external_postgres=True,
         system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
         additional_system_parameter_defaults={"enable_table_keys": "true"},
         sanity_restart=False,

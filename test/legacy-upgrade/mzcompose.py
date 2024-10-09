@@ -58,7 +58,7 @@ SERVICES = [
     # because that would involve maintaining backwards compatibility for all
     # testdrive commands.
     Testdrive(
-        external_cockroach=True,
+        external_postgres=True,
         validate_catalog_store=False,
         volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
     ),
@@ -188,7 +188,7 @@ def test_upgrade_from_version(
                 if MzVersion.parse_mz(from_version) >= start_version
             ],
             volumes_extra=["secrets:/share/secrets"],
-            external_cockroach=True,
+            external_postgres=True,
             system_parameter_defaults=system_parameter_defaults,
             deploy_generation=deploy_generation,
             restart="on-failure",
@@ -201,7 +201,7 @@ def test_upgrade_from_version(
             name=mz_service,
             options=list(mz_options.values()),
             volumes_extra=["secrets:/share/secrets"],
-            external_cockroach=True,
+            external_postgres=True,
             system_parameter_defaults=system_parameter_defaults,
             restart="on-failure",
             sanity_restart=False,
@@ -260,7 +260,7 @@ def test_upgrade_from_version(
                         if version >= start_version
                     ],
                     volumes_extra=["secrets:/share/secrets"],
-                    external_cockroach=True,
+                    external_postgres=True,
                     system_parameter_defaults=system_parameter_defaults,
                     deploy_generation=deploy_generation,
                     restart="on-failure",
@@ -289,7 +289,7 @@ def test_upgrade_from_version(
         name=mz_service,
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
-        external_cockroach=True,
+        external_postgres=True,
         system_parameter_defaults=system_parameter_defaults,
         deploy_generation=deploy_generation,
         restart="on-failure",
@@ -309,7 +309,7 @@ def test_upgrade_from_version(
 
     with c.override(
         Testdrive(
-            external_cockroach=True,
+            external_postgres=True,
             validate_catalog_store=True,
             volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
         )

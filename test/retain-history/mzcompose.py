@@ -20,7 +20,7 @@ from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
     Cockroach(setup_materialize=True),
-    Materialized(propagate_crashes=True, external_cockroach=True),
+    Materialized(propagate_crashes=True, external_postgres=True),
     Testdrive(no_reset=True, default_timeout="5s"),
 ]
 

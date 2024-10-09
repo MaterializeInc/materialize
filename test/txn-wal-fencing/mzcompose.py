@@ -177,7 +177,7 @@ def run_workload(c: Composition, workload: Workload) -> None:
         *[
             Materialized(
                 name=mz_name,
-                external_cockroach=True,
+                external_postgres=True,
                 external_minio=True,
                 sanity_restart=False,
             )

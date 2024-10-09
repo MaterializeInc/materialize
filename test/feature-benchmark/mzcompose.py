@@ -308,7 +308,7 @@ def create_mz_service(
         environment_id=f"local-az1-{uuid.uuid4()}-0",
         soft_assertions=False,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
     )

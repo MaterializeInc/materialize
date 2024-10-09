@@ -29,7 +29,7 @@ class BackupAndRestore(Action):
             Materialized(
                 name=state.mz_service,
                 external_minio=True,
-                external_cockroach=True,
+                external_postgres=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
