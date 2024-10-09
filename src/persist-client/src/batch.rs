@@ -397,7 +397,7 @@ pub(crate) const ENCODING_COMPRESSION_FORMAT: Config<&'static str> = Config::new
 
 pub(crate) const STRUCTURED_ORDER: Config<bool> = Config::new(
     "persist_batch_structured_order",
-    false,
+    true,
     "If enabled, output compaction batches in structured-data order.",
 );
 
