@@ -23,7 +23,7 @@ use mz_catalog::builtin::{
     BUILTIN_PREFIXES, BUILTIN_ROLES, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
     RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
-use mz_catalog::config::StateConfig;
+use mz_catalog::config::{BuiltinItemMigrationConfig, StateConfig};
 use mz_catalog::durable::objects::{
     SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
@@ -214,6 +214,24 @@ impl Catalog {
                 );
         }
 
+        // This will fall back to the default in code (false) if we timeout on the
+        // initial LD sync. We're just using this to get some additional testing in on
+        // CTs so a false negative is fine, we're only worried about false positives.
+        let include_builtin_continual_tasks = get_dyncfg_val_from_defaults_and_remote(
+            &config.system_parameter_defaults,
+            config.remote_system_parameters.as_ref(),
+            &ENABLE_CONTINUAL_TASK_BUILTINS,
+        ) && match config.builtin_item_migration_config {
+            BuiltinItemMigrationConfig::Legacy => true,
+            // Bit of a hack, but ignore builtin Continual Tasks in read-only
+            // mode of a 0dt upgrade. They need to write the as_of back into the
+            // catalog, which... read only. We could add it to the builtin
+            // migration shard, but that's a decent bit of additional complexity
+            // and one of the benefits of CTs is they rehydrate quickly, so
+            // ~fine to skip pre-hydrating them in read-only.
+            BuiltinItemMigrationConfig::ZeroDownTime { read_only, .. } => !read_only,
+        };
+
         let mut state = CatalogState {
             database_by_name: BTreeMap::new(),
             database_by_id: BTreeMap::new(),
@@ -249,14 +267,7 @@ impl Catalog {
                 now: config.now.clone(),
                 connection_context: config.connection_context,
                 builtins_cfg: BuiltinsConfig {
-                    // This will fall back to the default in code (false) if we timeout on the
-                    // initial LD sync. We're just using this to get some additional testing in on
-                    // CTs so a false negative is fine, we're only worried about false positives.
-                    include_continual_tasks: get_dyncfg_val_from_defaults_and_remote(
-                        &config.system_parameter_defaults,
-                        config.remote_system_parameters.as_ref(),
-                        &ENABLE_CONTINUAL_TASK_BUILTINS,
-                    ),
+                    include_continual_tasks: include_builtin_continual_tasks,
                 },
             },
             cluster_replica_sizes: config.cluster_replica_sizes,
@@ -667,6 +678,7 @@ impl Catalog {
                         unique_identifier: SystemObjectUniqueIdentifier {
                             id: new_id,
                             fingerprint: fingerprint.clone(),
+                            initial_as_of: None,
                         },
                     },
                 );
@@ -948,7 +960,11 @@ fn add_new_remove_old_builtin_items_migration(
                         object_type: builtin.catalog_item_type(),
                         object_name: builtin.name().to_string(),
                     },
-                    unique_identifier: SystemObjectUniqueIdentifier { id, fingerprint },
+                    unique_identifier: SystemObjectUniqueIdentifier {
+                        id,
+                        fingerprint,
+                        initial_as_of: None,
+                    },
                 });
                 new_builtin_ids.push(id);
 

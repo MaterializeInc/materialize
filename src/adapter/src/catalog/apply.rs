@@ -56,6 +56,7 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
+use timely::progress::Antichain;
 use tracing::{error, info_span, warn, Instrument};
 
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
@@ -532,12 +533,24 @@ impl CatalogState {
         }
 
         if let Some(entry) = retractions.system_object_mappings.remove(&id) {
-            // This implies that we updated the fingerprint for some builtin item. The retraction
-            // was parsed, planned, and optimized using the compiled in definition, not the
-            // definition from a previous version. So we can just stick the old entry back into the
-            // catalog.
-            self.insert_entry(entry);
-            return;
+            match &entry.item {
+                // Unlike any other builtin, ContinualTasks don't have a 1:1
+                // mapping between the builtin definition in code and what's
+                // stored in the durable catalog. This is because they need to
+                // pick an as_of to start at, but can't until much later in the
+                // boot process than when builtins get written to the catalog.
+                // This means the below branch is incorrect for them, but it's a
+                // performance optimization so fine to skip for just CTs.
+                CatalogItem::ContinualTask(_) => {}
+                _ => {
+                    // This implies that we updated the fingerprint for some builtin item. The retraction
+                    // was parsed, planned, and optimized using the compiled in definition, not the
+                    // definition from a previous version. So we can just stick the old entry back into the
+                    // catalog.
+                    self.insert_entry(entry);
+                    return;
+                }
+            }
         }
 
         let builtin = BUILTIN_LOOKUP
@@ -741,7 +754,7 @@ impl CatalogState {
                 )];
                 acl_items.extend_from_slice(&ct.access);
 
-                let item = self
+                let mut item = self
                     .parse_item(
                         id,
                         &ct.create_sql(),
@@ -759,9 +772,19 @@ impl CatalogState {
                             ct.name, e
                         )
                     });
-                let CatalogItem::ContinualTask(_) = &item else {
+                let CatalogItem::ContinualTask(inner) = &mut item else {
                     panic!("internal error: builtin continual task {}'s SQL does not begin with \"CREATE CONTINUAL TASK\".", ct.name);
                 };
+
+                assert!(
+                    inner.initial_as_of.is_none(),
+                    "builtin continual task {} unexpectedly has initial as_of set in SQL",
+                    ct.name
+                );
+                inner.initial_as_of = system_object_mapping
+                    .unique_identifier
+                    .initial_as_of
+                    .map(|as_of| Antichain::from_iter(as_of));
 
                 self.insert_item(
                     id,

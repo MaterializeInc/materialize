@@ -51,6 +51,7 @@ use mz_sql::session::vars::{Value as VarValue, VarInput};
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::controller::StorageController;
+use timely::progress::Antichain;
 use tracing::{info, trace};
 
 use crate::catalog::{
@@ -186,6 +187,10 @@ pub enum Op {
     UpdateSystemConfiguration {
         name: String,
         value: OwnedVarInput,
+    },
+    UpdateBuiltinAsOf {
+        id: GlobalId,
+        as_of: Antichain<mz_repr::Timestamp>,
     },
     ResetSystemConfiguration {
         name: String,
@@ -2047,6 +2052,19 @@ impl Catalog {
                         value: Some(value.borrow().to_vec().join(", ")),
                     }),
                 )?;
+            }
+            Op::UpdateBuiltinAsOf { id, as_of } => {
+                // TODO: This is `O(N^2)` in the number of builtin CTs + MVs.
+                // Currently, N is 1, but if we change the op to be
+                // `UpdateBuiltinAsOf`s so that you can collect the mappings
+                // into a hashmap and then do point lookups that would feel
+                // slightly better.
+                let mut mapping = tx
+                    .get_system_object_mappings()
+                    .find(|mapping| mapping.unique_identifier.id == id)
+                    .expect("mapping must exist");
+                mapping.unique_identifier.initial_as_of = Some(as_of.into_option());
+                tx.set_system_object_mappings(vec![mapping])?;
             }
             Op::ResetSystemConfiguration { name } => {
                 tx.remove_system_config(&name);

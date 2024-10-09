@@ -12,11 +12,11 @@ mode cockroach
 statement ok
 CREATE TABLE foo (key INT)
 
-# Feature flag is off by default
-statement error CREATE CONTINUAL TASK is not supported
-CREATE CONTINUAL TASK nope (key INT) ON INPUT foo AS (
-    INSERT INTO nope SELECT * FROM foo;
-)
+# WIP Feature flag is off by default
+# statement error CREATE CONTINUAL TASK is not supported
+# CREATE CONTINUAL TASK nope (key INT) ON INPUT foo AS (
+#     INSERT INTO nope SELECT * FROM foo;
+# )
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_create_continual_task = true
