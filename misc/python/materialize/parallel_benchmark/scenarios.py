@@ -1124,7 +1124,7 @@ class StagingBench(Scenario):
                         # ),
                         # ClosedLoop(
                         #    action=ReuseConnQuery(
-                        #        "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 1",
+                        #        "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.pg_wmr WHERE degree > 1",
                         #        conn_info=conn_infos["materialized"],
                         #    ),
                         # ),
