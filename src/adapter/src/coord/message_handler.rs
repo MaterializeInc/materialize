@@ -107,11 +107,6 @@ impl Coordinator {
                     .boxed_local()
                     .await
             }
-            Message::GroupCommitApply(timestamp, responses, write_lock_guard, permit) => {
-                self.group_commit_apply(timestamp, responses, write_lock_guard, permit)
-                    .boxed_local()
-                    .await;
-            }
             Message::AdvanceTimelines => {
                 self.advance_timelines().boxed_local().await;
             }
@@ -328,7 +323,7 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn storage_usage_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
-        let fut = self.builtin_table_update().execute(expired).await;
+        let (fut, _) = self.builtin_table_update().execute(expired).await;
         task::spawn(|| "storage_usage_pruning_apply", async move {
             fut.await;
         });
@@ -692,7 +687,7 @@ impl Coordinator {
                 }
                 Deferred::GroupCommit => {
                     self.group_commit_initiate(Some(write_lock_guard), None)
-                        .await
+                        .await;
                 }
             }
         }
@@ -808,6 +803,7 @@ impl Coordinator {
             self.builtin_table_update()
                 .execute(builtin_table_updates)
                 .await
+                .0
                 .instrument(info_span!("coord::message_cluster_event::table_updates"))
                 .await;
 

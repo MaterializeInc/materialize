@@ -188,7 +188,7 @@ use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycleEvent};
-use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
+use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, ReadHolds};
 
@@ -218,7 +218,7 @@ mod sql;
 mod validity;
 
 #[derive(Debug)]
-pub enum Message<T = mz_repr::Timestamp> {
+pub enum Message {
     Command(OpenTelemetryContext, Command),
     ControllerReady,
     PurifiedStatementReady(PurifiedStatementReady),
@@ -227,17 +227,6 @@ pub enum Message<T = mz_repr::Timestamp> {
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
-    /// Makes a group commit visible to all clients.
-    GroupCommitApply(
-        /// Timestamp of the writes in the group commit.
-        T,
-        /// Clients waiting on responses from the group commit.
-        Vec<CompletedClientTransmitter>,
-        /// Optional lock if the group commit contained writes to user tables.
-        Option<OwnedMutexGuard<()>>,
-        /// Permit which limits how many group commits we run at once.
-        Option<GroupCommitPermit>,
-    ),
     DeferredStatementReady,
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
@@ -341,7 +330,6 @@ impl Message {
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::WriteLockGrant(_) => "write_lock_grant",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
-            Message::GroupCommitApply(..) => "group_commit_apply",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
@@ -2120,7 +2108,7 @@ impl Coordinator {
         // storage collections) need to be back-filled so that any dependent dataflow can be
         // hydrated. Additionally, these shards are not registered with the txn-shard, and cannot
         // be registered while in read-only, so they are written to directly.
-        let migrated_updates_fut = if self.controller.read_only() {
+        if self.controller.read_only() {
             let min_timestamp = Timestamp::minimum();
             let migrated_builtin_table_updates: Vec<_> = builtin_table_updates
                 .drain_filter_swapping(|update| {
@@ -2135,9 +2123,7 @@ impl Coordinator {
                             == &[min_timestamp]
                 })
                 .collect();
-            if migrated_builtin_table_updates.is_empty() {
-                futures::future::ready(()).boxed()
-            } else {
+            if !migrated_builtin_table_updates.is_empty() {
                 let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
                 for update in migrated_builtin_table_updates {
                     appends
@@ -2167,16 +2153,13 @@ impl Coordinator {
                     .storage
                     .append_table(min_timestamp, boot_ts.step_forward(), appends)
                     .expect("cannot fail to append");
-                async {
+                spawn(|| "migrate-builtin-tables", async move {
                     fut.await
                         .expect("One-shot shouldn't be dropped during bootstrap")
                         .unwrap_or_terminate("cannot fail to append")
-                }
-                .boxed()
+                });
             }
-        } else {
-            futures::future::ready(()).boxed()
-        };
+        }
 
         info!(
             "startup: coordinator init: bootstrap: postamble complete in {:?}",
@@ -2185,17 +2168,15 @@ impl Coordinator {
 
         let builtin_update_start = Instant::now();
         info!("startup: coordinator init: bootstrap: generate builtin updates beginning");
-        let builtin_updates_fut = if self.controller.read_only() {
+        if self.controller.read_only() {
             info!("coordinator init: bootstrap: stashing builtin table updates while in read-only mode");
 
             self.buffered_builtin_table_updates
                 .as_mut()
                 .expect("in read-only mode")
                 .append(&mut builtin_table_updates);
-
-            futures::future::ready(()).boxed()
         } else {
-            self.bootstrap_tables(&entries, builtin_table_updates).await
+            self.bootstrap_tables(&entries, builtin_table_updates).await;
         };
         info!(
             "startup: coordinator init: bootstrap: generate builtin updates complete in {:?}",
@@ -2207,7 +2188,7 @@ impl Coordinator {
         // Cleanup orphaned secrets. Errors during list() or delete() do not
         // need to prevent bootstrap from succeeding; we will retry next
         // startup.
-        let secrets_cleanup_fut = {
+        {
             // Destructure Self so we can selectively move fields into the async
             // task.
             let Self {
@@ -2220,7 +2201,7 @@ impl Coordinator {
             let next_system_item_id = catalog.get_next_system_item_id().await?;
             let read_only = self.controller.read_only();
 
-            async move {
+            spawn(|| "cleanup-secrets", async move {
                 if read_only {
                     info!("coordinator init: not cleaning up orphaned secrets while in read-only mode");
                     return;
@@ -2263,25 +2244,15 @@ impl Coordinator {
                     }
                     Err(e) => warn!("Failed to list secrets during orphan cleanup: {:?}", e),
                 }
-            }
-        };
+            });
+        }
         info!(
             "startup: coordinator init: bootstrap: generate secret cleanup complete in {:?}",
             cleanup_secrets_start.elapsed()
         );
 
-        // Run all of our final steps concurrently.
         let final_steps_start = Instant::now();
-        info!(
-            "startup: coordinator init: bootstrap: concurrently update builtin tables, migrate builtin tables, and cleanup secrets beginning"
-        );
-        futures::future::join_all([
-            migrated_updates_fut,
-            builtin_updates_fut,
-            Box::pin(secrets_cleanup_fut),
-        ])
-        .instrument(info_span!("coord::bootstrap::final"))
-        .await;
+        info!("startup: coordinator init: bootstrap: postamble beginning");
 
         debug!("startup: coordinator init: bootstrap: announcing completion of initialization to controller");
         // Announce the completion of initialization.
@@ -2291,7 +2262,8 @@ impl Coordinator {
         self.bootstrap_introspection_subscribes().await;
 
         info!(
-            "startup: coordinator init: bootstrap: concurrently update builtin tables, migrate builtin tables, and cleanup secrets complete in {:?}", final_steps_start.elapsed()
+            "startup: coordinator init: bootstrap: postamble complete in {:?}",
+            final_steps_start.elapsed()
         );
 
         info!(
@@ -2303,6 +2275,8 @@ impl Coordinator {
 
     /// Prepares tables for writing by resetting them to a known state and
     /// appending the given builtin table updates.
+    ///
+    /// TODO(jkosh44) Talk about apply
     #[allow(clippy::async_yields_async)]
     #[instrument]
     async fn bootstrap_tables(
@@ -2321,13 +2295,12 @@ impl Coordinator {
             .filter(|entry| entry.is_table())
             .map(|entry| (entry.id(), Vec::new()))
             .collect();
-        self.controller
+        // TODO(jkosh44)
+        let table_fence_rx = self
+            .controller
             .storage
             .append_table(write_ts.clone(), advance_to, appends)
-            .expect("invalid updates")
-            .await
-            .expect("One-shot shouldn't be dropped during bootstrap")
-            .unwrap_or_terminate("cannot fail to append");
+            .expect("invalid updates");
         self.apply_local_write(write_ts).await;
 
         // Add builtin table updates the clear the contents of all system tables
@@ -2379,11 +2352,21 @@ impl Coordinator {
             builtin_table_updates.extend(retractions);
         }
 
+        // TODO(jkosh44)
+        table_fence_rx
+            .await
+            .expect("One-shot shouldn't be dropped during bootstrap")
+            .unwrap_or_terminate("cannot fail to append");
+
         debug!("coordinator init: sending builtin table updates");
-        let builtin_updates_fut = self
+        let (builtin_updates_fut, write_ts) = self
             .builtin_table_update()
             .execute(builtin_table_updates)
             .await;
+        // TODO(jkosh44)
+        if let Some(write_ts) = write_ts {
+            self.apply_local_write(write_ts).await;
+        }
         builtin_updates_fut
     }
 
