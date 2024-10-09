@@ -483,6 +483,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 import_ids = %dataflow.display_import_ids(),
                 export_ids = %dataflow.display_export_ids(),
                 as_of = ?as_of.elements(),
+                dataflow_expiration = ?dataflow_expiration.elements(),
                 until = ?until.elements(),
                 "creating dataflow",
             );
@@ -492,6 +493,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 import_ids = %dataflow.display_import_ids(),
                 export_ids = %dataflow.display_export_ids(),
                 as_of = ?as_of.elements(),
+                dataflow_expiration = ?dataflow_expiration.elements(),
                 until = ?until.elements(),
                 "creating dataflow",
             );
