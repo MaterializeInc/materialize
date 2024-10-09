@@ -157,13 +157,6 @@ contains:S3 bucket path is not empty
     HEADER = true
   )
 
-> COPY (SELECT 1 WHERE FALSE) TO 's3://copytos3/test/5'
-  WITH (
-    AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "100MB",
-    FORMAT = 'csv'
-  );
-
 $ set-from-sql var=key-1
 SELECT TO_CHAR(now(), 'YYYY-MM-DD')
 
@@ -175,9 +168,7 @@ $ s3-verify-data bucket=copytos3 key=test/2 sort-rows=true
 1
 2
 
-# The double `a` here is a result of the header being written once per file.
 $ s3-verify-data bucket=copytos3 key=test/2_5 sort-rows=true
-a
 a
 1
 
@@ -187,9 +178,6 @@ $ s3-verify-data bucket=copytos3 key=test/3 sort-rows=true
 $ s3-verify-data bucket=copytos3 key=test/4_5 sort-rows=true
 array;int4;jsonb;timestamp
 {1,2};83647;`{"s":"ab``c"}`;2010-10-10 10:10:10
-
-# Ensure that at least one file is written even when the input is empty.
-$ s3-verify-keys bucket=copytos3 prefix-path=test/5 key-pattern=^test/5/mz.*\.csv$
 
 # Copy a large amount of data in the background and check to see that the INCOMPLETE
 # sentinel object is written during the copy
@@ -224,13 +212,6 @@ $ s3-verify-keys bucket=copytos3 prefix-path=test/5 key-pattern=^test/5/mz.*\.cs
     FORMAT = 'parquet'
   );
 
-> COPY (SELECT 1 WHERE FALSE) TO 's3://copytos3/parquet_test/4'
-  WITH (
-    AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "100MB",
-    FORMAT = 'parquet'
-  );
-
 $ s3-verify-data bucket=copytos3 key=parquet_test/1/${key-1} sort-rows=true
 1
 2
@@ -241,9 +222,6 @@ $ s3-verify-data bucket=copytos3 key=parquet_test/2 sort-rows=true
 
 $ s3-verify-data bucket=copytos3 key=parquet_test/3 sort-rows=true
 {items: [1, 2], dimensions: 1} {items: [1, 2, , 4], dimensions: 2} false inf {"s":"abc"} 85907cb9ac9b4e3584b860dc69368aca 1 32767 2147483647 9223372036854775807 1234567890123456789012.4567890123456789 2010-10-10 10:10:10 2010-10-10T10:10:10 2010-10-10T08:10:10Z aaaa 5c7841414141 това е d182d0b5d0bad181d182
-
-# Ensure that at least one file is written even when the input is empty.
-$ s3-verify-keys bucket=copytos3 prefix-path=parquet_test/4 key-pattern=^parquet_test/4/mz.*\.parquet$
 
 # Confirm that unimplemented types will early exit before writing to s3
 ! COPY (SELECT '0 day'::interval)  TO 's3://copytos3/parquet_test/5'

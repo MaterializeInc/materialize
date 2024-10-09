@@ -119,10 +119,6 @@ impl CopyToS3Uploader for PgCopyUploader {
             Err(e) => Err(e.into()),
         }
     }
-
-    async fn force_new_file(&mut self) -> Result<(), anyhow::Error> {
-        self.start_new_file_upload().await
-    }
 }
 
 impl PgCopyUploader {
