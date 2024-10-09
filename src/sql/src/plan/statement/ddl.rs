@@ -2739,7 +2739,8 @@ pub fn plan_create_continual_task(
     mut stmt: CreateContinualTaskStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    scx.require_feature_flag(&ENABLE_CREATE_CONTINUAL_TASK)?;
+    // WIP
+    // scx.require_feature_flag(&ENABLE_CREATE_CONTINUAL_TASK)?;
     let cluster_id = match &stmt.in_cluster {
         None => scx.catalog.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
