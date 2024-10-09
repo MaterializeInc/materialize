@@ -127,6 +127,12 @@ expression.
 #### Cons
 - We need to worry about coordinating access across multiple pods. It's expected that during
   upgrades at least two `environmentd`s will be communicating with the cache.
+- We need to worry about compaction and read latency during startup.
+
+## Alternatives
+
+For the persist implementation, we could mint a new shard for each deploy generation. This would
+require us to finalize old shards during startup which would accumulate shard tombstones in CRDB.
 
 ## Open questions
 
