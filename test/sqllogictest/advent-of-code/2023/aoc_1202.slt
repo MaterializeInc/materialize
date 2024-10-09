@@ -1,0 +1,884 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1202.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (input TEXT);
+
+statement ok
+INSERT INTO input VALUES ('Game 1: 12 red, 2 green, 5 blue; 9 red, 6 green, 4 blue; 10 red, 2 green, 5 blue; 8 blue, 9 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 2: 3 green, 7 red; 3 blue, 5 red; 2 green, 1 blue, 6 red; 3 green, 2 red, 3 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 3: 12 red, 18 blue, 3 green; 14 red, 4 blue, 2 green; 4 green, 15 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 4: 14 blue, 8 red, 10 green; 7 green, 9 blue, 4 red; 4 green, 5 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 5: 2 red, 1 blue, 4 green; 1 blue, 1 red, 5 green; 6 green, 3 red; 10 blue, 4 green, 1 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 6: 5 red, 5 blue, 1 green; 5 blue, 15 red, 2 green; 3 green, 1 red, 9 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 7: 9 red, 8 blue, 13 green; 9 red, 7 blue, 10 green; 7 blue, 2 red, 11 green; 4 red, 6 blue, 10 green; 3 blue, 12 green, 1 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 8: 20 red, 5 green, 10 blue; 14 red, 8 blue, 5 green; 5 green, 4 blue, 9 red; 18 red, 1 green; 2 blue, 1 green, 5 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 9: 3 blue; 3 blue, 4 green, 1 red; 8 green, 2 blue, 4 red; 5 green, 4 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 10: 18 red, 11 green, 3 blue; 2 blue, 19 red, 7 green; 4 green, 1 blue, 6 red; 4 green, 2 red, 4 blue; 10 green, 5 red, 2 blue; 13 red, 12 green, 4 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 11: 5 green, 5 blue, 3 red; 2 red, 8 blue, 4 green; 4 blue, 4 green, 2 red; 1 blue, 3 red, 2 green; 4 blue, 4 green; 6 blue, 2 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 12: 6 blue, 1 green, 4 red; 12 blue, 4 red; 12 blue, 2 red, 6 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 13: 11 red, 17 blue, 7 green; 20 red, 12 green, 9 blue; 15 red, 15 green, 14 blue; 7 red, 6 green, 3 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 14: 8 red, 17 green, 6 blue; 5 red, 13 blue, 7 green; 2 red, 15 green, 4 blue; 9 blue, 2 green; 7 green, 2 blue, 8 red; 10 green, 14 blue, 10 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 15: 14 red, 4 green, 4 blue; 14 red, 2 green, 16 blue; 10 blue, 2 green, 6 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 16: 2 red, 3 green; 5 green; 1 red, 1 blue; 2 red, 3 green, 1 blue; 5 red, 4 green; 5 red, 4 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 17: 4 blue, 3 green, 9 red; 3 blue, 8 red, 1 green; 1 blue, 5 green; 8 green, 2 red; 10 red, 1 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 18: 10 blue, 5 red; 1 green, 9 red, 9 blue; 5 blue, 3 red; 3 red, 1 blue; 2 blue, 9 red, 1 green; 6 red, 7 blue, 1 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 19: 9 green, 2 red, 12 blue; 3 green, 9 red, 16 blue; 2 green, 17 blue; 11 green, 3 blue, 7 red; 2 red, 10 blue, 11 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 20: 17 blue, 16 green; 13 green, 12 blue, 13 red; 6 red, 9 green, 6 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 21: 1 green, 3 red, 1 blue; 1 blue, 2 green, 2 red; 2 green, 1 blue, 3 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 22: 7 green, 3 blue, 5 red; 2 green, 14 red, 3 blue; 2 green, 17 red; 2 blue, 15 red, 6 green; 4 green, 1 blue, 17 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 23: 4 blue, 2 red; 2 red, 7 blue, 1 green; 6 red, 5 blue, 5 green; 9 red, 4 blue; 10 blue, 8 red, 11 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 24: 1 red, 9 green, 5 blue; 14 green, 4 blue, 2 red; 5 blue, 1 red, 11 green; 3 blue, 2 red, 4 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 25: 3 green, 2 red, 1 blue; 2 blue, 10 green, 1 red; 8 red, 4 green, 1 blue; 3 blue, 15 red, 6 green; 2 blue, 13 red, 8 green; 2 red, 5 blue, 5 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 26: 5 green, 5 red; 12 green; 5 green, 3 blue, 4 red; 1 blue, 1 red, 17 green; 2 blue, 18 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 27: 1 blue, 7 green, 3 red; 3 red, 1 green, 13 blue; 4 green, 8 blue; 1 red, 3 green, 4 blue; 9 blue, 2 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 28: 9 red, 2 green, 5 blue; 5 red, 9 green; 5 blue, 1 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 29: 4 green, 10 blue, 13 red; 2 red, 5 green, 5 blue; 2 red, 9 green, 11 blue; 9 blue, 9 red, 13 green; 13 blue, 2 green, 14 red; 3 green, 8 blue, 5 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 30: 3 green, 7 red, 3 blue; 5 green, 5 blue, 12 red; 14 red, 6 green, 11 blue; 7 blue, 9 green, 11 red; 10 red, 1 blue, 4 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 31: 6 green, 5 blue, 17 red; 16 blue, 17 green, 14 red; 13 green, 13 blue, 3 red; 18 red, 8 green, 14 blue; 18 green, 1 blue; 16 red, 6 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 32: 12 green, 2 blue; 6 blue, 5 red, 10 green; 13 green, 2 blue; 2 red, 6 blue, 6 green; 9 green, 8 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 33: 4 blue, 6 red, 2 green; 7 red, 5 blue; 3 blue, 1 red, 1 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 34: 2 red, 7 blue, 1 green; 2 blue, 1 green, 6 red; 6 red, 3 green, 7 blue; 4 green, 13 red, 1 blue; 15 blue, 1 green, 5 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 35: 8 blue, 12 red, 7 green; 2 blue, 14 red, 3 green; 14 green, 8 blue, 7 red; 15 red, 12 blue, 12 green; 11 blue, 14 red, 1 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 36: 11 red, 8 green, 2 blue; 17 red, 2 blue; 3 blue, 8 green, 19 red; 6 red, 3 blue, 3 green; 8 red, 5 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 37: 2 blue, 3 red, 12 green; 3 red, 7 green, 4 blue; 7 blue, 3 red, 8 green; 13 green, 3 red, 2 blue; 2 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 38: 2 blue, 14 red, 17 green; 1 blue, 13 green, 6 red; 14 green, 2 blue, 2 red; 4 blue, 1 green, 6 red; 2 red, 12 green, 2 blue; 4 red, 2 blue, 1 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 39: 2 green, 3 red, 12 blue; 1 green, 14 blue, 16 red; 13 red, 9 blue, 1 green; 15 red, 1 green, 18 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 40: 17 green; 12 green, 6 blue; 1 red, 3 blue, 6 green; 1 red, 5 blue, 8 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 41: 2 green, 8 red; 2 blue, 7 green, 14 red; 13 red, 2 green, 1 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 42: 1 red, 7 blue, 7 green; 2 green, 4 blue, 1 red; 15 green, 8 blue, 1 red; 1 red, 1 blue, 12 green; 6 blue, 10 green; 6 blue, 1 red, 15 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 43: 8 blue, 1 green, 1 red; 3 green, 1 red; 2 red, 6 blue, 9 green; 2 blue, 3 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 44: 8 green; 1 blue, 12 green, 16 red; 9 red, 9 green, 2 blue; 3 blue, 11 green, 4 red; 16 red, 8 blue, 11 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 45: 4 blue, 3 red, 13 green; 2 red, 2 blue, 13 green; 11 green, 7 blue, 2 red; 9 green, 6 blue; 12 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 46: 14 green; 9 blue, 11 green, 10 red; 19 green, 8 red, 14 blue; 12 red, 10 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 47: 1 green, 14 red; 2 blue, 11 green, 4 red; 6 red, 8 blue, 2 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 48: 8 blue, 13 red; 5 red, 2 green, 10 blue; 9 red, 12 blue, 1 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 49: 2 blue, 8 green; 1 red, 8 green, 4 blue; 6 red, 1 blue; 3 green, 2 red, 4 blue; 6 blue, 1 red, 9 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 50: 7 red, 14 green, 4 blue; 9 red, 10 green, 2 blue; 3 red, 9 blue, 14 green; 2 green, 12 red, 5 blue; 10 blue, 6 green; 8 red, 1 blue, 7 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 51: 4 red, 18 green, 1 blue; 15 green; 3 blue, 16 red, 17 green; 9 blue, 10 red, 13 green; 11 green, 14 red; 1 green, 7 blue, 1 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 52: 7 red, 4 blue, 5 green; 1 green, 10 blue, 1 red; 4 blue, 5 red, 7 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 53: 3 red, 1 blue; 1 green, 3 red, 2 blue; 2 red, 1 blue, 8 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 54: 1 green, 11 red; 1 blue, 3 green, 1 red; 1 blue, 1 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 55: 1 blue, 2 green; 5 blue, 3 red; 3 green, 8 red, 3 blue; 4 red, 4 blue, 3 green; 2 green, 4 red; 4 red, 2 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 56: 17 blue, 12 green; 1 red, 7 green, 16 blue; 3 blue, 4 green, 3 red; 7 blue, 12 red, 15 green; 4 red, 8 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 57: 2 red, 3 blue; 1 red, 8 blue; 9 red, 11 green, 8 blue; 1 blue, 13 green, 6 red; 7 red, 8 green, 2 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 58: 13 blue, 8 red, 4 green; 2 green, 7 red; 6 green, 1 blue; 5 red, 8 blue, 5 green; 5 blue, 1 green, 3 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 59: 8 red, 10 blue, 3 green; 9 red, 19 blue; 11 red, 2 green, 20 blue; 1 red, 8 blue, 3 green; 11 blue, 1 red, 2 green; 8 red, 3 green, 19 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 60: 1 green, 2 blue, 5 red; 6 red, 2 green, 2 blue; 12 green, 2 blue; 5 red, 5 green, 1 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 61: 4 red, 9 green, 1 blue; 15 green, 1 blue, 8 red; 2 blue, 20 green; 13 green, 1 blue, 3 red; 7 green, 7 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 62: 7 red, 5 blue; 6 green, 6 blue, 7 red; 5 red, 4 blue, 2 green; 3 red, 3 green; 9 blue, 1 green, 1 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 63: 6 blue; 1 blue, 4 red; 11 blue, 2 green, 3 red; 5 blue, 2 green, 7 red; 3 red, 11 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 64: 3 green, 3 blue, 5 red; 2 red, 6 blue, 3 green; 2 red, 6 blue; 3 green, 7 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 65: 6 red, 7 blue, 11 green; 15 green, 9 blue, 3 red; 8 green, 10 red, 1 blue; 16 blue, 6 red, 2 green; 3 green, 10 red, 14 blue; 10 red, 2 blue, 13 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 66: 5 blue, 9 green; 2 green, 2 red, 7 blue; 4 red, 12 green, 1 blue; 2 red, 13 green, 7 blue; 3 red, 4 green, 2 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 67: 8 green, 5 red; 3 blue, 4 red, 10 green; 5 red, 12 blue, 11 green; 11 green, 4 blue; 5 blue, 4 green, 2 red; 1 red, 4 blue, 10 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 68: 4 blue, 13 red, 1 green; 2 blue, 6 red, 1 green; 5 green, 13 red, 2 blue; 3 blue, 3 green, 5 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 69: 6 red, 14 blue; 16 red, 17 blue; 4 red, 2 green; 14 red, 6 blue, 1 green; 16 red, 15 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 70: 5 blue, 6 red, 6 green; 6 green, 1 blue, 6 red; 3 blue, 12 red, 4 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 71: 1 green, 13 blue, 1 red; 2 green, 2 red; 1 green, 1 red, 6 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 72: 5 green, 10 red; 13 blue, 7 red, 8 green; 12 red, 3 green, 2 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 73: 10 green, 5 red; 11 red, 13 blue, 11 green; 14 green, 5 blue, 1 red; 9 green, 13 red, 10 blue; 8 red, 11 green, 8 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 74: 10 blue, 1 green, 6 red; 7 blue, 8 green, 4 red; 1 red, 8 blue, 7 green; 7 green, 1 red, 10 blue; 6 red, 9 green, 4 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 75: 1 blue, 3 green; 15 blue, 2 green, 11 red; 9 red, 18 blue; 10 red, 17 blue, 2 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 76: 3 green, 6 red, 4 blue; 7 green, 3 red; 5 blue, 15 red; 5 green, 2 blue, 20 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 77: 5 blue, 3 green, 7 red; 6 blue, 3 green, 1 red; 13 red, 5 blue, 1 green; 2 red, 2 blue, 3 green; 4 green, 7 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 78: 6 red, 4 blue; 2 blue, 2 red; 8 blue, 1 green, 8 red; 4 red, 1 green, 10 blue; 2 green, 5 red, 13 blue; 7 red, 2 green, 5 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 79: 3 green, 11 red; 16 green, 9 red, 17 blue; 3 red; 17 green, 18 blue, 5 red; 3 green, 3 red; 6 red, 18 blue, 12 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 80: 2 red, 5 blue, 1 green; 7 red; 2 red, 3 blue; 8 red, 5 blue; 8 red, 4 blue, 1 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 81: 12 green, 6 blue; 9 blue, 5 green, 1 red; 1 red, 7 green, 1 blue; 7 green, 1 blue; 1 green, 4 blue, 1 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 82: 12 green, 3 blue; 1 blue, 8 green; 15 green, 3 blue, 1 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 83: 5 red, 8 green; 10 green, 3 red, 11 blue; 12 green, 6 blue, 3 red; 2 green, 13 red, 9 blue; 12 green, 5 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 84: 1 green, 8 red, 2 blue; 2 blue, 9 red; 1 blue, 6 red; 3 red, 1 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 85: 2 blue, 7 red; 5 blue, 5 red, 6 green; 2 blue, 3 green, 7 red; 2 green, 1 blue, 5 red; 3 green, 2 blue; 5 red, 6 green, 1 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 86: 13 red, 9 green, 4 blue; 15 blue, 11 green; 12 red, 19 blue, 14 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 87: 13 green, 5 red, 7 blue; 5 red, 17 green, 5 blue; 16 green, 4 blue, 5 red; 15 green, 6 blue, 5 red; 2 red, 7 green, 3 blue; 3 green, 2 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 88: 9 green, 1 red, 5 blue; 8 red, 7 green, 14 blue; 8 red, 9 blue, 10 green; 4 red, 10 blue; 10 red, 4 green, 19 blue; 9 red, 1 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 89: 4 blue, 7 green, 1 red; 6 blue, 3 green; 7 blue, 1 red, 6 green; 4 blue, 4 green; 1 red, 11 green; 1 red, 1 green, 3 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 90: 4 red, 12 green, 4 blue; 1 red, 9 green; 5 green, 10 blue, 6 red; 6 red, 5 blue, 2 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 91: 16 blue, 11 red; 2 green, 3 red, 12 blue; 1 green, 17 blue, 1 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 92: 2 green, 2 blue, 1 red; 7 blue, 2 green; 8 blue, 1 red, 9 green; 11 blue, 5 green, 1 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 93: 5 blue, 1 red, 5 green; 2 red; 5 red, 9 green, 13 blue');
+
+statement ok
+INSERT INTO input VALUES ('Game 94: 2 red, 3 blue; 2 blue, 8 red, 5 green; 1 red, 15 blue; 2 red, 8 blue, 5 green; 16 blue, 11 red; 6 green, 6 blue, 6 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 95: 4 green, 5 red, 10 blue; 8 green, 1 red, 13 blue; 6 green, 9 blue, 7 red; 2 red, 2 blue, 2 green; 5 red, 9 green, 9 blue; 2 blue, 10 green, 3 red');
+
+statement ok
+INSERT INTO input VALUES ('Game 96: 2 green; 7 blue, 10 red, 4 green; 9 red, 2 blue, 9 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 97: 5 blue, 6 red, 14 green; 6 green, 14 blue, 2 red; 2 blue, 4 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 98: 8 green, 1 blue, 9 red; 1 blue, 10 green; 11 green, 1 blue, 3 red; 1 blue, 11 green, 10 red; 14 green, 7 red; 4 red, 10 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 99: 1 red, 6 green, 3 blue; 7 blue, 1 red, 2 green; 1 red, 4 green; 6 green, 11 blue, 1 red; 4 blue, 2 green; 2 blue, 1 red, 6 green');
+
+statement ok
+INSERT INTO input VALUES ('Game 100: 5 green, 1 red; 1 red, 6 green; 6 blue, 1 red, 6 green; 6 blue, 1 green, 2 red; 8 blue, 1 red, 4 green; 8 green, 5 blue');
+
+statement ok
+CREATE TABLE aoc_1202 (game_id TEXT, set_id TEXT, green_cnt INT, red_cnt INT, blue_cnt INT);
+
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 1', 'set_0', 2, 12, 5), ('Game 1', 'set_1', 6, 9, 4), ('Game 1', 'set_2', 2, 10, 5), ('Game 1', 'set_3', 0, 9, 8);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 2', 'set_0', 3, 7, 0), ('Game 2', 'set_1', 0, 5, 3), ('Game 2', 'set_2', 2, 6, 1), ('Game 2', 'set_3', 3, 2, 3);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 3', 'set_0', 3, 12, 18), ('Game 3', 'set_1', 2, 14, 4), ('Game 3', 'set_2', 4, 15, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 4', 'set_0', 10, 8, 14), ('Game 4', 'set_1', 7, 4, 9), ('Game 4', 'set_2', 4, 5, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 5', 'set_0', 4, 2, 1), ('Game 5', 'set_1', 5, 1, 1), ('Game 5', 'set_2', 6, 3, 0), ('Game 5', 'set_3', 4, 1, 10);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 6', 'set_0', 1, 5, 5), ('Game 6', 'set_1', 2, 15, 5), ('Game 6', 'set_2', 3, 1, 9);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 7', 'set_0', 13, 9, 8), ('Game 7', 'set_1', 10, 9, 7), ('Game 7', 'set_2', 11, 2, 7), ('Game 7', 'set_3', 10, 4, 6), ('Game 7', 'set_4', 12, 1, 3);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 8', 'set_0', 5, 20, 10), ('Game 8', 'set_1', 5, 14, 8), ('Game 8', 'set_2', 5, 9, 4), ('Game 8', 'set_3', 1, 18, 0), ('Game 8', 'set_4', 1, 5, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 9', 'set_0', 0, 0, 3), ('Game 9', 'set_1', 4, 1, 3), ('Game 9', 'set_2', 8, 4, 2), ('Game 9', 'set_3', 5, 4, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 10', 'set_0', 11, 18, 3), ('Game 10', 'set_1', 7, 19, 2), ('Game 10', 'set_2', 4, 6, 1), ('Game 10', 'set_3', 4, 2, 4), ('Game 10', 'set_4', 10, 5, 2), ('Game 10', 'set_5', 12, 13, 4);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 11', 'set_0', 5, 3, 5), ('Game 11', 'set_1', 4, 2, 8), ('Game 11', 'set_2', 4, 2, 4), ('Game 11', 'set_3', 2, 3, 1), ('Game 11', 'set_4', 4, 0, 4), ('Game 11', 'set_5', 0, 2, 6);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 12', 'set_0', 1, 4, 6), ('Game 12', 'set_1', 0, 4, 12), ('Game 12', 'set_2', 6, 2, 12);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 13', 'set_0', 7, 11, 17), ('Game 13', 'set_1', 12, 20, 9), ('Game 13', 'set_2', 15, 15, 14), ('Game 13', 'set_3', 6, 7, 3);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 14', 'set_0', 17, 8, 6), ('Game 14', 'set_1', 7, 5, 13), ('Game 14', 'set_2', 15, 2, 4), ('Game 14', 'set_3', 2, 0, 9), ('Game 14', 'set_4', 7, 8, 2), ('Game 14', 'set_5', 10, 10, 14);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 15', 'set_0', 4, 14, 4), ('Game 15', 'set_1', 2, 14, 16), ('Game 15', 'set_2', 2, 6, 10);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 16', 'set_0', 3, 2, 0), ('Game 16', 'set_1', 5, 0, 0), ('Game 16', 'set_2', 0, 1, 1), ('Game 16', 'set_3', 3, 2, 1), ('Game 16', 'set_4', 4, 5, 0), ('Game 16', 'set_5', 4, 5, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 17', 'set_0', 3, 9, 4), ('Game 17', 'set_1', 1, 8, 3), ('Game 17', 'set_2', 5, 0, 1), ('Game 17', 'set_3', 8, 2, 0), ('Game 17', 'set_4', 1, 10, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 18', 'set_0', 0, 5, 10), ('Game 18', 'set_1', 1, 9, 9), ('Game 18', 'set_2', 0, 3, 5), ('Game 18', 'set_3', 0, 3, 1), ('Game 18', 'set_4', 1, 9, 2), ('Game 18', 'set_5', 1, 6, 7);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 19', 'set_0', 9, 2, 12), ('Game 19', 'set_1', 3, 9, 16), ('Game 19', 'set_2', 2, 0, 17), ('Game 19', 'set_3', 11, 7, 3), ('Game 19', 'set_4', 11, 2, 10);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 20', 'set_0', 16, 0, 17), ('Game 20', 'set_1', 13, 13, 12), ('Game 20', 'set_2', 9, 6, 6);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 21', 'set_0', 1, 3, 1), ('Game 21', 'set_1', 2, 2, 1), ('Game 21', 'set_2', 2, 3, 1);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 22', 'set_0', 7, 5, 3), ('Game 22', 'set_1', 2, 14, 3), ('Game 22', 'set_2', 2, 17, 0), ('Game 22', 'set_3', 6, 15, 2), ('Game 22', 'set_4', 4, 17, 1);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 23', 'set_0', 0, 2, 4), ('Game 23', 'set_1', 1, 2, 7), ('Game 23', 'set_2', 5, 6, 5), ('Game 23', 'set_3', 0, 9, 4), ('Game 23', 'set_4', 11, 8, 10);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 24', 'set_0', 9, 1, 5), ('Game 24', 'set_1', 14, 2, 4), ('Game 24', 'set_2', 11, 1, 5), ('Game 24', 'set_3', 4, 2, 3);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 25', 'set_0', 3, 2, 1), ('Game 25', 'set_1', 10, 1, 2), ('Game 25', 'set_2', 4, 8, 1), ('Game 25', 'set_3', 6, 15, 3), ('Game 25', 'set_4', 8, 13, 2), ('Game 25', 'set_5', 5, 2, 5);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 26', 'set_0', 5, 5, 0), ('Game 26', 'set_1', 12, 0, 0), ('Game 26', 'set_2', 5, 4, 3), ('Game 26', 'set_3', 17, 1, 1), ('Game 26', 'set_4', 18, 0, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 27', 'set_0', 7, 3, 1), ('Game 27', 'set_1', 1, 3, 13), ('Game 27', 'set_2', 4, 0, 8), ('Game 27', 'set_3', 3, 1, 4), ('Game 27', 'set_4', 0, 2, 9);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 28', 'set_0', 2, 9, 5), ('Game 28', 'set_1', 9, 5, 0), ('Game 28', 'set_2', 0, 1, 5);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 29', 'set_0', 4, 13, 10), ('Game 29', 'set_1', 5, 2, 5), ('Game 29', 'set_2', 9, 2, 11), ('Game 29', 'set_3', 13, 9, 9), ('Game 29', 'set_4', 2, 14, 13), ('Game 29', 'set_5', 3, 5, 8);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 30', 'set_0', 3, 7, 3), ('Game 30', 'set_1', 5, 12, 5), ('Game 30', 'set_2', 6, 14, 11), ('Game 30', 'set_3', 9, 11, 7), ('Game 30', 'set_4', 4, 10, 1);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 31', 'set_0', 6, 17, 5), ('Game 31', 'set_1', 17, 14, 16), ('Game 31', 'set_2', 13, 3, 13), ('Game 31', 'set_3', 8, 18, 14), ('Game 31', 'set_4', 18, 0, 1), ('Game 31', 'set_5', 0, 16, 6);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 32', 'set_0', 12, 0, 2), ('Game 32', 'set_1', 10, 5, 6), ('Game 32', 'set_2', 13, 0, 2), ('Game 32', 'set_3', 6, 2, 6), ('Game 32', 'set_4', 9, 8, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 33', 'set_0', 2, 6, 4), ('Game 33', 'set_1', 0, 7, 5), ('Game 33', 'set_2', 1, 1, 3);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 34', 'set_0', 1, 2, 7), ('Game 34', 'set_1', 1, 6, 2), ('Game 34', 'set_2', 3, 6, 7), ('Game 34', 'set_3', 4, 13, 1), ('Game 34', 'set_4', 1, 5, 15);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 35', 'set_0', 7, 12, 8), ('Game 35', 'set_1', 3, 14, 2), ('Game 35', 'set_2', 14, 7, 8), ('Game 35', 'set_3', 12, 15, 12), ('Game 35', 'set_4', 1, 14, 11);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 36', 'set_0', 8, 11, 2), ('Game 36', 'set_1', 0, 17, 2), ('Game 36', 'set_2', 8, 19, 3), ('Game 36', 'set_3', 3, 6, 3), ('Game 36', 'set_4', 5, 8, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 37', 'set_0', 12, 3, 2), ('Game 37', 'set_1', 7, 3, 4), ('Game 37', 'set_2', 8, 3, 7), ('Game 37', 'set_3', 13, 3, 2), ('Game 37', 'set_4', 2, 0, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 38', 'set_0', 17, 14, 2), ('Game 38', 'set_1', 13, 6, 1), ('Game 38', 'set_2', 14, 2, 2), ('Game 38', 'set_3', 1, 6, 4), ('Game 38', 'set_4', 12, 2, 2), ('Game 38', 'set_5', 1, 4, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 39', 'set_0', 2, 3, 12), ('Game 39', 'set_1', 1, 16, 14), ('Game 39', 'set_2', 1, 13, 9), ('Game 39', 'set_3', 1, 15, 18);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 40', 'set_0', 17, 0, 0), ('Game 40', 'set_1', 12, 0, 6), ('Game 40', 'set_2', 6, 1, 3), ('Game 40', 'set_3', 8, 1, 5);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 41', 'set_0', 2, 8, 0), ('Game 41', 'set_1', 7, 14, 2), ('Game 41', 'set_2', 2, 13, 1);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 42', 'set_0', 7, 1, 7), ('Game 42', 'set_1', 2, 1, 4), ('Game 42', 'set_2', 15, 1, 8), ('Game 42', 'set_3', 12, 1, 1), ('Game 42', 'set_4', 10, 0, 6), ('Game 42', 'set_5', 15, 1, 6);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 43', 'set_0', 1, 1, 8), ('Game 43', 'set_1', 3, 1, 0), ('Game 43', 'set_2', 9, 2, 6), ('Game 43', 'set_3', 3, 0, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 44', 'set_0', 8, 0, 0), ('Game 44', 'set_1', 12, 16, 1), ('Game 44', 'set_2', 9, 9, 2), ('Game 44', 'set_3', 11, 4, 3), ('Game 44', 'set_4', 11, 16, 8);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 45', 'set_0', 13, 3, 4), ('Game 45', 'set_1', 13, 2, 2), ('Game 45', 'set_2', 11, 2, 7), ('Game 45', 'set_3', 9, 0, 6), ('Game 45', 'set_4', 12, 0, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 46', 'set_0', 14, 0, 0), ('Game 46', 'set_1', 11, 10, 9), ('Game 46', 'set_2', 19, 8, 14), ('Game 46', 'set_3', 0, 12, 10);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 47', 'set_0', 1, 14, 0), ('Game 47', 'set_1', 11, 4, 2), ('Game 47', 'set_2', 2, 6, 8);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 48', 'set_0', 0, 13, 8), ('Game 48', 'set_1', 2, 5, 10), ('Game 48', 'set_2', 1, 9, 12);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 49', 'set_0', 8, 0, 2), ('Game 49', 'set_1', 8, 1, 4), ('Game 49', 'set_2', 0, 6, 1), ('Game 49', 'set_3', 3, 2, 4), ('Game 49', 'set_4', 9, 1, 6);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 50', 'set_0', 14, 7, 4), ('Game 50', 'set_1', 10, 9, 2), ('Game 50', 'set_2', 14, 3, 9), ('Game 50', 'set_3', 2, 12, 5), ('Game 50', 'set_4', 6, 0, 10), ('Game 50', 'set_5', 7, 8, 1);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 51', 'set_0', 18, 4, 1), ('Game 51', 'set_1', 15, 0, 0), ('Game 51', 'set_2', 17, 16, 3), ('Game 51', 'set_3', 13, 10, 9), ('Game 51', 'set_4', 11, 14, 0), ('Game 51', 'set_5', 1, 1, 7);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 52', 'set_0', 5, 7, 4), ('Game 52', 'set_1', 1, 1, 10), ('Game 52', 'set_2', 7, 5, 4);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 53', 'set_0', 0, 3, 1), ('Game 53', 'set_1', 1, 3, 2), ('Game 53', 'set_2', 8, 2, 1);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 54', 'set_0', 1, 11, 0), ('Game 54', 'set_1', 3, 1, 1), ('Game 54', 'set_2', 0, 1, 1);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 55', 'set_0', 2, 0, 1), ('Game 55', 'set_1', 0, 3, 5), ('Game 55', 'set_2', 3, 8, 3), ('Game 55', 'set_3', 3, 4, 4), ('Game 55', 'set_4', 2, 4, 0), ('Game 55', 'set_5', 0, 4, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 56', 'set_0', 12, 0, 17), ('Game 56', 'set_1', 7, 1, 16), ('Game 56', 'set_2', 4, 3, 3), ('Game 56', 'set_3', 15, 12, 7), ('Game 56', 'set_4', 8, 4, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 57', 'set_0', 0, 2, 3), ('Game 57', 'set_1', 0, 1, 8), ('Game 57', 'set_2', 11, 9, 8), ('Game 57', 'set_3', 13, 6, 1), ('Game 57', 'set_4', 8, 7, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 58', 'set_0', 4, 8, 13), ('Game 58', 'set_1', 2, 7, 0), ('Game 58', 'set_2', 6, 0, 1), ('Game 58', 'set_3', 5, 5, 8), ('Game 58', 'set_4', 1, 3, 5);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 59', 'set_0', 3, 8, 10), ('Game 59', 'set_1', 0, 9, 19), ('Game 59', 'set_2', 2, 11, 20), ('Game 59', 'set_3', 3, 1, 8), ('Game 59', 'set_4', 2, 1, 11), ('Game 59', 'set_5', 3, 8, 19);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 60', 'set_0', 1, 5, 2), ('Game 60', 'set_1', 2, 6, 2), ('Game 60', 'set_2', 12, 0, 2), ('Game 60', 'set_3', 5, 5, 1);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 61', 'set_0', 9, 4, 1), ('Game 61', 'set_1', 15, 8, 1), ('Game 61', 'set_2', 20, 0, 2), ('Game 61', 'set_3', 13, 3, 1), ('Game 61', 'set_4', 7, 7, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 62', 'set_0', 0, 7, 5), ('Game 62', 'set_1', 6, 7, 6), ('Game 62', 'set_2', 2, 5, 4), ('Game 62', 'set_3', 3, 3, 0), ('Game 62', 'set_4', 1, 1, 9);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 63', 'set_0', 0, 0, 6), ('Game 63', 'set_1', 0, 4, 1), ('Game 63', 'set_2', 2, 3, 11), ('Game 63', 'set_3', 2, 7, 5), ('Game 63', 'set_4', 0, 3, 11);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 64', 'set_0', 3, 5, 3), ('Game 64', 'set_1', 3, 2, 6), ('Game 64', 'set_2', 0, 2, 6), ('Game 64', 'set_3', 3, 0, 7);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 65', 'set_0', 11, 6, 7), ('Game 65', 'set_1', 15, 3, 9), ('Game 65', 'set_2', 8, 10, 1), ('Game 65', 'set_3', 2, 6, 16), ('Game 65', 'set_4', 3, 10, 14), ('Game 65', 'set_5', 13, 10, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 66', 'set_0', 9, 0, 5), ('Game 66', 'set_1', 2, 2, 7), ('Game 66', 'set_2', 12, 4, 1), ('Game 66', 'set_3', 13, 2, 7), ('Game 66', 'set_4', 4, 3, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 67', 'set_0', 8, 5, 0), ('Game 67', 'set_1', 10, 4, 3), ('Game 67', 'set_2', 11, 5, 12), ('Game 67', 'set_3', 11, 0, 4), ('Game 67', 'set_4', 4, 2, 5), ('Game 67', 'set_5', 10, 1, 4);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 68', 'set_0', 1, 13, 4), ('Game 68', 'set_1', 1, 6, 2), ('Game 68', 'set_2', 5, 13, 2), ('Game 68', 'set_3', 3, 5, 3);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 69', 'set_0', 0, 6, 14), ('Game 69', 'set_1', 0, 16, 17), ('Game 69', 'set_2', 2, 4, 0), ('Game 69', 'set_3', 1, 14, 6), ('Game 69', 'set_4', 0, 16, 15);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 70', 'set_0', 6, 6, 5), ('Game 70', 'set_1', 6, 6, 1), ('Game 70', 'set_2', 4, 12, 3);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 71', 'set_0', 1, 1, 13), ('Game 71', 'set_1', 2, 2, 0), ('Game 71', 'set_2', 1, 1, 6);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 72', 'set_0', 5, 10, 0), ('Game 72', 'set_1', 8, 7, 13), ('Game 72', 'set_2', 3, 12, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 73', 'set_0', 10, 5, 0), ('Game 73', 'set_1', 11, 11, 13), ('Game 73', 'set_2', 14, 1, 5), ('Game 73', 'set_3', 9, 13, 10), ('Game 73', 'set_4', 11, 8, 8);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 74', 'set_0', 1, 6, 10), ('Game 74', 'set_1', 8, 4, 7), ('Game 74', 'set_2', 7, 1, 8), ('Game 74', 'set_3', 7, 1, 10), ('Game 74', 'set_4', 9, 6, 4);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 75', 'set_0', 3, 0, 1), ('Game 75', 'set_1', 2, 11, 15), ('Game 75', 'set_2', 0, 9, 18), ('Game 75', 'set_3', 2, 10, 17);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 76', 'set_0', 3, 6, 4), ('Game 76', 'set_1', 7, 3, 0), ('Game 76', 'set_2', 0, 15, 5), ('Game 76', 'set_3', 5, 20, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 77', 'set_0', 3, 7, 5), ('Game 77', 'set_1', 3, 1, 6), ('Game 77', 'set_2', 1, 13, 5), ('Game 77', 'set_3', 3, 2, 2), ('Game 77', 'set_4', 4, 0, 7);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 78', 'set_0', 0, 6, 4), ('Game 78', 'set_1', 0, 2, 2), ('Game 78', 'set_2', 1, 8, 8), ('Game 78', 'set_3', 1, 4, 10), ('Game 78', 'set_4', 2, 5, 13), ('Game 78', 'set_5', 2, 7, 5);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 79', 'set_0', 3, 11, 0), ('Game 79', 'set_1', 16, 9, 17), ('Game 79', 'set_2', 0, 3, 0), ('Game 79', 'set_3', 17, 5, 18), ('Game 79', 'set_4', 3, 3, 0), ('Game 79', 'set_5', 12, 6, 18);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 80', 'set_0', 1, 2, 5), ('Game 80', 'set_1', 0, 7, 0), ('Game 80', 'set_2', 0, 2, 3), ('Game 80', 'set_3', 0, 8, 5), ('Game 80', 'set_4', 1, 8, 4);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 81', 'set_0', 12, 0, 6), ('Game 81', 'set_1', 5, 1, 9), ('Game 81', 'set_2', 7, 1, 1), ('Game 81', 'set_3', 7, 0, 1), ('Game 81', 'set_4', 1, 1, 4);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 82', 'set_0', 12, 0, 3), ('Game 82', 'set_1', 8, 0, 1), ('Game 82', 'set_2', 15, 1, 3);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 83', 'set_0', 8, 5, 0), ('Game 83', 'set_1', 10, 3, 11), ('Game 83', 'set_2', 12, 3, 6), ('Game 83', 'set_3', 2, 13, 9), ('Game 83', 'set_4', 12, 0, 5);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 84', 'set_0', 1, 8, 2), ('Game 84', 'set_1', 0, 9, 2), ('Game 84', 'set_2', 0, 6, 1), ('Game 84', 'set_3', 1, 3, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 85', 'set_0', 0, 7, 2), ('Game 85', 'set_1', 6, 5, 5), ('Game 85', 'set_2', 3, 7, 2), ('Game 85', 'set_3', 2, 5, 1), ('Game 85', 'set_4', 3, 0, 2), ('Game 85', 'set_5', 6, 5, 1);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 86', 'set_0', 9, 13, 4), ('Game 86', 'set_1', 11, 0, 15), ('Game 86', 'set_2', 14, 12, 19);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 87', 'set_0', 13, 5, 7), ('Game 87', 'set_1', 17, 5, 5), ('Game 87', 'set_2', 16, 5, 4), ('Game 87', 'set_3', 15, 5, 6), ('Game 87', 'set_4', 7, 2, 3), ('Game 87', 'set_5', 3, 0, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 88', 'set_0', 9, 1, 5), ('Game 88', 'set_1', 7, 8, 14), ('Game 88', 'set_2', 10, 8, 9), ('Game 88', 'set_3', 0, 4, 10), ('Game 88', 'set_4', 4, 10, 19), ('Game 88', 'set_5', 1, 9, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 89', 'set_0', 7, 1, 4), ('Game 89', 'set_1', 3, 0, 6), ('Game 89', 'set_2', 6, 1, 7), ('Game 89', 'set_3', 4, 0, 4), ('Game 89', 'set_4', 11, 1, 0), ('Game 89', 'set_5', 1, 1, 3);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 90', 'set_0', 12, 4, 4), ('Game 90', 'set_1', 9, 1, 0), ('Game 90', 'set_2', 5, 6, 10), ('Game 90', 'set_3', 2, 6, 5);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 91', 'set_0', 0, 11, 16), ('Game 91', 'set_1', 2, 3, 12), ('Game 91', 'set_2', 1, 1, 17);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 92', 'set_0', 2, 1, 2), ('Game 92', 'set_1', 2, 0, 7), ('Game 92', 'set_2', 9, 1, 8), ('Game 92', 'set_3', 5, 1, 11);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 93', 'set_0', 5, 1, 5), ('Game 93', 'set_1', 0, 2, 0), ('Game 93', 'set_2', 9, 5, 13);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 94', 'set_0', 0, 2, 3), ('Game 94', 'set_1', 5, 8, 2), ('Game 94', 'set_2', 0, 1, 15), ('Game 94', 'set_3', 5, 2, 8), ('Game 94', 'set_4', 0, 11, 16), ('Game 94', 'set_5', 6, 6, 6);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 95', 'set_0', 4, 5, 10), ('Game 95', 'set_1', 8, 1, 13), ('Game 95', 'set_2', 6, 7, 9), ('Game 95', 'set_3', 2, 2, 2), ('Game 95', 'set_4', 9, 5, 9), ('Game 95', 'set_5', 10, 3, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 96', 'set_0', 2, 0, 0), ('Game 96', 'set_1', 4, 10, 7), ('Game 96', 'set_2', 9, 9, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 97', 'set_0', 14, 6, 5), ('Game 97', 'set_1', 6, 2, 14), ('Game 97', 'set_2', 4, 0, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 98', 'set_0', 8, 9, 1), ('Game 98', 'set_1', 10, 0, 1), ('Game 98', 'set_2', 11, 3, 1), ('Game 98', 'set_3', 11, 10, 1), ('Game 98', 'set_4', 14, 7, 0), ('Game 98', 'set_5', 10, 4, 0);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 99', 'set_0', 6, 1, 3), ('Game 99', 'set_1', 2, 1, 7), ('Game 99', 'set_2', 4, 1, 0), ('Game 99', 'set_3', 6, 1, 11), ('Game 99', 'set_4', 2, 0, 4), ('Game 99', 'set_5', 6, 1, 2);
+
+statement ok
+INSERT INTO aoc_1202 VALUES ('Game 100', 'set_0', 5, 1, 0), ('Game 100', 'set_1', 6, 1, 0), ('Game 100', 'set_2', 6, 1, 6), ('Game 100', 'set_3', 1, 2, 6), ('Game 100', 'set_4', 4, 1, 8), ('Game 100', 'set_5', 8, 0, 5);
+
+query I
+WITH game_cnt AS (
+SELECT split_part(game_id,' ', 2)::int AS game_id,
+       COUNT(set_id) AS total_set_cnt,
+       COUNT(set_id) FILTER (WHERE (green_cnt <= 13) AND (red_cnt <= 12) AND (blue_cnt <= 14)) AS possible_set_cnt
+FROM aoc_1202
+GROUP BY game_id
+)
+SELECT SUM(game_id) FROM game_cnt WHERE total_set_cnt = possible_set_cnt;
+----
+2600
+
+query T multiline
+EXPLAIN WITH game_cnt AS (
+        SELECT split_part(game_id,' ', 2)::int AS game_id,
+               COUNT(set_id) AS total_set_cnt,
+               COUNT(set_id) FILTER (WHERE (green_cnt <= 13) AND (red_cnt <= 12) AND (blue_cnt <= 14)) AS possible_set_cnt
+        FROM aoc_1202
+        GROUP BY game_id
+        )
+        SELECT SUM(game_id) FROM game_cnt WHERE total_set_cnt = possible_set_cnt;
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (null)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(text_to_integer(split_string(#0, " ", 2)))]
+        Project (#0)
+          Filter (#1 = #2)
+            Reduce group_by=[#0] aggregates=[count(#1), count(case when ((#2 <= 13) AND (#3 <= 12) AND (#4 <= 14)) then #1 else null end)]
+              ReadStorage materialize.public.aoc_1202
+
+Source materialize.public.aoc_1202
+
+Target cluster: quickstart
+
+EOF
+
+query I
+WITH game_min AS (
+SELECT split_part(game_id,' ', 2)::int AS game_id,
+       MAX(green_cnt) AS green_min,
+       MAX(red_cnt) AS red_min,
+       MAX(blue_cnt) AS blue_min
+FROM aoc_1202
+GROUP BY split_part(game_id,' ', 2)::int
+)
+SELECT SUM(green_min*red_min*blue_min) FROM game_min;
+----
+86036
+
+query T multiline
+EXPLAIN WITH game_min AS (
+SELECT split_part(game_id,' ', 2)::int AS game_id,
+       MAX(green_cnt) AS green_min,
+       MAX(red_cnt) AS red_min,
+       MAX(blue_cnt) AS blue_min
+FROM aoc_1202
+GROUP BY split_part(game_id,' ', 2)::int
+)
+SELECT SUM(green_min*red_min*blue_min) FROM game_min;
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (null)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(((#0 * #1) * #2))]
+        Project (#1..=#3)
+          Reduce group_by=[text_to_integer(split_string(#0, " ", 2))] aggregates=[max(#1), max(#2), max(#3)]
+            Project (#0, #2..=#4)
+              ReadStorage materialize.public.aoc_1202
+
+Source materialize.public.aoc_1202
+
+Target cluster: quickstart
+
+EOF
+
+query II
+with mutually recursive
+    -- Parse the input up
+    lines(line TEXT) as (select regexp_split_to_table(input, '\n') as line from input),
+    games(game TEXT, report TEXT) as (select regexp_split_to_array(line, ':')[1], regexp_split_to_array(line, ':')[2] from lines),
+    round(game TEXT, visible TEXT) as (select game, regexp_split_to_table(report, ';') from games),
+    bacon(game TEXT, color TEXT) as (select game, regexp_split_to_table(visible, ',') from round),
+    parsed(game INT, color TEXT, number INT) as (
+        select
+            substring(game, 5)::INT as game,
+            regexp_split_to_array(color, ' ')[3] as color,
+            regexp_split_to_array(color, ' ')[2]::INT as number
+        from bacon
+    ),
+    -- PART 1
+    limits(color TEXT, number INT) as (SELECT * FROM (VALUES ('red', 12), ('green', 13), ('blue', 14))),
+    bad_news(game INT) as (
+        select game
+        from parsed, limits
+        where parsed.color = limits.color
+          AND parsed.number > limits.number
+    ),
+    plausible(game INT) as (select distinct parsed.game from parsed left join bad_news on(parsed.game = bad_news.game) where bad_news.game IS NULL),
+    part1(part1 BIGINT) as (select SUM(game) from plausible),
+    -- PART 2
+    maximum(game INT, color TEXT, number INT) as (select game, color, max(number) from parsed GROUP BY game, color),
+    red(game INT) as (select game from maximum, generate_series(1, number) where color = 'red'),
+    blue(game INT) as (select game from maximum, generate_series(1, number) where color = 'blue'),
+    green(game INT) as (select game from maximum, generate_series(1, number) where color = 'green'),
+    power(game INT, product BIGINT) as (SELECT red.game, count(*) from red, blue, green where red.game = blue.game and blue.game = green.game GROUP BY red.game),
+    part2(part2 BIGINT) as (select sum(product)::BIGINT from power)
+select * from part1, part2;
+----
+2600  86036
+
+query T multiline
+EXPLAIN with mutually recursive
+    -- Parse the input up
+    lines(line TEXT) as (select regexp_split_to_table(input, '\n') as line from input),
+    games(game TEXT, report TEXT) as (select regexp_split_to_array(line, ':')[1], regexp_split_to_array(line, ':')[2] from lines),
+    round(game TEXT, visible TEXT) as (select game, regexp_split_to_table(report, ';') from games),
+    bacon(game TEXT, color TEXT) as (select game, regexp_split_to_table(visible, ',') from round),
+    parsed(game INT, color TEXT, number INT) as (
+        select
+            substring(game, 5)::INT as game,
+            regexp_split_to_array(color, ' ')[3] as color,
+            regexp_split_to_array(color, ' ')[2]::INT as number
+        from bacon
+    ),
+    -- PART 1
+    limits(color TEXT, number INT) as (SELECT * FROM (VALUES ('red', 12), ('green', 13), ('blue', 14))),
+    bad_news(game INT) as (
+        select game
+        from parsed, limits
+        where parsed.color = limits.color
+          AND parsed.number > limits.number
+    ),
+    plausible(game INT) as (select distinct parsed.game from parsed left join bad_news on(parsed.game = bad_news.game) where bad_news.game IS NULL),
+    part1(part1 BIGINT) as (select SUM(game) from plausible),
+    -- PART 2
+    maximum(game INT, color TEXT, number INT) as (select game, color, max(number) from parsed GROUP BY game, color),
+    red(game INT) as (select game from maximum, generate_series(1, number) where color = 'red'),
+    blue(game INT) as (select game from maximum, generate_series(1, number) where color = 'blue'),
+    green(game INT) as (select game from maximum, generate_series(1, number) where color = 'green'),
+    power(game INT, product BIGINT) as (SELECT red.game, count(*) from red, blue, green where red.game = blue.game and blue.game = green.game GROUP BY red.game),
+    part2(part2 BIGINT) as (select sum(product)::BIGINT from power)
+select * from part1, part2;
+----
+Explained Query:
+  Return
+    CrossJoin type=differential
+      ArrangeBy keys=[[]]
+        Union
+          Get l3
+          Map (null)
+            Union
+              Negate
+                Project ()
+                  Get l3
+              Constant
+                - ()
+      ArrangeBy keys=[[]]
+        Project (#1)
+          Map (numeric_to_bigint(#0))
+            Union
+              Get l5
+              Map (null)
+                Union
+                  Negate
+                    Project ()
+                      Get l5
+                  Constant
+                    - ()
+  With
+    cte l5 =
+      Reduce aggregates=[sum(#0)]
+        Project (#1)
+          Reduce group_by=[#0] aggregates=[count(*)]
+            Project (#0)
+              Join on=(#0 = #1 = #2) type=delta
+                ArrangeBy keys=[[#0]]
+                  Project (#0)
+                    FlatMap generate_series(1, #1, 1)
+                      Project (#0, #2)
+                        Filter (#1 = "red")
+                          Get l4
+                ArrangeBy keys=[[#0]]
+                  Project (#0)
+                    FlatMap generate_series(1, #1, 1)
+                      Project (#0, #2)
+                        Filter (#1 = "blue")
+                          Get l4
+                ArrangeBy keys=[[#0]]
+                  Project (#0)
+                    FlatMap generate_series(1, #1, 1)
+                      Project (#0, #2)
+                        Filter (#1 = "green")
+                          Get l4
+    cte l4 =
+      Reduce group_by=[#0, #1] aggregates=[max(#2)]
+        Get l1
+    cte l3 =
+      Reduce aggregates=[sum(#0)]
+        Distinct project=[#0]
+          Union
+            Negate
+              Project (#0)
+                Join on=(#0 = #1) type=differential
+                  Get l2
+                  ArrangeBy keys=[[#0]]
+                    Distinct project=[#0]
+                      Project (#0)
+                        Filter (#3 > #5)
+                          Join on=(#0 = #1 AND #2 = #4) type=delta
+                            Get l2
+                            ArrangeBy keys=[[#0], [#1]]
+                              Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+                                Get l0
+                            ArrangeBy keys=[[#0]]
+                              Constant
+                                - ("red", 12)
+                                - ("blue", 14)
+                                - ("green", 13)
+            Project (#0)
+              Get l0
+    cte l2 =
+      ArrangeBy keys=[[#0]]
+        Project (#0)
+          Get l1
+    cte l1 =
+      Filter (#0) IS NOT NULL
+        Get l0
+    cte l0 =
+      Project (#3, #5, #6)
+        Map (text_to_integer(substr(#0, 5)), regexp_split_to_array[" ", case_insensitive=false](#2), array_index(#4, 3), text_to_integer(array_index(#4, 2)))
+          FlatMap unnest_array(regexp_split_to_array[",", case_insensitive=false](#1))
+            Project (#0, #2)
+              FlatMap unnest_array(regexp_split_to_array[";", case_insensitive=false](#1))
+                Project (#3, #4)
+                  Map (regexp_split_to_array[":", case_insensitive=false](#1), array_index(#2, 1), array_index(#2, 2))
+                    FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
+                      ReadStorage materialize.public.input
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF
