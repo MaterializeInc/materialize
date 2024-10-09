@@ -390,6 +390,7 @@ where
     T: CopyToS3Uploader,
 {
     let worker_id = scope.index();
+    let num_workers = scope.peers();
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-uploader".to_string(), scope.clone());
 
     let mut input_handle = builder.new_disconnected_input(&input_collection.inner, Pipeline);
@@ -447,6 +448,17 @@ where
                 match event {
                     AsyncEvent::Data(_ts, data) => {
                         for (((row, batch), ()), ts, diff) in data {
+                            // Check our assumption above that batches are
+                            // always assigned to the worker with ID `batch %
+                            // num_workers`.
+                            if usize::cast_from(batch) % num_workers != worker_id {
+                                anyhow::bail!(
+                                    "internal error: batch {} assigned to worker {} (expected worker {})",
+                                    batch,
+                                    worker_id,
+                                    usize::cast_from(batch) % num_workers
+                                );
+                            }
                             if !up_to.less_equal(&ts) {
                                 if diff < 0 {
                                     anyhow::bail!(
