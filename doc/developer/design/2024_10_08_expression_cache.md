@@ -41,6 +41,19 @@ Restarting an environment will look something like this:
 1. Start deploy generation `n` in read-write mode.
 2. Read optimized expressions from cache.
 
+### Prior Art
+
+The catalog currently has an in-memory expression cache.
+
+  - [https://github.com/MaterializeInc/materialize/blob/bff231953f4bb97b70cae81bdd6dd1716dbf8cec/src/adapter/src/catalog.rs#L127](https://github.com/MaterializeInc/materialize/blob/bff231953f4bb97b70cae81bdd6dd1716dbf8cec/src/adapter/src/catalog.rs#L127)
+  - [https://github.com/MaterializeInc/materialize/blob/bff231953f4bb97b70cae81bdd6dd1716dbf8cec/src/adapter/src/catalog.rs#L145-L345](https://github.com/MaterializeInc/materialize/blob/bff231953f4bb97b70cae81bdd6dd1716dbf8cec/src/adapter/src/catalog.rs#L145-L345)
+
+This cache is used to serve `EXPLAIN` queries to ensure accurate and consistent responses. When an
+index is dropped, it may change how an object _would_ be optimized, but it does not change how the
+object is currently deployed in a cluster. This cache contains the expressions that are deployed in
+a cluster, but not necessarily the expressions that would result from optimization from the current
+catalog contents.
+
 ### Cache API
 
 Below is the API that the cache will present. It may be further wrapped with typed methods that
@@ -51,6 +64,8 @@ implementing.
 trait ExpressionCache {
     /// Returns the `expression_type` of `global_id` that is currently deployed in a cluster. This
     /// will not change in-between restarts as result of DDL, as long as `global_id` exists.
+    /// 
+    /// This is useful for serving `EXPLAIN` queries.
     fn get_deployed_expression(&self, global_id: GlobalId, expression_type: ExpressionType) -> Option<Bytes>;
 
     /// Returns the `expression_type` of `global_id` based on the current catalog contents of
