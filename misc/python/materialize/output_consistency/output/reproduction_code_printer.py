@@ -147,6 +147,8 @@ class ReproductionCodePrinter(BaseOutputPrinter):
             query_template.row_selection if apply_row_filter else ALL_ROWS_SELECTION
         )
 
+        # TODO: consider sub-queries
+
         setup_code_lines = []
         for data_source in query_template.get_all_data_sources():
             if data_source.custom_db_object_name is not None:
