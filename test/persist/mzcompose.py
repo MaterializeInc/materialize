@@ -63,7 +63,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.consensus == "mem":
         consensus_uri = "mem://consensus"
     elif args.consensus == "cockroach":
-        consensus_uri = "postgres://materialize:materialize@postgres:5432?options=--search_path=consensus"
+        consensus_uri = "postgres://root@postgres:5432?options=--search_path=consensus"
         c.up("cockroach")
     else:
         # empty consensus uri defaults to Maelstrom consensus implementation
