@@ -163,8 +163,12 @@ expression.
 
 ## Alternatives
 
-For the persist implementation, we could mint a new shard for each deploy generation. This would
+- For the persist implementation, we could mint a new shard for each deploy generation. This would
 require us to finalize old shards during startup which would accumulate shard tombstones in CRDB.
+- We could use persist's `FileBlob` for durability. It's extremely well tested (most of CI uses it
+  for persist) and solves at least some of the file system cons.
+- We could use persist for durability, but swap in the `FileBlob` as the blob store and some local
+  consensus implementation.
 
 ## Open questions
 
