@@ -188,7 +188,7 @@ use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycleEvent};
-use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
+use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, ReadHolds};
 
@@ -218,7 +218,7 @@ mod sql;
 mod validity;
 
 #[derive(Debug)]
-pub enum Message<T = mz_repr::Timestamp> {
+pub enum Message {
     Command(OpenTelemetryContext, Command),
     ControllerReady,
     PurifiedStatementReady(PurifiedStatementReady),
@@ -227,17 +227,6 @@ pub enum Message<T = mz_repr::Timestamp> {
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
-    /// Makes a group commit visible to all clients.
-    GroupCommitApply(
-        /// Timestamp of the writes in the group commit.
-        T,
-        /// Clients waiting on responses from the group commit.
-        Vec<CompletedClientTransmitter>,
-        /// Optional lock if the group commit contained writes to user tables.
-        Option<OwnedMutexGuard<()>>,
-        /// Permit which limits how many group commits we run at once.
-        Option<GroupCommitPermit>,
-    ),
     DeferredStatementReady,
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
@@ -341,7 +330,6 @@ impl Message {
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::WriteLockGrant(_) => "write_lock_grant",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
-            Message::GroupCommitApply(..) => "group_commit_apply",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",

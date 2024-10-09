@@ -107,11 +107,6 @@ impl Coordinator {
                     .boxed_local()
                     .await
             }
-            Message::GroupCommitApply(timestamp, responses, write_lock_guard, permit) => {
-                self.group_commit_apply(timestamp, responses, write_lock_guard, permit)
-                    .boxed_local()
-                    .await;
-            }
             Message::AdvanceTimelines => {
                 self.advance_timelines().boxed_local().await;
             }
@@ -690,10 +685,7 @@ impl Coordinator {
                             .await;
                     }
                 }
-                Deferred::GroupCommit => {
-                    self.group_commit_initiate(Some(write_lock_guard), None)
-                        .await
-                }
+                Deferred::GroupCommit => self.group_commit(Some(write_lock_guard), None).await,
             }
         }
         // N.B. if no deferred plans, write lock is released by drop

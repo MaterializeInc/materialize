@@ -196,7 +196,7 @@ impl Coordinator {
                 .instrument(Span::current()),
             );
         } else {
-            self.group_commit_initiate(None, permit).await;
+            self.group_commit(None, permit).await;
         }
     }
 
@@ -212,8 +212,8 @@ impl Coordinator {
     /// All applicable pending writes will be combined into a single Append command and sent to
     /// STORAGE as a single batch. All applicable writes will happen at the same timestamp and all
     /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
-    #[instrument(name = "coord::group_commit_initiate", fields(has_write_lock=write_lock_guard.is_some()))]
-    pub(crate) async fn group_commit_initiate(
+    #[instrument(name = "coord::group_commit", fields(has_write_lock=write_lock_guard.is_some()))]
+    pub(crate) async fn group_commit(
         &mut self,
         write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
         permit: Option<GroupCommitPermit>,
@@ -417,41 +417,6 @@ impl Coordinator {
         );
     }
 
-    /// Applies the results of a completed group commit. The read timestamp of the timeline
-    /// containing user tables will be advanced to the timestamp of the completed write, the read
-    /// hold on the timeline containing user tables is advanced to the new time, and responses are
-    /// sent to all waiting clients.
-    ///
-    /// It's important that the timeline is advanced before responses are sent so that the client
-    /// is guaranteed to see the write.
-    ///
-    /// We also advance all other timelines and update the read holds of non-realtime
-    /// timelines.
-    #[instrument(level = "debug")]
-    pub(crate) async fn group_commit_apply(
-        &mut self,
-        timestamp: Timestamp,
-        responses: Vec<CompletedClientTransmitter>,
-        _write_lock_guard: Option<OwnedMutexGuard<()>>,
-        _permit: Option<GroupCommitPermit>,
-    ) {
-        self.apply_local_write(timestamp).await;
-        for response in responses {
-            let (mut ctx, result) = response.finalize();
-            ctx.session_mut().apply_write(timestamp);
-            ctx.retire(result);
-        }
-
-        // Advancing timelines will update all timeline read holds, and update the read timestamps
-        // of non-realtime timelines. There are no guarantees that we need to provide with the
-        // ordering of advancing timelines and user transactions. Updating read holds are only to
-        // allow compaction and free some memory. Non-realtime timelines can only be written to by
-        // upstream sources, which we don't provide ordering guarantees for with respect to user
-        // transactions. We advance the timelines here out of convenience, because we
-        // know at least the real-time timeline will have a read hold that can be updated.
-        self.advance_timelines().await;
-    }
-
     /// Submit a write to be executed during the next group commit and trigger a group commit.
     pub(crate) fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
         if self.controller.read_only() {
@@ -604,7 +569,7 @@ impl<'a> BuiltinTableAppend<'a> {
             updates,
             source: BuiltinTableUpdateSource::Internal(tx),
         });
-        self.coord.group_commit_initiate(None, None).await;
+        self.coord.group_commit(None, None).await;
 
         // Avoid excessive group commits by resetting the periodic table advancement timer. The
         // group commit triggered by above will already advance all tables.
