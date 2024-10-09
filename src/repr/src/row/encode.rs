@@ -2232,6 +2232,13 @@ mod tests {
         let ord_col = ::arrow::compute::take(&col, &indices, None).expect("takeable");
         assert_eq!(row_col.as_ref(), ord_col.as_ref());
 
+        // Check that our size estimates are consistent.
+        assert_eq!(
+            ord.goodbytes(),
+            (0..col.len()).map(|i| ord.at(i).goodbytes()).sum::<usize>(),
+            "total size should match the sum of the sizes at each index"
+        );
+
         // Check that our lower bounds work as expected.
         if !ord_col.is_empty() {
             let min_idx = indices.values()[0].as_usize();

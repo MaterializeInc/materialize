@@ -19,7 +19,7 @@ use ::arrow::array::{
 use ::arrow::buffer::OffsetBuffer;
 use ::arrow::datatypes::ToByteSlice;
 use bytes::Bytes;
-use mz_persist_types::arrow::ProtoArrayData;
+use mz_persist_types::arrow::{ArrayOrd, ProtoArrayData};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::gen::persist::ProtoColumnarRecords;
@@ -540,6 +540,11 @@ impl ColumnarRecordsStructuredExt {
             (None, None) => None,
         };
         Ok(ext)
+    }
+
+    /// The "goodput" of these arrays, excluding overhead like offsets etc.
+    pub fn goodbytes(&self) -> usize {
+        ArrayOrd::new(self.key.as_ref()).goodbytes() + ArrayOrd::new(self.val.as_ref()).goodbytes()
     }
 }
 

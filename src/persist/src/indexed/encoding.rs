@@ -228,10 +228,7 @@ impl BlobTraceUpdates {
 
     /// Return the estimated memory usage of the raw data.
     pub fn goodbytes(&self) -> usize {
-        self.records().goodbytes()
-            + self.structured().map_or(0, |e| {
-                e.key.get_buffer_memory_size() + e.val.get_buffer_memory_size()
-            })
+        self.records().goodbytes() + self.structured().map_or(0, |e| e.goodbytes())
     }
 
     /// Return the [`ColumnarRecordsStructuredExt`] of the blob.
