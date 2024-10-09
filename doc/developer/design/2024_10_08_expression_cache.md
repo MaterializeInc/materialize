@@ -82,14 +82,16 @@ trait ExpressionCache {
 
     /// Durably remove and return all entries in `deploy_generation` that depend on an ID in
     /// `dropped_ids`.
+    ///
+    /// Optional for v1.
     fn invalidate_entries(&mut self, dropped_ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ExpressionType)>;
 
     /// Durably removes all entries with a deploy generation less than this cache's deploy
     /// generation.
     fn cleanup_all_prior_deploy_generations(&mut self);
 
-    /// Remove all entries that depend on a global ID that is not present in `txn`.
-    fn reconcile(&mut self, txn: mz_catalog::durable::Transaction);
+    /// Remove all entries that depend on a global ID that is not present in `ids`.
+    fn reconcile(&mut self, ids: &BTreeSet<GlobalId>);
 }
 ```
 
@@ -112,6 +114,10 @@ Below is a detailed set of steps that will happen in startup.
 2. Update cache via `ExpressionCache::insert_expression`.
 
 ### DDL - Drop
+
+This is optional for v1, `ExpressionCache::reconcile` on startup will update the cache to the
+correct state.
+
 1. Execute catalog transaction.
 2. Invalidate cache entries via `ExpressionCache::invalidate_entries`.
 3. Re-compute and repopulate cache entries that depended on dropped entries via
