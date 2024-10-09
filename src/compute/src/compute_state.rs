@@ -15,7 +15,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
-use chrono::DateTime;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Hashable;
@@ -170,10 +170,10 @@ pub struct ComputeState {
     /// Used to compute `replica_expiration`.
     pub init_system_time: EpochMillis,
 
-    /// The maximum time for which the replica is expected to live. If set, dataflows in the replica
-    /// can be configured to drop diffs associated with timestamps beyond the replica expiration.
+    /// The maximum time for which the replica is expected to live. If not empty, dataflows in the
+    /// replica can drop diffs associated with timestamps beyond the replica expiration.
     /// The replica will panic if such dataflows are not dropped before the replica has expired.
-    pub replica_expiration: Option<Timestamp>,
+    pub replica_expiration: Antichain<Timestamp>,
 }
 
 impl ComputeState {
@@ -221,7 +221,7 @@ impl ComputeState {
             read_only_rx,
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME.clone()(),
-            replica_expiration: None,
+            replica_expiration: Antichain::default(),
         }
     }
 
@@ -309,31 +309,43 @@ impl ComputeState {
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
 
-        let offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.worker_config);
-        if offset.is_zero() {
-            if self.replica_expiration.is_some() {
-                info!("disabling replica expiration");
-                self.replica_expiration = None;
-            }
-        } else {
-            let offset: EpochMillis = offset
-                .as_millis()
-                .try_into()
-                .expect("duration did not fit within u64");
-            let replica_expiration_millis = self.init_system_time + offset;
-            let replica_expiration = Some(Timestamp::from(replica_expiration_millis));
-            if self.replica_expiration != replica_expiration {
-                info!(
-                    "setting replica_expiration = {:?} [{}]",
-                    replica_expiration_millis,
-                    DateTime::from_timestamp_millis(
-                        replica_expiration_millis
-                            .try_into()
-                            .expect("replica_expiration did not fit within i64")
-                    )
-                    .expect("could not construct DateTime from replica_expiration_millis"),
-                );
-                self.replica_expiration = replica_expiration;
+        // Set replica expiration.
+        {
+            let offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.worker_config);
+            if offset.is_zero() {
+                if self.replica_expiration.as_option().is_some() {
+                    warn!(
+                        current_replica_expiration = ?self.replica_expiration,
+                        "replica_expiration: cannot disable once expiration is enabled",
+                    );
+                }
+            } else {
+                let offset: EpochMillis = offset
+                    .as_millis()
+                    .try_into()
+                    .expect("duration must fit within u64");
+                let replica_expiration_millis = self.init_system_time + offset;
+                let replica_expiration = Timestamp::from(replica_expiration_millis);
+
+                // We only allow updating `replica_expiration` to an earlier time. Allowing it to be
+                // updated to a later time could be surprising since existing dataflows would still
+                // panic at their original expiration.
+                if !self.replica_expiration.less_equal(&replica_expiration) {
+                    info!(
+                        offset = %offset,
+                        replica_expiration_millis = %replica_expiration_millis,
+                        replica_expiration_utc = %mz_ore::now::to_datetime(replica_expiration_millis),
+                        "updating replica_expiration",
+                    );
+                    self.replica_expiration = Antichain::from_elem(replica_expiration);
+                } else {
+                    warn!(
+                        new_offset = %offset,
+                        current_replica_expiration_millis = %replica_expiration_millis,
+                        current_replica_expiration_utc = %mz_ore::now::to_datetime(replica_expiration_millis),
+                        "replica_expiration: ignoring new offset as it is greater than current value",
+                    );
+                }
             }
         }
     }
@@ -458,22 +470,29 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let dataflow_index = self.timely_worker.next_dataflow_index();
         let as_of = dataflow.as_of.clone().unwrap();
 
+        // Determine the dataflow expiration, if any.
+        let dataflow_expiration =
+            dataflow.expire_dataflow_at(&self.compute_state.replica_expiration);
+
+        // Add the dataflow expiration to `until`.
+        let until = dataflow.until.meet(&dataflow_expiration);
+
         if dataflow.is_transient() {
-            tracing::debug!(
+            debug!(
                 name = %dataflow.debug_name,
                 import_ids = %dataflow.display_import_ids(),
                 export_ids = %dataflow.display_export_ids(),
                 as_of = ?as_of.elements(),
-                until = ?dataflow.until.elements(),
+                until = ?until.elements(),
                 "creating dataflow",
             );
         } else {
-            tracing::info!(
+            info!(
                 name = %dataflow.debug_name,
                 import_ids = %dataflow.display_import_ids(),
                 export_ids = %dataflow.display_export_ids(),
                 as_of = ?as_of.elements(),
-                until = ?dataflow.until.elements(),
+                until = ?until.elements(),
                 "creating dataflow",
             );
         };
@@ -523,6 +542,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             self.compute_state,
             dataflow,
             start_signal,
+            until,
+            dataflow_expiration,
         );
     }
 

@@ -11,8 +11,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fmt::Debug;
 
+use differential_dataflow::lattice::Lattice;
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
@@ -119,37 +119,26 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
     /// which dataflow expiration should be disabled.
     pub fn expire_dataflow_at(
         &self,
-        replica_expiration: Option<mz_repr::Timestamp>,
+        replica_expiration: &Antichain<mz_repr::Timestamp>,
     ) -> Antichain<mz_repr::Timestamp> {
         let dataflow_expiration_desc = &self.dataflow_expiration_desc;
-        if
-        // The current dataflow has a refresh schedule.
-        self.refresh_schedule.is_some()
-            // The dataflow has a transitive dependency with a refresh schedule.
+
+        // Disable dataflow expiration if `replica_expiration` is unset, the current dataflow has a
+        // refresh schedule, has a transitive dependency with a refresh schedule, or the dataflow's
+        // timeline is not `Timeline::EpochMilliSeconds`.
+        if replica_expiration.is_empty()
+            || self.refresh_schedule.is_some()
             || dataflow_expiration_desc.has_transitive_refresh_schedule
-            // The dataflow's timeline is not `Timeline::EpochMilliSeconds`.
             || !dataflow_expiration_desc.is_timeline_epoch_ms
         {
-            return Antichain::default(); // Disables dataflow expiration.
+            return Antichain::default();
         }
 
-        if let Some(replica_expiration) = replica_expiration {
-            if let Some(upper) = &dataflow_expiration_desc.transitive_upper {
-                if upper.is_empty() {
-                    // When the `upper` of a dataflow is empty, reads are valid at all times, including
-                    // times beyond the replica expiration. Disable dataflow expiration in this case.
-                    return Antichain::default();
-                }
-                if !upper.less_than(&replica_expiration) {
-                    // Move up the dataflow expiration to `upper` when `upper` is greater than the
-                    // configured replica expiration.
-                    return upper.clone();
-                }
-            }
-
-            Antichain::from_elem(replica_expiration)
+        if let Some(upper) = &dataflow_expiration_desc.transitive_upper {
+            // Returns empty if `upper` is empty, else the max of `upper` and `replica_expiration`.
+            upper.join(replica_expiration)
         } else {
-            Antichain::default()
+            replica_expiration.clone()
         }
     }
 }

@@ -162,6 +162,7 @@ impl GlobalLirPlan {
         sink_desc
     }
 
+    /// Get the plan's [`LirDataflowDescription`].
     pub fn df_desc(&self) -> &LirDataflowDescription {
         &self.df_desc
     }

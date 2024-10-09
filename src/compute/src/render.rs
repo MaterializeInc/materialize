@@ -176,6 +176,8 @@ pub fn build_compute_dataflow<A: Allocate>(
     compute_state: &mut ComputeState,
     dataflow: DataflowDescription<FlatPlan, CollectionMetadata>,
     start_signal: StartSignal,
+    until: Antichain<mz_repr::Timestamp>,
+    dataflow_expiration: Antichain<mz_repr::Timestamp>,
 ) {
     // Mutually recursive view definitions require special handling.
     let recursive = dataflow
@@ -196,12 +198,6 @@ pub fn build_compute_dataflow<A: Allocate>(
         .iter()
         .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
         .collect::<Vec<_>>();
-
-    // Determine the dataflow expiration, if any.
-    let dataflow_expiration = dataflow.expire_dataflow_at(compute_state.replica_expiration);
-
-    // Add the dataflow expiration to `until`.
-    let until = dataflow.until.meet(&dataflow_expiration);
 
     let worker_logging = timely_worker.log_register().get("timely");
 

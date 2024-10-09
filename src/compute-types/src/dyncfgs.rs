@@ -124,14 +124,14 @@ pub const COPY_TO_S3_MULTIPART_PART_SIZE_BYTES: Config<usize> = Config::new(
 
 /// The maximum lifetime of a replica configured as an offset to the replica start time.
 /// Used in temporal filters to drop diffs generated at timestamps beyond the expiration time.
+///
+/// Disabled by default. Once set, cannot be disabled again during the lifetime of a replica.
+/// When set multiple times, existing replicas only accept strictly decreasing offsets.
 pub const COMPUTE_REPLICA_EXPIRATION_OFFSET: Config<Duration> = Config::new(
     "compute_replica_expiration_offset",
-    // Default is 3 weeks to account for 2 skipped DB releases + 1 day buffer.
-    Duration::from_secs(22 * SECONDS_IN_A_DAY),
+    Duration::ZERO,
     "The expiration time offset for replicas. Zero disables expiration.",
 );
-// Number of seconds in a day.
-const SECONDS_IN_A_DAY: u64 = 24 * 60 * 60;
 
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {

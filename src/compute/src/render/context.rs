@@ -37,7 +37,7 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{error, info};
+use tracing::error;
 
 use crate::arrangement::manager::SpecializedTraceHandle;
 use crate::compute_state::{ComputeState, HydrationEvent};
@@ -122,10 +122,6 @@ where
                 tx: compute_state.hydration_tx.clone(),
             })
         };
-
-        if !dataflow_expiration.is_empty() {
-            info!("enabling dataflow expiration for dataflow {dataflow_id}: expiration: {dataflow_expiration:?}, until: {until:?}");
-        }
 
         Self {
             scope,

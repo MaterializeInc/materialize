@@ -255,12 +255,9 @@ impl Coordinator {
         let read_holds = self.acquire_read_holds(&id_bundle);
         let as_of = read_holds.least_valid_read();
 
-        let global_mir_plan = global_mir_plan.resolve(
-            as_of,
-            // Introspection subscribes only read from system collections, which are always in
-            // the `EpochMilliseconds` timeline.
-            true,
-        );
+        // Introspection subscribes only read from system collections, which are always in
+        // the `EpochMilliseconds` timeline.
+        let global_mir_plan = global_mir_plan.resolve(as_of, true);
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(

@@ -97,6 +97,7 @@ pub struct Index {
 }
 
 impl Index {
+    /// Construct a new [`Index`]. Arguments are recorded as-is.
     pub fn new(
         name: QualifiedItemName,
         on: GlobalId,

@@ -284,10 +284,12 @@ impl Coordinator {
 
         self.store_transaction_read_holds(ctx.session(), read_holds);
 
-        let global_mir_plan = global_mir_plan.resolve(
-            Antichain::from_elem(as_of),
-            determination.timestamp_context.is_timeline_epoch_ms(),
-        );
+        let is_timeline_epoch_ms = self
+            .validate_timeline_context(plan.from.depends_on().iter().cloned())?
+            .is_timeline_epoch_ms();
+
+        let global_mir_plan =
+            global_mir_plan.resolve(Antichain::from_elem(as_of), is_timeline_epoch_ms);
 
         // Optimize LIR
         let span = Span::current();

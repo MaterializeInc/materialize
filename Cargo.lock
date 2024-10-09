@@ -4663,7 +4663,6 @@ dependencies = [
  "async-stream",
  "async-trait",
  "bytesize",
- "chrono",
  "clap",
  "core_affinity",
  "crossbeam-channel",

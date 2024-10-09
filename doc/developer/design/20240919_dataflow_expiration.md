@@ -75,6 +75,8 @@ if compute_replica_expiration_offset is not set:
 else for dataflows of type in [materialized view, index, subscribe]:
   replica_expiration := replica_start + compute_replica_expiration_offset
   if dataflow_timeline is not EpochMilliseconds:
+    # Dataflows that do not depend on any source or table are not in the
+    # EpochMilliseconds timeline
     dataflow_expiration := []
   else if refresh_interval set in any transitive dependency of dataflow:
     dataflow_expiration := []
