@@ -31,12 +31,14 @@ $ kafka-ingest format=avro topic=resolution-unions schema=${int} timestamp=1
 > CREATE SOURCE resolution_unions
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-unions-${testdrive.seed}')
+
+> CREATE TABLE resolution_unions_tbl FROM SOURCE resolution_unions (REFERENCE "testdrive-resolution-unions-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 $ kafka-ingest format=avro topic=resolution-unions schema=${union-int} timestamp=2
 {"f1": {"int": 123 } }
 
-> SELECT f1 FROM resolution_unions
+> SELECT f1 FROM resolution_unions_tbl
 234
 123

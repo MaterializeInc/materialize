@@ -33,10 +33,12 @@ $ kafka-ingest format=avro topic=decode-1to2-nodefault schema=${1column} timesta
 > CREATE SOURCE decode_1to2_nodefault
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-1to2-nodefault-${testdrive.seed}')
+
+> CREATE TABLE decode_1to2_nodefault_tbl FROM SOURCE decode_1to2_nodefault (REFERENCE "testdrive-decode-1to2-nodefault-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${2columns-nodefault}'
   ENVELOPE NONE
 
-! SELECT * FROM decode_1to2_nodefault
+! SELECT * FROM decode_1to2_nodefault_tbl
 contains:avro deserialization error: unable to decode row : IO error: UnexpectedEof
 
 #
@@ -51,10 +53,12 @@ $ kafka-ingest format=avro topic=decode-1to2-default schema=${1column} timestamp
 > CREATE SOURCE decode_1to2_default
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-1to2-default-${testdrive.seed}')
+
+> CREATE TABLE decode_1to2_default_tbl FROM SOURCE decode_1to2_default (REFERENCE "testdrive-decode-1to2-default-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${2columns-default}'
   ENVELOPE NONE
 
-! SELECT * FROM decode_1to2_default
+! SELECT * FROM decode_1to2_default_tbl
 contains:Decode error: avro deserialization error: unable to decode row : IO error: UnexpectedEof
 
 #
@@ -70,8 +74,10 @@ $ kafka-ingest format=avro topic=decode-2to1 schema=${2columns-nodefault} timest
 > CREATE SOURCE decode_2to1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-2to1-${testdrive.seed}')
+
+> CREATE TABLE decode_2to1_tbl FROM SOURCE decode_2to1 (REFERENCE "testdrive-decode-2to1-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${1column}'
   ENVELOPE NONE
 
-! SELECT * FROM decode_2to1
+! SELECT * FROM decode_2to1_tbl
 contains:Unexpected bytes remaining

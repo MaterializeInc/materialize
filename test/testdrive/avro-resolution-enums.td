@@ -31,6 +31,8 @@ $ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} timestam
 > CREATE SOURCE resolution_enums
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-enums-${testdrive.seed}')
+
+> CREATE TABLE resolution_enums_tbl FROM SOURCE resolution_enums (REFERENCE "testdrive-resolution-enums-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
@@ -41,10 +43,10 @@ $ kafka-ingest format=avro topic=resolution-enums schema=${enum-writer} timestam
 $ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} timestamp=1
 {"f1": "E1" }
 
-> SHOW COLUMNS FROM resolution_enums
+> SHOW COLUMNS FROM resolution_enums_tbl
 f1 false text ""
 
-> SELECT f1 FROM resolution_enums
+> SELECT f1 FROM resolution_enums_tbl
 E1
 E1
 E_DEFAULT

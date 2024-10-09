@@ -34,9 +34,11 @@ $ kafka-ingest format=avro topic=resolution schema=${reader} timestamp=2
 > CREATE SOURCE resolution
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-${testdrive.seed}')
+
+> CREATE TABLE resolution_tbl FROM SOURCE resolution (REFERENCE "testdrive-resolution-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-> SELECT f1 FROM resolution
+> SELECT f1 FROM resolution_tbl
 "1970-01-01 00:00:00"
 "1970-01-01 00:00:00.000123"

@@ -48,13 +48,15 @@ $ kafka-ingest format=avro topic=correctness-data key-format=avro key-schema=${k
 > CREATE SOURCE correctness_data
   IN CLUSTER correctness_data_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-correctness-data-${testdrive.seed}')
+
+> CREATE TABLE correctness_data_tbl FROM SOURCE correctness_data (REFERENCE "testdrive-correctness-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
 > CREATE CLUSTER correctness_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK correctness_sink
   IN CLUSTER correctness_sink_cluster
-  FROM correctness_data
+  FROM correctness_data_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-correctness-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

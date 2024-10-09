@@ -29,17 +29,19 @@ $ kafka-ingest format=avro topic=tail-without-snapshot schema=${int} timestamp=1
 > CREATE SOURCE tail_without_snapshot
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-tail-without-snapshot-${testdrive.seed}')
+
+> CREATE TABLE tail_without_snapshot_tbl FROM SOURCE tail_without_snapshot (REFERENCE "testdrive-tail-without-snapshot-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
 
-> SELECT * FROM tail_without_snapshot;
+> SELECT * FROM tail_without_snapshot_tbl;
 123
 234
 345
 
 > BEGIN
 
-> DECLARE c CURSOR FOR SUBSCRIBE tail_without_snapshot WITH (SNAPSHOT = FALSE);
+> DECLARE c CURSOR FOR SUBSCRIBE tail_without_snapshot_tbl WITH (SNAPSHOT = FALSE);
 
 > FETCH 1 FROM c WITH (timeout = '2s')
 

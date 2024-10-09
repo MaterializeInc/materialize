@@ -24,6 +24,8 @@ $ kafka-ingest topic=static format=bytes
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-static-${testdrive.seed}')
+
+> CREATE TABLE indexed (c)_tbl FROM SOURCE indexed (c) (REFERENCE "testdrive-static-${testdrive.seed}")
   FORMAT TEXT
 
 > CREATE DEFAULT INDEX ON indexed
@@ -32,6 +34,8 @@ $ kafka-ingest topic=static format=bytes
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-static-${testdrive.seed}')
+
+> CREATE TABLE unindexed (c)_tbl FROM SOURCE unindexed (c) (REFERENCE "testdrive-static-${testdrive.seed}")
   FORMAT TEXT
 
 > CREATE VIEW v_unindexed AS SELECT count(*) FROM unindexed
