@@ -47,9 +47,7 @@ impl SystemParameterBackend {
             let mut vars = BTreeMap::new();
             vars.insert(param.name.clone(), param.value.clone());
             match self.session_client.set_system_vars(vars).await {
-                Ok(()) => {
-                    info!(name = param.name, value = param.value, "sync parameter");
-                }
+                Ok(()) => {}
                 Err(error) => match error {
                     AdapterError::ReadOnly => {
                         info!(

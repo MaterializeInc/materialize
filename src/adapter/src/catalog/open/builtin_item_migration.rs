@@ -35,7 +35,7 @@ use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItem;
 use mz_storage_client::controller::StorageTxn;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::catalog::open::builtin_item_migration::persist_schema::{TableKey, TableKeySchema};
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
@@ -409,7 +409,8 @@ async fn migrate_builtin_items_0dt(
     };
 
     let updates = txn.get_and_commit_op_updates();
-    let builtin_table_updates = state.apply_updates_for_bootstrap(updates).await;
+    let (builtin_table_updates, apply_timings) = state.apply_updates_for_bootstrap(updates).await;
+    info!("STARTUP LOOK: migrate builtin apply took: {apply_timings:?}");
 
     let cleanup_action = async move {
         if !read_only {
