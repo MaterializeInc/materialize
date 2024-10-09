@@ -62,27 +62,31 @@ implementing.
 
 ```Rust
 trait ExpressionCache {
+    /// Opens a new [`ExpressionCache`] for `deploy_generation`.
+    fn open(deploy_generation: u64) -> Self;
+    
     /// Returns the `expression_type` of `global_id` that is currently deployed in a cluster. This
     /// will not change in-between restarts as result of DDL, as long as `global_id` exists.
     /// 
     /// This is useful for serving `EXPLAIN` queries.
     fn get_deployed_expression(&self, global_id: GlobalId, expression_type: ExpressionType) -> Option<Bytes>;
 
-    /// Returns the `expression_type` of `global_id` based on the current catalog contents of
-    /// `deploy_generation`. This may change in-between restarts as result of DDL.
-    fn get_durable_expression(&self, deploy_generation: u64, global_id: GlobalId, expression_type: ExpressionType) -> Option<Bytes>;
+    /// Returns the `expression_type` of `global_id` based on the current catalog contents. This
+    /// may change in-between restarts as result of DDL.
+    fn get_durable_expression(&self, global_id: GlobalId, expression_type: ExpressionType) -> Option<Bytes>;
 
     /// Durably inserts `expression`, with key `(deploy_generation, global_id, expression_type)`.
     ///
     /// Panics if `(deploy_generation, global_id, expression_type)` already exists.
-    fn insert_expression(&mut self, deploy_generation: u64, global_id: GlobalId, expression_type: ExpressionType, expression: Bytes);
+    fn insert_expression(&mut self, global_id: GlobalId, expression_type: ExpressionType, expression: Bytes);
 
     /// Durably remove and return all entries in `deploy_generation` that depend on an ID in
     /// `dropped_ids`.
-    fn invalidate_entries(&mut self, deploy_generation: u64, dropped_ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ExpressionType)>;
+    fn invalidate_entries(&mut self, dropped_ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ExpressionType)>;
 
-    /// Durably removes all entries with a deploy generation <= `deploy_generation`.
-    fn remove_deploy_generations(&mut self, deploy_generation: u64);
+    /// Durably removes all entries with a deploy generation less than this cache's deploy
+    /// generation.
+    fn cleanup_all_prior_deploy_generations(&mut self);
 
     /// Remove all entries that depend on a global ID that is not present in `txn`.
     fn reconcile(&mut self, txn: mz_catalog::durable::Transaction);
