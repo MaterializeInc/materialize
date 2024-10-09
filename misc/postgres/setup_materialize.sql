@@ -9,6 +9,10 @@
 
 -- Sets up a Postgres DB for use by Materialize.
 
+CREATE ROLE materialize WITH LOGIN PASSWORD 'materialize';
+CREATE DATABASE materialize;
+GRANT ALL PRIVILEGES ON DATABASE materialize TO materialize;
+\c materialize
 CREATE SCHEMA IF NOT EXISTS consensus;
 CREATE SCHEMA IF NOT EXISTS adapter;
 CREATE SCHEMA IF NOT EXISTS storage;

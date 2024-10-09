@@ -30,7 +30,10 @@ RUN apt-get update \
     && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql \
     && chown materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql \
     && echo "materialize ALL=(postgres) NOPASSWD: ALL" >> /etc/sudoers \
-    && sed -i "s/^max_connections = .*/max_connections = 500/" /etc/postgresql/16/main/postgresql.conf
+    && sed -i "s/^max_connections = .*/max_connections = 5000/" /etc/postgresql/16/main/postgresql.conf \
+    && sed -i "s/^#listen_addresses = .*/listen_addresses = '*'/" /etc/postgresql/16/main/postgresql.conf \
+    && echo "host    all             materialize     0.0.0.0/0             trust" >> /etc/postgresql/16/main/pg_hba.conf
+
 
 ENV POSTGRES_USER=postgres
 ENV POSTGRES_PASSWORD=postgres
