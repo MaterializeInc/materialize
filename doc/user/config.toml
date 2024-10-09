@@ -3,6 +3,7 @@ title = "Materialize Documentation"
 pygmentsCodeFences = true
 pygmentsUseClasses = true
 
+disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
