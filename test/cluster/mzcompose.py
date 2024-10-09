@@ -62,7 +62,6 @@ SERVICES = [
     Materialized(
         # We use mz_panic() in some test scenarios, so environmentd must stay up.
         propagate_crashes=False,
-        external_postgres=True,
     ),
     Postgres(),
     Redpanda(),
@@ -3213,7 +3212,6 @@ def workflow_test_incident_70(c: Composition) -> None:
 
     with c.override(
         Materialized(
-            external_postgres=True,
             external_minio=True,
             sanity_restart=False,
         ),
