@@ -4832,7 +4832,7 @@ def workflow_test_graceful_reconfigure(
         )
 
 
-def workflow_crash_on_replica_expiration(
+def workflow_crash_on_replica_expiration_mv(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
@@ -4841,6 +4841,7 @@ def workflow_crash_on_replica_expiration(
     c.down(destroy_volumes=True)
     with c.override(
         Testdrive(no_reset=True),
+        Clusterd(name="clusterd1", restart="on-failure"),
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
@@ -4865,14 +4866,82 @@ def workflow_crash_on_replica_expiration(
             SET CLUSTER TO test;
 
             CREATE TABLE t (x int);
-            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t WHERE x < 23;
-            SELECT mz_unsafe.mz_sleep(15);
-            SELECT * FROM mv;
+            INSERT INTO t VALUES (42);
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t WHERE x < 84;
+            SELECT mz_unsafe.mz_sleep(11);
             """,
             port=6877,
             user="mz_system",
         )
+
+        results = c.sql_query(
+            """
+            SELECT * from mv;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        assert results == [(42,)], f"Results mismatch: expected [42], found {results}"
+
         c1 = c.invoke("logs", "clusterd1", capture=True)
         assert (
             "has exceeded expiration" in c1.stdout
+        ), "unexpected success in crash-on-replica-expiration"
+
+
+def workflow_crash_on_replica_expiration_index(
+        c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests that clusterd crashes when a replica is set to expire
+    """
+    c.down(destroy_volumes=True)
+    with c.override(
+            Testdrive(no_reset=True),
+            Clusterd(name="clusterd1", restart="on-failure"),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd1")
+        c.sql(
+            """
+            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
+            ALTER SYSTEM SET compute_replica_expiration_offset = '10s';
+
+            DROP CLUSTER IF EXISTS test CASCADE;
+            DROP TABLE IF EXISTS t CASCADE;
+
+            CREATE CLUSTER test REPLICAS (
+                test (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            );
+            SET CLUSTER TO test;
+
+            CREATE TABLE t (x int);
+            INSERT INTO t VALUES (42);
+            CREATE VIEW mv AS SELECT * FROM t WHERE x < 84;
+            CREATE DEFAULT INDEX ON mv;
+            SELECT mz_unsafe.mz_sleep(11);
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        results = c.sql_query(
+            """
+            SELECT * from mv;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        assert results == [(42,)], f"Results mismatch: expected [42], found {results}"
+
+        c1 = c.invoke("logs", "clusterd1", capture=True)
+        assert (
+                "has exceeded expiration" in c1.stdout
         ), "unexpected success in crash-on-replica-expiration"
