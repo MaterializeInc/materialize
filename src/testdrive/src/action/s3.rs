@@ -89,6 +89,7 @@ pub async fn run_verify_data(
                 actual_body.lines().map(|l| l.to_string()).collect()
             }
             key if key.ends_with(".parquet") => rows_from_parquet(bytes),
+            key if key.ends_with("UPLOAD-START") => continue,
             key => bail!("unexpected file type: {key}"),
         };
         rows.extend(new_rows);
