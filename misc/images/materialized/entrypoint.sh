@@ -18,7 +18,7 @@ have, which may be able to improve both our software and your queries!
 Please reach out at:
 
   Web: https://materialize.com
-  GitHub issues: https://github.com/MaterializeInc/materialize/issues
+  GitHub discussions: https://github.com/MaterializeInc/materialize/discussions
   Slack: https://www.materialize.com/s/chat
   Email: support@materialize.com
   Twitter: @MaterializeInc
@@ -51,7 +51,7 @@ if [ -z "${MZ_NO_BUILTIN_COCKROACH:-}" ]; then
   done
 
   # See: https://github.com/cockroachdb/cockroach/issues/93892
-  # See: https://github.com/MaterializeInc/materialize/issues/16726
+  # See: https://github.com/MaterializeInc/database-issues/issues/4843
   cockroach sql --insecure -e "SET CLUSTER SETTING sql.stats.forecasts.enabled = false"
 
   cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS consensus"
