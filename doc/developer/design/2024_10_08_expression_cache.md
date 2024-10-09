@@ -77,10 +77,10 @@ struct Expressions {
 trait ExpressionCache {
     /// Opens a new [`ExpressionCache`] for `deploy_generation`.
     fn open(deploy_generation: u64) -> Self;
-    
+
     /// Returns the optimized expressions of `global_id` that is currently deployed in a cluster.
     /// This will not change in-between restarts as result of DDL, as long as `global_id` exists.
-    /// 
+    ///
     /// This is useful for serving `EXPLAIN` queries.
     fn get_deployed_expressions(&self, global_id: GlobalId) -> Option<&Expressions>;
 
