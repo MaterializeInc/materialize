@@ -75,37 +75,31 @@ struct Expressions {
 }
 
 trait ExpressionCache {
-    /// Opens a new [`ExpressionCache`] for `deploy_generation`.
-    fn open(deploy_generation: u64) -> Self;
+    /// Creates a new [`ExpressionCache`] for `deploy_generation`.
+    fn new(&mut self, deploy_generation: u64) -> Self;
 
-    /// Returns the optimized expressions of `global_id` that is currently deployed in a cluster.
-    /// This will not change in-between restarts as result of DDL, as long as `global_id` exists.
+    /// Remove all entries in current deploy generation that depend on a global ID that is not
+    /// present in `current_ids`.
     ///
-    /// This is useful for serving `EXPLAIN` queries.
-    fn get_deployed_expressions(&self, global_id: GlobalId) -> Option<&Expressions>;
+    /// Returns all cached expressions.
+    fn reconcile_and_open(&mut self, current_ids: &BTreeSet<GlobalId>) -> Vec<(GlobalId, Expressions)>;
 
-    /// Returns the optimized expressions of `global_id` based on the current catalog contents. This
-    /// may change in-between restarts as result of DDL.
-    fn get_durable_expressions(&self, global_id: GlobalId) -> Option<&Expressions>;
+    /// Durably removes all entries with a deploy generation less than this cache's deploy
+    /// generation.
+    fn cleanup_all_prior_deploy_generations(&mut self);
 
-    /// Durably inserts `expressions`.
+    /// Durably inserts `expressions` into current deploy generation.
     ///
     /// Returns a [`Future`] that completes once `expressions` have been made durable.
     ///
     /// Panics if any `GlobalId` already exists in the cache.
     fn insert_expressions(&mut self, expressions: Vec<(GlobalId, Expressions)>) -> impl Future<Output = ()>;
 
-    /// Durably remove and return all entries that depend on an ID in `dropped_ids`.
+    /// Durably remove and return all entries in current deploy generation that depend on an ID in
+    /// `dropped_ids` .
     ///
     /// Optional for v1.
     fn invalidate_entries(&mut self, dropped_ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, Expressions)>;
-
-    /// Durably removes all entries with a deploy generation less than this cache's deploy
-    /// generation.
-    fn cleanup_all_prior_deploy_generations(&mut self);
-
-    /// Remove all entries that depend on a global ID that is not present in `ids`.
-    fn reconcile(&mut self, ids: &BTreeSet<GlobalId>);
 }
 ```
 
@@ -113,29 +107,28 @@ trait ExpressionCache {
 
 Below is a detailed set of steps that will happen in startup.
 
-1. Call `ExpressionCache::reconcile` to remove any invalid entries.
+1. Call `ExpressionCache::open` to remove any invalid entries and retrieve cached entries.
 2. While opening the catalog, for each object:
-    a. If the object is present in the cache, read the cached optimized expression via
-       `ExpressionCache::get_durable_expression`.
+    a. If the object is present in the cache, use cached optimized expression.
     b. Else generate the optimized expressions and insert the expressions via
-       `ExpressionCache::insert_expression`.
-3. If in read-write mode, call `ExpressionCache::remove_deploy_generation` to remove the previous
+       `ExpressionCache::insert_expressions`.
+3. If in read-write mode, call `ExpressionCache::cleanup_all_prior_deploy_generations` to remove the previous
    deploy generation.
 
 ### DDL - Create
 
 1. Execute catalog transaction.
-2. Update cache via `ExpressionCache::insert_expression`.
+2. Update cache via `ExpressionCache::insert_expressions`.
 
 ### DDL - Drop
 
-This is optional for v1, on startup `ExpressionCache::reconcile` will update the cache to the
+This is optional for v1, on startup `ExpressionCache::open` will update the cache to the
 correct state.
 
 1. Execute catalog transaction.
 2. Invalidate cache entries via `ExpressionCache::invalidate_entries`.
 3. Re-compute and repopulate cache entries that depended on dropped entries via
-   `ExpressionCache::insert_expression`.
+   `ExpressionCache::insert_expressions`.
 
 ### File System Implementation
 
