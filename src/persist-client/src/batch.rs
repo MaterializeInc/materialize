@@ -405,7 +405,7 @@ pub(crate) const RECORD_SCHEMA_ID: Config<bool> = Config::new(
 
 pub(crate) const STRUCTURED_ORDER: Config<bool> = Config::new(
     "persist_batch_structured_order",
-    false,
+    true,
     "If enabled, output compaction batches in structured-data order.",
 );
 
