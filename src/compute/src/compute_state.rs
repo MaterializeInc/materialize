@@ -165,6 +165,11 @@ pub struct ComputeState {
     /// perform maintenance with every `step_or_park` invocation.
     pub server_maintenance_interval: Duration,
 
+    /// The [`mz_ore::now::SYSTEM_TIME`] at which the replica was started.
+    ///
+    /// Used to compute `replica_expiration`.
+    pub init_system_time: EpochMillis,
+
     /// The maximum time for which the replica is expected to live. If set, dataflows in the replica
     /// can be configured to drop diffs associated with timestamps beyond the replica expiration.
     /// The replica will panic if such dataflows are not dropped before the replica has expired.
@@ -215,6 +220,7 @@ impl ComputeState {
             read_only_tx,
             read_only_rx,
             server_maintenance_interval: Duration::ZERO,
+            init_system_time: mz_ore::now::SYSTEM_TIME.clone()(),
             replica_expiration: None,
         }
     }
@@ -303,26 +309,31 @@ impl ComputeState {
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
 
-        if self.replica_expiration.is_none() {
-            let offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.worker_config);
-            if !offset.is_zero() {
-                let now = mz_ore::now::SYSTEM_TIME.clone()();
-                let offset: EpochMillis = offset
-                    .as_millis()
-                    .try_into()
-                    .expect("duration did not fit within u64");
-                let replica_expiration = now + offset;
+        let offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.worker_config);
+        if offset.is_zero() {
+            if self.replica_expiration.is_some() {
+                info!("disabling replica expiration");
+                self.replica_expiration = None;
+            }
+        } else {
+            let offset: EpochMillis = offset
+                .as_millis()
+                .try_into()
+                .expect("duration did not fit within u64");
+            let replica_expiration_millis = self.init_system_time + offset;
+            let replica_expiration = Some(Timestamp::from(replica_expiration_millis));
+            if self.replica_expiration != replica_expiration {
                 info!(
                     "setting replica_expiration = {:?} [{}]",
-                    replica_expiration,
+                    replica_expiration_millis,
                     DateTime::from_timestamp_millis(
-                        replica_expiration
+                        replica_expiration_millis
                             .try_into()
                             .expect("replica_expiration did not fit within i64")
                     )
-                    .expect("could not construct DateTime from replica_expiration"),
+                    .expect("could not construct DateTime from replica_expiration_millis"),
                 );
-                self.replica_expiration = Some(Timestamp::from(replica_expiration));
+                self.replica_expiration = replica_expiration;
             }
         }
     }
