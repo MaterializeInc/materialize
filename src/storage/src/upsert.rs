@@ -80,11 +80,6 @@ impl From<&[u8]> for UpsertKey {
     }
 }
 
-thread_local! {
-    /// A thread-local datum cache used to calculate hashes
-    pub static KEY_DATUMS: RefCell<DatumVec> = RefCell::new(DatumVec::new());
-}
-
 /// The hash function used to map upsert keys. It is important that this hash is a cryptographic
 /// hash so that there is no risk of collisions. Collisions on SHA256 have a probability of 2^128
 /// which is many orders of magnitude smaller than many other events that we don't even think about
@@ -96,23 +91,29 @@ impl UpsertKey {
         Self::from_iter(key.map(|r| r.iter()))
     }
 
-    pub fn from_value(value: Result<&Row, &UpsertError>, mut key_indices: &[usize]) -> Self {
-        Self::from_iter(value.map(|value| {
-            value.iter().enumerate().flat_map(move |(idx, datum)| {
-                let key_idx = key_indices.get(0)?;
-                if idx == *key_idx {
-                    key_indices = &key_indices[1..];
-                    Some(datum)
-                } else {
-                    None
-                }
-            })
-        }))
+    pub fn from_value(value: Result<&Row, &UpsertError>, key_indices: &[usize]) -> Self {
+        thread_local! {
+            /// A thread-local datum cache used to calculate hashes
+            static VALUE_DATUMS: RefCell<DatumVec> = RefCell::new(DatumVec::new());
+        }
+        VALUE_DATUMS.with(|value_datums| {
+            let mut value_datums = value_datums.borrow_mut();
+            let value = value.map(|v| value_datums.borrow_with(v));
+            let key = match value {
+                Ok(ref datums) => Ok(key_indices.iter().map(|&idx| datums[idx])),
+                Err(err) => Err(err),
+            };
+            Self::from_iter(key)
+        })
     }
 
     pub fn from_iter<'a, 'b>(
         key: Result<impl Iterator<Item = Datum<'a>> + 'b, &UpsertError>,
     ) -> Self {
+        thread_local! {
+            /// A thread-local datum cache used to calculate hashes
+            static KEY_DATUMS: RefCell<DatumVec> = RefCell::new(DatumVec::new());
+        }
         KEY_DATUMS.with(|key_datums| {
             let mut key_datums = key_datums.borrow_mut();
             // Borrowing the DatumVec gives us a temporary buffer to store datums in that will be
@@ -625,7 +626,7 @@ struct UpsertConfig {
 
 fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
-    mut key_indices: Vec<usize>,
+    key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
     previous: Collection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Vec<PressOnDropButton>>,
@@ -647,9 +648,6 @@ where
     US: UpsertStateBackend<Option<FromTime>>,
     FromTime: timely::ExchangeData + Ord,
 {
-    // Sort key indices to ensure we can construct the key by iterating over the datums of the row
-    key_indices.sort_unstable();
-
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
     // We only care about UpsertValueError since this is the only error that we can retract
