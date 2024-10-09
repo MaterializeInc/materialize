@@ -27,7 +27,7 @@ from materialize.postgres_consistency.postgres_consistency_test import (
 
 SERVICES = [
     Cockroach(setup_materialize=True),
-    Materialized(propagate_crashes=True, external_cockroach=True),
+    Materialized(propagate_crashes=True, external_postgres=True),
     Postgres(),
     Mz(app_password=""),
 ]

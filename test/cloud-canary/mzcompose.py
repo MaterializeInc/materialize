@@ -199,7 +199,7 @@ SERVICES = [
         # in order to ensure a perfect match to the container that should be
         # deployed to the cloud
         image=f"materialize/environmentd:{VERSION}",
-        external_cockroach=True,
+        external_postgres=True,
         persist_blob_url="file:///mzdata/persist/blob",
         options=[
             "--orchestrator=process",

@@ -236,7 +236,7 @@ def workflow_stash(c: Composition) -> None:
     )
     c.rm_volumes("mzdata", force=True)
 
-    with c.override(Materialized(external_cockroach=True)):
+    with c.override(Materialized(external_postgres=True)):
         c.up("cockroach")
 
         c.up("materialized")

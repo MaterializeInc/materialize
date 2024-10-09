@@ -71,7 +71,7 @@ class StartMz(MzcomposeAction):
         mz = Materialized(
             name=self.mz_service,
             image=image,
-            external_cockroach=True,
+            external_postgres=True,
             external_minio=True,
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,

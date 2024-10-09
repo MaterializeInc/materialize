@@ -97,14 +97,14 @@ SERVICES = [
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
     Materialized(
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
         volumes_extra=["secrets:/share/secrets"],
     ),
     Materialized(
         name="mz_1",
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
@@ -112,7 +112,7 @@ SERVICES = [
     ),
     Materialized(
         name="mz_2",
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
@@ -120,7 +120,7 @@ SERVICES = [
     ),
     Materialized(
         name="mz_3",
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
@@ -128,7 +128,7 @@ SERVICES = [
     ),
     Materialized(
         name="mz_4",
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
@@ -136,7 +136,7 @@ SERVICES = [
     ),
     Materialized(
         name="mz_5",
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",

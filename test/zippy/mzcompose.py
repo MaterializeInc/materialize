@@ -50,11 +50,11 @@ SERVICES = [
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     Balancerd(),
-    Materialized(external_minio=True, external_cockroach=True, sanity_restart=False),
+    Materialized(external_minio=True, external_postgres=True, sanity_restart=False),
     Materialized(
         name="materialized2",
         external_minio=True,
-        external_cockroach=True,
+        external_postgres=True,
         sanity_restart=False,
     ),
     Clusterd(name="storaged"),

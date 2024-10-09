@@ -37,7 +37,7 @@ ITERATIONS = 128
 
 SERVICES = [
     Cockroach(setup_materialize=True),
-    Materialized(external_cockroach=True),
+    Materialized(external_postgres=True),
     Testdrive(
         no_reset=True,
         seed=1,

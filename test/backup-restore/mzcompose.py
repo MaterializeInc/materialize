@@ -24,7 +24,7 @@ SERVICES = [
     Cockroach(setup_materialize=True),
     Minio(setup_materialize=True),
     Mc(),
-    Materialized(external_minio=True, external_cockroach=True, sanity_restart=False),
+    Materialized(external_minio=True, external_postgres=True, sanity_restart=False),
     Testdrive(no_reset=True),
     Persistcli(),
 ]
