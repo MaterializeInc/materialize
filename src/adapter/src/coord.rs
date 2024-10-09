@@ -1288,6 +1288,24 @@ impl Drop for ExecuteContextExtra {
 /// the `ExecuteContextExtra` object (today, it is simply empty).
 #[derive(Debug)]
 pub struct ExecuteContext {
+    inner: Box<ExecuteContextInner>,
+}
+
+impl std::ops::Deref for ExecuteContext {
+    type Target = ExecuteContextInner;
+    fn deref(&self) -> &Self::Target {
+        &*self.inner
+    }
+}
+
+impl std::ops::DerefMut for ExecuteContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.inner
+    }
+}
+
+#[derive(Debug)]
+pub struct ExecuteContextInner {
     tx: ClientTransmitter<ExecuteResponse>,
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     session: Session,
@@ -1318,10 +1336,13 @@ impl ExecuteContext {
         extra: ExecuteContextExtra,
     ) -> Self {
         Self {
-            tx,
-            session,
-            extra,
-            internal_cmd_tx,
+            inner: ExecuteContextInner {
+                tx,
+                session,
+                extra,
+                internal_cmd_tx,
+            }
+            .into(),
         }
     }
 
@@ -1341,24 +1362,24 @@ impl ExecuteContext {
         Session,
         ExecuteContextExtra,
     ) {
-        let Self {
+        let ExecuteContextInner {
             tx,
             internal_cmd_tx,
             session,
             extra,
-        } = self;
+        } = *self.inner;
         (tx, internal_cmd_tx, session, extra)
     }
 
     /// Retire the execution, by sending a message to the coordinator.
     #[instrument(level = "debug")]
     pub fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
-        let Self {
+        let ExecuteContextInner {
             tx,
             internal_cmd_tx,
             session,
             extra,
-        } = self;
+        } = *self.inner;
         let reason = if extra.is_trivial() {
             None
         } else {
