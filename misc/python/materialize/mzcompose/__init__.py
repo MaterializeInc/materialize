@@ -111,7 +111,7 @@ def get_default_system_parameters(
         "persist_batch_columnar_format": (
             "both_v2" if version >= MzVersion.parse_mz("v0.112.0-dev") else "row"
         ),
-        "persist_batch_columnar_format_percent": "10",
+        "persist_batch_columnar_format_percent": "100",
         "persist_batch_delete_enabled": "true",
         "persist_batch_record_run_meta": (
             "true" if version >= MzVersion.parse_mz("v0.115.0-dev") else "false"
