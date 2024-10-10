@@ -1420,7 +1420,7 @@ pub trait ExternalCatalogReference {
     fn item_name(&self) -> &str;
 }
 
-impl ExternalCatalogReference for mz_mysql_util::MySqlTableDesc {
+impl ExternalCatalogReference for &mz_mysql_util::MySqlTableDesc {
     fn schema_name(&self) -> &str {
         &self.schema_name
     }
@@ -1469,7 +1469,7 @@ pub enum ExternalReferenceResolutionError {
     #[error("reference to {name} not found in source")]
     DoesNotExist { name: String },
     #[error(
-        "reference to {name} is ambiguous, consider specifying an additional \
+        "reference {name} is ambiguous, consider specifying an additional \
     layer of qualification"
     )]
     Ambiguous { name: String },

@@ -41,4 +41,4 @@ CREATE TEMPORARY TABLE t_temp (f1 BOOLEAN);
 0
 
 ! CREATE TABLE t_temp FROM SOURCE mz_source (REFERENCE public.t_temp);
-contains:No tables found
+contains:reference to public.t_temp not found in source
