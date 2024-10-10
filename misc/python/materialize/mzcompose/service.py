@@ -77,7 +77,7 @@ class ServiceConfig(TypedDict, total=False):
     host user.
 
     This is an mzcompose extension to Docker Compose. It is equivalent to
-    passing `--user $(id -u):$(id -g)` to `docker run`. The defualt is `False`.
+    passing `--user $(id -u):$(id -g)` to `docker run`. The default is `False`.
     """
 
     allow_host_ports: bool
