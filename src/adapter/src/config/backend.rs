@@ -45,10 +45,11 @@ impl SystemParameterBackend {
     pub async fn push(&mut self, params: &mut SynchronizedParameters) {
         for param in params.modified() {
             let mut vars = BTreeMap::new();
+            info!(name = param.name, value = param.value, "updating parameter");
             vars.insert(param.name.clone(), param.value.clone());
             match self.session_client.set_system_vars(vars).await {
                 Ok(()) => {
-                    info!(name = param.name, value = param.value, "sync parameter");
+                    info!(name = param.name, value = param.value, "update success");
                 }
                 Err(error) => match error {
                     AdapterError::ReadOnly => {
