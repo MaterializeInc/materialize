@@ -2216,7 +2216,7 @@ impl Coordinator {
         // Cleanup orphaned secrets. Errors during list() or delete() do not
         // need to prevent bootstrap from succeeding; we will retry next
         // startup.
-        let secrets_cleanup_fut = {
+        {
             // Destructure Self so we can selectively move fields into the async
             // task.
             let Self {
@@ -2228,8 +2228,15 @@ impl Coordinator {
             let next_user_item_id = catalog.get_next_user_item_id().await?;
             let next_system_item_id = catalog.get_next_system_item_id().await?;
             let read_only = self.controller.read_only();
+            // Fetch all IDs from the catalog to future-proof against other
+            // things using secrets. Today, SECRET and CONNECTION objects use
+            // secrets_controller.ensure, but more things could in the future
+            // that would be easy to miss adding here.
+            let catalog_ids: BTreeSet<GlobalId> =
+                catalog.entries().map(|entry| entry.id()).collect();
+            let secrets_controller = Arc::clone(secrets_controller);
 
-            async move {
+            spawn(|| "cleanup-orphaned-secrets", async move {
                 if read_only {
                     info!("coordinator init: not cleaning up orphaned secrets while in read-only mode");
                     return;
@@ -2238,12 +2245,6 @@ impl Coordinator {
 
                 match secrets_controller.list().await {
                     Ok(controller_secrets) => {
-                        // Fetch all IDs from the catalog to future-proof against other
-                        // things using secrets. Today, SECRET and CONNECTION objects use
-                        // secrets_controller.ensure, but more things could in the future
-                        // that would be easy to miss adding here.
-                        let catalog_ids: BTreeSet<GlobalId> =
-                            catalog.entries().map(|entry| entry.id()).collect();
                         let controller_secrets: BTreeSet<GlobalId> =
                             controller_secrets.into_iter().collect();
                         let orphaned = controller_secrets.difference(&catalog_ids);
@@ -2272,8 +2273,8 @@ impl Coordinator {
                     }
                     Err(e) => warn!("Failed to list secrets during orphan cleanup: {:?}", e),
                 }
-            }
-        };
+            });
+        }
         info!(
             "startup: coordinator init: bootstrap: generate secret cleanup complete in {:?}",
             cleanup_secrets_start.elapsed()
@@ -2282,15 +2283,11 @@ impl Coordinator {
         // Run all of our final steps concurrently.
         let final_steps_start = Instant::now();
         info!(
-            "startup: coordinator init: bootstrap: concurrently update builtin tables, migrate builtin tables, and cleanup secrets beginning"
+            "startup: coordinator init: bootstrap: concurrently update builtin tables and migrate builtin tables beginning"
         );
-        futures::future::join_all([
-            migrated_updates_fut,
-            builtin_updates_fut,
-            Box::pin(secrets_cleanup_fut),
-        ])
-        .instrument(info_span!("coord::bootstrap::final"))
-        .await;
+        futures::future::join_all([migrated_updates_fut, builtin_updates_fut])
+            .instrument(info_span!("coord::bootstrap::final"))
+            .await;
 
         debug!("startup: coordinator init: bootstrap: announcing completion of initialization to controller");
         // Announce the completion of initialization.
@@ -2300,7 +2297,7 @@ impl Coordinator {
         self.bootstrap_introspection_subscribes().await;
 
         info!(
-            "startup: coordinator init: bootstrap: concurrently update builtin tables, migrate builtin tables, and cleanup secrets complete in {:?}", final_steps_start.elapsed()
+            "startup: coordinator init: bootstrap: concurrently update builtin tables and migrate builtin tables complete in {:?}", final_steps_start.elapsed()
         );
 
         info!(
