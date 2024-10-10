@@ -174,8 +174,12 @@ impl Coordinator {
         }: ExplainTimestampRealTimeRecency,
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         let source_ids = optimized_plan.depends_on();
+        let source_items: Vec<_> = source_ids
+            .iter()
+            .map(|gid| self.catalog().resolve_global_id(gid).item_id())
+            .collect();
         let fut = self
-            .determine_real_time_recent_timestamp(session, source_ids.iter().cloned())
+            .determine_real_time_recent_timestamp(session, source_items.into_iter())
             .await?;
 
         match fut {

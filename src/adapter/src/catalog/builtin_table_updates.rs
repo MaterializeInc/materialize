@@ -81,7 +81,7 @@ use crate::coord::ConnMeta;
 
 /// An update to a built-in table.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BuiltinTableUpdate<T = GlobalId> {
+pub struct BuiltinTableUpdate<T = CatalogItemId> {
     /// The reference of the table to update.
     pub id: T,
     /// The data to put into the table.
@@ -94,7 +94,7 @@ impl CatalogState {
     pub fn resolve_builtin_table_updates(
         &self,
         builtin_table_update: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
-    ) -> Vec<BuiltinTableUpdate<GlobalId>> {
+    ) -> Vec<BuiltinTableUpdate<CatalogItemId>> {
         builtin_table_update
             .into_iter()
             .map(|builtin_table_update| self.resolve_builtin_table_update(builtin_table_update))
@@ -104,7 +104,7 @@ impl CatalogState {
     pub fn resolve_builtin_table_update(
         &self,
         BuiltinTableUpdate { id, row, diff }: BuiltinTableUpdate<&'static BuiltinTable>,
-    ) -> BuiltinTableUpdate<GlobalId> {
+    ) -> BuiltinTableUpdate<CatalogItemId> {
         let id = self.resolve_builtin_table(id);
         BuiltinTableUpdate { id, row, diff }
     }

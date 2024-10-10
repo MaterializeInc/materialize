@@ -811,6 +811,11 @@ impl Table {
     pub fn timeline(&self) -> Timeline {
         Timeline::EpochMilliseconds
     }
+
+    /// Returns all of the [`GlobalId`]s that this [`Table`] can be referenced by.
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.collections.values().copied()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1056,6 +1061,11 @@ impl Source {
         }
     }
 
+    /// The single [`GlobalId`] that refers to this Source.
+    pub fn global_id(&self) -> GlobalId {
+        self.collection_id
+    }
+
     /// The expensive resource that each source consumes is persist shards. To
     /// prevent abuse, we want to prevent users from creating sources that use an
     /// unbounded number of persist shards. But we also don't want to count
@@ -1164,6 +1174,11 @@ impl Sink {
     pub fn connection_id(&self) -> Option<CatalogItemId> {
         self.connection.connection_id()
     }
+
+    /// The single [`GlobalId`] that this Sink can be referenced by.
+    pub fn global_id(&self) -> GlobalId {
+        self.export_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1219,12 +1234,19 @@ pub struct MaterializedView {
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
 }
 
+impl MaterializedView {
+    /// The single [`GlobalId`] this [`MaterializedView`] can be referenced by.
+    pub fn global_id(&self) -> GlobalId {
+        self.collection_id
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Index {
     pub create_sql: String,
     /// [`GlobalId`] used to reference this Index.
     pub collection_id: GlobalId,
-    /// Collection this Index is on.
+    /// The [`GlobalId`] this Index is on.
     pub on: GlobalId,
     pub keys: Arc<[MirScalarExpr]>,
     pub conn_id: Option<ConnectionId>,
@@ -1232,6 +1254,13 @@ pub struct Index {
     pub cluster_id: ClusterId,
     pub custom_logical_compaction_window: Option<CompactionWindow>,
     pub is_retained_metrics_object: bool,
+}
+
+impl Index {
+    /// The [`GlobalId`] that refers to this Index.
+    pub fn global_id(&self) -> GlobalId {
+        self.collection_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1263,7 +1292,9 @@ pub struct Connection {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContinualTask {
+    /// Parse-able SQL that defines this continual task.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this continual task from outside the catalog.
     pub collection_id: GlobalId,
     pub input_id: GlobalId,
     /// ContinualTasks are self-referential. We make this work by using a
@@ -1271,12 +1302,23 @@ pub struct ContinualTask {
     /// planning. Then we fill in the real `GlobalId` before constructing this
     /// catalog item.
     pub raw_expr: Arc<HirRelationExpr>,
+    /// Columns for this continual task.
     pub desc: RelationDesc,
+    /// Other catalog items that this continual task references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+    /// All of the catalog objects that are referenced by this continual task.
     pub dependencies: DependencyIds,
+    /// Cluster that this continual task runs on.
     pub cluster_id: ClusterId,
     /// See the comment on [MaterializedView::initial_as_of].
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
+}
+
+impl ContinualTask {
+    /// The single [`GlobalId`] used to reference this continual task.
+    pub fn global_id(&self) -> GlobalId {
+        self.collection_id
+    }
 }
 
 impl CatalogItem {
@@ -1316,6 +1358,10 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => Box::new(std::iter::empty()),
         }
+    }
+
+    pub fn latest_global_id(&self) -> GlobalId {
+        self.global_ids().max().expect("at least one GlobalId")
     }
 
     /// Whether this item represents a storage collection.
@@ -2192,6 +2238,10 @@ impl CatalogEntry {
     /// Returns all of the [`GlobalId`]s associated with this item.
     pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
         self.item().global_ids()
+    }
+
+    pub fn latest_global_id(&self) -> GlobalId {
+        self.item().latest_global_id()
     }
 
     /// Returns the OID of this catalog entry.

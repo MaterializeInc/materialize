@@ -1048,7 +1048,7 @@ pub struct ExplainSinkSchemaPlan {
 
 #[derive(Debug)]
 pub struct SendDiffsPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub updates: Vec<(Row, Diff)>,
     pub kind: MutationKind,
     pub returning: Vec<(Row, NonZeroUsize)>,
@@ -1057,14 +1057,14 @@ pub struct SendDiffsPlan {
 
 #[derive(Debug)]
 pub struct InsertPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub values: HirRelationExpr,
     pub returning: Vec<mz_expr::MirScalarExpr>,
 }
 
 #[derive(Debug)]
 pub struct ReadThenWritePlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub selection: HirRelationExpr,
     pub finishing: RowSetFinishing,
     pub assignments: BTreeMap<usize, mz_expr::MirScalarExpr>,

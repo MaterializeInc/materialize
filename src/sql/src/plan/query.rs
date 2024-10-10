@@ -257,7 +257,7 @@ pub fn plan_insert_query(
     returning: Vec<SelectItem<Aug>>,
 ) -> Result<
     (
-        GlobalId,
+        CatalogItemId,
         HirRelationExpr,
         PlannedRootQuery<Vec<HirScalarExpr>>,
     ),
@@ -465,7 +465,7 @@ pub fn plan_insert_query(
     };
 
     Ok((
-        table.global_id(),
+        table.item_id(),
         expr.map(map_exprs).project(project_key),
         returning,
     ))
@@ -626,7 +626,7 @@ pub fn plan_copy_from_rows(
 
 /// Common information used for DELETE, UPDATE, and INSERT INTO ... SELECT plans.
 pub struct ReadThenWritePlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     /// Read portion of query.
     ///
     /// NOTE: Even if the WHERE filter is left off, we still need to perform a read to generate
@@ -771,7 +771,7 @@ pub fn plan_mutation_query_inner(
     };
 
     Ok(ReadThenWritePlan {
-        id: id.to_global_id(),
+        id,
         selection: get,
         finishing,
         assignments: sets,

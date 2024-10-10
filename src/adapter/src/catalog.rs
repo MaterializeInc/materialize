@@ -734,17 +734,20 @@ impl Catalog {
     }
 
     /// Resolves a `BuiltinTable`.
-    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
+    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> CatalogItemId {
         self.state.resolve_builtin_table(builtin)
     }
 
     /// Resolves a `BuiltinLog`.
-    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
+    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> CatalogItemId {
         self.state.resolve_builtin_log(builtin)
     }
 
     /// Resolves a `BuiltinSource`.
-    pub fn resolve_builtin_storage_collection(&self, builtin: &'static BuiltinSource) -> GlobalId {
+    pub fn resolve_builtin_storage_collection(
+        &self,
+        builtin: &'static BuiltinSource,
+    ) -> CatalogItemId {
         self.state.resolve_builtin_source(builtin)
     }
 
@@ -843,8 +846,12 @@ impl Catalog {
         self.state.get_entry(id)
     }
 
+    pub fn get_global_ids(&self, id: &CatalogItemId) -> impl Iterator<Item = GlobalId> + '_ {
+        self.get_entry(id).global_ids()
+    }
+
     pub fn resolve_global_id(&self, id: &GlobalId) -> &CatalogEntry {
-        self.state.resolve_global_id(id).expect("todo")
+        self.state.resolve_global_id(id)
     }
 
     pub fn get_schema(
@@ -1774,7 +1781,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         id: &GlobalId,
     ) -> Result<Box<dyn mz_sql::catalog::CatalogCollectionItem>, SqlCatalogError> {
-        let entry = self.state.resolve_global_id(id)?;
+        let entry = self.state.resolve_global_id(id);
         let entry = match &entry.item {
             CatalogItem::Table(table) => {
                 let (version, _gid) = table

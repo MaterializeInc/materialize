@@ -556,10 +556,15 @@ impl Coordinator {
                 let mut collections = Vec::with_capacity(sources.len());
 
                 for (item_id, source) in sources {
-                    let source_status_collection_id =
-                        Some(coord.catalog().resolve_builtin_storage_collection(
-                            &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                        ));
+                    let source_status_item_id = coord.catalog().resolve_builtin_storage_collection(
+                        &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                    );
+                    let source_status_collection_id = Some(
+                        coord
+                            .catalog()
+                            .get_entry(source_status_item_id)
+                            .latest_global_id(),
+                    );
 
                     let (data_source, status_collection_id) = match source.data_source {
                         DataSourceDesc::Ingestion {
@@ -1013,10 +1018,16 @@ impl Coordinator {
                                 // TODO: It's a little weird that a table will be present in this
                                 // source status collection, we might want to split out into a separate
                                 // status collection.
-                                let status_collection_id =
-                                    Some(coord.catalog().resolve_builtin_storage_collection(
+                                let source_status_item_id =
+                                    coord.catalog().resolve_builtin_storage_collection(
                                         &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                                    ));
+                                    );
+                                let source_status_collection_id = Some(
+                                    coord
+                                        .catalog()
+                                        .get_entry(source_status_item_id)
+                                        .latest_global_id(),
+                                );
                                 let collection_desc = CollectionDescription::<Timestamp> {
                                     desc: table.desc.clone(),
                                     data_source: DataSource::IngestionExport {
@@ -2212,7 +2223,7 @@ impl Coordinator {
     pub(super) async fn determine_real_time_recent_timestamp(
         &self,
         session: &Session,
-        source_ids: impl Iterator<Item = GlobalId>,
+        source_ids: impl Iterator<Item = CatalogItemId>,
     ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
     {
         let vars = session.vars();
@@ -2230,7 +2241,7 @@ impl Coordinator {
             // storage objects that ingest data from external systems) remap
             // data. We "cheat" a little bit and filter out any IDs that aren't
             // user objects because we know they are not a RTR source.
-            let mut to_visit = VecDeque::from_iter(source_ids.filter(GlobalId::is_user));
+            let mut to_visit = VecDeque::from_iter(source_ids.filter(CatalogItemId::is_user));
             // If none of the sources are user objects, we don't need to provide
             // a RTR timestamp.
             if to_visit.is_empty() {
@@ -2249,6 +2260,10 @@ impl Coordinator {
                         .filter(|id| !timestamp_objects.contains(id) && id.is_user()),
                 );
             }
+            let timestamp_objects = timestamp_objects
+                .into_iter()
+                .flat_map(|item_id| self.catalog().get_entry(&item_id).global_ids())
+                .collect();
 
             let r = self
                 .controller
@@ -2641,7 +2656,12 @@ impl Coordinator {
                     }
                     match entry.item().typ() {
                         typ @ (Func | View | MaterializedView | ContinualTask) => {
-                            ids_to_check.extend(entry.uses());
+                            // TODO(parkmycar): This probably isn't right.
+                            let gids = entry
+                                .uses()
+                                .into_iter()
+                                .flat_map(|item_id| catalog.get_entry(item_id).global_ids());
+                            ids_to_check.extend(gids);
                             let valid_id = id.is_user() || matches!(typ, Func);
                             valid_id
                         }

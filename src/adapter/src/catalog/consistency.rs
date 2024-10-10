@@ -356,7 +356,7 @@ impl CatalogState {
                 let Some(used_entry) = self.entry_by_id.get(&used_id) else {
                     dependency_inconsistencies.push(ObjectDependencyInconsistency::MissingUses {
                         object_a: *id,
-                        object_b: *used_id,
+                        object_b: used_id,
                     });
                     continue;
                 };
@@ -364,7 +364,7 @@ impl CatalogState {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
-                            object_b: *used_id,
+                            object_b: used_id,
                         },
                     );
                 }

@@ -1762,7 +1762,7 @@ impl Coordinator {
     pub(crate) async fn bootstrap(
         &mut self,
         boot_ts: Timestamp,
-        migrated_storage_collections_0dt: BTreeSet<GlobalId>,
+        migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         let bootstrap_start = Instant::now();
@@ -1893,6 +1893,7 @@ impl Coordinator {
 
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog().resolve_builtin_log(log))
+            .flat_map(|item_id| self.catalog().get_global_ids(&item_id))
             .collect();
 
         let mut privatelink_connections = BTreeMap::new();
@@ -1953,14 +1954,14 @@ impl Coordinator {
                         .entry(policy.expect("sources have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .extend(entry.global_ids());
+                        .insert(source.global_id());
                 }
-                CatalogItem::Table(_) => {
+                CatalogItem::Table(table) => {
                     policies_to_set
                         .entry(policy.expect("tables have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .extend(entry.global_ids());
+                        .extend(table.global_ids());
                 }
                 CatalogItem::Index(idx) => {
                     let policy_entry = policies_to_set
@@ -1972,7 +1973,7 @@ impl Coordinator {
                             .compute_ids
                             .entry(idx.cluster_id)
                             .or_insert_with(BTreeSet::new)
-                            .extend(entry.global_ids());
+                            .insert(idx.global_id());
                     } else {
                         let df_desc = self
                             .catalog()
@@ -2014,11 +2015,11 @@ impl Coordinator {
                         .entry(policy.expect("materialized views have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(entry.id());
+                        .insert(mview.global_id());
 
                     let mut df_desc = self
                         .catalog()
-                        .try_get_physical_plan(&entry.id())
+                        .try_get_physical_plan(&mview.global_id())
                         .expect("added in `bootstrap_dataflow_plans`")
                         .clone();
 
@@ -2038,7 +2039,7 @@ impl Coordinator {
 
                     let df_meta = self
                         .catalog()
-                        .try_get_dataflow_metainfo(&entry.id())
+                        .try_get_dataflow_metainfo(&mview.global_id())
                         .expect("added in `bootstrap_dataflow_plans`");
 
                     if self.catalog().state().system_config().enable_mz_notices() {
@@ -2053,8 +2054,7 @@ impl Coordinator {
                     self.ship_dataflow(df_desc, mview.cluster_id, None).await;
                 }
                 CatalogItem::Sink(sink) => {
-                    let id = entry.id();
-                    self.create_storage_export(id, sink)
+                    self.create_storage_export(sink.global_id(), sink)
                         .await
                         .unwrap_or_terminate("cannot fail to create exports");
                 }
@@ -2074,11 +2074,11 @@ impl Coordinator {
                         .entry(policy.expect("continual tasks have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(entry.id());
+                        .insert(ct.global_id());
 
                     let mut df_desc = self
                         .catalog()
-                        .try_get_physical_plan(&entry.id())
+                        .try_get_physical_plan(&ct.global_id())
                         .expect("added in `bootstrap_dataflow_plans`")
                         .clone();
 
@@ -2088,7 +2088,7 @@ impl Coordinator {
 
                     let df_meta = self
                         .catalog()
-                        .try_get_dataflow_metainfo(&entry.id())
+                        .try_get_dataflow_metainfo(&ct.global_id())
                         .expect("added in `bootstrap_dataflow_plans`");
 
                     if self.catalog().state().system_config().enable_mz_notices() {
@@ -2153,11 +2153,12 @@ impl Coordinator {
             let min_timestamp = Timestamp::minimum();
             let migrated_builtin_table_updates: Vec<_> = builtin_table_updates
                 .drain_filter_swapping(|update| {
+                    let gid = self.catalog().get_entry(&update.id).latest_global_id();
                     migrated_storage_collections_0dt.contains(&update.id)
                         && self
                             .controller
                             .storage_collections
-                            .collection_frontiers(update.id)
+                            .collection_frontiers(gid)
                             .expect("all tables are registered")
                             .write_frontier
                             .elements()
@@ -2169,8 +2170,9 @@ impl Coordinator {
             } else {
                 let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
                 for update in migrated_builtin_table_updates {
+                    let gid = self.catalog().get_entry(update.id).latest_global_id();
                     appends
-                        .entry(update.id)
+                        .entry(gid)
                         .or_default()
                         .push((update.row, update.diff));
                 }
@@ -2371,15 +2373,15 @@ impl Coordinator {
         };
         let mut retraction_tasks = Vec::new();
         for system_table in entries.iter().filter(|entry| {
-            entry.is_table() && entry.id().is_system() && !is_storage_usage_by_shard(entry)
+            entry.is_table() && entry.item_id().is_system() && !is_storage_usage_by_shard(entry)
         }) {
-            let id = system_table.id();
+            let id = system_table.item_id();
             debug!(
                 "coordinator init: resetting system table {} ({})",
                 self.catalog().resolve_full_name(system_table.name(), None),
                 id,
             );
-            let current_contents_fut = self.controller.storage.snapshot(id, read_ts);
+            let current_contents_fut = self.controller.storage.snapshot(id.to_global_id(), read_ts);
             let task = spawn(|| format!("snapshot-{}", id), async move {
                 let current_contents = current_contents_fut
                     .await
@@ -2438,11 +2440,14 @@ impl Coordinator {
     #[instrument]
     async fn bootstrap_storage_collections(
         &mut self,
-        migrated_storage_collections: &BTreeSet<GlobalId>,
+        migrated_storage_collections: &BTreeSet<CatalogItemId>,
     ) {
         let catalog = self.catalog();
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
+        let source_status_collection_id = catalog
+            .get_entry(source_status_collection_id)
+            .latest_global_id();
 
         let source_desc = |data_source: &DataSourceDesc, desc: &RelationDesc| {
             let (data_source, status_collection_id) = match data_source.clone() {
@@ -2553,6 +2558,10 @@ impl Coordinator {
         };
 
         let storage_metadata = self.catalog.state().storage_metadata();
+        let migrated_storage_collections = migrated_storage_collections
+            .into_iter()
+            .flat_map(|item_id| self.catalog.get_entry(item_id).global_ids())
+            .collect();
 
         self.controller
             .storage
@@ -2560,7 +2569,7 @@ impl Coordinator {
                 storage_metadata,
                 Some(register_ts),
                 collections,
-                migrated_storage_collections,
+                &migrated_storage_collections,
             )
             .await
             .unwrap_or_terminate("cannot fail to create collections");
@@ -3370,11 +3379,12 @@ impl Coordinator {
     /// never commit retractions to [`MZ_STORAGE_USAGE_BY_SHARD`] outside of this method, which is
     /// only called once during startup. So we don't have to worry about double/invalid retractions.
     async fn prune_storage_usage_events_on_startup(&self, retention_period: Duration) {
-        let id = self
+        let item_id = self
             .catalog()
             .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD);
+        let global_id = self.catalog.get_entry(item_id).latest_global_id();
         let read_ts = self.get_local_read_ts().await;
-        let current_contents_fut = self.controller.storage.snapshot(id, read_ts);
+        let current_contents_fut = self.controller.storage.snapshot(global_id, read_ts);
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         spawn(|| "storage_usage_prune", async move {
             let mut current_contents = current_contents_fut
@@ -3401,7 +3411,11 @@ impl Coordinator {
                     .expect("all collections happen after Jan 1 1970");
                 if collection_timestamp < cutoff_ts {
                     debug!("pruning storage event {row:?}");
-                    let builtin_update = BuiltinTableUpdate { id, row, diff: -1 };
+                    let builtin_update = BuiltinTableUpdate {
+                        id: item_id,
+                        row,
+                        diff: -1,
+                    };
                     expired.push(builtin_update);
                 }
             }
@@ -3713,7 +3727,10 @@ pub fn serve(
         let clusters_caught_up_check =
             clusters_caught_up_trigger.map(|trigger| CaughtUpCheckContext {
                 trigger,
-                exclude_collections: new_builtins,
+                exclude_collections: new_builtins
+                    .into_iter()
+                    .flat_map(|item_id| catalog.get_entry(&item_id).global_ids())
+                    .collect(),
             });
 
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
