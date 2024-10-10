@@ -96,7 +96,9 @@ class Expression:
     def collect_data_sources(self) -> list[DataSource]:
         data_sources = []
         for leaf in self.collect_leaves():
-            data_sources.append(leaf.get_data_source())
+            data_source = leaf.get_data_source()
+            if data_source is not None:
+                data_sources.append(data_source)
 
         return data_sources
 
@@ -198,7 +200,9 @@ class LeafExpression(Expression):
         self, sql_adjuster: SqlDialectAdjuster, include_alias: bool
     ) -> str:
         if include_alias:
-            return f"{self.get_data_source().alias()}.{self.column_name}"
+            data_source = self.get_data_source()
+            assert data_source is not None, "data source is None"
+            return f"{data_source.alias()}.{self.column_name}"
         return self.column_name
 
     def collect_leaves(self) -> list[LeafExpression]:
@@ -216,11 +220,16 @@ class LeafExpression(Expression):
     ) -> set[ExpressionCharacteristics]:
         return self.own_characteristics
 
-    def get_data_source(self) -> DataSource:
+    def get_data_source(self) -> DataSource | None:
         raise NotImplementedError
 
-    def get_source_column_identifier(self) -> SourceColumnIdentifier:
+    def get_source_column_identifier(self) -> SourceColumnIdentifier | None:
+        data_source = self.get_data_source()
+
+        if data_source is None:
+            return None
+
         return SourceColumnIdentifier(
-            data_source_alias=self.get_data_source().alias(),
+            data_source_alias=data_source.alias(),
             column_name=self.column_name,
         )
