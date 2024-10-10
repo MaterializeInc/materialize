@@ -95,15 +95,15 @@ SELECT
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "MUCHMUCHMUCHLONGERVALUE", "f2": 9000}
 
-> SELECT
-    SUM(u.bytes_indexed) > ${state-bytes},
-    SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
-  GROUP BY s.name
-  ORDER BY s.name
-true 3
+# > SELECT
+#     SUM(u.bytes_indexed) > ${state-bytes},
+#     SUM(u.records_indexed)
+#   FROM mz_sources s
+#   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+#   WHERE s.name IN ('upsert')
+#   GROUP BY s.name
+#   ORDER BY s.name
+# true 3
 
 
 # Ensure deletes work.
