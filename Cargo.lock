@@ -3412,6 +3412,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "k8s-controller"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5da4d3249c4ebd1e6de32134fb82a720db3e7a978ad38e576d64e6a22c6e308"
+dependencies = [
+ "async-trait",
+ "futures",
+ "k8s-openapi",
+ "kube",
+ "kube-runtime",
+ "rand",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "k8s-openapi"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4546,8 +4562,10 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "schemars",
+ "semver",
  "serde",
  "serde_json",
+ "tracing",
  "uuid",
  "workspace-hack",
 ]
@@ -5507,6 +5525,46 @@ dependencies = [
  "tracing",
  "tracing-capture",
  "tracing-subscriber",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-orchestratord"
+version = "0.120.0-dev.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "chrono",
+ "clap",
+ "futures",
+ "http 1.1.0",
+ "k8s-controller",
+ "k8s-openapi",
+ "kube",
+ "maplit",
+ "mz-alloc",
+ "mz-alloc-default",
+ "mz-build-info",
+ "mz-cloud-resources",
+ "mz-environmentd",
+ "mz-orchestrator-kubernetes",
+ "mz-orchestrator-tracing",
+ "mz-ore",
+ "mz-prof-http",
+ "mz-tls-util",
+ "prometheus",
+ "rand",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tokio-postgres",
+ "tower-http",
+ "tracing",
+ "urlencoding",
  "workspace-hack",
 ]
 
