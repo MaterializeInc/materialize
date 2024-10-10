@@ -641,8 +641,8 @@ pub trait CatalogItem {
     fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)>;
 
     /// Returns the column defaults associated with the catalog item, if the
-    /// catalog item is a table.
-    fn table_details(&self) -> Option<&[Expr<Aug>]>;
+    /// catalog item is a table that accepts writes.
+    fn writable_table_details(&self) -> Option<&[Expr<Aug>]>;
 
     /// Returns the type information associated with the catalog item, if the
     /// catalog item is a type.
