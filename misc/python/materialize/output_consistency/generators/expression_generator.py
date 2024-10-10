@@ -30,8 +30,14 @@ from materialize.output_consistency.expression.expression import (
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
+from materialize.output_consistency.expression.row_index_expression import (
+    RowIndexExpression,
+)
 from materialize.output_consistency.input_data.operations.equality_operations_provider import (
     EQUALS_OPERATION,
+)
+from materialize.output_consistency.input_data.params.row_index_param import (
+    RowIndexParam,
 )
 from materialize.output_consistency.input_data.params.same_operation_param import (
     SameOperationParam,
@@ -342,6 +348,14 @@ class ExpressionGenerator:
             expression_to_use = arg_context.args[param.index_of_previous_param]
             expression_to_use.recursively_mark_as_shared()
             return expression_to_use
+
+        if isinstance(param, RowIndexParam):
+            expression_to_share_data_source = arg_context.args[
+                param.index_of_param_to_share_data_source
+            ]
+            return RowIndexExpression(
+                expression_to_share_data_source, param.allow_multi_column_expression
+            )
 
         create_complex_arg = (
             arg_context.requires_aggregation()
