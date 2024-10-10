@@ -1415,7 +1415,7 @@ pub mod datadriven {
 
     use crate::batch::{
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-        BLOB_TARGET_SIZE,
+        BLOB_TARGET_SIZE, STRUCTURED_ORDER,
     };
     use crate::fetch::{Cursor, EncodedPart};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
@@ -1455,6 +1455,12 @@ pub mod datadriven {
             client
                 .cfg
                 .set_config(&BLOB_TARGET_SIZE, *BLOB_TARGET_SIZE.default());
+            // Our structured compaction code uses slightly different estimates
+            // for array size than the old path, which can affect the results of
+            // some compaction tests.
+            client
+                .cfg
+                .set_config(&STRUCTURED_ORDER, *STRUCTURED_ORDER.default());
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
