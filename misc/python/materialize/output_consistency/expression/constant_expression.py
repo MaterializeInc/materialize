@@ -72,8 +72,8 @@ class ConstantExpression(LeafExpression):
     def collect_vertical_table_indices(self) -> set[int]:
         return set()
 
-    def get_data_source(self) -> DataSource:
-        return DataSource(table_index=None)
+    def get_data_source(self) -> DataSource | None:
+        return None
 
     def __str__(self) -> str:
         return f"ConstantExpression (value={self.value}, type={self.data_type})"

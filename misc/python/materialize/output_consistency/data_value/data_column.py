@@ -11,6 +11,9 @@
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.data_value.data_value import DataValue
+from materialize.output_consistency.data_value.source_column_identifier import (
+    SourceColumnIdentifier,
+)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -146,9 +149,14 @@ class DataColumn(LeafExpression):
             if table_index is None or table_index in value.vertical_table_indices
         ]
 
-    def get_data_source(self) -> DataSource:
+    def get_data_source(self) -> DataSource | None:
         assert self.data_source is not None, "Data source not assigned"
         return self.data_source
+
+    def get_source_column_identifier(self) -> SourceColumnIdentifier:
+        source_column_identifier = super().get_source_column_identifier()
+        assert source_column_identifier is not None
+        return source_column_identifier
 
     def __str__(self) -> str:
         return f"DataValue (column='{self.column_name}', type={self.data_type})"
