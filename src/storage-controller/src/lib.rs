@@ -469,7 +469,7 @@ where
         migrated_storage_collections: &BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         self.migrated_storage_collections
-            .clone_from(migrated_storage_collections);
+            .extend(migrated_storage_collections.iter().cloned());
 
         self.storage_collections
             .create_collections_for_bootstrap(

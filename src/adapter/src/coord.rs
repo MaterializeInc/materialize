@@ -184,7 +184,9 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
-use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
+use crate::optimize::dataflows::{
+    dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
+};
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycleEvent};
@@ -2474,47 +2476,53 @@ impl Coordinator {
             }
         };
 
-        let collections: Vec<_> = catalog
-            .entries()
-            .filter_map(|entry| {
-                let id = entry.id();
-                match entry.item() {
-                    CatalogItem::Source(source) => {
-                        Some((id, source_desc(&source.data_source, &source.desc)))
-                    }
-                    CatalogItem::Table(table) => {
-                        let collection_desc = match &table.data_source {
-                            TableDataSource::TableWrites { defaults: _ } => {
-                                CollectionDescription::for_table(table.desc.clone())
-                            }
-                            TableDataSource::DataSource(data_source_desc) => {
-                                source_desc(data_source_desc, &table.desc)
-                            }
-                        };
-                        Some((id, collection_desc))
-                    }
-                    CatalogItem::MaterializedView(mv) => {
-                        let collection_desc = CollectionDescription {
-                            desc: mv.desc.clone(),
-                            data_source: DataSource::Other,
-                            since: mv.initial_as_of.clone(),
-                            status_collection_id: None,
-                        };
-                        Some((id, collection_desc))
-                    }
-                    CatalogItem::ContinualTask(ct) => {
-                        let collection_desc = CollectionDescription {
-                            desc: ct.desc.clone(),
-                            data_source: DataSource::Other,
-                            since: ct.initial_as_of.clone(),
-                            status_collection_id: None,
-                        };
-                        Some((id, collection_desc))
-                    }
-                    _ => None,
+        let mut collections = vec![];
+        let mut new_builtin_continual_tasks = vec![];
+        for entry in catalog.entries() {
+            let id = entry.id();
+            match entry.item() {
+                CatalogItem::Source(source) => {
+                    collections.push((id, source_desc(&source.data_source, &source.desc)));
                 }
-            })
-            .collect();
+                CatalogItem::Table(table) => {
+                    let collection_desc = match &table.data_source {
+                        TableDataSource::TableWrites { defaults: _ } => {
+                            CollectionDescription::for_table(table.desc.clone())
+                        }
+                        TableDataSource::DataSource(data_source_desc) => {
+                            source_desc(data_source_desc, &table.desc)
+                        }
+                    };
+                    collections.push((id, collection_desc));
+                }
+                CatalogItem::MaterializedView(mv) => {
+                    let collection_desc = CollectionDescription {
+                        desc: mv.desc.clone(),
+                        data_source: DataSource::Other,
+                        since: mv.initial_as_of.clone(),
+                        status_collection_id: None,
+                    };
+                    collections.push((id, collection_desc));
+                }
+                CatalogItem::ContinualTask(ct) => {
+                    let collection_desc = CollectionDescription {
+                        desc: ct.desc.clone(),
+                        data_source: DataSource::Other,
+                        since: ct.initial_as_of.clone(),
+                        status_collection_id: None,
+                    };
+                    if id.is_system() && collection_desc.since.is_none() {
+                        // We need a non-0 since to make as_of selection work. Fill it in below with
+                        // the `bootstrap_builtin_continual_tasks` call, which can only be run after
+                        // `create_collections_for_bootstrap`.
+                        new_builtin_continual_tasks.push((id, collection_desc));
+                    } else {
+                        collections.push((id, collection_desc));
+                    }
+                }
+                _ => (),
+            }
+        }
 
         let register_ts = if self.controller.read_only() {
             self.get_local_read_ts().await
@@ -2537,9 +2545,51 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 
+        self.bootstrap_builtin_continual_tasks(new_builtin_continual_tasks)
+            .await;
+
         if !self.controller.read_only() {
             self.apply_local_write(register_ts).await;
         }
+    }
+
+    /// TODO(ct1): Hack to make as_of selection happy. It assumes that anything
+    /// with a zero upper has the since set to the initial as_of. Ideally we'd
+    /// write this down in the durable catalog, but that's hard because of boot
+    /// ordering and it's possible that a better long-term fix would be in as_of
+    /// selection itself.
+    async fn bootstrap_builtin_continual_tasks(
+        &mut self,
+        mut collections: Vec<(GlobalId, CollectionDescription<Timestamp>)>,
+    ) {
+        for (id, collection) in &mut collections {
+            let entry = self.catalog.get_entry(id);
+            let ct = match &entry.item {
+                CatalogItem::ContinualTask(ct) => ct.clone(),
+                _ => unreachable!("only called with continual task builtins"),
+            };
+            let debug_name = self
+                .catalog()
+                .resolve_full_name(entry.name(), None)
+                .to_string();
+            let (_optimized_plan, physical_plan, _metainfo) = self
+                .optimize_create_continual_task(&ct, *id, self.owned_catalog(), debug_name)
+                .expect("builtin CT should optimize successfully");
+
+            // Determine an as of for the new continual task.
+            let mut id_bundle = dataflow_import_id_bundle(&physical_plan, ct.cluster_id);
+            // Can't acquire a read hold on ourselves because we don't exist yet.
+            id_bundle.storage_ids.remove(id);
+            let read_holds = self.acquire_read_holds(&id_bundle);
+            let as_of = read_holds.least_valid_read();
+
+            collection.since = Some(as_of.clone());
+        }
+        self.controller
+            .storage
+            .create_collections(self.catalog.state().storage_metadata(), None, collections)
+            .await
+            .unwrap_or_terminate("cannot fail to create collections");
     }
 
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
