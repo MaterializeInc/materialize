@@ -24,6 +24,9 @@ from materialize.output_consistency.input_data.params.map_operation_param import
 from materialize.output_consistency.input_data.params.record_operation_param import (
     RecordOperationParam,
 )
+from materialize.output_consistency.input_data.params.row_indices_param import (
+    RowIndicesParam,
+)
 from materialize.output_consistency.input_data.params.same_operation_param import (
     SameOperationParam,
 )
@@ -112,12 +115,13 @@ MAP_OPERATION_TYPES.append(
 MAP_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "map_agg",
-        {3: "map_agg($, $ ORDER BY row_index, $)"},
+        {4: "map_agg($, $ ORDER BY $, $)"},
         [
             # key
             StringOperationParam(only_type_text=True),
             # value
             AnyOperationParam(),
+            RowIndicesParam(index_of_param_to_share_data_source=0),
             # order within aggregated values
             SameOperationParam(index_of_previous_param=1),
         ],

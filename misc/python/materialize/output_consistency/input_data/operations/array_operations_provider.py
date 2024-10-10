@@ -27,6 +27,9 @@ from materialize.output_consistency.input_data.params.enum_constant_operation_pa
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
 )
+from materialize.output_consistency.input_data.params.row_indices_param import (
+    RowIndicesParam,
+)
 from materialize.output_consistency.input_data.params.same_operation_param import (
     SameOperationParam,
 )
@@ -172,8 +175,12 @@ ARRAY_OPERATION_TYPES.append(
 ARRAY_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "array_agg",
-        {2: "array_agg($ ORDER BY row_index, $)"},
-        [AnyOperationParam(), SameOperationParam(index_of_previous_param=0)],
+        {3: "array_agg($ ORDER BY $, $)"},
+        [
+            AnyOperationParam(),
+            RowIndicesParam(index_of_param_to_share_data_source=0),
+            SameOperationParam(index_of_previous_param=0),
+        ],
         ArrayReturnTypeSpec(array_value_type_category=DataTypeCategory.DYNAMIC),
         is_aggregation=True,
     ),

@@ -31,6 +31,9 @@ from materialize.output_consistency.input_data.params.number_operation_param imp
 from materialize.output_consistency.input_data.params.record_operation_param import (
     RecordOperationParam,
 )
+from materialize.output_consistency.input_data.params.row_indices_param import (
+    RowIndicesParam,
+)
 from materialize.output_consistency.input_data.params.same_operation_param import (
     SameOperationParam,
 )
@@ -181,9 +184,10 @@ JSONB_OPERATION_TYPES.append(
 JSONB_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "jsonb_agg",
-        {2: "jsonb_agg($ ORDER BY row_index, $)"},
+        {3: "jsonb_agg($ ORDER BY $, $)"},
         [
             AnyOperationParam(include_record_type=False),
+            RowIndicesParam(index_of_param_to_share_data_source=0),
             SameOperationParam(index_of_previous_param=0),
         ],
         JsonbReturnTypeSpec(),
@@ -197,8 +201,12 @@ JSONB_OPERATION_TYPES.append(
 JSONB_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "jsonb_agg",
-        {2: "jsonb_agg($ ORDER BY row_index, $)"},
-        [RecordOperationParam(), SameOperationParam(index_of_previous_param=0)],
+        {3: "jsonb_agg($ ORDER BY $, $)"},
+        [
+            RecordOperationParam(),
+            RowIndicesParam(index_of_param_to_share_data_source=0),
+            SameOperationParam(index_of_previous_param=0),
+        ],
         JsonbReturnTypeSpec(),
         is_aggregation=True,
         tags={TAG_JSONB_AGGREGATION},
@@ -209,12 +217,13 @@ JSONB_OPERATION_TYPES.append(
 JSONB_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "jsonb_object_agg",
-        {4: "jsonb_object_agg($, $ ORDER BY row_index, $, $)"},
+        {5: "jsonb_object_agg($, $ ORDER BY $, $, $)"},
         [
             # key
             AnyOperationParam(),
             # value
             AnyOperationParam(include_record_type=False),
+            RowIndicesParam(index_of_param_to_share_data_source=0),
             SameOperationParam(index_of_previous_param=0),
             SameOperationParam(index_of_previous_param=1),
         ],
@@ -229,12 +238,13 @@ JSONB_OPERATION_TYPES.append(
 JSONB_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "jsonb_object_agg",
-        {3: "jsonb_object_agg($, $ ORDER BY row_index, $)"},
+        {4: "jsonb_object_agg($, $ ORDER BY $, $)"},
         [
             # key
             AnyOperationParam(),
             # value
             RecordOperationParam(),
+            RowIndicesParam(index_of_param_to_share_data_source=0),
             SameOperationParam(index_of_previous_param=0),
         ],
         JsonbReturnTypeSpec(),
