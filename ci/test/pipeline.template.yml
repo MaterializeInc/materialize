@@ -137,7 +137,7 @@ steps:
         inputs:
           - "*"
         depends_on: []
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         coverage: skip
