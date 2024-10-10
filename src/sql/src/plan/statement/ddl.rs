@@ -153,7 +153,7 @@ use crate::plan::{
     View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars::{
-    self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_CREATE_CONTINUAL_TASK, ENABLE_KAFKA_SINK_HEADERS,
+    self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS,
     ENABLE_KAFKA_SINK_PARTITION_BY, ENABLE_REFRESH_EVERY_MVS,
 };
 use crate::{names, parse};
@@ -2749,7 +2749,12 @@ pub fn plan_create_continual_task(
     mut stmt: CreateContinualTaskStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    scx.require_feature_flag(&ENABLE_CREATE_CONTINUAL_TASK)?;
+    match &stmt.sugar {
+        None => scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_CREATE)?,
+        Some(ast::CreateContinualTaskSugar::Transform { .. }) => {
+            scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_TRANSFORM)?
+        }
+    };
     let cluster_id = match &stmt.in_cluster {
         None => scx.catalog.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,

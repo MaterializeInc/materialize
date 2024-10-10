@@ -22,8 +22,8 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     ContinualTaskStmt, CreateConnectionStatement, CreateContinualTaskStatement,
-    CreateIndexStatement, CreateMaterializedViewStatement, CreateSecretStatement,
-    CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
+    CreateContinualTaskSugar, CreateIndexStatement, CreateMaterializedViewStatement,
+    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
     CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
     CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior,
     MutRecBlock, Op, Query, Statement, TableFactor, TableFromSourceColumns, UnresolvedItemName,
@@ -425,6 +425,7 @@ pub fn create_statement(
             stmts,
             in_cluster: _,
             as_of: _,
+            sugar,
         }) => {
             let mut normalizer = QueryNormalizer::new();
             normalizer.visit_item_name_mut(name);
@@ -434,6 +435,12 @@ pub fn create_statement(
                     ContinualTaskStmt::Delete(stmt) => normalizer.visit_delete_statement_mut(stmt),
                     ContinualTaskStmt::Insert(stmt) => normalizer.visit_insert_statement_mut(stmt),
                 }
+            }
+            match sugar {
+                Some(CreateContinualTaskSugar::Transform { transform }) => {
+                    normalizer.visit_query_mut(transform)
+                }
+                None => {}
             }
             if let Some(err) = normalizer.err {
                 return Err(err);
