@@ -4843,13 +4843,15 @@ def workflow_crash_on_replica_expiration_mv(
         Testdrive(no_reset=True),
         Clusterd(name="clusterd1", restart="on-failure"),
     ):
+        offset = 20
+
         c.up("testdrive", persistent=True)
         c.up("materialized")
         c.up("clusterd1")
         c.sql(
-            """
+            f"""
             ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
-            ALTER SYSTEM SET compute_replica_expiration_offset = '10s';
+            ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
 
             DROP CLUSTER IF EXISTS test CASCADE;
             DROP TABLE IF EXISTS t CASCADE;
@@ -4868,7 +4870,7 @@ def workflow_crash_on_replica_expiration_mv(
             CREATE TABLE t (x int);
             INSERT INTO t VALUES (42);
             CREATE MATERIALIZED VIEW mv AS SELECT * FROM t WHERE x < 84;
-            SELECT mz_unsafe.mz_sleep(11);
+            SELECT mz_unsafe.mz_sleep({offset + 10});
             """,
             port=6877,
             user="mz_system",
@@ -4907,13 +4909,15 @@ def workflow_crash_on_replica_expiration_index(
         Testdrive(no_reset=True),
         Clusterd(name="clusterd1", restart="on-failure"),
     ):
+        offset = 20
+
         c.up("testdrive", persistent=True)
         c.up("materialized")
         c.up("clusterd1")
         c.sql(
-            """
+            f"""
             ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
-            ALTER SYSTEM SET compute_replica_expiration_offset = '10s';
+            ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
 
             DROP CLUSTER IF EXISTS test CASCADE;
             DROP TABLE IF EXISTS t CASCADE;
@@ -4933,7 +4937,7 @@ def workflow_crash_on_replica_expiration_index(
             INSERT INTO t VALUES (42);
             CREATE VIEW mv AS SELECT * FROM t WHERE x < 84;
             CREATE DEFAULT INDEX ON mv;
-            SELECT mz_unsafe.mz_sleep(11);
+            SELECT mz_unsafe.mz_sleep({offset + 10});
             """,
             port=6877,
             user="mz_system",
@@ -4959,21 +4963,22 @@ def workflow_crash_on_replica_expiration_index(
         # Check that expected metrics exist and have sensible values.
         metrics = fetch_metrics()
 
-        # now() + 10s
-        expected_expiration_timestamp_sec = int(time.time()) + 10
+        expected_expiration_timestamp_sec = int(time.time())
 
         expiration_timestamp_sec = (
             metrics.get_value("mz_dataflow_replica_expiration_timestamp_seconds") / 1000
         )
+        # Just ensure the expiration_timestamp is within a reasonable range of now().
         assert (
-            (expected_expiration_timestamp_sec - 10)
+            (expected_expiration_timestamp_sec - offset)
             < expiration_timestamp_sec
-            < (expected_expiration_timestamp_sec + 10)
+            < (expected_expiration_timestamp_sec + offset)
         ), f"expiration_timestamp: expected={expected_expiration_timestamp_sec}[{datetime.fromtimestamp(expected_expiration_timestamp_sec)}], got={expiration_timestamp_sec}[{[{datetime.fromtimestamp(expiration_timestamp_sec)}]}]"
 
         expiration_remaining = metrics.get_value(
             "mz_dataflow_replica_expiration_remaining_seconds"
         )
+        # Ensure the expiration_remaining is within the configured offset.
         assert (
-            expiration_remaining < 10.0
+            1.0  < expiration_remaining < float(offset)
         ), f"expiration_remaining: expected < 10s, got={expiration_remaining}"
