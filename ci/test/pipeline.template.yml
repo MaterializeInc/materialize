@@ -152,7 +152,7 @@ steps:
           - "**/Cargo.toml"
           - "**/*.rs"
         depends_on: []
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
           # note: the `x86_64-unknown-linux-gnu` target may not be installed
           queue: builder-linux-x86_64
