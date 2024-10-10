@@ -2193,10 +2193,12 @@ class ReplicaExpiration(Scenario):
     content TEXT,
     event_ts TIMESTAMP
   );
-> CREATE MATERIALIZED VIEW last_30_days AS
+> CREATE VIEW last_30_days AS
   SELECT event_ts, content
   FROM events
   WHERE mz_now() <= event_ts + INTERVAL '30 days';
+
+> CREATE DEFAULT INDEX ON last_30_days
 """
             ),
         ]
