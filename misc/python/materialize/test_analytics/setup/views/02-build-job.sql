@@ -60,6 +60,7 @@ SELECT
     date_trunc('day', min(bj.start_time)) AS day,
     -- success when no shard failed
     sum(CASE WHEN bj.success THEN 0 ELSE 1 END) = 0 AS success,
+    sum(extract(EPOCH FROM (bj.end_time - bj.start_time))) AS duration_in_sec,
     count(*) as count_shards
 FROM build_job bj
 WHERE bj.is_latest_retry = TRUE
