@@ -1198,7 +1198,7 @@ impl Coordinator {
                 entry.item().is_retained_metrics_object()
                     && entry.item().is_compute_object_on_cluster().is_none()
             })
-            .map(|entry| (entry.id(), policy.clone()))
+            .map(|entry| (entry.item_id(), policy.clone()))
             .collect::<Vec<_>>();
         let compute_policies = self
             .catalog()

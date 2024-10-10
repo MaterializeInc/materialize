@@ -565,7 +565,7 @@ pub fn plan_copy_from_rows(
 ) -> Result<HirRelationExpr, PlanError> {
     let scx = StatementContext::new(Some(pcx), catalog);
 
-    let table = catalog.resolve_global_id(&id);
+    let table = catalog.resolve_global_id(&id)?;
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
     let mut defaults = table

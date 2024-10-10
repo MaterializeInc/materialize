@@ -111,7 +111,7 @@ impl CatalogState {
 
     pub fn pack_depends_update(
         &self,
-        depender: GlobalId,
+        depender: CatalogItemId,
         dependee: CatalogItemId,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
@@ -461,7 +461,6 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let entry = self.get_entry(&id);
-        let id = entry.id();
         let oid = entry.oid();
         let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema_id = &self
@@ -653,7 +652,7 @@ impl CatalogState {
                         }
                     }
                     DataSourceDesc::Webhook { .. } => {
-                        vec![self.pack_webhook_source_update(id.to_item_id(), diff)]
+                        vec![self.pack_webhook_source_update(id, diff)]
                     }
                     _ => vec![],
                 });
@@ -778,7 +777,7 @@ impl CatalogState {
 
     fn pack_history_retention_strategy_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         cw: CompactionWindow,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
@@ -799,7 +798,7 @@ impl CatalogState {
 
     fn pack_table_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -856,7 +855,7 @@ impl CatalogState {
 
     fn pack_source_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -913,7 +912,7 @@ impl CatalogState {
 
     fn pack_postgres_source_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         postgres: &PostgresSourceConnection<ReferencedConnection>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
@@ -930,7 +929,7 @@ impl CatalogState {
 
     fn pack_kafka_source_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         kafka: &KafkaSourceConnection<ReferencedConnection>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
@@ -938,7 +937,7 @@ impl CatalogState {
             id: &*MZ_KAFKA_SOURCES,
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::String(&kafka.group_id(&self.config.connection_context, id)),
+                Datum::String(&kafka.group_id(&self.config.connection_context, id.to_global_id())),
                 Datum::String(&kafka.topic),
             ]),
             diff,
@@ -947,7 +946,7 @@ impl CatalogState {
 
     fn pack_postgres_source_tables_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         schema_name: &str,
         table_name: &str,
         diff: Diff,
@@ -965,7 +964,7 @@ impl CatalogState {
 
     fn pack_mysql_source_tables_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         schema_name: &str,
         table_name: &str,
         diff: Diff,
@@ -983,7 +982,7 @@ impl CatalogState {
 
     fn pack_kafka_source_tables_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         topic: &str,
         envelope: Option<&str>,
         key_format: Option<&str>,
@@ -1005,7 +1004,7 @@ impl CatalogState {
 
     fn pack_connection_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -1082,7 +1081,7 @@ impl CatalogState {
 
     pub(crate) fn pack_ssh_tunnel_connection_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         key_1: &SshKey,
         key_2: &SshKey,
         diff: Diff,
@@ -1100,11 +1099,11 @@ impl CatalogState {
 
     fn pack_kafka_connection_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         kafka: &KafkaConnection<ReferencedConnection>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let progress_topic = kafka.progress_topic(&self.config.connection_context, id.to_item_id());
+        let progress_topic = kafka.progress_topic(&self.config.connection_context, id);
         let mut row = Row::default();
         row.packer()
             .push_array(
@@ -1132,7 +1131,7 @@ impl CatalogState {
 
     pub fn pack_aws_privatelink_connection_update(
         &self,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
         aws_principal_context: &AwsPrincipalContext,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
@@ -1146,7 +1145,7 @@ impl CatalogState {
 
     pub fn pack_aws_connection_update(
         &self,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
         aws_config: &AwsConnection,
         diff: Diff,
     ) -> Result<BuiltinTableUpdate<&'static BuiltinTable>, anyhow::Error> {
@@ -1185,15 +1184,11 @@ impl CatalogState {
                     .connection_context
                     .aws_connection_role_arn
                     .as_deref();
-                external_id = Some(
-                    assume_role
-                        .external_id(&self.config.connection_context, connection_id.to_item_id())?,
-                );
+                external_id =
+                    Some(assume_role.external_id(&self.config.connection_context, connection_id)?);
                 example_trust_policy = {
-                    let policy = assume_role.example_trust_policy(
-                        &self.config.connection_context,
-                        connection_id.to_item_id(),
-                    )?;
+                    let policy = assume_role
+                        .example_trust_policy(&self.config.connection_context, connection_id)?;
                     let policy = Jsonb::from_serde_json(policy).expect("valid json");
                     Some(policy.into_row())
                 };
@@ -1221,7 +1216,7 @@ impl CatalogState {
 
     fn pack_view_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -1268,7 +1263,7 @@ impl CatalogState {
 
     fn pack_materialized_view_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -1379,7 +1374,7 @@ impl CatalogState {
 
     fn pack_continual_task_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -1437,7 +1432,7 @@ impl CatalogState {
 
     fn pack_sink_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -1500,7 +1495,7 @@ impl CatalogState {
 
     fn pack_index_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         name: &str,
         owner_id: &RoleId,
@@ -1581,7 +1576,7 @@ impl CatalogState {
 
     fn pack_type_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -1697,7 +1692,7 @@ impl CatalogState {
 
     fn pack_func_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         schema_id: &SchemaSpecifier,
         name: &str,
         owner_id: &RoleId,
@@ -1709,7 +1704,7 @@ impl CatalogState {
             let arg_type_ids = func_impl_details
                 .arg_typs
                 .iter()
-                .map(|typ| self.get_system_type(typ).id().to_string())
+                .map(|typ| self.get_system_type(typ).item_id().to_string())
                 .collect::<Vec<_>>();
 
             let mut row = Row::default();
@@ -1737,13 +1732,13 @@ impl CatalogState {
                     Datum::from(
                         func_impl_details
                             .variadic_typ
-                            .map(|typ| self.get_system_type(typ).id().to_string())
+                            .map(|typ| self.get_system_type(typ).item_id().to_string())
                             .as_deref(),
                     ),
                     Datum::from(
                         func_impl_details
                             .return_typ
-                            .map(|typ| self.get_system_type(typ).id().to_string())
+                            .map(|typ| self.get_system_type(typ).item_id().to_string())
                             .as_deref(),
                     ),
                     func_impl_details.return_is_set.into(),
@@ -1777,7 +1772,7 @@ impl CatalogState {
         let arg_type_ids = func_impl_details
             .arg_typs
             .iter()
-            .map(|typ| self.get_system_type(typ).id().to_string())
+            .map(|typ| self.get_system_type(typ).item_id().to_string())
             .collect::<Vec<_>>();
 
         let mut row = Row::default();
@@ -1801,7 +1796,7 @@ impl CatalogState {
                 Datum::from(
                     func_impl_details
                         .return_typ
-                        .map(|typ| self.get_system_type(typ).id().to_string())
+                        .map(|typ| self.get_system_type(typ).item_id().to_string())
                         .as_deref(),
                 ),
             ]),
@@ -1811,7 +1806,7 @@ impl CatalogState {
 
     fn pack_secret_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,

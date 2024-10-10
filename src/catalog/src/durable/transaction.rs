@@ -47,12 +47,12 @@ use crate::durable::objects::{
     ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
     Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
-    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
-    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
-    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
-    UnfinalizedShardKey,
+    IntrospectionSourceIndex, Item, ItemKey, ItemValue, ItemValueKind, ReplicaConfig, Role,
+    RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
+    ServerConfigurationValue, SettingKey, SettingValue, SourceReference, SourceReferencesKey,
+    SourceReferencesValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
+    SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
+    TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
@@ -591,15 +591,13 @@ impl<'a> Transaction<'a> {
         id: CatalogItemId,
         schema_id: SchemaId,
         item_name: &str,
-        create_sql: String,
+        kind: ItemValueKind,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         temporary_oids: &HashSet<u32>,
     ) -> Result<u32, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
-        self.insert_item(
-            id, oid, schema_id, item_name, create_sql, owner_id, privileges,
-        )?;
+        self.insert_item(id, oid, schema_id, item_name, kind, owner_id, privileges)?;
         Ok(oid)
     }
 
@@ -609,7 +607,7 @@ impl<'a> Transaction<'a> {
         oid: u32,
         schema_id: SchemaId,
         item_name: &str,
-        create_sql: String,
+        kind: ItemValueKind,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
     ) -> Result<(), CatalogError> {
@@ -618,7 +616,7 @@ impl<'a> Transaction<'a> {
             ItemValue {
                 schema_id,
                 name: item_name.to_string(),
-                create_sql,
+                kind,
                 owner_id,
                 privileges,
                 oid,
@@ -1320,7 +1318,7 @@ impl<'a> Transaction<'a> {
     /// Panics if provided id is not a system id.
     pub fn update_system_object_mappings(
         &mut self,
-        mappings: BTreeMap<GlobalId, SystemObjectMapping>,
+        mappings: BTreeMap<CatalogItemId, SystemObjectMapping>,
     ) -> Result<(), CatalogError> {
         if mappings.is_empty() {
             return Ok(());
@@ -1328,7 +1326,7 @@ impl<'a> Transaction<'a> {
 
         let n = self.system_gid_mapping.update(
             |_k, v| {
-                if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
+                if let Some(mapping) = mappings.get(&CatalogItemId::System(v.catalog_id)) {
                     let (_, new_value) = mapping.clone().into_key_value();
                     Some(new_value)
                 } else {

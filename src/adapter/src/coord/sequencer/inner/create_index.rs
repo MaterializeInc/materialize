@@ -303,11 +303,13 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let exported_index_id = if let ExplainContext::None = explain_ctx {
+        let item_id = if let ExplainContext::None = explain_ctx {
             self.catalog_mut().allocate_user_id().await?
         } else {
             self.allocate_transient_item_id()
         };
+        let collection_id = item_id.to_global_id();
+
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&explain_ctx);
@@ -316,7 +318,7 @@ impl Coordinator {
         let mut optimizer = optimize::index::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
-            exported_index_id.to_global_id(),
+            collection_id,
             optimizer_config,
             self.optimizer_metrics(),
         );
@@ -349,7 +351,7 @@ impl Coordinator {
                                 let (_, df_meta) = global_lir_plan.unapply();
                                 CreateIndexStage::Explain(CreateIndexExplain {
                                     validity,
-                                    exported_index_id: exported_index_id.to_global_id(),
+                                    exported_index_id: collection_id,
                                     plan,
                                     df_meta,
                                     explain_ctx,
@@ -357,7 +359,8 @@ impl Coordinator {
                             } else {
                                 CreateIndexStage::Finish(CreateIndexFinish {
                                     validity,
-                                    exported_index_id,
+                                    item_id,
+                                    collection_id,
                                     plan,
                                     resolved_ids,
                                     global_mir_plan,
@@ -380,7 +383,7 @@ impl Coordinator {
                                 tracing::error!("error while handling EXPLAIN statement: {}", err);
                                 CreateIndexStage::Explain(CreateIndexExplain {
                                     validity,
-                                    exported_index_id: exported_index_id.to_global_id(),
+                                    exported_index_id: collection_id,
                                     plan,
                                     df_meta: Default::default(),
                                     explain_ctx,
@@ -402,7 +405,8 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateIndexFinish {
-            exported_index_id,
+            item_id,
+            collection_id,
             plan:
                 plan::CreateIndexPlan {
                     name,
@@ -425,10 +429,11 @@ impl Coordinator {
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
         let ops = vec![catalog::Op::CreateItem {
-            id: exported_index_id,
+            id: item_id,
             name: name.clone(),
             item: CatalogItem::Index(Index {
                 create_sql,
+                collection_id,
                 keys: keys.into(),
                 on,
                 conn_id: None,
@@ -452,24 +457,17 @@ impl Coordinator {
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 // Save plan structures.
-                coord.catalog_mut().set_optimized_plan(
-                    exported_index_id.to_global_id(),
-                    global_mir_plan.df_desc().clone(),
-                );
-                coord.catalog_mut().set_physical_plan(
-                    exported_index_id.to_global_id(),
-                    global_lir_plan.df_desc().clone(),
-                );
+                coord
+                    .catalog_mut()
+                    .set_optimized_plan(collection_id, global_mir_plan.df_desc().clone());
+                coord
+                    .catalog_mut()
+                    .set_physical_plan(collection_id, global_lir_plan.df_desc().clone());
 
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 let notice_builtin_updates_fut = coord
-                    .process_dataflow_metainfo(
-                        df_meta,
-                        exported_index_id.to_global_id(),
-                        session,
-                        notice_ids,
-                    )
+                    .process_dataflow_metainfo(df_meta, collection_id, session, notice_ids)
                     .await;
 
                 // We're putting in place read holds, such that ship_dataflow,
@@ -502,7 +500,7 @@ impl Coordinator {
 
                 coord.update_compute_read_policy(
                     cluster_id,
-                    exported_index_id.to_global_id(),
+                    item_id,
                     compaction_window.unwrap_or_default().into(),
                 );
             })

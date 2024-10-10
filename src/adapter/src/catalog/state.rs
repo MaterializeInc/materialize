@@ -26,6 +26,7 @@ use mz_catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
 };
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
+use mz_catalog::durable::objects::ItemValueKind;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
@@ -109,6 +110,8 @@ pub struct CatalogState {
     pub(super) database_by_id: BTreeMap<DatabaseId, Database>,
     #[serde(serialize_with = "skip_temp_items")]
     pub(super) entry_by_id: BTreeMap<CatalogItemId, CatalogEntry>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) entry_by_global_id: BTreeMap<GlobalId, CatalogItemId>,
     pub(super) ambient_schemas_by_name: BTreeMap<String, SchemaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
@@ -166,6 +169,7 @@ impl CatalogState {
             database_by_name: Default::default(),
             database_by_id: Default::default(),
             entry_by_id: Default::default(),
+            entry_by_global_id: Default::default(),
             ambient_schemas_by_name: Default::default(),
             ambient_schemas_by_id: Default::default(),
             temporary_schemas: Default::default(),
@@ -586,6 +590,14 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
     }
 
+    pub fn resolve_global_id(&self, id: &GlobalId) -> Result<&CatalogEntry, SqlCatalogError> {
+        let item_id = self
+            .entry_by_global_id
+            .get(&id)
+            .ok_or_else(|| SqlCatalogError::UnknownItem(format!("GlobalId: {id}")))?;
+        Ok(self.get_entry(item_id))
+    }
+
     pub fn get_temp_items(&self, conn: &ConnectionId) -> impl Iterator<Item = ObjectId> + '_ {
         let schema = self
             .temporary_schemas
@@ -782,7 +794,7 @@ impl CatalogState {
     pub(crate) fn deserialize_item(
         &self,
         id: CatalogItemId,
-        create_sql: &str,
+        create_sql: &ItemValueKind,
     ) -> Result<CatalogItem, AdapterError> {
         self.parse_item(id, create_sql, None, false, None)
     }
@@ -792,21 +804,23 @@ impl CatalogState {
     pub(crate) fn parse_item(
         &self,
         id: CatalogItemId,
-        create_sql: &str,
+        kind: &ItemValueKind,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
     ) -> Result<CatalogItem, AdapterError> {
         let session_catalog = self.for_system_session();
 
-        let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &session_catalog)?;
+        let (plan, resolved_ids) = Self::parse_plan(kind.create_sql(), pcx, &session_catalog)?;
 
-        Ok(match plan {
-            Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
+        let item = match (plan, kind) {
+            (
+                Plan::CreateTable(CreateTablePlan { table, .. }),
+                ItemValueKind::Table { collections, .. },
+            ) => CatalogItem::Table(Table {
                 create_sql: Some(table.create_sql),
                 desc: table.desc,
-                // TODO(alter_table): Allocate unique GlobalId.
-                collection_id: id.to_global_id(),
+                collections: collections.clone(),
                 conn_id: None,
                 resolved_ids,
                 custom_logical_compaction_window: custom_logical_compaction_window
@@ -838,12 +852,15 @@ impl CatalogState {
                     }
                 },
             }),
-            Plan::CreateSource(CreateSourcePlan {
-                source,
-                timeline,
-                in_cluster,
-                ..
-            }) => CatalogItem::Source(Source {
+            (
+                Plan::CreateSource(CreateSourcePlan {
+                    source,
+                    timeline,
+                    in_cluster,
+                    ..
+                }),
+                ItemValueKind::Source { collection, .. },
+            ) => CatalogItem::Source(Source {
                 create_sql: Some(source.create_sql),
                 data_source: match source.data_source {
                     mz_sql::plan::DataSourceDesc::Ingestion(ingestion_desc) => {
@@ -884,8 +901,7 @@ impl CatalogState {
                     },
                 },
                 desc: source.desc,
-                // TODO(alter_table): Allocate unique GlobalId.
-                collection_id: id.to_global_id(),
+                collection_id: *collection,
                 timeline,
                 resolved_ids,
                 custom_logical_compaction_window: source
@@ -893,7 +909,10 @@ impl CatalogState {
                     .or(custom_logical_compaction_window),
                 is_retained_metrics_object,
             }),
-            Plan::CreateView(CreateViewPlan { view, .. }) => {
+            (
+                Plan::CreateView(CreateViewPlan { view, .. }),
+                ItemValueKind::View { collection, .. },
+            ) => {
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
@@ -907,6 +926,7 @@ impl CatalogState {
 
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
+                    collection_id: *collection,
                     raw_expr: raw_expr.into(),
                     desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
                     optimized_expr: optimized_expr.into(),
@@ -914,9 +934,12 @@ impl CatalogState {
                     resolved_ids,
                 })
             }
-            Plan::CreateMaterializedView(CreateMaterializedViewPlan {
-                materialized_view, ..
-            }) => {
+            (
+                Plan::CreateMaterializedView(CreateMaterializedViewPlan {
+                    materialized_view, ..
+                }),
+                ItemValueKind::MaterializedView { collection, .. },
+            ) => {
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
@@ -939,8 +962,7 @@ impl CatalogState {
                     raw_expr: raw_expr.into(),
                     optimized_expr: optimized_expr.into(),
                     desc,
-                    // TODO(alter_table): Allocate unique GlobalId.
-                    collection_id: id.to_global_id(),
+                    collection_id: *collection,
                     resolved_ids,
                     cluster_id: materialized_view.cluster_id,
                     non_null_assertions: materialized_view.non_null_assertions,
@@ -949,11 +971,19 @@ impl CatalogState {
                     initial_as_of,
                 })
             }
-            Plan::CreateContinualTask(plan) => CatalogItem::ContinualTask(
-                crate::continual_task::ct_item_from_plan(plan, id, resolved_ids)?,
-            ),
-            Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
+            (Plan::CreateContinualTask(plan), ItemValueKind::ContinualTask { collection, .. }) => {
+                CatalogItem::ContinualTask(crate::continual_task::ct_item_from_plan(
+                    plan,
+                    *collection,
+                    resolved_ids,
+                )?)
+            }
+            (
+                Plan::CreateIndex(CreateIndexPlan { index, .. }),
+                ItemValueKind::Index { collection, .. },
+            ) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
+                collection_id: *collection,
                 on: index.on,
                 keys: index.keys.into(),
                 conn_id: None,
@@ -963,13 +993,17 @@ impl CatalogState {
                     .or(index.compaction_window),
                 is_retained_metrics_object,
             }),
-            Plan::CreateSink(CreateSinkPlan {
-                sink,
-                with_snapshot,
-                in_cluster,
-                ..
-            }) => CatalogItem::Sink(Sink {
+            (
+                Plan::CreateSink(CreateSinkPlan {
+                    sink,
+                    with_snapshot,
+                    in_cluster,
+                    ..
+                }),
+                ItemValueKind::Sink { collection, .. },
+            ) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
+                export_id: *collection,
                 from: sink.from,
                 connection: sink.connection,
                 partition_strategy: sink.partition_strategy,
@@ -979,27 +1013,34 @@ impl CatalogState {
                 resolved_ids,
                 cluster_id: in_cluster,
             }),
-            Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
-                create_sql: Some(typ.create_sql),
-                desc: typ.inner.desc(&session_catalog)?,
-                details: CatalogTypeDetails {
-                    array_id: None,
-                    typ: typ.inner,
-                    pg_metadata: None,
-                },
-                resolved_ids,
-            }),
-            Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
-                create_sql: secret.create_sql,
-            }),
-            Plan::CreateConnection(CreateConnectionPlan {
-                connection:
-                    mz_sql::plan::Connection {
-                        create_sql,
-                        details,
+            (Plan::CreateType(CreateTypePlan { typ, .. }), ItemValueKind::Type { .. }) => {
+                CatalogItem::Type(Type {
+                    create_sql: Some(typ.create_sql),
+                    desc: typ.inner.desc(&session_catalog)?,
+                    details: CatalogTypeDetails {
+                        array_id: None,
+                        typ: typ.inner,
+                        pg_metadata: None,
                     },
-                ..
-            }) => CatalogItem::Connection(Connection {
+                    resolved_ids,
+                })
+            }
+            (Plan::CreateSecret(CreateSecretPlan { secret, .. }), ItemValueKind::Secret { .. }) => {
+                CatalogItem::Secret(Secret {
+                    create_sql: secret.create_sql,
+                })
+            }
+            (
+                Plan::CreateConnection(CreateConnectionPlan {
+                    connection:
+                        mz_sql::plan::Connection {
+                            create_sql,
+                            details,
+                        },
+                    ..
+                }),
+                ItemValueKind::Connection { .. },
+            ) => CatalogItem::Connection(Connection {
                 create_sql,
                 details,
                 resolved_ids,
@@ -1010,7 +1051,9 @@ impl CatalogState {
                 })
                 .into())
             }
-        })
+        };
+
+        Ok(item)
     }
 
     /// Execute function `f` on `self`, with all "enable_for_item_parsing" feature flags enabled.
@@ -1294,33 +1337,33 @@ impl CatalogState {
     /// Optimized lookup for a builtin table.
     ///
     /// Panics if the builtin table doesn't exist in the catalog.
-    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
+    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> CatalogItemId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Table(builtin))
     }
 
     /// Optimized lookup for a builtin log.
     ///
     /// Panics if the builtin log doesn't exist in the catalog.
-    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
+    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> CatalogItemId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin))
     }
 
     /// Optimized lookup for a builtin storage collection.
     ///
     /// Panics if the builtin storage collection doesn't exist in the catalog.
-    pub fn resolve_builtin_source(&self, builtin: &'static BuiltinSource) -> GlobalId {
+    pub fn resolve_builtin_source(&self, builtin: &'static BuiltinSource) -> CatalogItemId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Source(builtin))
     }
 
     /// Optimized lookup for a builtin object.
     ///
     /// Panics if the builtin object doesn't exist in the catalog.
-    pub fn resolve_builtin_object<T: TypeReference>(&self, builtin: &Builtin<T>) -> GlobalId {
+    pub fn resolve_builtin_object<T: TypeReference>(&self, builtin: &Builtin<T>) -> CatalogItemId {
         let schema_id = &self.ambient_schemas_by_name[builtin.schema()];
         let schema = &self.ambient_schemas_by_id[schema_id];
         match builtin.catalog_item_type() {
-            CatalogItemType::Type => schema.types[builtin.name()].to_global_id(),
-            CatalogItemType::Func => schema.functions[builtin.name()].to_global_id(),
+            CatalogItemType::Type => schema.types[builtin.name()],
+            CatalogItemType::Func => schema.functions[builtin.name()],
             CatalogItemType::Table
             | CatalogItemType::Source
             | CatalogItemType::Sink
@@ -1329,7 +1372,7 @@ impl CatalogState {
             | CatalogItemType::Index
             | CatalogItemType::Secret
             | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => schema.items[builtin.name()].to_global_id(),
+            | CatalogItemType::ContinualTask => schema.items[builtin.name()],
         }
     }
 
@@ -2043,16 +2086,16 @@ impl CatalogState {
     /// subsources will be added to the result.
     pub fn source_compaction_windows(
         &self,
-        ids: impl IntoIterator<Item = GlobalId>,
-    ) -> BTreeMap<CompactionWindow, BTreeSet<GlobalId>> {
-        let mut cws: BTreeMap<CompactionWindow, BTreeSet<GlobalId>> = BTreeMap::new();
+        ids: impl IntoIterator<Item = CatalogItemId>,
+    ) -> BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>> {
+        let mut cws: BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>> = BTreeMap::new();
         let mut ids = VecDeque::from_iter(ids);
         let mut seen = BTreeSet::new();
-        while let Some(id) = ids.pop_front() {
-            if !seen.insert(id) {
+        while let Some(item_id) = ids.pop_front() {
+            if !seen.insert(item_id) {
                 continue;
             }
-            let entry = self.get_entry(&id);
+            let entry = self.get_entry(&item_id);
             let Some(source) = entry.source() else {
                 // Views could depend on sources, so ignore them if added by used_by below.
                 continue;
@@ -2061,8 +2104,8 @@ impl CatalogState {
             match source.data_source {
                 DataSourceDesc::Ingestion { .. } => {
                     // For sources, look up each dependent subsource and propagate.
-                    cws.entry(source_cw).or_default().insert(id);
-                    ids.extend(entry.used_by().iter().map(|id| id.to_global_id()));
+                    cws.entry(source_cw).or_default().insert(item_id);
+                    ids.extend(entry.used_by());
                 }
                 DataSourceDesc::IngestionExport { ingestion_id, .. } => {
                     // For subsources, look up the parent source and propagate the compaction
@@ -2074,12 +2117,12 @@ impl CatalogState {
                     let cw = ingestion
                         .custom_logical_compaction_window
                         .unwrap_or(source_cw);
-                    cws.entry(cw).or_default().insert(id);
+                    cws.entry(cw).or_default().insert(item_id);
                 }
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Webhook { .. } => {
-                    cws.entry(source_cw).or_default().insert(id);
+                    cws.entry(source_cw).or_default().insert(item_id);
                 }
             }
         }

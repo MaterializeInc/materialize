@@ -709,7 +709,7 @@ impl Coordinator {
 
                 coord
                     .initialize_storage_read_policies(
-                        btreeset![collection_id],
+                        btreeset![item_id],
                         compaction_window.unwrap_or(CompactionWindow::Default),
                     )
                     .await;

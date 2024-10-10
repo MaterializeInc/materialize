@@ -30,7 +30,9 @@ use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Conf
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState, TestCatalogStateBuilder};
 use mz_catalog::memory::error::{Error, ErrorKind};
-use mz_catalog::memory::objects::{CatalogEntry, Cluster, ClusterReplica, Database, Role, Schema};
+use mz_catalog::memory::objects::{
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Role, Schema,
+};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -350,12 +352,12 @@ impl Catalog {
     /// will be added to the result.
     pub fn source_read_policies(
         &self,
-        id: GlobalId,
-    ) -> Vec<(GlobalId, ReadPolicy<mz_repr::Timestamp>)> {
+        id: CatalogItemId,
+    ) -> Vec<(CatalogItemId, ReadPolicy<mz_repr::Timestamp>)> {
         let mut policies = Vec::new();
         let cws = self.state.source_compaction_windows([id]);
-        for (cw, ids) in cws {
-            for id in ids {
+        for (cw, items) in cws {
+            for id in items {
                 policies.push((id, cw.into()));
             }
         }
@@ -375,7 +377,7 @@ pub struct ConnCatalog<'a> {
     ///
     /// Note that uses of this field should be used by short-lived
     /// catalogs.
-    unresolvable_ids: BTreeSet<GlobalId>,
+    unresolvable_ids: BTreeSet<CatalogItemId>,
     conn_id: ConnectionId,
     cluster: String,
     database: Option<DatabaseId>,
@@ -403,7 +405,7 @@ impl ConnCatalog<'_> {
     ///
     /// # Panics
     /// If the catalog's role ID is not [`MZ_SYSTEM_ROLE_ID`].
-    pub fn mark_id_unresolvable_for_replanning(&mut self, id: GlobalId) {
+    pub fn mark_id_unresolvable_for_replanning(&mut self, id: CatalogItemId) {
         assert_eq!(
             self.role_id, MZ_SYSTEM_ROLE_ID,
             "only the system role can mark IDs unresolvable",
@@ -841,6 +843,10 @@ impl Catalog {
         self.state.get_entry(id)
     }
 
+    pub fn resolve_global_id(&self, id: &GlobalId) -> &CatalogEntry {
+        self.state.resolve_global_id(id).expect("todo")
+    }
+
     pub fn get_schema(
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
@@ -1043,32 +1049,32 @@ impl Catalog {
 
     pub fn user_connections(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries()
-            .filter(|entry| entry.is_connection() && entry.id().is_user())
+            .filter(|entry| entry.is_connection() && entry.item_id().is_user())
     }
 
     pub fn user_tables(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries()
-            .filter(|entry| entry.is_table() && entry.id().is_user())
+            .filter(|entry| entry.is_table() && entry.item_id().is_user())
     }
 
     pub fn user_sources(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries()
-            .filter(|entry| entry.is_source() && entry.id().is_user())
+            .filter(|entry| entry.is_source() && entry.item_id().is_user())
     }
 
     pub fn user_sinks(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries()
-            .filter(|entry| entry.is_sink() && entry.id().is_user())
+            .filter(|entry| entry.is_sink() && entry.item_id().is_user())
     }
 
     pub fn user_materialized_views(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries()
-            .filter(|entry| entry.is_materialized_view() && entry.id().is_user())
+            .filter(|entry| entry.is_materialized_view() && entry.item_id().is_user())
     }
 
     pub fn user_secrets(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries()
-            .filter(|entry| entry.is_secret() && entry.id().is_user())
+            .filter(|entry| entry.is_secret() && entry.item_id().is_user())
     }
 
     pub fn clusters(&self) -> impl Iterator<Item = &Cluster> {
@@ -1120,7 +1126,7 @@ impl Catalog {
 
     pub fn user_continual_tasks(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries()
-            .filter(|entry| entry.is_continual_task() && entry.id().is_user())
+            .filter(|entry| entry.is_continual_task() && entry.item_id().is_user())
     }
 
     pub fn system_privileges(&self) -> &PrivilegeMap {
@@ -1704,7 +1710,7 @@ impl SessionCatalog for ConnCatalog<'_> {
             name,
             &self.conn_id,
         )?;
-        if self.unresolvable_ids.contains(&r.id()) {
+        if self.unresolvable_ids.contains(&r.item_id()) {
             Err(SqlCatalogError::UnknownItem(name.to_string()))
         } else {
             Ok(r)
@@ -1722,7 +1728,7 @@ impl SessionCatalog for ConnCatalog<'_> {
             &self.conn_id,
         )?;
 
-        if self.unresolvable_ids.contains(&r.id()) {
+        if self.unresolvable_ids.contains(&r.item_id()) {
             Err(SqlCatalogError::UnknownFunction {
                 name: name.to_string(),
                 alternative: None,
@@ -1743,7 +1749,7 @@ impl SessionCatalog for ConnCatalog<'_> {
             &self.conn_id,
         )?;
 
-        if self.unresolvable_ids.contains(&r.id()) {
+        if self.unresolvable_ids.contains(&r.item_id()) {
             Err(SqlCatalogError::UnknownType {
                 name: name.to_string(),
             })
@@ -1764,11 +1770,23 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.get_entry(id)
     }
 
-    fn resolve_global_id(&self, id: &GlobalId) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
-        // TODO(alter_table): Resolve a GlobalId from a reverse map.
-        self.state
-            .get_entry(&id.to_item_id())
-            .at_version(RelationVersionSelector::Latest)
+    fn resolve_global_id(
+        &self,
+        id: &GlobalId,
+    ) -> Result<Box<dyn mz_sql::catalog::CatalogCollectionItem>, SqlCatalogError> {
+        let entry = self.state.resolve_global_id(id)?;
+        let entry = match &entry.item {
+            CatalogItem::Table(table) => {
+                let (version, _gid) = table
+                    .collections
+                    .iter()
+                    .find(|(_version, gid)| *gid == id)
+                    .expect("catalog out of sync, mismatched GlobalId");
+                entry.at_version(RelationVersionSelector::Specific(*version))
+            }
+            _ => entry.at_version(RelationVersionSelector::Latest),
+        };
+        Ok(entry)
     }
 
     fn get_items(&self) -> Vec<&dyn mz_sql::catalog::CatalogItem> {
@@ -1981,6 +1999,7 @@ mod tests {
     use std::{env, iter};
 
     use itertools::Itertools;
+    use mz_catalog::durable::objects::ItemValueKind;
     use mz_catalog::memory::objects::CatalogItem;
     use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
@@ -2001,10 +2020,12 @@ mod tests {
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
     use mz_repr::{
-        CatalogItemId, Datum, RelationType, RelationVersionSelector, RowArena, ScalarType,
-        Timestamp,
+        CatalogItemId, Datum, GlobalId, RelationType, RelationVersionSelector, RowArena,
+        ScalarType, Timestamp,
     };
-    use mz_sql::catalog::{BuiltinsConfig, CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog};
+    use mz_sql::catalog::{
+        BuiltinsConfig, CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog,
+    };
     use mz_sql::func::{Func, FuncImpl, Operation, OP_IMPLS};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
@@ -2324,6 +2345,10 @@ mod tests {
         assert_err!(mz_sql_parser::parser::parse_statements_with_limit(
             &create_sql
         ));
+        let item_kind = ItemValueKind::View {
+            create_sql,
+            collection: GlobalId::User(100),
+        };
 
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
@@ -2335,7 +2360,7 @@ mod tests {
                     .expect("unable to open debug catalog");
             let item = catalog
                 .state()
-                .deserialize_item(id, &create_sql)
+                .deserialize_item(id, &item_kind)
                 .expect("unable to parse view");
             catalog
                 .transact(
@@ -3225,15 +3250,20 @@ mod tests {
             let schema_spec = schema.id().clone();
             let schema_name = &schema.name().schema;
             let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
+            let create_sql = format!(
+                "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
+            );
+            let kind = ItemValueKind::MaterializedView {
+                create_sql,
+                collection: GlobalId::User(100),
+            };
             let mv_id = catalog
                 .allocate_user_id()
                 .await
                 .expect("unable to allocate id");
             let mv = catalog
                 .state()
-                .deserialize_item(mv_id, &format!(
-                    "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
-                ))
+                .deserialize_item(mv_id, &kind)
                 .expect("unable to deserialize item");
             catalog
                 .transact(
@@ -3260,7 +3290,7 @@ mod tests {
                 .entries()
                 .find(|entry| &entry.name.item == "mz_tables" && entry.is_table())
                 .expect("mz_tables doesn't exist")
-                .id();
+                .item_id();
             let check_mv_id = catalog
                 .entries()
                 .find(|entry| &entry.name.item == mv_name && entry.is_materialized_view())
@@ -3290,7 +3320,7 @@ mod tests {
                 .entries()
                 .find(|entry| &entry.name.item == "mz_tables" && entry.is_table())
                 .expect("mz_tables doesn't exist")
-                .id();
+                .item_id();
             // Assert that the table was migrated and got a new ID.
             assert_ne!(new_mz_tables_id, mz_tables_id);
 

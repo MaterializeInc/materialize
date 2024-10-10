@@ -31,7 +31,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::codec_impls::ShardIdSchema;
 use mz_persist_types::ShardId;
-use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItem;
 use mz_storage_client::controller::StorageTxn;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -45,7 +45,7 @@ pub(crate) struct BuiltinItemMigrationResult {
     /// A vec of updates to apply to the builtin tables.
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
     /// A set of storage collections to drop (only used by legacy migration).
-    pub(crate) storage_collections_to_drop: BTreeSet<GlobalId>,
+    pub(crate) storage_collections_to_drop: BTreeSet<CatalogItemId>,
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
     pub(crate) migrated_storage_collections_0dt: BTreeSet<GlobalId>,
     /// Some cleanup action to take once the migration has been made durable.
@@ -56,7 +56,7 @@ pub(crate) struct BuiltinItemMigrationResult {
 pub(crate) async fn migrate_builtin_items(
     state: &mut CatalogState,
     txn: &mut Transaction<'_>,
-    migrated_builtins: Vec<GlobalId>,
+    migrated_builtins: Vec<CatalogItemId>,
     config: BuiltinItemMigrationConfig,
 ) -> Result<BuiltinItemMigrationResult, Error> {
     match config {
@@ -86,7 +86,7 @@ pub(crate) async fn migrate_builtin_items(
 async fn migrate_builtin_items_legacy(
     state: &mut CatalogState,
     txn: &mut Transaction<'_>,
-    migrated_builtins: Vec<GlobalId>,
+    migrated_builtins: Vec<CatalogItemId>,
 ) -> Result<BuiltinItemMigrationResult, Error> {
     let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter(&state.config().builtins_cfg)
         .map(|builtin| {
@@ -171,7 +171,7 @@ async fn migrate_builtin_items_0dt(
     state: &mut CatalogState,
     txn: &mut Transaction<'_>,
     persist_client: PersistClient,
-    migrated_builtins: Vec<GlobalId>,
+    migrated_builtins: Vec<CatalogItemId>,
     deploy_generation: u64,
     read_only: bool,
 ) -> Result<BuiltinItemMigrationResult, Error> {
@@ -211,7 +211,8 @@ async fn migrate_builtin_items_0dt(
                     object_name: entry.name().item.clone(),
                 },
                 unique_identifier: SystemObjectUniqueIdentifier {
-                    id: id.to_item_id(),
+                    catalog_id: *id,
+                    collection_id: id.to_global_id(),
                     fingerprint: fingerprint.clone(),
                 },
             },
@@ -269,7 +270,7 @@ async fn migrate_builtin_items_0dt(
         .filter_map(|id| {
             if state.get_entry(&id).item().is_storage_collection() {
                 match id {
-                    GlobalId::System(id) => Some(id),
+                    CatalogItemId::System(id) => Some(id),
                     _ => unreachable!("builtin objects must have system ID, found: {id:?}"),
                 }
             } else {

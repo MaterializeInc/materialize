@@ -1086,7 +1086,7 @@ pub struct AlterSetClusterPlan {
 
 #[derive(Debug)]
 pub struct AlterRetainHistoryPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub value: Option<Value>,
     pub window: CompactionWindow,
     pub object_type: ObjectType,
@@ -1126,13 +1126,15 @@ pub enum AlterSourceAction {
 
 #[derive(Debug)]
 pub struct AlterSourcePlan {
-    pub id: GlobalId,
+    pub item_id: CatalogItemId,
+    pub ingestion_id: GlobalId,
     pub action: AlterSourceAction,
 }
 
 #[derive(Debug, Clone)]
 pub struct AlterSinkPlan {
-    pub id: GlobalId,
+    pub item_id: CatalogItemId,
+    pub export_id: GlobalId,
     pub sink: Sink,
     pub with_snapshot: bool,
     pub in_cluster: ClusterId,

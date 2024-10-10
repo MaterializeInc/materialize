@@ -11,7 +11,7 @@ use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::proto;
-use mz_catalog::durable::objects::{DurableType, IdAlloc};
+use mz_catalog::durable::objects::{DurableType, IdAlloc, ItemValueKind};
 use mz_catalog::durable::{
     test_bootstrap_args, CatalogError, DurableCatalogError, FenceError, Item,
     TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY,
@@ -22,7 +22,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistClient;
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
-use mz_repr::CatalogItemId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 
@@ -203,7 +203,10 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             oid: 20_000,
             schema_id: SchemaId::User(1),
             name: "foo".to_string(),
-            create_sql: "CREATE VIEW v AS SELECT 1".to_string(),
+            kind: ItemValueKind::View {
+                create_sql: "CREATE VIEW v AS SELECT 1".to_string(),
+                collection: GlobalId::User(100),
+            },
             owner_id: RoleId::User(1),
             privileges: vec![],
         },
@@ -212,7 +215,10 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             oid: 20_001,
             schema_id: SchemaId::User(1),
             name: "bar".to_string(),
-            create_sql: "CREATE MATERIALIZED VIEW mv AS SELECT 2".to_string(),
+            kind: ItemValueKind::MaterializedView {
+                create_sql: "CREATE MATERIALIZED VIEW mv AS SELECT 2".to_string(),
+                collection: GlobalId::User(200),
+            },
             owner_id: RoleId::User(2),
             privileges: vec![],
         },
@@ -236,7 +242,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             item.oid,
             item.schema_id,
             &item.name,
-            item.create_sql.clone(),
+            item.kind.clone(),
             item.owner_id,
             item.privileges.clone(),
         )

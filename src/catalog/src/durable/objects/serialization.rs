@@ -26,7 +26,7 @@ use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
@@ -45,7 +45,7 @@ use crate::durable::objects::{
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
     ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey,
-    ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
+    ItemValue, ItemValueKind, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
     ServerConfigurationValue, SettingKey, SettingValue, SourceReference, SourceReferencesKey,
     SourceReferencesValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
     SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
@@ -326,14 +326,16 @@ impl RustType<proto::GidMappingKey> for GidMappingKey {
 impl RustType<proto::GidMappingValue> for GidMappingValue {
     fn into_proto(&self) -> proto::GidMappingValue {
         proto::GidMappingValue {
-            id: self.id,
+            catalog_id: self.catalog_id,
+            collection_id: self.collection_id,
             fingerprint: self.fingerprint.to_string(),
         }
     }
 
     fn from_proto(proto: proto::GidMappingValue) -> Result<Self, TryFromProtoError> {
         Ok(GidMappingValue {
-            id: proto.id,
+            catalog_id: proto.catalog_id,
+            collection_id: proto.collection_id,
             fingerprint: proto.fingerprint,
         })
     }
@@ -541,15 +543,10 @@ impl RustType<proto::ItemKey> for ItemKey {
 
 impl RustType<proto::ItemValue> for ItemValue {
     fn into_proto(&self) -> proto::ItemValue {
-        let definition = proto::CatalogItem {
-            value: Some(proto::catalog_item::Value::V1(proto::catalog_item::V1 {
-                create_sql: self.create_sql.clone(),
-            })),
-        };
         proto::ItemValue {
             schema_id: Some(self.schema_id.into_proto()),
             name: self.name.to_string(),
-            definition: Some(definition),
+            kind: Some(self.kind.into_proto()),
             owner_id: Some(self.owner_id.into_proto()),
             privileges: self.privileges.into_proto(),
             oid: self.oid,
@@ -557,22 +554,190 @@ impl RustType<proto::ItemValue> for ItemValue {
     }
 
     fn from_proto(proto: proto::ItemValue) -> Result<Self, TryFromProtoError> {
-        let create_sql_value = proto
-            .definition
-            .ok_or_else(|| TryFromProtoError::missing_field("ItemValue::definition"))?
-            .value
-            .ok_or_else(|| TryFromProtoError::missing_field("CatalogItem::value"))?;
-        let create_sql = match create_sql_value {
-            proto::catalog_item::Value::V1(c) => c.create_sql,
-        };
         Ok(ItemValue {
             schema_id: proto.schema_id.into_rust_if_some("ItemValue::schema_id")?,
             name: proto.name,
-            create_sql,
+            kind: proto.kind.into_rust_if_some("ItemValue::kind")?,
             owner_id: proto.owner_id.into_rust_if_some("ItemValue::owner_id")?,
             privileges: proto.privileges.into_rust()?,
             oid: proto.oid,
         })
+    }
+}
+
+impl RustType<proto::CatalogItemKind> for ItemValueKind {
+    fn into_proto(&self) -> proto::CatalogItemKind {
+        let value = match self {
+            ItemValueKind::Table {
+                create_sql,
+                collections,
+            } => proto::catalog_item_kind::Value::Table(proto::catalog_item_kind::Table {
+                create_sql: create_sql.clone(),
+                collections: collections
+                    .iter()
+                    .map(|(version, global_id)| proto::ItemCollection {
+                        version: Some(version.into_proto()),
+                        id: Some(global_id.into_proto()),
+                    })
+                    .collect(),
+            }),
+            ItemValueKind::Source {
+                create_sql,
+                collection,
+            } => proto::catalog_item_kind::Value::Source(proto::catalog_item_kind::Source {
+                create_sql: create_sql.clone(),
+                collection: Some(collection.into_proto()),
+            }),
+            ItemValueKind::Sink {
+                create_sql,
+                collection,
+            } => proto::catalog_item_kind::Value::Sink(proto::catalog_item_kind::Sink {
+                create_sql: create_sql.clone(),
+                collection: Some(collection.into_proto()),
+            }),
+            ItemValueKind::View {
+                create_sql,
+                collection,
+            } => proto::catalog_item_kind::Value::View(proto::catalog_item_kind::View {
+                create_sql: create_sql.clone(),
+                collection: Some(collection.into_proto()),
+            }),
+            ItemValueKind::MaterializedView {
+                create_sql,
+                collection,
+            } => proto::catalog_item_kind::Value::MaterializedView(
+                proto::catalog_item_kind::MaterializedView {
+                    create_sql: create_sql.clone(),
+                    collection: Some(collection.into_proto()),
+                },
+            ),
+            ItemValueKind::ContinualTask {
+                create_sql,
+                collection,
+            } => proto::catalog_item_kind::Value::ContinualTask(
+                proto::catalog_item_kind::ContinualTask {
+                    create_sql: create_sql.clone(),
+                    collection: Some(collection.into_proto()),
+                },
+            ),
+            ItemValueKind::Index {
+                create_sql,
+                collection,
+            } => proto::catalog_item_kind::Value::Index(proto::catalog_item_kind::Index {
+                create_sql: create_sql.clone(),
+                collection: Some(collection.into_proto()),
+            }),
+            ItemValueKind::Type { create_sql } => {
+                proto::catalog_item_kind::Value::Type(proto::catalog_item_kind::Type {
+                    create_sql: create_sql.clone(),
+                })
+            }
+            ItemValueKind::Function { create_sql } => {
+                proto::catalog_item_kind::Value::Function(proto::catalog_item_kind::Function {
+                    create_sql: create_sql.clone(),
+                })
+            }
+            ItemValueKind::Secret { create_sql } => {
+                proto::catalog_item_kind::Value::Secret(proto::catalog_item_kind::Secret {
+                    create_sql: create_sql.clone(),
+                })
+            }
+            ItemValueKind::Connection { create_sql } => {
+                proto::catalog_item_kind::Value::Connection(proto::catalog_item_kind::Connection {
+                    create_sql: create_sql.clone(),
+                })
+            }
+        };
+
+        proto::CatalogItemKind { value: Some(value) }
+    }
+
+    fn from_proto(proto: proto::CatalogItemKind) -> Result<Self, TryFromProtoError> {
+        use proto::catalog_item_kind::Value::*;
+
+        let kind = proto
+            .value
+            .ok_or_else(|| TryFromProtoError::missing_field("CatalogItemKind::value"))?;
+
+        let value = match kind {
+            Table(table) => ItemValueKind::Table {
+                create_sql: table.create_sql,
+                collections: table
+                    .collections
+                    .into_iter()
+                    .map(|collection| {
+                        let version = collection
+                            .version
+                            .into_rust_if_some("ItemCollection::version")?;
+                        let id = collection.id.into_rust_if_some("ItemCollection::id")?;
+
+                        Ok::<_, TryFromProtoError>((version, id))
+                    })
+                    .collect::<Result<_, _>>()?,
+            },
+            Source(source) => ItemValueKind::Source {
+                create_sql: source.create_sql,
+                collection: source
+                    .collection
+                    .into_rust_if_some("ItemValueKind::Source::collection")?,
+            },
+            Sink(sink) => ItemValueKind::Sink {
+                create_sql: sink.create_sql,
+                collection: sink
+                    .collection
+                    .into_rust_if_some("ItemValueKind::Sink::collection")?,
+            },
+            View(view) => ItemValueKind::View {
+                create_sql: view.create_sql,
+                collection: view
+                    .collection
+                    .into_rust_if_some("ItemValueKind::View::collection")?,
+            },
+            MaterializedView(mv) => ItemValueKind::MaterializedView {
+                create_sql: mv.create_sql,
+                collection: mv
+                    .collection
+                    .into_rust_if_some("ItemValueKind::MaterializedView::collection")?,
+            },
+            ContinualTask(ct) => ItemValueKind::ContinualTask {
+                create_sql: ct.create_sql,
+                collection: ct
+                    .collection
+                    .into_rust_if_some("ItemValueKind::ContinualTask::collection")?,
+            },
+            Index(view) => ItemValueKind::Index {
+                create_sql: view.create_sql,
+                collection: view
+                    .collection
+                    .into_rust_if_some("ItemValueKind::Index::collection")?,
+            },
+            Type(ty) => ItemValueKind::Type {
+                create_sql: ty.create_sql,
+            },
+            Function(func) => ItemValueKind::Function {
+                create_sql: func.create_sql,
+            },
+            Secret(secret) => ItemValueKind::Secret {
+                create_sql: secret.create_sql,
+            },
+            Connection(conn) => ItemValueKind::Connection {
+                create_sql: conn.create_sql,
+            },
+        };
+
+        Ok(value)
+    }
+}
+
+impl RustType<proto::Version> for RelationVersion {
+    fn into_proto(&self) -> proto::Version {
+        proto::Version {
+            value: self.into_raw(),
+        }
+    }
+
+    fn from_proto(proto: proto::Version) -> Result<Self, TryFromProtoError> {
+        Ok(RelationVersion::from_raw(proto.value))
     }
 }
 

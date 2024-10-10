@@ -340,14 +340,14 @@ impl Coordinator {
                         | CatalogItem::Source(_)
                         | CatalogItem::MaterializedView(_)
                         | CatalogItem::ContinualTask(_) => {
-                            id_bundle.storage_ids.insert(entry.id());
+                            id_bundle.storage_ids.extend(entry.global_ids());
                         }
                         CatalogItem::Index(index) => {
                             id_bundle
                                 .compute_ids
                                 .entry(index.cluster_id)
                                 .or_default()
-                                .insert(entry.id());
+                                .extend(entry.global_ids());
                         }
                         CatalogItem::View(_)
                         | CatalogItem::Sink(_)
@@ -500,6 +500,7 @@ impl Coordinator {
         let mut res: BTreeMap<TimelineContext, CollectionIdBundle> = BTreeMap::new();
 
         for id in &id_bundle.storage_ids {
+            let item_id = self.catalog().resolve_global_id(id).item_id();
             let timeline_context = self.get_timeline_context(*id);
             res.entry(timeline_context)
                 .or_default()

@@ -23,7 +23,7 @@ use mz_catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinView, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP,
 };
 use mz_catalog::durable::objects::{
-    ClusterKey, DatabaseKey, DurableType, ItemKey, RoleKey, SchemaKey,
+    ClusterKey, DatabaseKey, DurableType, ItemKey, ItemValueKind, RoleKey, SchemaKey,
 };
 use mz_catalog::durable::{CatalogError, DurableCatalogError};
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -42,7 +42,7 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::{
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType, NameReference,
@@ -516,7 +516,7 @@ impl CatalogState {
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
-        let id = system_object_mapping.unique_identifier.id;
+        let id = system_object_mapping.unique_identifier.catalog_id;
 
         if system_object_mapping.unique_identifier.runtime_alterable() {
             // Runtime-alterable system objects have real entries in the items
@@ -590,7 +590,9 @@ impl CatalogState {
                         create_sql: None,
                         desc: table.desc.clone(),
                         // TODO(alter_table): Allocate a unique GlobalId.
-                        collection_id: id.to_global_id(),
+                        collections: [(RelationVersion::root(), id.to_global_id())]
+                            .into_iter()
+                            .collect(),
                         conn_id: None,
                         resolved_ids: ResolvedIds(BTreeSet::new()),
                         custom_logical_compaction_window: table.is_retained_metrics_object.then(
@@ -611,10 +613,14 @@ impl CatalogState {
                 );
             }
             Builtin::Index(index) => {
+                let kind = ItemValueKind::Index {
+                    create_sql: index.create_sql(),
+                    collection: id.to_global_id(),
+                };
                 let mut item = self
                     .parse_item(
                         id,
-                        &index.create_sql(),
+                        &kind,
                         None,
                         index.is_retained_metrics_object,
                         if index.is_retained_metrics_object { Some(self.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
@@ -777,10 +783,14 @@ impl CatalogState {
                 );
             }
             Builtin::Connection(connection) => {
+                // TODO(alter_table)
+                let kind = ItemValueKind::Connection {
+                    create_sql: connection.sql.to_string(),
+                };
                 let mut item = self
                     .parse_item(
                         id,
-                        connection.sql,
+                        &kind,
                         None,
                         false,
                         None,
@@ -879,7 +889,7 @@ impl CatalogState {
                     oid,
                     schema_id,
                     name,
-                    create_sql,
+                    kind,
                     owner_id,
                     privileges,
                 } = item;
@@ -898,12 +908,12 @@ impl CatalogState {
                         // item. This is a performance optimization and not needed for correctness.
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
-                        if retraction.create_sql() != create_sql {
-                            let item = self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
-                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                            });
-                            retraction.item = item;
-                        }
+                        //
+                        // TODO(alter_table): Re-add this performance optimization.
+                        let item = self
+                            .deserialize_item(id, &kind)
+                            .unwrap_or_else(|e| panic!("{e:?}: invalid persisted Item: {kind:?}"));
+                        retraction.item = item;
                         retraction.id = id;
                         retraction.oid = oid;
                         retraction.name = name;
@@ -913,10 +923,9 @@ impl CatalogState {
                         retraction
                     }
                     None => {
-                        let catalog_item =
-                            self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
-                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                            });
+                        let catalog_item = self
+                            .deserialize_item(id, &kind)
+                            .unwrap_or_else(|e| panic!("{e:?}: invalid persisted Item: {kind:?}"));
                         CatalogEntry {
                             item: catalog_item,
                             referenced_by: Vec::new(),
@@ -1128,7 +1137,7 @@ impl CatalogState {
                 // items collection and so get handled through the normal
                 // `StateUpdateKind::Item`.`
                 if !system_object_mapping.unique_identifier.runtime_alterable() {
-                    self.pack_item_update(system_object_mapping.unique_identifier.id, diff)
+                    self.pack_item_update(system_object_mapping.unique_identifier.catalog_id, diff)
                 } else {
                     vec![]
                 }
@@ -1241,7 +1250,12 @@ impl CatalogState {
                     let handle = mz_ore::task::spawn(
                         || "parse view",
                         async move {
-                            let res = task_state.parse_item(id, &create_sql, None, false, None);
+                            // TODO(alter_table): This should be stored durably in the Catalog.
+                            let kind = ItemValueKind::View {
+                                create_sql,
+                                collection: id.to_global_id(),
+                            };
+                            let res = task_state.parse_item(id, &kind, None, false, None);
                             (id, res)
                         }
                         .instrument(span),
@@ -1376,7 +1390,7 @@ impl CatalogState {
 
         for u in &entry.references().0 {
             match self.entry_by_id.get_mut(u) {
-                Some(metadata) => metadata.referenced_by.push(entry.id().into()),
+                Some(metadata) => metadata.referenced_by.push(entry.item_id()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
                     &u,
@@ -1391,13 +1405,16 @@ impl CatalogState {
                 continue;
             }
             match self.entry_by_id.get_mut(&u.to_item_id()) {
-                Some(metadata) => metadata.used_by.push(entry.id().into()),
+                Some(metadata) => metadata.used_by.push(entry.item_id()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
                     &u,
                     self.resolve_full_name(entry.name(), entry.conn_id())
                 ),
             }
+        }
+        for gid in entry.item.global_ids() {
+            self.entry_by_global_id.insert(gid, entry.item_id());
         }
         let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema = self.get_schema_mut(
@@ -1533,6 +1550,8 @@ impl CatalogState {
             oid,
             index_name,
             CatalogItem::Index(Index {
+                // TODO(alter_table): Allocate a unique GlobalId.
+                collection_id: index_id,
                 on: log_id,
                 keys: log
                     .variant
@@ -1731,10 +1750,10 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             // and can never depend upon one another, to fix the topological sort,
             // we can just always move sinks to the end.
             .sorted_by_key(|(item, _ts, _diff)| {
-                if item.create_sql.starts_with("CREATE SINK") {
-                    GlobalId::User(u64::MAX)
+                if matches!(item.kind, ItemValueKind::Sink { .. }) {
+                    CatalogItemId::User(u64::MAX)
                 } else {
-                    item.id.to_global_id()
+                    item.id
                 }
             })
             .collect()
@@ -1753,8 +1772,8 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             // and can never depend upon one another, to fix the topological sort,
             // we can just always move sinks to the end.
             .sorted_by_key(|(item, _ts, _diff)| match item.item.typ() {
-                CatalogItemType::Sink => GlobalId::User(u64::MAX),
-                _ => item.id.to_global_id(),
+                CatalogItemType::Sink => CatalogItemId::User(u64::MAX),
+                _ => item.id,
             })
             .collect()
     }
@@ -2025,6 +2044,9 @@ fn lookup_builtin_view_addition(
         .expect("missing builtin view");
     (
         *builtin,
-        system_object_mapping.unique_identifier.id.to_global_id(),
+        system_object_mapping
+            .unique_identifier
+            .catalog_id
+            .to_global_id(),
     )
 }

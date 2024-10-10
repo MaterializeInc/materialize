@@ -69,7 +69,7 @@ use crate::AdapterError;
 #[derive(Debug, Clone)]
 pub enum Op {
     AlterRetainHistory {
-        id: GlobalId,
+        id: CatalogItemId,
         value: Option<Value>,
         window: CompactionWindow,
     },
@@ -176,7 +176,7 @@ pub enum Op {
         config: ReplicaConfig,
     },
     UpdateItem {
-        id: GlobalId,
+        id: CatalogItemId,
         name: QualifiedItemName,
         to_item: CatalogItem,
     },
@@ -610,7 +610,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id.to_item_id(), new_entry.into())?;
+                tx.update_item(id, new_entry.into())?;
 
                 Self::log_update(state, &id);
             }
@@ -1723,7 +1723,7 @@ impl Catalog {
 
                 updates.push(id.to_item_id());
                 for id in updates {
-                    Self::log_update(state, &id.to_global_id());
+                    Self::log_update(state, &id);
                 }
             }
             Op::RenameSchema {
@@ -1839,7 +1839,7 @@ impl Catalog {
                 tx.update_schema(schema_id, new_schema.into())?;
 
                 for id in updates {
-                    Self::log_update(state, &id.to_global_id());
+                    Self::log_update(state, &id);
                 }
             }
             Op::UpdateOwner { id, new_owner } => {
@@ -2000,7 +2000,7 @@ impl Catalog {
                 let mut entry = state.get_entry(&id).clone();
                 entry.name = name.clone();
                 entry.item = to_item.clone();
-                tx.update_item(id.to_item_id(), entry.into())?;
+                tx.update_item(id, entry.into())?;
 
                 if Self::should_audit_log_item(&to_item) {
                     let mut full_name = Self::full_name_detail(
@@ -2114,7 +2114,7 @@ impl Catalog {
         Ok((weird_builtin_table_update, temporary_item_updates))
     }
 
-    fn log_update(state: &CatalogState, id: &GlobalId) {
+    fn log_update(state: &CatalogState, id: &CatalogItemId) {
         let entry = state.get_entry(id);
         info!(
             "update {} {} ({})",

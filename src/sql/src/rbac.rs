@@ -1036,13 +1036,18 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::from(*id)],
             ..Default::default()
         },
-        Plan::AlterSource(plan::AlterSourcePlan { id, action: _ }) => RbacRequirements {
-            ownership: vec![ObjectId::from(*id)],
+        Plan::AlterSource(plan::AlterSourcePlan {
+            item_id,
+            ingestion_id: _,
+            action: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::from(*item_id)],
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterSink(plan::AlterSinkPlan {
-            id,
+            item_id,
+            export_id: _,
             sink,
             with_snapshot: _,
             in_cluster,
@@ -1054,7 +1059,7 @@ fn generate_rbac_requirements(
                 role_id,
             ));
             RbacRequirements {
-                ownership: vec![ObjectId::from(*id)],
+                ownership: vec![ObjectId::Item(*item_id)],
                 privileges,
                 item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()

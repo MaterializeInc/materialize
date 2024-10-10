@@ -31,13 +31,14 @@ pub(crate) mod state_update;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
+use anyhow::Context;
 use mz_audit_log::VersionedEvent;
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
@@ -461,7 +462,7 @@ pub struct Item {
     pub oid: u32,
     pub schema_id: SchemaId,
     pub name: String,
-    pub create_sql: String,
+    pub kind: ItemValueKind,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
 }
@@ -477,7 +478,7 @@ impl DurableType for Item {
                 oid: self.oid,
                 schema_id: self.schema_id,
                 name: self.name,
-                create_sql: self.create_sql,
+                kind: self.kind,
                 owner_id: self.owner_id,
                 privileges: self.privileges,
             },
@@ -490,7 +491,7 @@ impl DurableType for Item {
             oid: value.oid,
             schema_id: value.schema_id,
             name: value.name,
-            create_sql: value.create_sql,
+            kind: value.kind,
             owner_id: value.owner_id,
             privileges: value.privileges,
         }
@@ -555,7 +556,8 @@ pub struct SystemObjectDescription {
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SystemObjectUniqueIdentifier {
-    pub id: CatalogItemId,
+    pub catalog_id: CatalogItemId,
+    pub collection_id: GlobalId,
     pub fingerprint: String,
 }
 
@@ -590,12 +592,20 @@ impl DurableType for SystemObjectMapping {
                 object_name: self.description.object_name,
             },
             GidMappingValue {
-                id: match self.unique_identifier.id {
+                catalog_id: match self.unique_identifier.catalog_id {
                     CatalogItemId::System(id) => id,
                     CatalogItemId::User(_) => unreachable!("GID mapping cannot use a User ID"),
                     CatalogItemId::Transient(_) => {
                         unreachable!("GID mapping cannot use a Transient ID")
                     }
+                },
+                collection_id: match self.unique_identifier.collection_id {
+                    GlobalId::System(id) => id,
+                    GlobalId::User(_) => unreachable!("GID mapping cannot use a User ID"),
+                    GlobalId::Transient(_) => {
+                        unreachable!("GID mapping cannot use a Transient ID")
+                    }
+                    GlobalId::Explain => unreachable!("GID mapping cannot use an Explain ID"),
                 },
                 fingerprint: self.unique_identifier.fingerprint,
             },
@@ -610,7 +620,8 @@ impl DurableType for SystemObjectMapping {
                 object_name: key.object_name,
             },
             unique_identifier: SystemObjectUniqueIdentifier {
-                id: CatalogItemId::System(value.id),
+                catalog_id: CatalogItemId::System(value.catalog_id),
+                collection_id: GlobalId::System(value.collection_id),
                 fingerprint: value.fingerprint,
             },
         }
@@ -1040,7 +1051,8 @@ pub struct GidMappingKey {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct GidMappingValue {
-    pub(crate) id: u64,
+    pub(crate) catalog_id: u64,
+    pub(crate) collection_id: u64,
     pub(crate) fingerprint: String,
 }
 
@@ -1129,7 +1141,7 @@ pub struct ItemKey {
 pub struct ItemValue {
     pub(crate) schema_id: SchemaId,
     pub(crate) name: String,
-    pub(crate) create_sql: String,
+    pub(crate) kind: ItemValueKind,
     pub(crate) owner_id: RoleId,
     pub(crate) privileges: Vec<MzAclItem>,
     pub(crate) oid: u32,
@@ -1137,31 +1149,139 @@ pub struct ItemValue {
 
 impl ItemValue {
     pub(crate) fn item_type(&self) -> CatalogItemType {
-        // NOTE(benesch): the implementation of this method is hideous, but is
-        // there a better alternative? Storing the object type alongside the
-        // `create_sql` would introduce the possibility of skew.
-        let mut tokens = self.create_sql.split_whitespace();
-        assert_eq!(tokens.next(), Some("CREATE"));
-        match tokens.next() {
-            Some("TABLE") => CatalogItemType::Table,
-            Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
-            Some("SINK") => CatalogItemType::Sink,
-            Some("VIEW") => CatalogItemType::View,
-            Some("MATERIALIZED") => {
-                assert_eq!(tokens.next(), Some("VIEW"));
-                CatalogItemType::MaterializedView
-            }
-            Some("CONTINUAL") => {
-                assert_eq!(tokens.next(), Some("TASK"));
-                CatalogItemType::ContinualTask
-            }
-            Some("INDEX") => CatalogItemType::Index,
-            Some("TYPE") => CatalogItemType::Type,
-            Some("FUNCTION") => CatalogItemType::Func,
-            Some("SECRET") => CatalogItemType::Secret,
-            Some("CONNECTION") => CatalogItemType::Connection,
-            _ => panic!("unexpected create sql: {}", self.create_sql),
+        match self.kind {
+            ItemValueKind::Table { .. } => CatalogItemType::Table,
+            ItemValueKind::Source { .. } => CatalogItemType::Source,
+            ItemValueKind::Sink { .. } => CatalogItemType::Sink,
+            ItemValueKind::View { .. } => CatalogItemType::View,
+            ItemValueKind::MaterializedView { .. } => CatalogItemType::MaterializedView,
+            ItemValueKind::Index { .. } => CatalogItemType::Index,
+            ItemValueKind::Type { .. } => CatalogItemType::Type,
+            ItemValueKind::Function { .. } => CatalogItemType::Func,
+            ItemValueKind::Secret { .. } => CatalogItemType::Secret,
+            ItemValueKind::Connection { .. } => CatalogItemType::Connection,
+            ItemValueKind::ContinualTask { .. } => CatalogItemType::ContinualTask,
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+pub enum ItemValueKind {
+    Table {
+        create_sql: String,
+        collections: BTreeMap<RelationVersion, GlobalId>,
+    },
+    Source {
+        create_sql: String,
+        collection: GlobalId,
+    },
+    Sink {
+        create_sql: String,
+        collection: GlobalId,
+    },
+    View {
+        create_sql: String,
+        collection: GlobalId,
+    },
+    MaterializedView {
+        create_sql: String,
+        collection: GlobalId,
+    },
+    ContinualTask {
+        create_sql: String,
+        collection: GlobalId,
+    },
+    Index {
+        create_sql: String,
+        collection: GlobalId,
+    },
+    Type {
+        create_sql: String,
+    },
+    Function {
+        create_sql: String,
+    },
+    Secret {
+        create_sql: String,
+    },
+    Connection {
+        create_sql: String,
+    },
+}
+
+impl ItemValueKind {
+    pub fn create_sql(&self) -> &str {
+        match self {
+            ItemValueKind::Table { create_sql, .. }
+            | ItemValueKind::Source { create_sql, .. }
+            | ItemValueKind::Sink { create_sql, .. }
+            | ItemValueKind::View { create_sql, .. }
+            | ItemValueKind::MaterializedView { create_sql, .. }
+            | ItemValueKind::Index { create_sql, .. }
+            | ItemValueKind::Type { create_sql }
+            | ItemValueKind::Function { create_sql }
+            | ItemValueKind::Secret { create_sql }
+            | ItemValueKind::Connection { create_sql }
+            | ItemValueKind::ContinualTask { create_sql, .. } => &create_sql,
+        }
+    }
+
+    /// Update the inner `create_sql`.
+    ///
+    /// Returns an error if the `create_sql` is changed in a way that would
+    /// create a different type when re-parsed.
+    pub fn rewrite_sql<F>(&mut self, f: F) -> Result<(), anyhow::Error>
+    where
+        F: FnOnce(&str) -> Result<String, anyhow::Error>,
+    {
+        let new_sql = f(self.create_sql()).context("re-writing SQL")?;
+
+        // Validate the new SQL.
+        //
+        // TODO(parkmycar): Do we just want to re-parse the entire statement?
+        let mut tokens = new_sql.split_whitespace();
+        assert_eq!(tokens.next(), Some("CREATE"));
+        let () = match (tokens.next(), &self) {
+            (Some("TABLE"), ItemValueKind::Table { .. })
+            | (Some("SOURCE") | Some("SUBSOURCE"), ItemValueKind::Source { .. })
+            | (Some("SINK"), ItemValueKind::Sink { .. })
+            | (Some("VIEW"), ItemValueKind::View { .. })
+            | (Some("INDEX"), ItemValueKind::Index { .. })
+            | (Some("TYPE"), ItemValueKind::Type { .. })
+            | (Some("FUNCTION"), ItemValueKind::Function { .. })
+            | (Some("SECRET"), ItemValueKind::Secret { .. })
+            | (Some("CONNECTION"), ItemValueKind::Connection { .. }) => (),
+            (Some("MATERIALIZED"), ItemValueKind::MaterializedView { .. }) => {
+                assert_eq!(tokens.next(), Some("VIEW"));
+                ()
+            }
+            (Some("CONTINUAL"), ItemValueKind::ContinualTask { .. }) => {
+                assert_eq!(tokens.next(), Some("TASK"));
+                ()
+            }
+            (keyword, kind) => {
+                anyhow::bail!("invalid sql re-write, new type: {keyword:?}, current type: {kind:?}")
+            }
+        };
+
+        // Update the existing SQL.
+        match self {
+            ItemValueKind::Table { create_sql, .. }
+            | ItemValueKind::Source { create_sql, .. }
+            | ItemValueKind::Sink { create_sql, .. }
+            | ItemValueKind::View { create_sql, .. }
+            | ItemValueKind::MaterializedView { create_sql, .. }
+            | ItemValueKind::Index { create_sql, .. }
+            | ItemValueKind::Type { create_sql }
+            | ItemValueKind::Function { create_sql }
+            | ItemValueKind::Secret { create_sql }
+            | ItemValueKind::Connection { create_sql }
+            | ItemValueKind::ContinualTask { create_sql, .. } => {
+                *create_sql = new_sql;
+            }
+        }
+
+        Ok(())
     }
 }
 

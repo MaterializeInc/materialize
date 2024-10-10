@@ -557,7 +557,8 @@ pub struct CreateIndexOptimize {
 #[derive(Debug)]
 pub struct CreateIndexFinish {
     validity: PlanValidity,
-    exported_index_id: CatalogItemId,
+    item_id: CatalogItemId,
+    collection_id: GlobalId,
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
     global_mir_plan: optimize::index::GlobalMirPlan,
@@ -593,7 +594,10 @@ pub struct CreateViewOptimize {
 #[derive(Debug)]
 pub struct CreateViewFinish {
     validity: PlanValidity,
-    id: CatalogItemId,
+    /// ID of this item in the Catalog.
+    item_id: CatalogItemId,
+    /// ID by with Compute will reference this View.
+    collection_id: GlobalId,
     plan: plan::CreateViewPlan,
     resolved_ids: ResolvedIds,
     optimized_expr: OptimizedMirRelationExpr,
@@ -1904,7 +1908,7 @@ impl Coordinator {
                 //
                 // HACK: sinks are permitted to depend on items with larger IDs,
                 // due to `ALTER SINK`.
-                !entry.id().is_user()
+                !entry.item_id().is_user()
                     || entry.is_sink()
                     || entry
                         .uses()
@@ -1919,7 +1923,7 @@ impl Coordinator {
             debug!(
                 "coordinator init: installing {} {}",
                 entry.item().typ(),
-                entry.id()
+                entry.item_id()
             );
             let mut policy = entry.item().initial_logical_compaction_window();
             match entry.item() {
@@ -1948,14 +1952,14 @@ impl Coordinator {
                         .entry(policy.expect("sources have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(entry.id());
+                        .extend(entry.global_ids());
                 }
                 CatalogItem::Table(_) => {
                     policies_to_set
                         .entry(policy.expect("tables have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(entry.id());
+                        .extend(entry.global_ids());
                 }
                 CatalogItem::Index(idx) => {
                     let policy_entry = policies_to_set
@@ -1967,7 +1971,7 @@ impl Coordinator {
                             .compute_ids
                             .entry(idx.cluster_id)
                             .or_insert_with(BTreeSet::new)
-                            .insert(entry.id());
+                            .extend(entry.global_ids());
                     } else {
                         let df_desc = self
                             .catalog()

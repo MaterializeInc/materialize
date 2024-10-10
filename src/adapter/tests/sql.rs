@@ -25,7 +25,7 @@ use mz_adapter::catalog::{Catalog, Op};
 use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_catalog::memory::objects::{CatalogItem, Table, TableDataSource};
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_repr::RelationDesc;
+use mz_repr::{RelationDesc, RelationVersion};
 use mz_sql::ast::Statement;
 use mz_sql::catalog::CatalogDatabase;
 use mz_sql::names::{
@@ -95,7 +95,12 @@ async fn datadriven() {
                                                 test_case.input.trim_end()
                                             )),
                                             desc: RelationDesc::empty(),
-                                            collection_id: id.to_global_id(),
+                                            collections: [(
+                                                RelationVersion::root(),
+                                                id.to_global_id(),
+                                            )]
+                                            .into_iter()
+                                            .collect(),
                                             conn_id: None,
                                             resolved_ids: ResolvedIds(BTreeSet::new()),
                                             custom_logical_compaction_window: None,

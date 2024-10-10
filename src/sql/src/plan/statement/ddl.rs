@@ -6172,7 +6172,7 @@ fn alter_retain_history(
             let window = plan_retain_history(scx, lcw)?;
 
             Ok(Plan::AlterRetainHistory(AlterRetainHistoryPlan {
-                id: entry.item_id().to_global_id(),
+                id: entry.item_id(),
                 value,
                 window,
                 object_type,
@@ -6476,7 +6476,8 @@ pub fn plan_alter_sink(
             };
 
             Ok(Plan::AlterSink(AlterSinkPlan {
-                id: item.item_id().to_global_id(),
+                item_id: item.item_id(),
+                export_id: item.item_id().to_global_id(),
                 sink: plan.sink,
                 with_snapshot: plan.with_snapshot,
                 in_cluster: plan.in_cluster,

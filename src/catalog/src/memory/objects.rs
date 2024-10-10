@@ -28,7 +28,10 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, RelationVersionSelector, Timestamp};
+use mz_repr::{
+    CatalogItemId, Diff, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+    Timestamp,
+};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Expr, Raw, Statement, UnresolvedItemName, Value, WithOptionValue};
 use mz_sql::catalog::{
@@ -63,6 +66,7 @@ use tracing::debug;
 
 use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
+use crate::durable::objects::ItemValueKind;
 
 /// Used to update `self` from the input value while consuming the input value.
 pub trait UpdateFrom<T>: From<T> {
@@ -770,7 +774,7 @@ impl From<CatalogEntry> for durable::Item {
             oid: entry.oid,
             schema_id: entry.name.qualifiers.schema_spec.into(),
             name: entry.name.item,
-            create_sql: entry.item.into_serialized(),
+            kind: entry.item.into_serialized(),
             owner_id: entry.owner_id,
             privileges: entry.privileges.into_all_values().collect(),
         }
@@ -779,16 +783,25 @@ impl From<CatalogEntry> for durable::Item {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Table {
+    /// Parse-able SQL that defines this table.
     pub create_sql: Option<String>,
+    /// [`RelationDesc`] of this table, derived from the `create_sql`.
     pub desc: RelationDesc,
-    pub collection_id: GlobalId,
+    /// Versions of this table, and the [`GlobalId`]s that refer to them.
+    pub collections: BTreeMap<RelationVersion, GlobalId>,
+    /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
     #[serde(skip)]
     pub conn_id: Option<ConnectionId>,
+    /// Other catalog objects referenced by this table, e.g. custom types.
     pub resolved_ids: ResolvedIds,
+    /// Custom compaction window, e.g. set via `ALTER RETAIN HISTORY`.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
-    /// Whether the table's logical compaction window is controlled by
-    /// METRICS_RETENTION
+    /// Whether the table's logical compaction window is controlled by the ['metrics_retention']
+    /// session variable.
+    ///
+    /// ['metrics_retention']: mz_sql::session::vars::METRICS_RETENTION
     pub is_retained_metrics_object: bool,
+    /// Where data for this table comes from, e.g. `INSERT` statements or an upstream source.
     pub data_source: TableDataSource,
 }
 
@@ -1090,15 +1103,27 @@ pub struct Log {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Sink {
+    /// Parse-able SQL that defines this sink.
     pub create_sql: String,
+    /// ID used to reference the export in compute powering the sink.
+    pub export_id: GlobalId,
+    /// Collection we read into this sink.
     pub from: GlobalId,
+    /// Connection to the external service we're sinking into, e.g. Kafka.
     pub connection: StorageSinkConnection<ReferencedConnection>,
-    // TODO(guswynn): this probably should just be in the `connection`.
+    /// Envelope we use to sink into the external system.
+    ///
+    /// TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
+    /// Strategy used to partition rows.
     pub partition_strategy: SinkPartitionStrategy,
+    /// Emit an initial snapshot into the sink.
     pub with_snapshot: bool,
+    /// Used to fence other writes into this sink as we evolve the upstream materialized view.
     pub version: u64,
+    /// Other catalog objects this sink references.
     pub resolved_ids: ResolvedIds,
+    /// Cluster this sink runs on.
     pub cluster_id: ClusterId,
 }
 
@@ -1143,28 +1168,49 @@ impl Sink {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct View {
+    /// Parse-able SQL that defines this view.
     pub create_sql: String,
+    /// ID used to reference this view from outside the catalog, e.g. compute.
+    pub collection_id: GlobalId,
+    /// Unoptimized high-level expression from parsing the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
+    /// Optimized mid-level expression from optimizing the `raw_expr`.
     pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    /// Columns of this view.
     pub desc: RelationDesc,
+    /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
     pub conn_id: Option<ConnectionId>,
+    /// Other catalog objects that are referenced by this view.
     pub resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MaterializedView {
+    /// Parse-able SQL that defines this materialized view.
     pub create_sql: String,
+    /// Raw high-level expression from planning, derived from the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
+    /// Optimized mid-level expression, derived from the `raw_expr`.
     pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    /// Columns for this materialized view.
     pub desc: RelationDesc,
+    /// [`GlobalId`] used to reference this materialized view from outside the catalog.
     pub collection_id: GlobalId,
+    /// Other catalog items that this materialized view references.
     pub resolved_ids: ResolvedIds,
+    /// Cluster that this materialized view runs on.
     pub cluster_id: ClusterId,
+    /// Column indexes that we assert are not `NULL`.
+    ///
+    /// TODO(parkmycar): Switch this to use the `ColumnIdx` type.
     pub non_null_assertions: Vec<usize>,
+    /// Custom compaction window, e.g. set via `ALTER RETAIN HISTORY`.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
+    /// Schedule to refresh this materialized view, e.g. set via `REFRESH EVERY` option.
     pub refresh_schedule: Option<RefreshSchedule>,
     /// The initial `as_of` of the storage collection associated with the materialized view.
-    /// Note that this doesn't change upon restarts.
+    ///
+    /// Note: This doesn't change upon restarts.
     /// (The dataflow's initial `as_of` can be different.)
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
 }
@@ -1172,6 +1218,9 @@ pub struct MaterializedView {
 #[derive(Debug, Clone, Serialize)]
 pub struct Index {
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this Index.
+    pub collection_id: GlobalId,
+    /// Collection this Index is on.
     pub on: GlobalId,
     pub keys: Arc<[MirScalarExpr]>,
     pub conn_id: Option<ConnectionId>,
@@ -1211,6 +1260,7 @@ pub struct Connection {
 #[derive(Debug, Clone, Serialize)]
 pub struct ContinualTask {
     pub create_sql: String,
+    pub collection_id: GlobalId,
     pub input_id: GlobalId,
     /// ContinualTasks are self-referential. We make this work by using a
     /// placeholder `LocalId` for the CT itself through name resolution and
@@ -1240,6 +1290,26 @@ impl CatalogItem {
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
             CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
             CatalogItem::ContinualTask(_) => mz_sql::catalog::CatalogItemType::ContinualTask,
+        }
+    }
+
+    /// Returns the [`GlobalId`]s that reference this item, if any.
+    pub fn global_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_> {
+        match self {
+            CatalogItem::Table(table) => Box::new(table.collections.values().copied()),
+            CatalogItem::Source(source) => Box::new(std::iter::once(source.collection_id)),
+            CatalogItem::Log(log) => {
+                todo!()
+            }
+            CatalogItem::Sink(sink) => Box::new(std::iter::once(sink.export_id)),
+            CatalogItem::View(view) => Box::new(std::iter::once(view.collection_id)),
+            CatalogItem::MaterializedView(mv) => Box::new(std::iter::once(mv.collection_id)),
+            CatalogItem::ContinualTask(ct) => Box::new(std::iter::once(ct.collection_id)),
+            CatalogItem::Index(index) => Box::new(std::iter::once(index.collection_id)),
+            CatalogItem::Func(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => Box::new(std::iter::empty()),
         }
     }
 
@@ -1794,66 +1864,68 @@ impl CatalogItem {
         }
     }
 
-    pub fn to_serialized(&self) -> String {
-        match self {
-            CatalogItem::Table(table) => table
-                .create_sql
-                .as_ref()
-                .expect("builtin tables cannot be serialized")
-                .clone(),
-            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
-            CatalogItem::Source(source) => {
-                assert!(
-                    !matches!(source.data_source, DataSourceDesc::Introspection(_)),
-                    "cannot serialize introspection/builtin sources",
-                );
-                source
-                    .create_sql
-                    .as_ref()
-                    .expect("builtin sources cannot be serialized")
-                    .clone()
-            }
-            CatalogItem::View(view) => view.create_sql.clone(),
-            CatalogItem::MaterializedView(mview) => mview.create_sql.clone(),
-            CatalogItem::Index(index) => index.create_sql.clone(),
-            CatalogItem::Sink(sink) => sink.create_sql.clone(),
-            CatalogItem::Type(typ) => typ
-                .create_sql
-                .as_ref()
-                .expect("builtin types cannot be serialized")
-                .clone(),
-            CatalogItem::Secret(secret) => secret.create_sql.clone(),
-            CatalogItem::Connection(connection) => connection.create_sql.clone(),
-            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::ContinualTask(ct) => ct.create_sql.clone(),
-        }
+    pub fn to_serialized(&self) -> ItemValueKind {
+        todo!()
+        // match self {
+        //     CatalogItem::Table(table) => table
+        //         .create_sql
+        //         .as_ref()
+        //         .expect("builtin tables cannot be serialized")
+        //         .clone(),
+        //     CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
+        //     CatalogItem::Source(source) => {
+        //         assert!(
+        //             !matches!(source.data_source, DataSourceDesc::Introspection(_)),
+        //             "cannot serialize introspection/builtin sources",
+        //         );
+        //         source
+        //             .create_sql
+        //             .as_ref()
+        //             .expect("builtin sources cannot be serialized")
+        //             .clone()
+        //     }
+        //     CatalogItem::View(view) => view.create_sql.clone(),
+        //     CatalogItem::MaterializedView(mview) => mview.create_sql.clone(),
+        //     CatalogItem::Index(index) => index.create_sql.clone(),
+        //     CatalogItem::Sink(sink) => sink.create_sql.clone(),
+        //     CatalogItem::Type(typ) => typ
+        //         .create_sql
+        //         .as_ref()
+        //         .expect("builtin types cannot be serialized")
+        //         .clone(),
+        //     CatalogItem::Secret(secret) => secret.create_sql.clone(),
+        //     CatalogItem::Connection(connection) => connection.create_sql.clone(),
+        //     CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+        //     CatalogItem::ContinualTask(ct) => ct.create_sql.clone(),
+        // }
     }
 
-    pub fn into_serialized(self) -> String {
-        match self {
-            CatalogItem::Table(table) => table
-                .create_sql
-                .expect("builtin tables cannot be serialized"),
-            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
-            CatalogItem::Source(source) => {
-                assert!(
-                    !matches!(source.data_source, DataSourceDesc::Introspection(_)),
-                    "cannot serialize introspection/builtin sources",
-                );
-                source
-                    .create_sql
-                    .expect("builtin sources cannot be serialized")
-            }
-            CatalogItem::View(view) => view.create_sql,
-            CatalogItem::MaterializedView(mview) => mview.create_sql,
-            CatalogItem::Index(index) => index.create_sql,
-            CatalogItem::Sink(sink) => sink.create_sql,
-            CatalogItem::Type(typ) => typ.create_sql.expect("builtin types cannot be serialized"),
-            CatalogItem::Secret(secret) => secret.create_sql,
-            CatalogItem::Connection(connection) => connection.create_sql,
-            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::ContinualTask(ct) => ct.create_sql,
-        }
+    pub fn into_serialized(self) -> ItemValueKind {
+        todo!()
+        // match self {
+        //     CatalogItem::Table(table) => table
+        //         .create_sql
+        //         .expect("builtin tables cannot be serialized"),
+        //     CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
+        //     CatalogItem::Source(source) => {
+        //         assert!(
+        //             !matches!(source.data_source, DataSourceDesc::Introspection(_)),
+        //             "cannot serialize introspection/builtin sources",
+        //         );
+        //         source
+        //             .create_sql
+        //             .expect("builtin sources cannot be serialized")
+        //     }
+        //     CatalogItem::View(view) => view.create_sql,
+        //     CatalogItem::MaterializedView(mview) => mview.create_sql,
+        //     CatalogItem::Index(index) => index.create_sql,
+        //     CatalogItem::Sink(sink) => sink.create_sql,
+        //     CatalogItem::Type(typ) => typ.create_sql.expect("builtin types cannot be serialized"),
+        //     CatalogItem::Secret(secret) => secret.create_sql,
+        //     CatalogItem::Connection(connection) => connection.create_sql,
+        //     CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+        //     CatalogItem::ContinualTask(ct) => ct.create_sql,
+        // }
     }
 }
 
@@ -2113,6 +2185,11 @@ impl CatalogEntry {
     /// Returns the [`CatalogItemId`] of this catalog entry.
     pub fn item_id(&self) -> CatalogItemId {
         self.id
+    }
+
+    /// Returns all of the [`GlobalId`]s associated with this item.
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.item().global_ids()
     }
 
     /// Returns the OID of this catalog entry.

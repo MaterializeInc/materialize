@@ -36,8 +36,8 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersionSelector, Row, RowArena,
-    RowIterator, Timestamp,
+    CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersion,
+    RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
 };
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
@@ -428,7 +428,8 @@ impl Coordinator {
 
         Ok((
             Plan::AlterSource(mz_sql::plan::AlterSourcePlan {
-                id: source_id.to_global_id(),
+                item_id: source_id,
+                ingestion_id: source_id.to_global_id(),
                 action,
             }),
             ResolvedIds(BTreeSet::new()),
@@ -532,7 +533,10 @@ impl Coordinator {
         session: &mut Session,
         plans: Vec<plan::CreateSourcePlanBundle>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let collection_ids: Vec<_> = plans.iter().map(|plan| plan.collection_id).collect();
+        let (collection_ids, item_ids): (Vec<_>, Vec<_>) = plans
+            .iter()
+            .map(|plan| (plan.collection_id, plan.item_id))
+            .unzip();
         let CreateSourceInner {
             ops,
             sources,
@@ -644,10 +648,7 @@ impl Coordinator {
                 // ever called with, hedge our bets a bit and collect the compaction windows for
                 // each id in the bundle (these should all be identical). This is some extra work
                 // but seems safer.
-                let read_policies = coord
-                    .catalog()
-                    .state()
-                    .source_compaction_windows(collection_ids);
+                let read_policies = coord.catalog().state().source_compaction_windows(item_ids);
                 for (compaction_window, storage_policies) in read_policies {
                     coord
                         .initialize_storage_read_policies(storage_policies, compaction_window)
@@ -913,6 +914,10 @@ impl Coordinator {
         let table_id = self.catalog_mut().allocate_user_id().await?;
         // TODO(alter_table): Allocate a unique GlobalId.
         let collection_id = table_id.to_global_id();
+        let collections = [(RelationVersion::root(), collection_id)]
+            .into_iter()
+            .collect();
+
         let data_source = match table.data_source {
             plan::TableDataSource::TableWrites { defaults } => {
                 TableDataSource::TableWrites { defaults }
@@ -937,7 +942,7 @@ impl Coordinator {
         let table = Table {
             create_sql: Some(table.create_sql),
             desc: table.desc,
-            collection_id,
+            collections,
             conn_id: conn_id.cloned(),
             resolved_ids,
             custom_logical_compaction_window: table.compaction_window,
@@ -993,7 +998,7 @@ impl Coordinator {
 
                         coord
                             .initialize_storage_read_policies(
-                                btreeset![collection_id],
+                                btreeset![table_id],
                                 table
                                     .custom_logical_compaction_window
                                     .unwrap_or(CompactionWindow::Default),
@@ -1041,7 +1046,7 @@ impl Coordinator {
                                 let read_policies = coord
                                     .catalog()
                                     .state()
-                                    .source_compaction_windows(vec![collection_id]);
+                                    .source_compaction_windows(vec![table_id]);
                                 for (compaction_window, storage_policies) in read_policies {
                                     coord
                                         .initialize_storage_read_policies(
@@ -1092,6 +1097,8 @@ impl Coordinator {
 
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+        // TODO(alter_table): Allocate a unique GlobalId.
+        let export_id = id.to_global_id();
 
         if let Some(cluster) = self.catalog().try_get_cluster(in_cluster) {
             mz_ore::soft_assert_or_log!(
@@ -1103,6 +1110,7 @@ impl Coordinator {
 
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
+            export_id,
             from: sink.from,
             connection: sink.connection,
             partition_strategy: sink.partition_strategy,
@@ -2971,7 +2979,8 @@ impl Coordinator {
             window: plan.window,
         }];
         self.catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-            let cluster = match coord.catalog().get_entry(&plan.id).item() {
+            let catalog_item = coord.catalog().get_entry(&plan.id).item();
+            let cluster = match catalog_item {
                 CatalogItem::Table(_)
                 | CatalogItem::MaterializedView(_)
                 | CatalogItem::ContinualTask(_) => None,
@@ -3216,7 +3225,7 @@ impl Coordinator {
         // the new `from` collection's read hold and the sink's write frontier.
         self.install_storage_watch_set(
             ctx.session().conn_id().clone(),
-            BTreeSet::from_iter([plan.id]),
+            BTreeSet::from_iter([plan.export_id]),
             read_ts,
             WatchSetResponse::AlterSinkReady(AlterSinkReadyContext {
                 ctx: Some(ctx),
@@ -3241,18 +3250,18 @@ impl Coordinator {
         }
 
         let plan::AlterSinkPlan {
-            id,
+            item_id,
+            export_id,
             sink,
             with_snapshot,
             in_cluster,
         } = ctx.plan.clone();
-
         // Assert that we can recover the updates that happened at the timestamps of the write
         // frontier. This must be true in this call.
         let write_frontier = &self
             .controller
             .storage
-            .export(id)
+            .export(export_id)
             .expect("sink known to exist")
             .write_frontier;
         let as_of = ctx.read_hold.least_valid_read();
@@ -3260,6 +3269,7 @@ impl Coordinator {
 
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
+            export_id,
             from: sink.from,
             connection: sink.connection.clone(),
             envelope: sink.envelope,
@@ -3271,8 +3281,8 @@ impl Coordinator {
         };
 
         let ops = vec![catalog::Op::UpdateItem {
-            id,
-            name: self.catalog.get_entry(&id).name().clone(),
+            id: item_id,
+            name: self.catalog.get_entry(&item_id).name().clone(),
             to_item: CatalogItem::Sink(catalog_sink),
         }];
 
@@ -3315,7 +3325,7 @@ impl Coordinator {
         self.controller
             .storage
             .alter_export(
-                id,
+                export_id,
                 ExportDescription {
                     sink: storage_sink_desc,
                     instance_id: in_cluster,
@@ -3393,7 +3403,7 @@ impl Coordinator {
             // Open a new catalog, which we will use to re-plan our
             // statement with the desired config.
             let mut catalog = self.catalog().for_system_session();
-            catalog.mark_id_unresolvable_for_replanning(id.to_global_id());
+            catalog.mark_id_unresolvable_for_replanning(id);
 
             // Re-define our source in terms of the amended statement
             let plan = match mz_sql::plan::plan(
@@ -3510,7 +3520,7 @@ impl Coordinator {
         };
 
         let ops = vec![catalog::Op::UpdateItem {
-            id: id.to_global_id(),
+            id,
             name: self.catalog.get_entry(&id).name().clone(),
             to_item: CatalogItem::Connection(connection.clone()),
         }];
@@ -3615,9 +3625,13 @@ impl Coordinator {
     pub(super) async fn sequence_alter_source(
         &mut self,
         session: &Session,
-        plan::AlterSourcePlan { id, action }: plan::AlterSourcePlan,
+        plan::AlterSourcePlan {
+            item_id,
+            ingestion_id,
+            action,
+        }: plan::AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let cur_entry = self.catalog().get_entry(&id);
+        let cur_entry = self.catalog().get_entry(&item_id);
         let cur_source = cur_entry.source().expect("known to be source");
 
         let create_sql_to_stmt_deps = |coord: &Coordinator, err_cx, create_source_sql| {
@@ -3658,7 +3672,7 @@ impl Coordinator {
                 // Get all currently referred-to items
                 let catalog = self.catalog();
                 let curr_references: BTreeSet<_> = catalog
-                    .get_entry(&id)
+                    .get_entry(&item_id)
                     .used_by()
                     .into_iter()
                     .filter_map(|subsource| {
@@ -3789,7 +3803,7 @@ impl Coordinator {
                 };
 
                 let mut catalog = self.catalog().for_system_session();
-                catalog.mark_id_unresolvable_for_replanning(cur_entry.id());
+                catalog.mark_id_unresolvable_for_replanning(cur_entry.item_id());
 
                 // Re-define our source in terms of the amended statement
                 let plan = match mz_sql::plan::plan(
@@ -3829,16 +3843,16 @@ impl Coordinator {
 
                 self.controller
                     .storage
-                    .check_alter_ingestion_source_desc(id, &desc)
+                    .check_alter_ingestion_source_desc(ingestion_id, &desc)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
                 // Redefine source. This must be done before we create any new
                 // subsources so that it has the right ingestion.
                 let mut ops = vec![catalog::Op::UpdateItem {
-                    id,
+                    id: item_id,
                     // Look this up again so we don't have to hold an immutable reference to the
                     // entry for so long.
-                    name: self.catalog.get_entry(&id).name().clone(),
+                    name: self.catalog.get_entry(&item_id).name().clone(),
                     to_item: CatalogItem::Source(source),
                 }];
 
@@ -3859,13 +3873,13 @@ impl Coordinator {
 
                 self.controller
                     .storage
-                    .alter_ingestion_source_desc(id, desc)
+                    .alter_ingestion_source_desc(ingestion_id, desc)
                     .await
                     .unwrap_or_terminate("cannot fail to alter source desc");
 
-                let mut collection_ids = BTreeSet::new();
+                let mut item_ids = BTreeSet::new();
                 let mut collections = Vec::with_capacity(sources.len());
-                for (_item_id, source) in sources {
+                for (item_id, source) in sources {
                     let source_status_collection_id =
                         Some(self.catalog().resolve_builtin_storage_collection(
                             &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
@@ -3905,7 +3919,7 @@ impl Coordinator {
                         },
                     ));
 
-                    collection_ids.insert(source.collection_id);
+                    item_ids.insert(item_id);
                 }
 
                 let storage_metadata = self.catalog.state().storage_metadata();
@@ -3917,7 +3931,7 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to create collections");
 
                 self.initialize_storage_read_policies(
-                    collection_ids,
+                    item_ids,
                     source_compaction_window.unwrap_or(CompactionWindow::Default),
                 )
                 .await;

@@ -348,7 +348,7 @@ impl Coordinator {
                 }
 
                 let ops = vec![catalog::Op::UpdateItem {
-                    id: id.to_global_id(),
+                    id,
                     name: entry.name,
                     to_item,
                 }];

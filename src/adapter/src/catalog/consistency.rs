@@ -14,7 +14,7 @@
 
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId};
+use mz_repr::CatalogItemId;
 use mz_sql::catalog::{CatalogItem, DefaultPrivilegeObject};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
@@ -450,13 +450,13 @@ impl CatalogState {
                         item_inconsistencies.push(ItemInconsistency::NonExistentItem {
                             db_id: *db_id,
                             schema_id: schema.id,
-                            item_id: item_id.to_global_id(),
+                            item_id: *item_id,
                         });
                         continue;
                     };
                     if item_name != &entry.name().item {
                         item_inconsistencies.push(ItemInconsistency::ItemNameMismatch {
-                            item_id: item_id.to_global_id(),
+                            item_id: *item_id,
                             map_name: item_name.clone(),
                             entry_name: entry.name().clone(),
                         });
@@ -666,11 +666,11 @@ enum ItemInconsistency {
     NonExistentItem {
         db_id: DatabaseId,
         schema_id: SchemaSpecifier,
-        item_id: GlobalId,
+        item_id: CatalogItemId,
     },
     /// An item in the `Schema` `items` collection has a mismatched name.
     ItemNameMismatch {
-        item_id: GlobalId,
+        item_id: CatalogItemId,
         /// Name from the `items` map.
         map_name: String,
         /// Name on the entry itself.
