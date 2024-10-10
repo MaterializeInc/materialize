@@ -24,4 +24,9 @@ try bin/xcompile cargo test --locked --doc
 
 try bin/ci-closed-issues-detect --changed-lines-only
 
+# Smoke out failures in generating the license metadata page, even though we
+# don't care about its output in the test pipeline, so that we don't only
+# discover the failures after a merge to main.
+try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
+
 try_status_report
