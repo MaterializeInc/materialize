@@ -32,7 +32,7 @@ RUN apt-get update \
     && echo "materialize ALL=(postgres) NOPASSWD: ALL" >> /etc/sudoers \
     && sed -i "s/^max_connections = .*/max_connections = 5000/" /etc/postgresql/16/main/postgresql.conf \
     && sed -i "s/^#listen_addresses = .*/listen_addresses = '*'/" /etc/postgresql/16/main/postgresql.conf \
-    && echo "host all root 0.0.0.0/0 trust" | cat - /etc/postgresql/16/main/pg_hba.conf > /etc/postgresql/16/main/pg_hba.conf.tmp && mv /etc/postgresql/16/main/pg_hba.conf.tmp /etc/postgresql/16/main/pg_hba.conf
+    && echo -e "local all root trust\nhost all root 0.0.0.0/0 trust" | cat - /etc/postgresql/16/main/pg_hba.conf > /etc/postgresql/16/main/pg_hba.conf.tmp && mv /etc/postgresql/16/main/pg_hba.conf.tmp /etc/postgresql/16/main/pg_hba.conf
 
 
 ENV POSTGRES_USER=postgres
