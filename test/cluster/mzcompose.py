@@ -4892,6 +4892,13 @@ def workflow_crash_on_replica_expiration_mv(
 def workflow_crash_on_replica_expiration_index(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp)
+
     """
     Tests that clusterd crashes when a replica is set to expire
     """
@@ -4945,3 +4952,20 @@ def workflow_crash_on_replica_expiration_index(
         assert (
             "has exceeded expiration" in c1.stdout
         ), "unexpected success in crash-on-replica-expiration"
+
+        # Wait a bit to let the controller refresh its metrics.
+        time.sleep(2)
+
+        # Check that expected metrics exist and have sensible values.
+        metrics = fetch_metrics()
+
+        # now() + 10s
+        expected_expiration_timestamp_sec = int(time.time()) + 10
+
+        expiration_timestamp_sec = metrics.get_value("mz_dataflow_replica_expiration_timestamp_seconds") / 1000
+        assert \
+            (expected_expiration_timestamp_sec - 10) < expiration_timestamp_sec < (expected_expiration_timestamp_sec + 10),\
+            f"expiration_timestamp: expected={expected_expiration_timestamp_sec}[{datetime.fromtimestamp(expected_expiration_timestamp_sec)}], got={expiration_timestamp_sec}[{[{datetime.fromtimestamp(expiration_timestamp_sec)}]}]"
+
+        expiration_remaining = metrics.get_value("mz_dataflow_replica_expiration_remaining_seconds")
+        assert expiration_remaining < 10.0, f"expiration_remaining: expected < 10s, got={expiration_remaining}"
