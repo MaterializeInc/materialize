@@ -32,11 +32,13 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=120s
 
 > CREATE SOURCE redpanda_privatelink_bytes
   IN CLUSTER canary_sources
-  FROM KAFKA CONNECTION redpanda_privatelink_conn (TOPIC 'testdrive-bytes-privatelink-${testdrive.seed}')
+  FROM KAFKA CONNECTION redpanda_privatelink_conn (TOPIC 'testdrive-bytes-privatelink-${testdrive.seed}');
+
+> CREATE TABLE redpanda_privatelink_bytes_tbl FROM SOURCE redpanda_privatelink_bytes (REFERENCE "testdrive-bytes-privatelink-${testdrive.seed}")
   FORMAT BYTES
   ENVELOPE NONE;
 
-> CREATE MATERIALIZED VIEW redpanda_privatelink_bytes_view AS SELECT COUNT(*) AS cnt FROM redpanda_privatelink_bytes;
+> CREATE MATERIALIZED VIEW redpanda_privatelink_bytes_view AS SELECT COUNT(*) AS cnt FROM redpanda_privatelink_bytes_tbl;
 
 > CREATE DEFAULT INDEX ON redpanda_privatelink_bytes_view;
 

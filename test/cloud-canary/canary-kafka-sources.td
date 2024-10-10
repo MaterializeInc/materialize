@@ -32,11 +32,13 @@ abc:abc
 
 > CREATE SOURCE kafka_bytes
   IN CLUSTER canary_sources
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bytes-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bytes-${testdrive.seed}');
+
+> CREATE TABLE kafka_bytes_tbl FROM SOURCE kafka_bytes (REFERENCE "testdrive-bytes-${testdrive.seed}")
   FORMAT BYTES
   ENVELOPE NONE;
 
-> CREATE MATERIALIZED VIEW kafka_bytes_view AS SELECT COUNT(*) AS cnt FROM kafka_bytes;
+> CREATE MATERIALIZED VIEW kafka_bytes_view AS SELECT COUNT(*) AS cnt FROM kafka_bytes_tbl;
 
 > CREATE DEFAULT INDEX ON kafka_bytes_view;
 

@@ -55,7 +55,9 @@ contains:ssl.ca.pem failed: not in PEM format?
 
 > CREATE SOURCE text_data (a) FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
+
+> CREATE TABLE text_data (a)_tbl FROM SOURCE text_data (a) (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
 
 > SELECT * FROM text_data
 banana
@@ -69,9 +71,11 @@ banana
 
 > CREATE SOURCE text_data_ssh FROM KAFKA CONNECTION kafka_ssh (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
-  ) FORMAT TEXT
+  )
 
-> SELECT * FROM text_data_ssh
+> CREATE TABLE text_data_ssh_tbl FROM SOURCE text_data_ssh (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+
+> SELECT * FROM text_data_ssh_tbl
 banana
 
 # ALTER CONNECTION
