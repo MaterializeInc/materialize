@@ -714,6 +714,10 @@ impl MirScalarExpr {
     /// long as this information continues to hold (nullability may not hold
     /// as expressions migrate around).
     ///
+    /// (If you'd like to not use nullability information here, then you can
+    /// tweak the nullabilities in `column_types` before passing it to this
+    /// function, see e.g. in `EquivalenceClasses::minimize`.)
+    ///
     /// Also performs partial canonicalization on the expression.
     ///
     /// ```rust
@@ -1472,19 +1476,6 @@ impl MirScalarExpr {
         }
 
         /* #endregion */
-    }
-
-    /// Reduces a complex expression where possible.
-    ///
-    /// This function is like `reduce` except that it does not rely on nullability
-    /// information present in `column_types`, and it should only apply reductions
-    /// that are safe in all contexts.
-    pub fn reduce_safely(&mut self, column_types: &[ColumnType]) {
-        let mut column_types = column_types.to_vec();
-        for column in column_types.iter_mut() {
-            column.nullable = true;
-        }
-        self.reduce(&column_types[..])
     }
 
     /// Decompose an IsNull expression into a disjunction of
