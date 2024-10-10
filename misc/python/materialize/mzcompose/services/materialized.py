@@ -171,21 +171,15 @@ class Materialized(Service):
             f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
         ]
 
-        if external_postgres:
-            # assert (
-            #     external_cockroach is False
-            # ), "Can't set both external postgres and cockroach"
-            address = "postgres" if external_postgres == True else external_postgres
-            depends_graph["postgres"] = {"condition": "service_healthy"}
-            command += [
-                f"--persist-consensus-url=postgres://root@{address}:5432",
-            ]
-            environment += [
-                f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:5432",
-                "MZ_NO_BUILTIN_POSTGRES=1",
-            ]
-        elif external_cockroach:
-            address = "cockroach" if external_cockroach == True else external_cockroach
+        if external_cockroach or external_postgres:
+            assert (
+                not external_cockroach and external_postgres
+            ), "Can't set both external_cockroach and external_postgres"
+            address = (
+                "cockroach"
+                if external_cockroach == True or external_postgres == True
+                else external_cockroach or external_postgres
+            )
             depends_graph["cockroach"] = {"condition": "service_healthy"}
             command += [
                 f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
@@ -193,9 +187,7 @@ class Materialized(Service):
             environment += [
                 f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
                 "MZ_NO_BUILTIN_POSTGRES=1",
-                # Set the adapter stash URL for older environments that need it (versions before
-                # v0.92.0).
-                f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
+                f"MZ_PURE_POSTGRES={1 if external_postgres else 0}",
             ]
 
         command += [
@@ -262,7 +254,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_graph,
                 "command": command,
-                "ports": [6875, 6876, 6877, 6878, 6880, 6881, 5432],
+                "ports": [6875, 6876, 6877, 6878, 6880, 6881, 26257],
                 "environment": environment,
                 "volumes": volumes,
                 "tmpfs": ["/tmp"],

@@ -1327,7 +1327,7 @@ class Composition:
             args += [
                 f"--materialize-url=postgres://materialize@{mz_service}:6875",
                 f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
-                f"--persist-consensus-url=postgres://root@{mz_service}:5432?options=--search_path=consensus",
+                f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus",
             ]
 
         if persistent:
@@ -1410,7 +1410,7 @@ class Composition:
             "--commit",
             "restore-blob",
             f"--blob-uri={minio_blob_uri()}",
-            "--consensus-uri=postgres://root@postgres:5432?options=--search_path=consensus",
+            "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
         )
         self.up(mz_service)
 

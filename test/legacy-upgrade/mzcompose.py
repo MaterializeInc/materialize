@@ -18,11 +18,10 @@ from materialize import buildkite
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -42,7 +41,7 @@ SERVICES = [
     SchemaRegistry(),
     Postgres(),
     MySql(),
-    Cockroach(setup_materialize=True),
+    PostgresAsCockroach(),
     # Overridden below
     Materialized(),
     Materialized(name="materialized2"),

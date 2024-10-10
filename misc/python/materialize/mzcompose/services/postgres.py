@@ -30,7 +30,7 @@ class Postgres(Service):
         volumes: list[str] = [],
         max_wal_senders: int = 100,
         max_replication_slots: int = 100,
-        setup_materialize: bool = True,
+        setup_materialize: bool = False,
     ) -> None:
         command: list[str] = [
             "postgres",
@@ -68,3 +68,10 @@ class Postgres(Service):
             }
         )
         super().__init__(name=name, config=config)
+
+
+class PostgresAsCockroach(Postgres):
+    def __init__(
+        self,
+    ) -> None:
+        super().__init__(name="cockroach", setup_materialize=True, ports=["26257:5432"])
