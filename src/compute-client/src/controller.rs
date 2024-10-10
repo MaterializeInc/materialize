@@ -57,7 +57,6 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{self, MissedTickBehavior};
 use tracing::debug_span;
 use uuid::Uuid;
 
@@ -196,8 +195,6 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     config: ComputeParameters,
     /// `arrangement_exert_proportionality` value passed to new replicas.
     arrangement_exert_proportionality: u32,
-    /// A controller response to be returned on the next call to [`ComputeController::process`].
-    stashed_response: Option<ComputeControllerResponse<T>>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
     /// The compute controller metrics.
@@ -212,19 +209,12 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     /// subcomponents of the compute controller.
     dyncfg: Arc<ConfigSet>,
 
-    /// Receiver for responses produced by `Instance`s.
-    response_rx: mpsc::UnboundedReceiver<ComputeControllerResponse<T>>,
     /// Response sender that's passed to new `Instance`s.
     response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
     /// Receiver for introspection updates produced by `Instance`s.
     introspection_rx: crossbeam_channel::Receiver<IntrospectionUpdates>,
     /// Introspection updates sender that's passed to new `Instance`s.
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-
-    /// Ticker for scheduling periodic maintenance work.
-    maintenance_ticker: tokio::time::Interval,
-    /// Whether maintenance work was scheduled.
-    maintenance_scheduled: bool,
 }
 
 impl<T: ComputeControllerTimestamp> ComputeController<T> {
@@ -237,12 +227,9 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         metrics_registry: MetricsRegistry,
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
+        response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
     ) -> Self {
-        let (response_tx, response_rx) = mpsc::unbounded_channel();
         let (introspection_tx, introspection_rx) = crossbeam_channel::unbounded();
-
-        let mut maintenance_ticker = time::interval(Duration::from_secs(1));
-        maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         let instance_workload_classes = Arc::new(Mutex::new(BTreeMap::<
             ComputeInstanceId,
@@ -295,18 +282,14 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             read_only,
             config: Default::default(),
             arrangement_exert_proportionality: 16,
-            stashed_response: None,
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
             now,
             wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
-            response_rx,
             response_tx,
             introspection_rx,
             introspection_tx,
-            maintenance_ticker,
-            maintenance_scheduled: false,
         }
     }
 
@@ -458,18 +441,14 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             read_only,
             config: _,
             arrangement_exert_proportionality,
-            stashed_response,
             envd_epoch,
             metrics: _,
             now: _,
             wallclock_lag: _,
             dyncfg: _,
-            response_rx: _,
             response_tx: _,
             introspection_rx: _,
             introspection_tx: _,
-            maintenance_ticker: _,
-            maintenance_scheduled,
         } = self;
 
         let mut instances_dump = BTreeMap::new();
@@ -502,9 +481,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
                 "arrangement_exert_proportionality",
                 arrangement_exert_proportionality,
             )?,
-            field("stashed_response", format!("{stashed_response:?}"))?,
             field("envd_epoch", envd_epoch)?,
-            field("maintenance_scheduled", maintenance_scheduled)?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
@@ -649,34 +626,6 @@ where
         self.initialized = true;
         for instance in self.instances.values_mut() {
             instance.call(Instance::initialization_complete);
-        }
-    }
-
-    /// Wait until the controller is ready to do some processing.
-    ///
-    /// This method may block for an arbitrarily long time.
-    ///
-    /// When the method returns, the caller should call [`ComputeController::process`].
-    ///
-    /// This method is cancellation safe.
-    pub async fn ready(&mut self) {
-        if self.stashed_response.is_some() {
-            // We still have a response stashed, which we are immediately ready to process.
-            return;
-        }
-        if self.maintenance_scheduled {
-            // Maintenance work has been scheduled.
-            return;
-        }
-
-        tokio::select! {
-            resp = self.response_rx.recv() => {
-                let resp = resp.expect("`self.response_tx` not dropped");
-                self.stashed_response = Some(resp);
-            }
-            _ = self.maintenance_ticker.tick() => {
-                self.maintenance_scheduled = true;
-            },
         }
     }
 
@@ -1012,26 +961,9 @@ where
         }
     }
 
-    /// Processes the work queued by [`ComputeController::ready`].
+    /// Perform maintenance work.
     #[mz_ore::instrument(level = "debug")]
-    pub fn process(
-        &mut self,
-        storage: &mut dyn StorageController<Timestamp = T>,
-    ) -> Option<ComputeControllerResponse<T>> {
-        // Perform periodic maintenance work.
-        if self.maintenance_scheduled {
-            self.maintain(storage);
-            self.maintenance_ticker.reset();
-            self.maintenance_scheduled = false;
-        }
-
-        // Return a ready response, if any.
-        self.stashed_response.take()
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    fn maintain(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
-        // Perform instance maintenance work.
+    pub fn maintain(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
         for instance in self.instances.values_mut() {
             instance.call(Instance::maintain);
         }
