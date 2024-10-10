@@ -277,8 +277,13 @@ pub fn plan_insert_query(
     }
     let desc = table.desc(&scx.catalog.resolve_full_name(table.name()))?;
     let mut defaults = table
-        .table_details()
-        .expect("attempted to insert into non-table")
+        .writable_table_details()
+        .ok_or_else(|| {
+            sql_err!(
+                "cannot insert into non-writeable table '{}'",
+                table_name.full_name_str()
+            )
+        })?
         .to_vec();
 
     for default in &mut defaults {
@@ -532,9 +537,12 @@ pub fn plan_copy_from(
         );
     }
 
-    let _ = table
-        .table_details()
-        .expect("attempted to insert into non-table");
+    let _ = table.writable_table_details().ok_or_else(|| {
+        sql_err!(
+            "cannot insert into non-writeable table '{}'",
+            table_name.full_name_str()
+        )
+    })?;
 
     if table.id().is_system() {
         sql_bail!(
@@ -562,8 +570,8 @@ pub fn plan_copy_from_rows(
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
     let mut defaults = table
-        .table_details()
-        .expect("attempted to insert into non-table")
+        .writable_table_details()
+        .ok_or_else(|| sql_err!("cannot copy into non-writeable table"))?
         .to_vec();
 
     for default in &mut defaults {
@@ -688,6 +696,12 @@ pub fn plan_mutation_query_inner(
             table_name.full_name_str()
         );
     }
+    let _ = item.writable_table_details().ok_or_else(|| {
+        sql_err!(
+            "cannot mutate non-writeable table '{}'",
+            table_name.full_name_str()
+        )
+    })?;
     if id.is_system() {
         sql_bail!(
             "cannot mutate system table '{}'",
