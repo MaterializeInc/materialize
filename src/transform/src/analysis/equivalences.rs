@@ -346,16 +346,30 @@ impl EquivalenceClasses {
         // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
         self.tidy();
 
+        // We should not rely on nullability information present in `column_types`. (Doing this
+        // every time just before calling `reduce` was found to be a bottleneck during incident-217,
+        // so now we do this nullability tweaking only once here.)
+        let columns = columns.as_ref().map(|columns| {
+            columns
+                .iter()
+                .map(|col| {
+                    let mut col = col.clone();
+                    col.nullable = true;
+                    col
+                })
+                .collect()
+        });
+
         // We continue as long as any simplification has occurred.
         // An expression can be simplified, a duplication found, or two classes unified.
         let mut stable = false;
         while !stable {
-            stable = self.minimize_once(columns);
+            stable = self.minimize_once(&columns);
         }
 
         // TODO: remove these measures once we are more confident about idempotence.
         let prev = self.clone();
-        self.minimize_once(columns);
+        self.minimize_once(&columns);
         mz_ore::soft_assert_eq_or_log!(self, &prev, "Equivalences::minimize() not idempotent");
     }
 
@@ -371,7 +385,7 @@ impl EquivalenceClasses {
             for class in self.classes.iter_mut() {
                 for expr in class.iter_mut() {
                     let prev_expr = expr.clone();
-                    expr.reduce_safely(columns);
+                    expr.reduce(columns);
                     if &prev_expr != expr {
                         stable = false;
                     }
