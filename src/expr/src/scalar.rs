@@ -1479,6 +1479,9 @@ impl MirScalarExpr {
     /// This function is like `reduce` except that it does not rely on nullability
     /// information present in `column_types`, and it should only apply reductions
     /// that are safe in all contexts.
+    ///
+    /// We found this to be a bottleneck during incident-217 when called from `minimize_once`,
+    /// so then we pulled up the tweaking of nullabilities into `minimize`.
     pub fn reduce_safely(&mut self, column_types: &[ColumnType]) {
         let mut column_types = column_types.to_vec();
         for column in column_types.iter_mut() {
