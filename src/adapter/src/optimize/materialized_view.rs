@@ -76,6 +76,10 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
+    /// Whether the timeline is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
+    ///
+    /// Used to determine if it is safe to enable dataflow expiration.
+    is_timeline_epoch_ms: bool,
 }
 
 impl Optimizer {
@@ -90,6 +94,7 @@ impl Optimizer {
         debug_name: String,
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
+        is_timeline_epoch_ms: bool,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -104,6 +109,7 @@ impl Optimizer {
             config,
             metrics,
             duration: Default::default(),
+            is_timeline_epoch_ms,
         }
     }
 }
@@ -220,6 +226,8 @@ impl Optimize<LocalMirPlan> for Optimizer {
             DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
+
+        df_desc.dataflow_expiration_desc.is_timeline_epoch_ms = self.is_timeline_epoch_ms;
 
         df_desc.refresh_schedule.clone_from(&self.refresh_schedule);
 

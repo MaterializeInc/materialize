@@ -4830,3 +4830,219 @@ def workflow_test_graceful_reconfigure(
             port=6877,
             user="mz_system",
         )
+
+
+def workflow_crash_on_replica_expiration_mv(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests that clusterd crashes when a replica is set to expire
+    """
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(name="clusterd1", restart="on-failure"),
+    ):
+        offset = 20
+
+        c.up("materialized")
+        c.up("clusterd1")
+        c.sql(
+            f"""
+            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
+            ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
+
+            DROP CLUSTER IF EXISTS test CASCADE;
+            DROP TABLE IF EXISTS t CASCADE;
+
+            CREATE CLUSTER test REPLICAS (
+                test (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            );
+            SET CLUSTER TO test;
+
+            CREATE TABLE t (x int);
+            INSERT INTO t VALUES (42);
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t WHERE x < 84;
+            SELECT mz_unsafe.mz_sleep({offset + 10});
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        results = c.sql_query(
+            """
+            SELECT * from mv;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        assert results == [(42,)], f"Results mismatch: expected [42], found {results}"
+
+        c1 = c.invoke("logs", "clusterd1", capture=True)
+        assert (
+            "has exceeded expiration" in c1.stdout
+        ), "unexpected success in crash-on-replica-expiration"
+
+
+def workflow_crash_on_replica_expiration_index(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp)
+
+    """
+    Tests that clusterd crashes when a replica is set to expire
+    """
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(name="clusterd1", restart="on-failure"),
+    ):
+        offset = 20
+
+        c.up("materialized")
+        c.up("clusterd1")
+        c.sql(
+            f"""
+            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
+            ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
+
+            DROP CLUSTER IF EXISTS test CASCADE;
+            DROP TABLE IF EXISTS t CASCADE;
+
+            CREATE CLUSTER test REPLICAS (
+                test (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            );
+            SET CLUSTER TO test;
+
+            CREATE TABLE t (x int);
+            INSERT INTO t VALUES (42);
+            CREATE VIEW mv AS SELECT * FROM t WHERE x < 84;
+            CREATE DEFAULT INDEX ON mv;
+            SELECT mz_unsafe.mz_sleep({offset + 10});
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        results = c.sql_query(
+            """
+            SELECT * from mv;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        assert results == [(42,)], f"Results mismatch: expected [42], found {results}"
+
+        c1 = c.invoke("logs", "clusterd1", capture=True)
+        assert (
+            "has exceeded expiration" in c1.stdout
+        ), "unexpected success in crash-on-replica-expiration"
+
+        # Wait a bit to let the controller refresh its metrics.
+        time.sleep(2)
+
+        # Check that expected metrics exist and have sensible values.
+        metrics = fetch_metrics()
+
+        expected_expiration_timestamp_sec = int(time.time())
+
+        expiration_timestamp_sec = (
+            metrics.get_value("mz_dataflow_replica_expiration_timestamp_seconds") / 1000
+        )
+        # Just ensure the expiration_timestamp is within a reasonable range of now().
+        assert (
+            (expected_expiration_timestamp_sec - offset)
+            < expiration_timestamp_sec
+            < (expected_expiration_timestamp_sec + offset)
+        ), f"expiration_timestamp: expected={expected_expiration_timestamp_sec}[{datetime.fromtimestamp(expected_expiration_timestamp_sec)}], got={expiration_timestamp_sec}[{[{datetime.fromtimestamp(expiration_timestamp_sec)}]}]"
+
+        expiration_remaining = metrics.get_value(
+            "mz_dataflow_replica_expiration_remaining_seconds"
+        )
+        # Ensure the expiration_remaining is within the configured offset.
+        assert (
+            1.0 < expiration_remaining < float(offset)
+        ), f"expiration_remaining: expected < 10s, got={expiration_remaining}"
+
+
+def workflow_replica_expiration_creates_retraction_diffs_after_panic(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Test that retraction diffs within the expiration time are generated after the replica expires and panics
+    """
+    c.down(destroy_volumes=True)
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(name="clusterd1", restart="on-failure"),
+    ):
+
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd1")
+        c.testdrive(
+            dedent(
+                """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
+            ALTER SYSTEM SET compute_replica_expiration_offset = '50s';
+
+            > DROP CLUSTER IF EXISTS test CASCADE;
+            > DROP TABLE IF EXISTS events CASCADE;
+
+            > CREATE CLUSTER test REPLICAS (
+                test (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+              );
+            > SET CLUSTER TO test;
+
+            > CREATE TABLE events (
+              content TEXT,
+              event_ts TIMESTAMP
+              );
+
+            > CREATE VIEW events_view AS
+              SELECT event_ts, content
+              FROM events
+              WHERE mz_now() <= event_ts + INTERVAL '80s';
+
+            > CREATE DEFAULT INDEX ON events_view;
+
+            > INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
+
+            # Retraction diffs are not generated
+            > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
+              WHERE name LIKE '%events_view_primary_idx';
+            1000
+            # Sleep until the replica expires
+            > SELECT mz_unsafe.mz_sleep(60);
+            <null>
+            # Retraction diffs are now within the expiration time and should be generated
+            > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
+              WHERE name LIKE '%events_view_primary_idx';
+            2000
+            > DROP TABLE events CASCADE;
+            > DROP CLUSTER test CASCADE;
+            """
+            )
+        )

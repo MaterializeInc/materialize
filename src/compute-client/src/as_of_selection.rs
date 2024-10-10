@@ -743,8 +743,8 @@ mod tests {
 
     use async_trait::async_trait;
     use futures::future::BoxFuture;
-    use mz_compute_types::dataflows::IndexDesc;
     use mz_compute_types::dataflows::IndexImport;
+    use mz_compute_types::dataflows::{DataflowExpirationDesc, IndexDesc};
     use mz_compute_types::sinks::ComputeSinkConnection;
     use mz_compute_types::sinks::ComputeSinkDesc;
     use mz_compute_types::sinks::PersistSinkConnection;
@@ -1005,6 +1005,7 @@ mod tests {
             initial_storage_as_of: Default::default(),
             refresh_schedule: Default::default(),
             debug_name: Default::default(),
+            dataflow_expiration_desc: DataflowExpirationDesc::default(),
         }
     }
 

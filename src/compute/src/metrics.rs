@@ -63,12 +63,22 @@ pub struct ComputeMetrics {
 
     /// Histogram of command handling durations.
     pub(crate) handle_command_duration_seconds: HistogramVec,
+
+    /// The timestamp of replica expiration.
+    pub(crate) replica_expiration_timestamp_seconds: raw::UIntGaugeVec,
+
+    /// Remaining seconds until replica expiration.
+    pub(crate) replica_expiration_remaining_seconds: raw::GaugeVec,
 }
 
 /// Per-worker metrics.
 pub struct WorkerMetrics {
     /// Histogram of command handling durations.
     pub(crate) handle_command_duration_seconds: CommandMetrics<Histogram>,
+    /// The timestamp of replica expiration.
+    pub(crate) replica_expiration_timestamp_seconds: UIntGauge,
+    /// Remaining seconds until replica expiration.
+    pub(crate) replica_expiration_remaining_seconds: raw::Gauge,
 }
 
 impl WorkerMetrics {
@@ -81,8 +91,18 @@ impl WorkerMetrics {
                 .with_label_values(&[&worker, typ])
         });
 
+        let replica_expiration_timestamp_seconds = metrics
+            .replica_expiration_timestamp_seconds
+            .with_label_values(&[&worker]);
+
+        let replica_expiration_remaining_seconds = metrics
+            .replica_expiration_remaining_seconds
+            .with_label_values(&[&worker]);
+
         Self {
             handle_command_duration_seconds,
+            replica_expiration_timestamp_seconds,
+            replica_expiration_remaining_seconds,
         }
     }
 }
@@ -169,6 +189,16 @@ impl ComputeMetrics {
                 const_labels: {"cluster" => "compute"},
                 var_labels: ["worker_id", "command_type"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
+            replica_expiration_timestamp_seconds: registry.register(metric!(
+                name: "mz_dataflow_replica_expiration_timestamp_seconds",
+                help: "The replica expiration timestamp in seconds since epoch.",
+                var_labels: ["worker_id"],
+            )),
+            replica_expiration_remaining_seconds: registry.register(metric!(
+                name: "mz_dataflow_replica_expiration_remaining_seconds",
+                help: "The remaining seconds until replica expiration. Can go negative, can lag behind.",
+                var_labels: ["worker_id"],
             )),
         }
     }

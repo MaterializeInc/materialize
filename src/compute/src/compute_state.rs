@@ -15,6 +15,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Hashable;
@@ -34,6 +35,7 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
+use mz_ore::now::EpochMillis;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
@@ -162,6 +164,16 @@ pub struct ComputeState {
     /// Interval at which to perform server maintenance tasks. Set to a zero interval to
     /// perform maintenance with every `step_or_park` invocation.
     pub server_maintenance_interval: Duration,
+
+    /// The [`mz_ore::now::SYSTEM_TIME`] at which the replica was started.
+    ///
+    /// Used to compute `replica_expiration`.
+    pub init_system_time: EpochMillis,
+
+    /// The maximum time for which the replica is expected to live. If not empty, dataflows in the
+    /// replica can drop diffs associated with timestamps beyond the replica expiration.
+    /// The replica will panic if such dataflows are not dropped before the replica has expired.
+    pub replica_expiration: Antichain<Timestamp>,
 }
 
 impl ComputeState {
@@ -208,6 +220,8 @@ impl ComputeState {
             read_only_tx,
             read_only_rx,
             server_maintenance_interval: Duration::ZERO,
+            init_system_time: mz_ore::now::SYSTEM_TIME(),
+            replica_expiration: Antichain::default(),
         }
     }
 
@@ -294,6 +308,53 @@ impl ComputeState {
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
+
+        // Set replica expiration.
+        {
+            let offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.worker_config);
+            if offset.is_zero() {
+                if !self.replica_expiration.is_empty() {
+                    warn!(
+                        current_replica_expiration = ?self.replica_expiration,
+                        "replica_expiration: cannot disable once expiration is enabled",
+                    );
+                }
+            } else {
+                let offset: EpochMillis = offset
+                    .as_millis()
+                    .try_into()
+                    .expect("duration must fit within u64");
+                let replica_expiration_millis = self.init_system_time + offset;
+                let replica_expiration = Timestamp::from(replica_expiration_millis);
+
+                // We only allow updating `replica_expiration` to an earlier time. Allowing it to be
+                // updated to a later time could be surprising since existing dataflows would still
+                // panic at their original expiration.
+                if !self.replica_expiration.less_equal(&replica_expiration) {
+                    info!(
+                        offset = %offset,
+                        replica_expiration_millis = %replica_expiration_millis,
+                        replica_expiration_utc = %mz_ore::now::to_datetime(replica_expiration_millis),
+                        "updating replica_expiration",
+                    );
+                    self.replica_expiration = Antichain::from_elem(replica_expiration);
+                } else {
+                    warn!(
+                        new_offset = %offset,
+                        current_replica_expiration_millis = %replica_expiration_millis,
+                        current_replica_expiration_utc = %mz_ore::now::to_datetime(replica_expiration_millis),
+                        "replica_expiration: ignoring new offset as it is greater than current value",
+                    );
+                }
+            }
+
+            // Record the replica expiration in the metrics.
+            if let Some(expiration) = self.replica_expiration.as_option() {
+                self.worker_metrics
+                    .replica_expiration_timestamp_seconds
+                    .set(expiration.into());
+            }
+        }
     }
 
     /// Returns the cc or non-cc version of "dataflow_max_inflight_bytes", as
@@ -416,22 +477,31 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let dataflow_index = self.timely_worker.next_dataflow_index();
         let as_of = dataflow.as_of.clone().unwrap();
 
+        // Determine the dataflow expiration, if any.
+        let dataflow_expiration =
+            dataflow.expire_dataflow_at(&self.compute_state.replica_expiration);
+
+        // Add the dataflow expiration to `until`.
+        let until = dataflow.until.meet(&dataflow_expiration);
+
         if dataflow.is_transient() {
-            tracing::debug!(
+            debug!(
                 name = %dataflow.debug_name,
                 import_ids = %dataflow.display_import_ids(),
                 export_ids = %dataflow.display_export_ids(),
                 as_of = ?as_of.elements(),
-                until = ?dataflow.until.elements(),
+                dataflow_expiration = ?dataflow_expiration.elements(),
+                until = ?until.elements(),
                 "creating dataflow",
             );
         } else {
-            tracing::info!(
+            info!(
                 name = %dataflow.debug_name,
                 import_ids = %dataflow.display_import_ids(),
                 export_ids = %dataflow.display_export_ids(),
                 as_of = ?as_of.elements(),
-                until = ?dataflow.until.elements(),
+                dataflow_expiration = ?dataflow_expiration.elements(),
+                until = ?until.elements(),
                 "creating dataflow",
             );
         };
@@ -481,6 +551,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             self.compute_state,
             dataflow,
             start_signal,
+            until,
+            dataflow_expiration,
         );
     }
 
@@ -756,6 +828,19 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             };
             let response = ComputeResponse::Status(StatusResponse::OperatorHydration(status));
             self.send_compute_response(response);
+        }
+    }
+
+    /// Report per-worker metrics.
+    pub(crate) fn report_metrics(&self) {
+        if let Some(expiration) = self.compute_state.replica_expiration.as_option() {
+            let now = Duration::from_millis(mz_ore::now::SYSTEM_TIME()).as_secs_f64();
+            let expiration = Duration::from_millis(<u64>::from(expiration)).as_secs_f64();
+            let remaining = expiration - now;
+            self.compute_state
+                .worker_metrics
+                .replica_expiration_remaining_seconds
+                .set(remaining)
         }
     }
 

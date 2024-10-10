@@ -190,11 +190,11 @@ use crate::assert_none;
 pub mod raw {
     use prometheus::core::{AtomicU64, GenericGaugeVec};
 
-    /// The unsigned integer version of [`GaugeVec`](prometheus::GaugeVec).
+    /// The unsigned integer version of [`GaugeVec`].
     /// Provides better performance if metric values are all unsigned integers.
     pub type UIntGaugeVec = GenericGaugeVec<AtomicU64>;
 
-    pub use prometheus::{CounterVec, HistogramVec, IntCounterVec, IntGaugeVec};
+    pub use prometheus::{CounterVec, Gauge, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
 }
 
 impl MetricsRegistry {

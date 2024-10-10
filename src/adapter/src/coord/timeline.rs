@@ -70,6 +70,11 @@ impl TimelineContext {
             Self::TimestampIndependent | Self::TimestampDependent => None,
         }
     }
+
+    /// Whether the context contains a timeline of type [`Timeline::EpochMilliseconds`].
+    pub fn is_timeline_epoch_ms(&self) -> bool {
+        matches!(self, &Self::TimelineDependent(Timeline::EpochMilliseconds))
+    }
 }
 
 /// Global state for a single timeline.

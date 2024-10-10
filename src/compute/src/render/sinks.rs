@@ -92,6 +92,13 @@ where
         let mut ok_collection = ok_collection.leave();
         let mut err_collection = err_collection.leave();
 
+        // Ensure that the frontier does not advance past the expiration time, if set. Otherwise,
+        // we might write down incorrect data.
+        if let Some(&expiration) = self.dataflow_expiration.as_option() {
+            ok_collection = ok_collection.expire_collection_at(expiration);
+            err_collection = err_collection.expire_collection_at(expiration);
+        }
+
         let non_null_assertions = sink.non_null_assertions.clone();
         let from_desc = sink.from_desc.clone();
         if !non_null_assertions.is_empty() {
