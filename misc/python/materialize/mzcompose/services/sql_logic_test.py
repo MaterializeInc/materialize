@@ -25,7 +25,7 @@ class SqlLogicTest(Service):
             "MZ_SOFT_ASSERTIONS=1",
         ],
         volumes: list[str] = ["../..:/workdir"],
-        depends_on: list[str] = ["cockroach"],
+        depends_on: list[str] = ["postgres"],
     ) -> None:
         environment += [
             "MZ_SYSTEM_PARAMETER_DEFAULT="

@@ -44,6 +44,7 @@ class Materialized(Service):
         environment_id: str | None = None,
         propagate_crashes: bool = True,
         external_cockroach: str | bool = False,
+        external_postgres: str | bool = False,
         external_minio: str | bool = False,
         unsafe_mode: bool = True,
         restart: str | None = None,
@@ -170,18 +171,23 @@ class Materialized(Service):
             f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
         ]
 
-        if external_cockroach:
-            address = "cockroach" if external_cockroach == True else external_cockroach
+        if external_cockroach or external_postgres:
+            assert (
+                not external_cockroach and external_postgres
+            ), "Can't set both external_cockroach and external_postgres"
+            address = (
+                "cockroach"
+                if external_cockroach == True or external_postgres == True
+                else external_cockroach or external_postgres
+            )
             depends_graph["cockroach"] = {"condition": "service_healthy"}
             command += [
                 f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
             ]
             environment += [
                 f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
-                "MZ_NO_BUILTIN_COCKROACH=1",
-                # Set the adapter stash URL for older environments that need it (versions before
-                # v0.92.0).
-                f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
+                "MZ_NO_BUILTIN_POSTGRES=1",
+                f"MZ_PURE_POSTGRES={1 if external_postgres else 0}",
             ]
 
         command += [

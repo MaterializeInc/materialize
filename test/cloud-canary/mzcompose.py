@@ -33,9 +33,9 @@ from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.postgres import PostgresAsCockroach
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.redpanda_cloud import RedpandaCloud
 from materialize.ui import UIError
@@ -193,13 +193,13 @@ class Redpanda:
 
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    PostgresAsCockroach(),
     Materialized(
         # We use materialize/environmentd and not materialize/materialized here
         # in order to ensure a perfect match to the container that should be
         # deployed to the cloud
         image=f"materialize/environmentd:{VERSION}",
-        external_cockroach=True,
+        external_postgres=True,
         persist_blob_url="file:///mzdata/persist/blob",
         options=[
             "--orchestrator=process",

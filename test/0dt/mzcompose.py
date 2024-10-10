@@ -20,7 +20,6 @@ from psycopg.errors import OperationalError
 from materialize import buildkite
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -28,7 +27,7 @@ from materialize.mzcompose.services.materialized import (
     Materialized,
 )
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -44,13 +43,13 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Cockroach(),
+    PostgresAsCockroach(),
     Materialized(
         name="mz_old",
         sanity_restart=False,
         deploy_generation=0,
         system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-        external_cockroach=True,
+        external_postgres=True,
     ),
     Materialized(
         name="mz_new",
@@ -58,7 +57,7 @@ SERVICES = [
         deploy_generation=1,
         system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
         restart="on-failure",
-        external_cockroach=True,
+        external_postgres=True,
     ),
     Testdrive(
         materialize_url="postgres://materialize@mz_old:6875",
@@ -214,7 +213,7 @@ def workflow_read_only(c: Composition) -> None:
         Materialized(
             name="mz_old",
             deploy_generation=1,
-            external_cockroach=True,
+            external_postgres=True,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
         )
     ):
@@ -294,7 +293,7 @@ def workflow_read_only(c: Composition) -> None:
             ],
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-            external_cockroach=True,
+            external_postgres=True,
         )
     ):
         c.up("mz_old")
@@ -920,7 +919,7 @@ def workflow_builtin_item_migrations(c: Composition) -> None:
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
-            external_cockroach=True,
+            external_postgres=True,
             force_migrations="all",
             healthcheck=LEADER_STATUS_HEALTHCHECK,
         ),

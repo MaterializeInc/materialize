@@ -36,12 +36,11 @@ from psycopg.errors import (
 from materialize import buildkite, ui
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -54,7 +53,6 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Localstack(),
-    Cockroach(setup_materialize=True),
     Clusterd(name="clusterd1"),
     Clusterd(name="clusterd2"),
     Clusterd(name="clusterd3"),
@@ -62,8 +60,9 @@ SERVICES = [
     Materialized(
         # We use mz_panic() in some test scenarios, so environmentd must stay up.
         propagate_crashes=False,
-        external_cockroach=True,
+        external_postgres=True,
     ),
+    PostgresAsCockroach(),
     Postgres(),
     Redpanda(),
     Toxiproxy(),
@@ -3213,7 +3212,7 @@ def workflow_test_incident_70(c: Composition) -> None:
 
     with c.override(
         Materialized(
-            external_cockroach=True,
+            external_postgres=True,
             external_minio=True,
             sanity_restart=False,
         ),

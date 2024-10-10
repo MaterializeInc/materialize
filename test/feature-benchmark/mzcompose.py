@@ -89,13 +89,12 @@ from materialize.feature_benchmark.termination import (
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -134,7 +133,7 @@ SERVICES = [
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
-    Cockroach(setup_materialize=True),
+    PostgresAsCockroach(),
     Minio(setup_materialize=True),
     KgenService(),
     Postgres(),
@@ -308,7 +307,7 @@ def create_mz_service(
         environment_id=f"local-az1-{uuid.uuid4()}-0",
         soft_assertions=False,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
     )

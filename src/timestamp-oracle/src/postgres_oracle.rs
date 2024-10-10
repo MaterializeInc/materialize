@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS timestamp_oracle (
     read_ts DECIMAL(20,0) NOT NULL,
     write_ts DECIMAL(20,0) NOT NULL,
     PRIMARY KEY(timeline)
-) WITH (sql_stats_automatic_collection_enabled = false);
+);
 ";
 
 /// A [`TimestampOracle`] backed by "Postgres".
@@ -439,13 +439,7 @@ where
             //
             // See: https://github.com/MaterializeInc/database-issues/issues/4001
             // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-            client
-                .batch_execute(&format!(
-                    "{} {}",
-                    SCHEMA,
-                    "ALTER TABLE timestamp_oracle CONFIGURE ZONE USING gc.ttlseconds = 600;",
-                ))
-                .await?;
+            client.batch_execute(&format!("{}", SCHEMA,)).await?;
 
             let oracle = PostgresTimestampOracle {
                 timeline: timeline.clone(),

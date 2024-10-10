@@ -21,14 +21,13 @@ from enum import Enum
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.grafana import Grafana
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
 from materialize.mzcompose.services.prometheus import Prometheus
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.ssh_bastion_host import (
@@ -46,15 +45,15 @@ SERVICES = [
     Redpanda(auto_create_topics=True),
     Debezium(redpanda=True),
     Postgres(),
-    Cockroach(),
+    PostgresAsCockroach(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     Balancerd(),
-    Materialized(external_minio=True, external_cockroach=True, sanity_restart=False),
+    Materialized(external_minio=True, external_postgres=True, sanity_restart=False),
     Materialized(
         name="materialized2",
         external_minio=True,
-        external_cockroach=True,
+        external_postgres=True,
         sanity_restart=False,
     ),
     Clusterd(name="storaged"),
@@ -126,13 +125,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--cockroach-tag",
-        type=str,
-        default=Cockroach.DEFAULT_COCKROACH_TAG,
-        help="Cockroach DockerHub tag to use.",
-    )
-
-    parser.add_argument(
         "--observability",
         action="store_true",
         help="Start Prometheus and Grafana",
@@ -150,12 +142,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     random.seed(args.seed)
 
     with c.override(
-        Cockroach(
-            image=f"cockroachdb/cockroach:{args.cockroach_tag}",
-            # Workaround for database-issues#5719
-            restart="on-failure:5",
-            setup_materialize=True,
-        ),
         Testdrive(
             materialize_url="postgres://materialize@balancerd:6875",
             no_reset=True,

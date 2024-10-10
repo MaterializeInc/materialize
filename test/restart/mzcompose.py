@@ -21,9 +21,9 @@ import requests
 from psycopg.errors import OperationalError
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import PostgresAsCockroach
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -42,7 +42,7 @@ SERVICES = [
         ],
     ),
     testdrive_no_reset,
-    Cockroach(setup_materialize=True),
+    PostgresAsCockroach(),
 ]
 
 
@@ -236,7 +236,7 @@ def workflow_stash(c: Composition) -> None:
     )
     c.rm_volumes("mzdata", force=True)
 
-    with c.override(Materialized(external_cockroach=True)):
+    with c.override(Materialized(external_postgres=True)):
         c.up("cockroach")
 
         c.up("materialized")

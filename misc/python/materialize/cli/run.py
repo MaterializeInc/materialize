@@ -39,7 +39,7 @@ SANITIZER_TARGET = (
     if sys.platform.startswith("linux")
     else f"{Arch.host()}-apple-darwin"
 )
-DEFAULT_POSTGRES = "postgres://root@localhost:26257/materialize"
+DEFAULT_POSTGRES = "postgres://root@cockroach:26257"
 
 # sets entitlements on the built binary, e.g. environmentd, so you can inspect it with Instruments
 MACOS_ENTITLEMENTS_DATA = """

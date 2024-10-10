@@ -27,14 +27,13 @@ from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.checks.scenarios_zero_downtime import *  # noqa: F401 F403
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
@@ -46,11 +45,7 @@ TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
 
 SERVICES = [
     TestCerts(),
-    Cockroach(
-        setup_materialize=True,
-        # Workaround for database-issues#5899
-        restart="on-failure:5",
-    ),
+    PostgresAsCockroach(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     Postgres(),
@@ -97,14 +92,14 @@ SERVICES = [
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
     Materialized(
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
         volumes_extra=["secrets:/share/secrets"],
     ),
     Materialized(
         name="mz_1",
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
@@ -112,7 +107,7 @@ SERVICES = [
     ),
     Materialized(
         name="mz_2",
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
@@ -120,7 +115,7 @@ SERVICES = [
     ),
     Materialized(
         name="mz_3",
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
@@ -128,7 +123,7 @@ SERVICES = [
     ),
     Materialized(
         name="mz_4",
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
@@ -136,7 +131,7 @@ SERVICES = [
     ),
     Materialized(
         name="mz_5",
-        external_cockroach=True,
+        external_postgres=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
