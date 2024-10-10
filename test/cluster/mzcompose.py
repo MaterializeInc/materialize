@@ -4890,15 +4890,15 @@ def workflow_crash_on_replica_expiration_mv(
 
 
 def workflow_crash_on_replica_expiration_index(
-        c: Composition, parser: WorkflowArgumentParser
+    c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
     Tests that clusterd crashes when a replica is set to expire
     """
     c.down(destroy_volumes=True)
     with c.override(
-            Testdrive(no_reset=True),
-            Clusterd(name="clusterd1", restart="on-failure"),
+        Testdrive(no_reset=True),
+        Clusterd(name="clusterd1", restart="on-failure"),
     ):
         c.up("testdrive", persistent=True)
         c.up("materialized")
@@ -4943,5 +4943,5 @@ def workflow_crash_on_replica_expiration_index(
 
         c1 = c.invoke("logs", "clusterd1", capture=True)
         assert (
-                "has exceeded expiration" in c1.stdout
+            "has exceeded expiration" in c1.stdout
         ), "unexpected success in crash-on-replica-expiration"

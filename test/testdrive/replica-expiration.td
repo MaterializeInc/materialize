@@ -132,6 +132,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
 
 
 # Ensure disabling expiration results in retractions
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = 0;
 > CREATE CLUSTER test (SIZE = '1')
