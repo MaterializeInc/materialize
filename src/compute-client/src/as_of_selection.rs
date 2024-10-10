@@ -119,6 +119,13 @@ pub fn run<T: TimestampManipulation>(
             }
         }
     }
+    tracing::info!(
+        "WIP read holds{}",
+        storage_read_holds
+            .iter()
+            .map(|(id, x)| format!("\n  {} {:?}", id, x))
+            .collect::<String>()
+    );
 
     let mut ctx = Context::new(dataflows, storage_collections, read_policies, current_time);
 
@@ -304,6 +311,7 @@ impl<T: Timestamp> Constraint<'_, T> {
 }
 
 /// State tracked for a compute collection during as-of selection.
+#[derive(Debug)]
 struct Collection<'a, T> {
     storage_inputs: Vec<GlobalId>,
     compute_inputs: Vec<GlobalId>,
@@ -355,6 +363,14 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                 collections.insert(id, collection);
             }
         }
+
+        let debug_fn = || {
+            collections
+                .iter()
+                .map(|(id, x)| format!("\n  {} {:?}", id, x))
+                .collect::<String>()
+        };
+        tracing::info!("WIP collections{}", debug_fn());
 
         Self {
             collections,
@@ -453,6 +469,18 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                 continue;
             };
             let upper = frontiers.read_capabilities.join(&frontiers.write_frontier);
+            // WIP explain
+            let upper = {
+                let bounds = self.expect_collection(*id).bounds.borrow();
+                tracing::info!(
+                    "WIP {} read={:?} write={:?} lower={:?}",
+                    id,
+                    frontiers.read_capabilities.elements(),
+                    frontiers.write_frontier.elements(),
+                    bounds.lower.elements(),
+                );
+                upper.join(&bounds.lower)
+            };
             let constraint = Constraint {
                 type_: ConstraintType::Hard,
                 bound_type: BoundType::Upper,
