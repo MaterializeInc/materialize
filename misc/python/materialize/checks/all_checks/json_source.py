@@ -32,16 +32,32 @@ class JsonSource(Check):
 
                 > CREATE CLUSTER single_replica_cluster SIZE '1';
 
-                > CREATE SOURCE format_jsonA
+                >[version<11900] CREATE SOURCE format_jsonA
                   IN CLUSTER single_replica_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
                   KEY FORMAT JSON
                   VALUE FORMAT JSON
                   ENVELOPE UPSERT
 
-                > CREATE SOURCE format_jsonB
+                >[version>=11900] CREATE SOURCE format_jsonA_src
                   IN CLUSTER single_replica_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE format_jsonA FROM SOURCE format_jsonA_src (REFERENCE "testdrive-format-json-${testdrive.seed}")
+                  KEY FORMAT JSON
+                  VALUE FORMAT JSON
+                  ENVELOPE UPSERT
+
+                >[version<11900] CREATE SOURCE format_jsonB
+                  IN CLUSTER single_replica_cluster
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
+                  KEY FORMAT JSON
+                  VALUE FORMAT JSON
+                  ENVELOPE UPSERT
+
+                >[version>=11900] CREATE SOURCE format_jsonB_src
+                  IN CLUSTER single_replica_cluster
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE format_jsonB FROM SOURCE format_jsonB_src (REFERENCE "testdrive-format-json-${testdrive.seed}")
                   KEY FORMAT JSON
                   VALUE FORMAT JSON
                   ENVELOPE UPSERT
@@ -67,6 +83,18 @@ class JsonSource(Check):
         ]
 
     def validate(self) -> Testdrive:
+        format_jsonB_source_name = (
+            "format_jsonb"
+            if self.base_version < MzVersion.parse_mz("v0.119.0")
+            else "format_jsonb_src"
+        )
+
+        source_details = (
+            " KEY FORMAT JSON VALUE FORMAT JSON ENVELOPE UPSERT"
+            if self.base_version < MzVersion.parse_mz("v0.119.0")
+            else ""
+        )
+
         return Testdrive(
             dedent(
                 """
@@ -83,9 +111,10 @@ class JsonSource(Check):
                 "\\"int\\"" 1
                 "\\"object\\"" "{\\"a\\":\\"b\\",\\"c\\":\\"d\\"}"
                 "\\"str\\"" "\\"hello\\""
-
-                > SHOW CREATE SOURCE format_jsonB;
-                materialize.public.format_jsonb "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_jsonb\\" IN CLUSTER \\"single_replica_cluster\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-json-${testdrive.seed}') KEY FORMAT JSON VALUE FORMAT JSON ENVELOPE UPSERT EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_jsonb_progress\\""
+                """
+                + f"""
+                > SHOW CREATE SOURCE {format_jsonB_source_name};
+                materialize.public.{format_jsonB_source_name} "CREATE SOURCE \\"materialize\\".\\"public\\".\\"{format_jsonB_source_name}\\" IN CLUSTER \\"single_replica_cluster\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-json-${{testdrive.seed}}'){source_details} EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"{format_jsonB_source_name}_progress\\""
            """
             )
         )
