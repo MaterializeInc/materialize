@@ -9,11 +9,11 @@
 
 
 from materialize.output_consistency.data_type.data_type import DataType
-from materialize.output_consistency.enum.enum_constant import (
-    StringConstant,
-)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
+)
+from materialize.output_consistency.expression.constant_expression import (
+    ConstantStringExpression,
 )
 from materialize.output_consistency.expression.expression import (
     Expression,
@@ -91,7 +91,7 @@ def create_pg_timezone_names_query() -> QueryTemplate:
         operation=STRING_NOT_LIKE_OPERATION,
         args=[
             pg_timezone_name_col_expr,
-            StringConstant("posix/%"),
+            ConstantStringExpression("posix/%"),
         ],
     )
 
@@ -147,7 +147,7 @@ def create_pg_timezone_names_query() -> QueryTemplate:
                 operation=create_in_operation(len(excluded_timezones)),
                 args=[
                     pg_timezone_name_col_expr,
-                    *[StringConstant(tz) for tz in excluded_timezones],
+                    *[ConstantStringExpression(tz) for tz in excluded_timezones],
                 ],
             )
         ],
@@ -166,10 +166,10 @@ def create_pg_timezone_names_query() -> QueryTemplate:
                 operation=REGEXP_REPLACE,
                 args=[
                     pg_timezone_name_col_expr,
-                    StringConstant("[^A-Za-z0-9]"),
-                    StringConstant(""),
+                    ConstantStringExpression("[^A-Za-z0-9]"),
+                    ConstantStringExpression(""),
                     # all occurrences
-                    StringConstant("g"),
+                    ConstantStringExpression("g"),
                 ],
             )
         ],

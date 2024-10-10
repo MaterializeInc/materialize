@@ -93,12 +93,3 @@ class EnumConstant(Expression):
             return False
 
         return tag in self.tags
-
-
-class StringConstant(EnumConstant):
-    def __init__(
-        self,
-        value: str,
-        characteristics: set[ExpressionCharacteristics] = set(),
-    ):
-        super().__init__(value, add_quotes=True, characteristics=characteristics)
