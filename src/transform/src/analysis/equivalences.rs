@@ -413,17 +413,29 @@ impl EquivalenceClasses {
         //    TODO: If all lists are sorted, this could be a linear merge among all.
         //          They stop being sorted as soon as we make any modification, though.
         //          But, it would be a fast rejection when faced with lots of data.
-        for index1 in 0..self.classes.len() {
-            for index2 in 0..index1 {
-                if self.classes[index1]
-                    .iter()
-                    .any(|x| self.classes[index2].iter().any(|y| x == y))
-                {
-                    let prior = std::mem::take(&mut self.classes[index2]);
-                    self.classes[index1].extend(prior);
-                    stable = false;
+        //    `expr_to_class_index` tells us for each expression the class index where we last saw
+        //    it.
+        //    `to_merge` has pairs of classes to be merged. The first element of the pair should be
+        //    an earlier class than the second, and `to_merge` should be in sorted order. (These
+        //    invariants are important when handling expressions that appear in more than two
+        //    classes: we'll first merge the first two into the second, and then all this into the
+        //    third, and so on.)
+        let mut expr_to_class_index = BTreeMap::new();
+        let mut to_merge = Vec::new();
+        for (index, class) in self.classes.iter().enumerate() {
+            for expr in class {
+                if let Some(other_index) = expr_to_class_index.get(expr) {
+                    to_merge.push((*other_index, index));
                 }
             }
+            for expr in class {
+                expr_to_class_index.insert(expr, index);
+            }
+        }
+        for (from, to) in to_merge {
+            let prior = std::mem::take(&mut self.classes[from]);
+            self.classes[to].extend(prior);
+            stable = false;
         }
 
         // 3. Identify idioms
