@@ -56,17 +56,11 @@
 #[cfg(test)]
 mod tests;
 
+use std::cmp::max;
+
 use mz_ore::{soft_assert_eq_or_log, soft_assert_ne_or_log};
 use mz_repr::Diff;
 use timely::progress::Timestamp as TimelyTimestamp;
-
-use paste::paste;
-#[cfg(test)]
-use proptest::prelude::*;
-#[cfg(test)]
-use proptest::strategy::ValueTree;
-#[cfg(test)]
-use proptest_derive::Arbitrary;
 
 use crate::durable::initialize::USER_VERSION_KEY;
 use crate::durable::objects::serialization::proto;
@@ -75,6 +69,13 @@ use crate::durable::objects::state_update::{
 };
 use crate::durable::persist::{Mode, Timestamp, UnopenedPersistCatalogState};
 use crate::durable::{CatalogError, DurableCatalogError};
+use paste::paste;
+#[cfg(test)]
+use proptest::prelude::*;
+#[cfg(test)]
+use proptest::strategy::ValueTree;
+#[cfg(test)]
+use proptest_derive::Arbitrary;
 
 #[cfg(test)]
 const ENCODED_TEST_CASES: usize = 100;
@@ -246,6 +247,7 @@ impl<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson> MigrationAction<V
 #[mz_ore::instrument(name = "persist::upgrade", level = "debug")]
 pub(crate) async fn upgrade(
     persist_handle: &mut UnopenedPersistCatalogState,
+    initial_ts: &mut Timestamp,
 ) -> Result<(), CatalogError> {
     soft_assert_ne_or_log!(
         persist_handle.upper,
@@ -261,7 +263,7 @@ pub(crate) async fn upgrade(
         .expect("initialized catalog must have a version");
     // Run migrations until we're up-to-date.
     while version < CATALOG_VERSION {
-        let new_version = run_upgrade(persist_handle, version).await?;
+        let new_version = run_upgrade(persist_handle, version, initial_ts).await?;
         version = new_version;
     }
 
@@ -274,6 +276,7 @@ pub(crate) async fn upgrade(
 async fn run_upgrade(
     unopened_catalog_state: &mut UnopenedPersistCatalogState,
     version: u64,
+    initial_ts: &mut Timestamp,
 ) -> Result<u64, CatalogError> {
     let incompatible = DurableCatalogError::IncompatibleDataVersion {
         found_version: version,
@@ -285,13 +288,69 @@ async fn run_upgrade(
     match version {
         ..=TOO_OLD_VERSION => Err(incompatible),
 
-        60 => run_versioned_upgrade(unopened_catalog_state, version, v60_to_v61::upgrade).await,
-        61 => run_versioned_upgrade(unopened_catalog_state, version, v61_to_v62::upgrade).await,
-        62 => run_versioned_upgrade(unopened_catalog_state, version, v62_to_v63::upgrade).await,
-        63 => run_versioned_upgrade(unopened_catalog_state, version, v63_to_v64::upgrade).await,
-        64 => run_versioned_upgrade(unopened_catalog_state, version, v64_to_v65::upgrade).await,
-        65 => run_versioned_upgrade(unopened_catalog_state, version, v65_to_v66::upgrade).await,
-        66 => run_versioned_upgrade(unopened_catalog_state, version, v66_to_v67::upgrade).await,
+        60 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                v60_to_v61::upgrade,
+                initial_ts,
+            )
+            .await
+        }
+        61 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                v61_to_v62::upgrade,
+                initial_ts,
+            )
+            .await
+        }
+        62 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                v62_to_v63::upgrade,
+                initial_ts,
+            )
+            .await
+        }
+        63 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                v63_to_v64::upgrade,
+                initial_ts,
+            )
+            .await
+        }
+        64 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                v64_to_v65::upgrade,
+                initial_ts,
+            )
+            .await
+        }
+        65 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                v65_to_v66::upgrade,
+                initial_ts,
+            )
+            .await
+        }
+        66 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                v66_to_v67::upgrade,
+                initial_ts,
+            )
+            .await
+        }
 
         // Up-to-date, no migration needed!
         CATALOG_VERSION => Ok(CATALOG_VERSION),
@@ -307,6 +366,7 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
     unopened_catalog_state: &mut UnopenedPersistCatalogState,
     current_version: u64,
     migration_logic: impl FnOnce(Vec<V1>) -> Vec<MigrationAction<V1, V2>>,
+    initial_ts: &mut Timestamp,
 ) -> Result<u64, CatalogError> {
     // 1. Use the V1 to deserialize the contents of the current snapshot.
     let snapshot: Vec<_> = unopened_catalog_state
@@ -337,13 +397,14 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
     updates.push(version_insertion);
 
     // 4. Apply migration to catalog.
+    *initial_ts = max(*initial_ts, unopened_catalog_state.upper);
     if matches!(unopened_catalog_state.mode, Mode::Writable) {
         unopened_catalog_state
-            .compare_and_append(updates)
+            .compare_and_append(updates, *initial_ts)
             .await
             .map_err(|e| e.unwrap_fence_error())?;
     } else {
-        let ts = unopened_catalog_state.upper;
+        let ts = *initial_ts;
         let updates = updates
             .into_iter()
             .map(|(kind, diff)| StateUpdate { kind, ts, diff });

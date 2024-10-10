@@ -51,12 +51,19 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_cluster");
 
-        let id = self.catalog_mut().allocate_user_cluster_id().await?;
+        let id_ts = self.get_local_write_ts().await.timestamp;
+        let id = self.catalog_mut().allocate_user_cluster_id(id_ts).await?;
+        self.apply_local_write(id_ts).await;
         // The catalog items for the introspection sources are shared between all replicas
         // of a compute instance, so we create them unconditionally during instance creation.
         // Whether a replica actually maintains introspection arrangements is determined by the
         // per-replica introspection configuration.
-        let introspection_sources = self.catalog_mut().allocate_introspection_sources().await;
+        let id_ts = self.get_local_write_ts().await.timestamp;
+        let introspection_sources = self
+            .catalog_mut()
+            .allocate_introspection_sources(id_ts)
+            .await;
+        self.apply_local_write(id_ts).await;
         let cluster_variant = match &variant {
             CreateClusterVariant::Managed(plan) => {
                 let logging = if let Some(config) = plan.compute.introspection {
@@ -144,7 +151,12 @@ impl Coordinator {
         )?;
 
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
-            let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
+            let id_ts = self.get_local_write_ts().await.timestamp;
+            let id = self
+                .catalog_mut()
+                .allocate_replica_id(&cluster_id, id_ts)
+                .await?;
+            self.apply_local_write(id_ts).await;
             self.create_managed_cluster_replica_op(
                 cluster_id,
                 id,
@@ -346,7 +358,9 @@ impl Coordinator {
                 compute: ComputeReplicaConfig { logging },
             };
 
-            let replica_id = self.catalog_mut().allocate_replica_id(&id).await?;
+            let id_ts = self.get_local_write_ts().await.timestamp;
+            let replica_id = self.catalog_mut().allocate_replica_id(&id, id_ts).await?;
+            self.apply_local_write(id_ts).await;
             ops.push(catalog::Op::CreateClusterReplica {
                 cluster_id: id,
                 id: replica_id,
@@ -503,7 +517,12 @@ impl Coordinator {
 
         // Replicas have the same owner as their cluster.
         let owner_id = cluster.owner_id();
-        let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
+        let id_ts = self.get_local_write_ts().await.timestamp;
+        let id = self
+            .catalog_mut()
+            .allocate_replica_id(&cluster_id, id_ts)
+            .await?;
+        self.apply_local_write(id_ts).await;
         let op = catalog::Op::CreateClusterReplica {
             cluster_id,
             id,
@@ -658,7 +677,12 @@ impl Coordinator {
                         .collect();
                     ops.push(catalog::Op::DropObjects(replica_ids_and_reasons));
                     for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
-                        let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
+                        let id_ts = self.get_local_write_ts().await.timestamp;
+                        let id = self
+                            .catalog_mut()
+                            .allocate_replica_id(&cluster_id, id_ts)
+                            .await?;
+                        self.apply_local_write(id_ts).await;
                         self.create_managed_cluster_replica_op(
                             cluster_id,
                             id,
@@ -677,7 +701,12 @@ impl Coordinator {
                 }
                 AlterClusterPlanStrategy::For(_) | AlterClusterPlanStrategy::UntilReady { .. } => {
                     for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
-                        let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
+                        let id_ts = self.get_local_write_ts().await.timestamp;
+                        let id = self
+                            .catalog_mut()
+                            .allocate_replica_id(&cluster_id, id_ts)
+                            .await?;
+                        self.apply_local_write(id_ts).await;
                         self.create_managed_cluster_replica_op(
                             cluster_id,
                             id,
@@ -715,7 +744,12 @@ impl Coordinator {
             for name in
                 (*replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
             {
-                let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
+                let id_ts = self.get_local_write_ts().await.timestamp;
+                let id = self
+                    .catalog_mut()
+                    .allocate_replica_id(&cluster_id, id_ts)
+                    .await?;
+                self.apply_local_write(id_ts).await;
                 self.create_managed_cluster_replica_op(
                     cluster_id,
                     id,

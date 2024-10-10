@@ -26,7 +26,7 @@ use crate::BUILD_INFO;
 
 /// The necessary input for preflight checks.
 pub struct PreflightInput {
-    pub boot_ts: u64,
+    pub boot_ts: mz_repr::Timestamp,
     pub environment_id: EnvironmentId,
     pub persist_client: PersistClient,
     pub bootstrap_default_cluster_replica_size: String,
@@ -82,7 +82,7 @@ pub async fn preflight_legacy(
             )
             .await
         {
-            Ok(adapter_storage) => Box::new(adapter_storage).expire().await,
+            Ok((adapter_storage, _)) => Box::new(adapter_storage).expire().await,
             Err(CatalogError::Durable(e)) if e.can_recover_with_write_mode() => {
                 // This is theoretically possible if catalog implementation A is
                 // initialized, implementation B is uninitialized, and we are going to
