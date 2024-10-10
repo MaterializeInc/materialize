@@ -16,7 +16,9 @@ from materialize.output_consistency.execution.sql_dialect_adjuster import (
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
-from materialize.output_consistency.expression.expression import LeafExpression
+from materialize.output_consistency.expression.expression import (
+    LeafExpression,
+)
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
@@ -25,9 +27,6 @@ from materialize.output_consistency.input_data.types.string_type_provider import
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 from materialize.output_consistency.query.data_source import DataSource
-from materialize.output_consistency.selection.row_selection import (
-    DataRowSelection,
-)
 
 
 class ConstantExpression(LeafExpression):
@@ -69,11 +68,6 @@ class ConstantExpression(LeafExpression):
             return f"'{sql_value}'"
 
         return sql_value
-
-    def recursively_collect_involved_characteristics(
-        self, row_selection: DataRowSelection
-    ) -> set[ExpressionCharacteristics]:
-        return self.own_characteristics
 
     def collect_vertical_table_indices(self) -> set[int]:
         return set()
