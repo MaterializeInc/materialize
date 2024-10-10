@@ -12,18 +12,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use itertools::Itertools;
+use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{
     CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, TableFunc,
 };
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_repr::explain::ExprHumanizer;
 use mz_repr::{Diff, GlobalId, Row};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::plan::join::JoinPlan;
-use crate::plan::reduce::{KeyValPlan, ReducePlan};
+use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
+use crate::plan::reduce::{BucketedPlan, HierarchicalPlan, KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
-use crate::plan::top_k::TopKPlan;
+use crate::plan::top_k::{MonotonicTopKPlan, TopKPlan};
 use crate::plan::{AvailableCollections, GetPlan, LirId, Plan, PlanNode, ProtoLetRecLimit};
 
 include!(concat!(
@@ -760,6 +763,181 @@ impl<T> FlatPlanNode<T> {
         }
 
         first.into_iter().chain(list).chain(last)
+    }
+
+    /// Renders a single `FlatPlanNode` as a string.
+    ///
+    /// Typically of the format "{NodeName}::{Detail} {input LirID} ({options})"
+    pub fn humanize(&self, humanizer: &dyn ExprHumanizer) -> String {
+        let explainer = HumanizedExplain::new(false);
+
+        match self {
+            FlatPlanNode::Constant { rows } => {
+                let summary = match rows {
+                    Ok(rows) => format!("{} rows", rows.len()),
+                    Err(_) => format!("error"),
+                };
+                format!("Constant {summary}")
+            }
+            FlatPlanNode::Get { id, keys: _, plan } => {
+                let id = match id {
+                    Id::Local(id) => id.to_string(),
+                    Id::Global(id) => humanizer.humanize_id(*id).unwrap_or_else(|| id.to_string()),
+                };
+                let plan = match plan {
+                    GetPlan::PassArrangements => format!("PassArrangements"),
+                    GetPlan::Arrangement(_key, Some(val), _mfp) => {
+                        format!("Arrangement (val={})", explainer.expr(val, None))
+                    }
+                    GetPlan::Arrangement(_key, None, _mfp) => format!("Arrangement"),
+                    GetPlan::Collection(_mfp) => format!("Collection"),
+                };
+
+                format!("Get::{plan} {id}")
+            }
+            FlatPlanNode::Let { id, value, body } => format!("Let {id}={value} in {body}"),
+            FlatPlanNode::LetRec {
+                ids,
+                values,
+                limits,
+                body,
+            } => {
+                let mut bindings = String::with_capacity(10 * ids.len());
+                for ((id, value), limit) in ids.iter().zip_eq(values).zip_eq(limits) {
+                    bindings.push_str("  ");
+                    bindings.push_str(&id.to_string());
+                    bindings.push_str(" = ");
+                    bindings.push_str(&value.to_string());
+
+                    if let Some(limit) = limit {
+                        bindings.push_str(&format!(" ({limit})"));
+                    }
+
+                    bindings.push('\n');
+                }
+
+                format!("LetRec\n{bindings}Returning {body}")
+            }
+            FlatPlanNode::Mfp {
+                input,
+                mfp: _,
+                input_key_val: _,
+            } => {
+                // TODO(mgree) show MFP detail
+                format!("MapFilterProject {input}")
+            }
+            FlatPlanNode::FlatMap {
+                input,
+                func,
+                exprs: _,
+                mfp_after: _,
+                input_key: _,
+            } => {
+                // TODO(mgree) show FlatMap detail
+                format!("FlatMap {input} ({func})")
+            }
+            FlatPlanNode::Join { inputs, plan } => {
+                let inputs = mz_ore::str::separated(", ", inputs);
+                match plan {
+                    JoinPlan::Linear(LinearJoinPlan {
+                        source_relation,
+                        stage_plans,
+                        ..
+                    }) => {
+                        let stages = mz_ore::str::separated(
+                            " » ",
+                            std::iter::once(source_relation)
+                                .chain(stage_plans.iter().map(|dsp| &dsp.lookup_relation)),
+                        );
+
+                        format!("Join::Differential {inputs}\n  {stages}")
+                    }
+                    JoinPlan::Delta(DeltaJoinPlan { path_plans }) => {
+                        let stages = mz_ore::str::separated(
+                            "\n  ",
+                            path_plans.iter().map(|dpp| {
+                                mz_ore::str::separated(
+                                    " » ",
+                                    std::iter::once(&dpp.source_relation).chain(
+                                        dpp.stage_plans.iter().map(|dsp| &dsp.lookup_relation),
+                                    ),
+                                )
+                            }),
+                        );
+
+                        format!("Join::Delta {inputs}\n  {stages}")
+                    }
+                }
+            }
+            FlatPlanNode::Reduce {
+                input,
+                key_val_plan: _key_val_plan,
+                plan,
+                input_key: _input_key,
+                mfp_after: _mfp_after,
+            } => {
+                let mut options = String::new();
+                let plan = match plan {
+                    ReducePlan::Distinct => "Distinct",
+                    ReducePlan::Accumulable(..) => "Accumulable",
+                    ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(..)) => {
+                        options.push_str(" (monotonic)");
+                        "Hierarchical"
+                    }
+                    ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(BucketedPlan {
+                        buckets,
+                        ..
+                    })) => {
+                        options.push_str(&format!(
+                            " (buckets: {})",
+                            mz_ore::str::separated(", ", buckets)
+                        ));
+                        "Hierarchical"
+                    }
+                    ReducePlan::Basic(..) => "Basic",
+                    ReducePlan::Collation(..) => "Collation",
+                };
+
+                format!("Reduce::{plan} {input}{options}")
+            }
+            FlatPlanNode::TopK { input, top_k_plan } => {
+                let plan = match top_k_plan {
+                    TopKPlan::MonotonicTop1(..) => "MonotonicTop1",
+                    TopKPlan::MonotonicTopK(MonotonicTopKPlan {
+                        limit: Some(limit), ..
+                    }) => &format!("MonotonicTopK({})", explainer.expr(limit, None)),
+                    TopKPlan::MonotonicTopK(MonotonicTopKPlan { .. }) => "MonotonicTopK",
+                    TopKPlan::Basic(..) => "Basic",
+                };
+                format!("TopK::{plan} {input}")
+            }
+            FlatPlanNode::Negate { input } => format!("Negate {input}"),
+            FlatPlanNode::Threshold {
+                input,
+                threshold_plan: _,
+            } => format!("Threshold {input}"),
+            FlatPlanNode::Union {
+                inputs,
+                consolidate_output,
+            } => {
+                let consolidate = if *consolidate_output {
+                    " (consolidates output)"
+                } else {
+                    ""
+                };
+
+                format!(
+                    "Union {}{consolidate}",
+                    mz_ore::str::separated(", ", inputs)
+                )
+            }
+            FlatPlanNode::ArrangeBy {
+                input,
+                forms: _,
+                input_key: _,
+                input_mfp: _,
+            } => format!("Arrange {input}"),
+        }
     }
 }
 
