@@ -353,7 +353,9 @@ class ExpressionGenerator:
             expression_to_share_data_source = arg_context.args[
                 param.index_of_param_to_share_data_source
             ]
-            return RowIndexExpression(expression_to_share_data_source)
+            return RowIndexExpression(
+                expression_to_share_data_source, param.allow_multi_column_expression
+            )
 
         create_complex_arg = (
             arg_context.requires_aggregation()

@@ -24,12 +24,15 @@ class RowIndexParam(OperationParam):
         self,
         index_of_param_to_share_data_source: int,
         optional: bool = False,
+        allow_multi_column_expression: bool = True,
     ):
         super().__init__(
             DataTypeCategory.ANY,
             optional,
         )
         self.index_of_param_to_share_data_source = index_of_param_to_share_data_source
+        self.allow_multi_column_expression = allow_multi_column_expression
+        """Hack to allow ordering by all data sources of a (nested) expression"""
 
     def supports_type(
         self, data_type: DataType, previous_args: list[Expression]

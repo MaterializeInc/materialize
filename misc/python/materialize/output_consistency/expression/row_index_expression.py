@@ -28,7 +28,9 @@ from materialize.output_consistency.query.data_source import DataSource
 
 class RowIndexExpression(LeafExpression):
 
-    def __init__(self, expression_to_share_data_source: Expression):
+    def __init__(
+        self, expression_to_share_data_source: Expression, allow_multi_columns: bool
+    ):
         super().__init__(
             column_name="row_index",
             data_type=INT8_TYPE,
@@ -36,6 +38,7 @@ class RowIndexExpression(LeafExpression):
             storage_layout=ValueStorageLayout.ANY,
         )
         self.expression_to_share_data_source = expression_to_share_data_source
+        self.allow_multi_columns = allow_multi_columns
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
         return self.data_type.resolve_return_type_spec(self.own_characteristics)
@@ -50,18 +53,31 @@ class RowIndexExpression(LeafExpression):
             # this happens when the expression is a constant
             return None
 
-        # this is a simplification; ideally, we would use all data sources
+        # we can only return one data source here but that does not really matter because we only reuse already used
+        # data sources
         return data_sources[0]
 
-    def to_sql_as_column(
-        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool
+    def to_sql(
+        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
     ) -> str:
-        if self.get_data_source() is None:
+        data_sources = self.expression_to_share_data_source.collect_data_sources()
+
+        if len(data_sources) == 0:
             # We won't use row_index in this case but a constant instead to avoid a potentially ambiguous column
             # reference
             return "0"
 
-        return super().to_sql_as_column(sql_adjuster, include_alias)
+        if not self.allow_multi_columns:
+            # only pick one data source in this case
+            data_sources = data_sources[:1]
+
+        expressions = []
+        for data_source in data_sources:
+            expressions.append(
+                super().to_sql_as_column(sql_adjuster, include_alias, data_source)
+            )
+
+        return ", ".join(expressions)
 
     def collect_vertical_table_indices(self) -> set[int]:
         # not relevant because this is already handled by the column sharing the data source
