@@ -220,7 +220,7 @@ impl ComputeState {
             read_only_tx,
             read_only_rx,
             server_maintenance_interval: Duration::ZERO,
-            init_system_time: mz_ore::now::SYSTEM_TIME.clone()(),
+            init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
         }
     }
@@ -313,7 +313,7 @@ impl ComputeState {
         {
             let offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.worker_config);
             if offset.is_zero() {
-                if self.replica_expiration.as_option().is_some() {
+                if !self.replica_expiration.is_empty() {
                     warn!(
                         current_replica_expiration = ?self.replica_expiration,
                         "replica_expiration: cannot disable once expiration is enabled",
