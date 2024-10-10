@@ -99,10 +99,14 @@ class PostgresResultComparator(ResultComparator):
         if isinstance(value1, str) and isinstance(value2, str):
             return self.is_str_equal(value1, value2, is_tolerant)
 
-        if is_tolerant and isinstance(value1, int) and isinstance(value2, int):
-            # This is needed for imprecise results of floating type operations that are returned as int values in dicts
-            # of JSONB data.
-            return self.is_float_equal(float(value1), float(value2))
+        if is_tolerant:
+            type1 = type(value1)
+            type2 = type(value2)
+
+            if type1 in {int, float, Decimal} and type2 in {int, float, Decimal}:
+                # This is needed for imprecise results of floating type operations that are returned as int or float
+                # values in dicts of JSONB data.
+                return self.is_decimal_equal(Decimal(value1), Decimal(value2))
 
         return False
 
