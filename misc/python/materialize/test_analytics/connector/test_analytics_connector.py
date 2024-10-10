@@ -74,6 +74,7 @@ class DatabaseConnector:
                 sslmode="require",
                 connect_timeout=timeout_in_seconds,
                 application_name=self.config.application_name,
+                options="-c tcp_keepalives_idle=30 -c tcp_keepalives_interval=10 -c tcp_keepalives_count=5",
             )
         except Exception:
             print(
