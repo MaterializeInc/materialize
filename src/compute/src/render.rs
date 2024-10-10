@@ -127,7 +127,7 @@ use mz_repr::{Datum, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
@@ -176,6 +176,8 @@ pub fn build_compute_dataflow<A: Allocate>(
     compute_state: &mut ComputeState,
     dataflow: DataflowDescription<FlatPlan, CollectionMetadata>,
     start_signal: StartSignal,
+    until: Antichain<mz_repr::Timestamp>,
+    dataflow_expiration: Antichain<mz_repr::Timestamp>,
 ) {
     // Mutually recursive view definitions require special handling.
     let recursive = dataflow
@@ -241,7 +243,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         source.storage_metadata.clone(),
                         dataflow.as_of.clone(),
                         snapshot_mode,
-                        dataflow.until.clone(),
+                        until.clone(),
                         mfp.as_mut(),
                         compute_state.dataflow_max_inflight_bytes(),
                         start_signal.clone(),
@@ -296,8 +298,13 @@ pub fn build_compute_dataflow<A: Allocate>(
         // in order to support additional timestamp coordinates for iteration.
         if recursive {
             scope.clone().iterative::<PointStamp<u64>, _, _>(|region| {
-                let mut context =
-                    Context::for_dataflow_in(&dataflow, region.clone(), compute_state);
+                let mut context = Context::for_dataflow_in(
+                    &dataflow,
+                    region.clone(),
+                    compute_state,
+                    until,
+                    dataflow_expiration,
+                );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -366,8 +373,13 @@ pub fn build_compute_dataflow<A: Allocate>(
             });
         } else {
             scope.clone().region_named(&build_name, |region| {
-                let mut context =
-                    Context::for_dataflow_in(&dataflow, region.clone(), compute_state);
+                let mut context = Context::for_dataflow_in(
+                    &dataflow,
+                    region.clone(),
+                    compute_state,
+                    until,
+                    dataflow_expiration,
+                );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -527,7 +539,14 @@ where
         });
 
         match bundle.arrangement(&idx.key) {
-            Some(ArrangementFlavor::Local(oks, errs)) => {
+            Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
+                // Ensure that the frontier does not advance past the expiration time, if set.
+                // Otherwise, we might write down incorrect data.
+                if let Some(&expiration) = self.dataflow_expiration.as_option() {
+                    oks.expire_arrangement_at(expiration);
+                    errs.stream = errs.stream.expire_stream_at(expiration);
+                }
+
                 // Obtain a specialized handle matching the specialized arrangement.
                 let oks_trace = oks.trace_handle();
 
@@ -594,13 +613,21 @@ where
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                let oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
-                let oks_trace = oks.trace_handle();
+                let mut oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
 
-                let errs = errs
+                let mut errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
                     .mz_arrange("Arrange export iterative err");
+
+                // Ensure that the frontier does not advance past the expiration time, if set.
+                // Otherwise, we might write down incorrect data.
+                if let Some(&expiration) = self.dataflow_expiration.as_option() {
+                    oks.expire_arrangement_at(expiration);
+                    errs.stream = errs.stream.expire_stream_at(expiration);
+                }
+
+                let oks_trace = oks.trace_handle();
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {

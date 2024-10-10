@@ -24,6 +24,7 @@ class Clusterd(Service):
         environment_extra: list[str] = [],
         memory: str | None = None,
         options: list[str] = [],
+        restart: str = "no",
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -58,6 +59,7 @@ class Clusterd(Service):
                 "ports": [2100, 2101, 6878],
                 "environment": environment,
                 "volumes": DEFAULT_MZ_VOLUMES,
+                "restart": restart,
             }
         )
 

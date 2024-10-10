@@ -742,6 +742,10 @@ pub struct CreateMaterializedViewOptimize {
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
+    /// Whether the timeline is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
+    ///
+    /// Used to determine if it is safe to enable dataflow expiration.
+    is_timeline_epoch_ms: bool,
 }
 
 #[derive(Debug)]
@@ -2572,8 +2576,15 @@ impl Coordinator {
                 .catalog()
                 .resolve_full_name(entry.name(), None)
                 .to_string();
+            let is_timeline_epoch_ms = self.get_timeline_context(*id).is_timeline_epoch_ms();
             let (_optimized_plan, physical_plan, _metainfo) = self
-                .optimize_create_continual_task(&ct, *id, self.owned_catalog(), debug_name)
+                .optimize_create_continual_task(
+                    &ct,
+                    *id,
+                    self.owned_catalog(),
+                    debug_name,
+                    is_timeline_epoch_ms,
+                )
                 .expect("builtin CT should optimize successfully");
 
             // Determine an as of for the new continual task.
@@ -2616,6 +2627,7 @@ impl Coordinator {
 
         for entry in ordered_catalog_entries {
             let id = entry.id();
+            let is_timeline_epoch_ms = self.get_timeline_context(id).is_timeline_epoch_ms();
             match entry.item() {
                 CatalogItem::Index(idx) => {
                     // Collect optimizer parameters.
@@ -2646,6 +2658,7 @@ impl Coordinator {
                             entry.name().clone(),
                             idx.on,
                             idx.keys.to_vec(),
+                            is_timeline_epoch_ms,
                         );
                         let global_mir_plan = optimizer.optimize(index_plan)?;
                         let optimized_plan = global_mir_plan.df_desc().clone();
@@ -2700,6 +2713,7 @@ impl Coordinator {
                             debug_name,
                             optimizer_config.clone(),
                             self.optimizer_metrics(),
+                            is_timeline_epoch_ms,
                         );
 
                         // MIR ⇒ MIR optimization (global)
@@ -2743,7 +2757,13 @@ impl Coordinator {
                         .resolve_full_name(entry.name(), None)
                         .to_string();
                     let (optimized_plan, physical_plan, metainfo) = self
-                        .optimize_create_continual_task(ct, id, self.owned_catalog(), debug_name)?;
+                        .optimize_create_continual_task(
+                            ct,
+                            id,
+                            self.owned_catalog(),
+                            debug_name,
+                            is_timeline_epoch_ms,
+                        )?;
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(id, optimized_plan);

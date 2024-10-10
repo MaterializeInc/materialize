@@ -132,6 +132,17 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     pub fn antichain(&self) -> Antichain<T> {
         Antichain::from_elem(self.timestamp_or_default())
     }
+
+    /// Whether the context contains a timestamp of type [`Timeline::EpochMilliseconds`].
+    pub fn is_timeline_epoch_ms(&self) -> bool {
+        matches!(
+            self,
+            &Self::TimelineTimestamp {
+                timeline: Timeline::EpochMilliseconds,
+                ..
+            }
+        )
+    }
 }
 
 #[async_trait(?Send)]
