@@ -2327,13 +2327,15 @@ impl Coordinator {
             .filter(|entry| entry.is_table())
             .map(|entry| (entry.id(), Vec::new()))
             .collect();
-        self.controller
+        // Append the tables in the background. We apply the write timestamp before getting a read
+        // timestamp and reading a snapshot of each table, so the snapshots will block on their own
+        // until the appends are complete.
+        let table_fence_rx = self
+            .controller
             .storage
             .append_table(write_ts.clone(), advance_to, appends)
-            .expect("invalid updates")
-            .await
-            .expect("One-shot shouldn't be dropped during bootstrap")
-            .unwrap_or_terminate("cannot fail to append");
+            .expect("invalid updates");
+
         self.apply_local_write(write_ts).await;
 
         // Add builtin table updates the clear the contents of all system tables
@@ -2384,6 +2386,12 @@ impl Coordinator {
             let retractions = retractions.expect("cannot fail to fetch snapshot");
             builtin_table_updates.extend(retractions);
         }
+
+        // Now that the snapshots are complete, the appends must also be complete.
+        table_fence_rx
+            .await
+            .expect("One-shot shouldn't be dropped during bootstrap")
+            .unwrap_or_terminate("cannot fail to append");
 
         debug!("coordinator init: sending builtin table updates");
         let builtin_updates_fut = self
