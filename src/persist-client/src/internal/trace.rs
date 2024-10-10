@@ -1179,6 +1179,12 @@ impl<T: Timestamp + Lattice> Spine<T> {
         true
     }
 
+    pub fn next_id(&mut self) -> SpineId {
+        let id = self.next_id;
+        self.next_id += 1;
+        SpineId(id, self.next_id)
+    }
+
     // Ideally, this method acts as insertion of `batch`, even if we are not yet
     // able to begin merging the batch. This means it is a good time to perform
     // amortized work proportional to the size of batch.
@@ -1186,11 +1192,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         assert!(batch.desc.lower() != batch.desc.upper());
         assert_eq!(batch.desc.lower(), &self.upper);
 
-        let id = {
-            let id = self.next_id;
-            self.next_id += 1;
-            SpineId(id, self.next_id)
-        };
+        let id = self.next_id();
         let batch = SpineBatch::merged(IdHollowBatch {
             id,
             batch: Arc::new(batch),
