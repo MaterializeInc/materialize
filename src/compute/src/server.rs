@@ -474,6 +474,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     compute_state.report_operator_hydration();
                     compute_state.report_frontiers();
                     compute_state.report_dropped_collections();
+                    compute_state.report_metrics();
                 }
 
                 self.metrics

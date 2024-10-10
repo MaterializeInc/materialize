@@ -347,6 +347,13 @@ impl ComputeState {
                     );
                 }
             }
+
+            // Record the replica expiration in the metrics.
+            if let Some(expiration) = self.replica_expiration.as_option() {
+                self.worker_metrics
+                    .replica_expiration_timestamp_seconds
+                    .set(expiration.into());
+            }
         }
     }
 
@@ -821,6 +828,19 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             };
             let response = ComputeResponse::Status(StatusResponse::OperatorHydration(status));
             self.send_compute_response(response);
+        }
+    }
+
+    /// Report per-worker metrics.
+    pub(crate) fn report_metrics(&self) {
+        if let Some(expiration) = self.compute_state.replica_expiration.as_option() {
+            let now = Duration::from_millis(mz_ore::now::SYSTEM_TIME()).as_secs_f64();
+            let expiration = Duration::from_millis(<u64>::from(expiration)).as_secs_f64();
+            let remaining = expiration - now;
+            self.compute_state
+                .worker_metrics
+                .replica_expiration_remaining_seconds
+                .set(remaining)
         }
     }
 
