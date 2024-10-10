@@ -74,19 +74,23 @@ struct Expressions {
     notices: SmallVec<[Arc<OptimizerNotice>; 4]>,
 }
 
-trait ExpressionCache {
+struct ExpressionCache {
+    deploy_generation: u64,
+    information_needed_to_connect_to_durable_store: _,
+}
+
+impl ExpressionCache {
     /// Creates a new [`ExpressionCache`] for `deploy_generation`.
-    fn new(&mut self, deploy_generation: u64) -> Self;
+    fn new(&mut self, deploy_generation: u64, information_needed_to_connect_to_durable_store: _) -> Self;
 
     /// Remove all entries in current deploy generation that depend on a global ID that is not
     /// present in `current_ids`.
     ///
+    /// If `remove_prior_gens` is `true`, all previous generations are durably  removed from the
+    /// cache.
+    ///
     /// Returns all cached expressions.
-    fn reconcile_and_open(&mut self, current_ids: &BTreeSet<GlobalId>) -> Vec<(GlobalId, Expressions)>;
-
-    /// Durably removes all entries with a deploy generation less than this cache's deploy
-    /// generation.
-    fn cleanup_all_prior_deploy_generations(&mut self);
+    fn open(&mut self, current_ids: &BTreeSet<GlobalId>, remove_prior_gens: bool) -> Vec<(GlobalId, Expressions)>;
 
     /// Durably inserts `expressions` into current deploy generation.
     ///
@@ -107,13 +111,12 @@ trait ExpressionCache {
 
 Below is a detailed set of steps that will happen in startup.
 
-1. Call `ExpressionCache::open` to remove any invalid entries and retrieve cached entries.
+1. Call `ExpressionCache::open` to remove any invalid entries and retrieve cached entries. When
+   passing in the arguments, `remove_prior_gens == !read_only_mode`.
 2. While opening the catalog, for each object:
     a. If the object is present in the cache, use cached optimized expression.
     b. Else generate the optimized expressions and insert the expressions via
        `ExpressionCache::insert_expressions`.
-3. If in read-write mode, call `ExpressionCache::cleanup_all_prior_deploy_generations` to remove the previous
-   deploy generation.
 
 ### DDL - Create
 
