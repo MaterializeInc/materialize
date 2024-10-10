@@ -299,6 +299,13 @@ impl Coordinator {
             let within_lag =
                 PartialOrder::less_equal(live_write_frontier, &bumped_write_plus_allowed_lag);
 
+            if within_lag {
+                // This is a bit spammy, but log caught-up collections while we
+                // investigate why environments are cutting over but then a lot
+                // of compute collections are _not_ in fact hydrated on
+                // clusters.
+                tracing::info!(%id, ?write_frontier, ?live_write_frontier, ?allowed_lag, %cluster.id, "collection is caught up");
+            }
             if !within_lag {
                 // We are not within the allowed lag!
                 //
