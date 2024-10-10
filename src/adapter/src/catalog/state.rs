@@ -39,6 +39,7 @@ use mz_controller::clusters::{
     UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -61,9 +62,9 @@ use mz_sql::catalog::{
     IdReference, NameReference, SessionCatalog, SystemObjectType, TypeReference,
 };
 use mz_sql::names::{
-    CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName,
-    QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
-    ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
+    CommentObjectId, DatabaseId, DependencyIds, FullItemName, FullSchemaName, ObjectId,
+    PartialItemName, QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
@@ -261,14 +262,14 @@ impl CatalogState {
     /// objects this catalog entry transitively depends on (where
     /// "depends on" is meant in the sense of [`CatalogItem::uses`], rather than
     /// [`CatalogItem::references`]).
-    pub fn transitive_uses(&self, id: GlobalId) -> impl Iterator<Item = GlobalId> + '_ {
+    pub fn transitive_uses(&self, id: CatalogItemId) -> impl Iterator<Item = CatalogItemId> + '_ {
         struct I<'a> {
-            queue: VecDeque<GlobalId>,
-            seen: BTreeSet<GlobalId>,
+            queue: VecDeque<CatalogItemId>,
+            seen: BTreeSet<CatalogItemId>,
             this: &'a CatalogState,
         }
         impl<'a> Iterator for I<'a> {
-            type Item = GlobalId;
+            type Item = CatalogItemId;
             fn next(&mut self) -> Option<Self::Item> {
                 if let Some(next) = self.queue.pop_front() {
                     for child in self.this.get_entry(&next).item().uses() {
@@ -590,11 +591,11 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
     }
 
-    pub fn resolve_global_id(&self, id: &GlobalId) -> Result<&CatalogEntry, SqlCatalogError> {
+    pub fn resolve_global_id(&self, id: &GlobalId) -> &CatalogEntry {
         let item_id = self
             .entry_by_global_id
             .get(&id)
-            .ok_or_else(|| SqlCatalogError::UnknownItem(format!("GlobalId: {id}")))?;
+            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"));
         Ok(self.get_entry(item_id))
     }
 
@@ -924,6 +925,13 @@ impl CatalogState {
                 let raw_expr = view.expr;
                 let optimized_expr = optimizer.optimize(raw_expr.clone())?;
 
+                // Resolve all item dependencies from the HIR expression.
+                let dependencies: BTreeSet<_> = raw_expr
+                    .depends_on()
+                    .into_iter()
+                    .map(|gid| self.resolve_global_id(&gid).item_id())
+                    .collect();
+
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
                     collection_id: *collection,
@@ -932,6 +940,7 @@ impl CatalogState {
                     optimized_expr: optimized_expr.into(),
                     conn_id: None,
                     resolved_ids,
+                    dependencies: DependencyIds(dependencies),
                 })
             }
             (

@@ -22,7 +22,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::task::JoinHandleExt;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
@@ -57,7 +57,7 @@ pub fn copy_to<G, F>(
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
     sink_id: GlobalId,
-    connection_id: GlobalId,
+    connection_id: CatalogItemId,
     params: CopyToParameters,
     worker_callback: F,
 ) where
@@ -142,7 +142,7 @@ fn render_initialization_operator<G>(
     scope: G,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
-    connection_id: GlobalId,
+    connection_id: CatalogItemId,
     sink_id: GlobalId,
     s3_key_manager: S3KeyManager,
     up_to: Antichain<G::Timestamp>,
@@ -200,7 +200,7 @@ where
         let leader_work = async move {
             info!(%sink_id, %worker_id, "s3 leader worker initialization");
             let sdk_config = aws_connection
-                .load_sdk_config(&connection_context, connection_id.to_item_id(), InTask::Yes)
+                .load_sdk_config(&connection_context, connection_id, InTask::Yes)
                 .await?;
 
             let client = mz_aws_util::s3::new_client(&sdk_config);
@@ -298,7 +298,7 @@ fn render_completion_operator<G, F>(
     scope: G,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
-    connection_id: GlobalId,
+    connection_id: CatalogItemId,
     sink_id: GlobalId,
     s3_key_manager: S3KeyManager,
     completion_stream: Stream<G, Result<u64, String>>,
@@ -336,7 +336,7 @@ fn render_completion_operator<G, F>(
             if is_leader {
                 debug!(%sink_id, %worker_id, "s3 leader worker completion");
                 let sdk_config = aws_connection
-                    .load_sdk_config(&connection_context, connection_id.to_item_id(), InTask::Yes)
+                    .load_sdk_config(&connection_context, connection_id, InTask::Yes)
                     .await?;
 
                 let client = mz_aws_util::s3::new_client(&sdk_config);
@@ -377,7 +377,7 @@ fn render_upload_operator<G, T>(
     scope: G,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
-    connection_id: GlobalId,
+    connection_id: CatalogItemId,
     connection_details: S3UploadInfo,
     sink_id: GlobalId,
     input_collection: Collection<G, ((Row, u64), ()), Diff>,
@@ -420,7 +420,7 @@ where
         // fallible async block to use the `?` operator for convenience
         let res = async move {
             let sdk_config = aws_connection
-                .load_sdk_config(&connection_context, connection_id.to_item_id(), InTask::Yes)
+                .load_sdk_config(&connection_context, connection_id, InTask::Yes)
                 .await?;
 
             // Map of an uploader per batch.

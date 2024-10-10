@@ -609,7 +609,7 @@ pub trait CatalogItem {
 
     /// Returns the IDs of the catalog items upon which this catalog item
     /// depends.
-    fn uses(&self) -> BTreeSet<GlobalId>;
+    fn uses(&self) -> BTreeSet<CatalogItemId>;
 
     /// Returns the IDs of the catalog items that directly reference this catalog item.
     fn referenced_by(&self) -> &[CatalogItemId];

@@ -72,7 +72,7 @@ use ipnet::IpNet;
 use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
 use mz_compute_client::as_of_selection;
 use mz_ore::channel::trigger::Trigger;
-use mz_sql::names::{ResolvedIds, SchemaSpecifier};
+use mz_sql::names::{DependencyIds, ResolvedIds, SchemaSpecifier};
 use mz_sql::session::user::User;
 use mz_storage_types::read_holds::ReadHold;
 use std::borrow::Cow;
@@ -421,7 +421,7 @@ pub struct CopyToContext {
     /// Connection information required to connect to the external service to copy the data.
     pub connection: StorageConnection<ReferencedConnection>,
     /// The ID of the CONNECTION object to be used for copying the data.
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     /// Format params to format the data.
     pub format: S3SinkFormat,
     /// Approximate max file size of each uploaded file.
@@ -599,6 +599,7 @@ pub struct CreateViewFinish {
     /// ID by with Compute will reference this View.
     collection_id: GlobalId,
     plan: plan::CreateViewPlan,
+    /// IDs of objects resolved during name resolution.
     resolved_ids: ResolvedIds,
     optimized_expr: OptimizedMirRelationExpr,
 }

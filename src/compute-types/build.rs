@@ -36,6 +36,7 @@ fn main() {
         .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
         .extern_path(".mz_repr.antichain", "::mz_repr::antichain")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
+        .extern_path(".mz_repr.catalog_item_id", "::mz_repr::catalog_item_id")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.explain", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")

@@ -1096,7 +1096,7 @@ fn plan_copy_to_expr(
         desc,
         to,
         connection: connection.to_owned(),
-        connection_id: conn_id.to_global_id(),
+        connection_id: conn_id,
         format,
         max_file_size: options.max_file_size.as_bytes(),
     }))

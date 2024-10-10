@@ -2144,6 +2144,16 @@ where
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ResolvedIds(pub BTreeSet<CatalogItemId>);
 
+/// A set of IDs references by the [`HirRelationExpr`] of an object.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DependencyIds(pub BTreeSet<CatalogItemId>);
+
+impl FromIterator<CatalogItemId> for DependencyIds {
+    fn from_iter<T: IntoIterator<Item = CatalogItemId>>(iter: T) -> Self {
+        DependencyIds(iter.into_iter().collect())
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct DependencyVisitor {
     ids: BTreeSet<CatalogItemId>,

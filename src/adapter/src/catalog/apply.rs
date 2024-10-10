@@ -1404,7 +1404,7 @@ impl CatalogState {
             if u == entry.id() {
                 continue;
             }
-            match self.entry_by_id.get_mut(&u.to_item_id()) {
+            match self.entry_by_id.get_mut(&u) {
                 Some(metadata) => metadata.used_by.push(entry.item_id()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
@@ -1479,7 +1479,7 @@ impl CatalogState {
             }
         }
         for u in metadata.uses() {
-            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u.to_item_id()) {
+            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
                 dep_metadata.used_by.retain(|u| *u != metadata.item_id())
             }
         }

@@ -558,6 +558,7 @@ impl Coordinator {
                         plan::MaterializedView {
                             mut create_sql,
                             expr: raw_expr,
+                            dependencies,
                             cluster_id,
                             non_null_assertions,
                             compaction_window,
@@ -644,6 +645,7 @@ impl Coordinator {
                     desc: global_lir_plan.desc().clone(),
                     collection_id,
                     resolved_ids,
+                    dependencies,
                     cluster_id,
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,

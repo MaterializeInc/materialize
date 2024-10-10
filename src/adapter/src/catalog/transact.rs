@@ -1006,10 +1006,12 @@ impl Catalog {
                     temporary_item_updates.push((item, StateDiff::Addition));
                 } else {
                     if let Some(temp_id) =
-                        item.uses().iter().find(|id| match state.try_get_entry(id) {
-                            Some(entry) => entry.item().is_temporary(),
-                            None => temporary_ids.contains(&id.to_item_id()),
-                        })
+                        item.uses()
+                            .iter()
+                            .find(|id| match state.try_get_entry(*id) {
+                                Some(entry) => entry.item().is_temporary(),
+                                None => temporary_ids.contains(&id),
+                            })
                     {
                         let temp_item = state.get_entry(temp_id);
                         return Err(AdapterError::Catalog(Error::new(

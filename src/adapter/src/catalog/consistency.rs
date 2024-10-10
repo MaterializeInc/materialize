@@ -353,10 +353,10 @@ impl CatalogState {
                 }
             }
             for used_id in entry.uses() {
-                let Some(used_entry) = self.entry_by_id.get(&used_id.to_item_id()) else {
+                let Some(used_entry) = self.entry_by_id.get(&used_id) else {
                     dependency_inconsistencies.push(ObjectDependencyInconsistency::MissingUses {
                         object_a: *id,
-                        object_b: used_id.to_item_id(),
+                        object_b: *used_id,
                     });
                     continue;
                 };
@@ -364,7 +364,7 @@ impl CatalogState {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
-                            object_b: used_id.to_item_id(),
+                            object_b: *used_id,
                         },
                     );
                 }
@@ -395,7 +395,7 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !used_by_entry.uses().contains(&id.to_global_id()) {
+                if !used_by_entry.uses().contains(&id) {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUses {
                             object_a: *id,

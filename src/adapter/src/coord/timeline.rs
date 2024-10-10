@@ -500,7 +500,6 @@ impl Coordinator {
         let mut res: BTreeMap<TimelineContext, CollectionIdBundle> = BTreeMap::new();
 
         for id in &id_bundle.storage_ids {
-            let item_id = self.catalog().resolve_global_id(id).item_id();
             let timeline_context = self.get_timeline_context(*id);
             res.entry(timeline_context)
                 .or_default()

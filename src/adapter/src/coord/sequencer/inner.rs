@@ -533,10 +533,7 @@ impl Coordinator {
         session: &mut Session,
         plans: Vec<plan::CreateSourcePlanBundle>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let (collection_ids, item_ids): (Vec<_>, Vec<_>) = plans
-            .iter()
-            .map(|plan| (plan.collection_id, plan.item_id))
-            .unzip();
+        let item_ids: Vec<_> = plans.iter().map(|plan| plan.item_id).collect();
         let CreateSourceInner {
             ops,
             sources,

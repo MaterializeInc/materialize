@@ -865,16 +865,22 @@ impl Coordinator {
             let ts = determination.timestamp_context.timestamp_or_default();
             let mut transitive_storage_deps = BTreeSet::new();
             let mut transitive_compute_deps = BTreeSet::new();
-            for id in id_bundle
+            for item_id in id_bundle
                 .iter()
+                .map(|gid| self.catalog.state().resolve_global_id(&gid).item_id())
                 .flat_map(|id| self.catalog.state().transitive_uses(id))
             {
-                match self.catalog.state().get_entry(&id).item() {
+                let entry = self.catalog.state().get_entry(&item_id);
+                match entry.item() {
+                    // TODO(parkmycar): Adding all of the GlobalIds an object depends on is
+                    // probably incorrect, but it's okay for now since the only thing that can have
+                    // multiple GlobalIds are Tables. In the future we should track dependencies
+                    // based on `GlobalId` or (`CatalogItemId`, `Version`).
                     CatalogItem::Table(_) | CatalogItem::Source(_) => {
-                        transitive_storage_deps.insert(id);
+                        transitive_storage_deps.extend(entry.global_ids());
                     }
                     CatalogItem::MaterializedView(_) | CatalogItem::Index(_) => {
-                        transitive_compute_deps.insert(id);
+                        transitive_compute_deps.extend(entry.global_ids());
                     }
                     _ => {}
                 }

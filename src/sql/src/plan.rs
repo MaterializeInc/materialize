@@ -76,8 +76,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDataType,
-    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
+    Aug, CommentObjectId, DependencyIds, FullItemName, ObjectId, QualifiedItemName,
+    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -912,7 +912,7 @@ pub struct CopyToPlan {
     pub to: HirScalarExpr,
     pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
     /// The ID of the connection.
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     pub format: S3SinkFormat,
     pub max_file_size: u64,
 }
@@ -1610,6 +1610,7 @@ pub struct Sink {
 pub struct View {
     pub create_sql: String,
     pub expr: HirRelationExpr,
+    pub dependencies: DependencyIds,
     pub column_names: Vec<ColumnName>,
     pub temporary: bool,
 }
@@ -1618,6 +1619,7 @@ pub struct View {
 pub struct MaterializedView {
     pub create_sql: String,
     pub expr: HirRelationExpr,
+    pub dependencies: DependencyIds,
     pub column_names: Vec<ColumnName>,
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,
