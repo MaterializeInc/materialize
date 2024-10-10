@@ -16,15 +16,17 @@ from materialize.output_consistency.execution.sql_dialect_adjuster import (
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
-from materialize.output_consistency.expression.expression import LeafExpression
+from materialize.output_consistency.expression.expression import (
+    LeafExpression,
+)
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.input_data.types.string_type_provider import (
+    TEXT_DATA_TYPE,
+)
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 from materialize.output_consistency.query.data_source import DataSource
-from materialize.output_consistency.selection.row_selection import (
-    DataRowSelection,
-)
 
 
 class ConstantExpression(LeafExpression):
@@ -33,6 +35,7 @@ class ConstantExpression(LeafExpression):
         self,
         value: str,
         data_type: DataType,
+        add_quotes: bool = False,
         characteristics: set[ExpressionCharacteristics] = set(),
         is_aggregate: bool = False,
     ):
@@ -46,6 +49,7 @@ class ConstantExpression(LeafExpression):
             False,
         )
         self.value = value
+        self.add_quotes = add_quotes
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
         return self.data_type.resolve_return_type_spec(self.own_characteristics)
@@ -59,12 +63,11 @@ class ConstantExpression(LeafExpression):
         return self.to_sql_as_value(sql_adjuster)
 
     def to_sql_as_value(self, sql_adjuster: SqlDialectAdjuster) -> str:
-        return self.data_type.value_to_sql(self.value, sql_adjuster)
+        sql_value = self.data_type.value_to_sql(self.value, sql_adjuster)
+        if self.add_quotes:
+            return f"'{sql_value}'"
 
-    def recursively_collect_involved_characteristics(
-        self, row_selection: DataRowSelection
-    ) -> set[ExpressionCharacteristics]:
-        return self.own_characteristics
+        return sql_value
 
     def collect_vertical_table_indices(self) -> set[int]:
         return set()
@@ -74,3 +77,14 @@ class ConstantExpression(LeafExpression):
 
     def __str__(self) -> str:
         return f"ConstantExpression (value={self.value}, type={self.data_type})"
+
+
+class ConstantStringExpression(ConstantExpression):
+    def __init__(
+        self,
+        value: str,
+        characteristics: set[ExpressionCharacteristics] = set(),
+    ):
+        super().__init__(
+            value, TEXT_DATA_TYPE, add_quotes=True, characteristics=characteristics
+        )
