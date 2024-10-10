@@ -312,33 +312,25 @@ where
                         } else {
                             (Collection::new(empty(scope)), None, None, None)
                         };
-                    let (upsert, health_update, upsert_token) = crate::upsert::upsert(
-                        &upsert_input.enter(scope),
-                        upsert_envelope.clone(),
-                        refine_antichain(&resume_upper),
-                        previous,
-                        previous_token,
-                        base_source_config.clone(),
-                        &storage_state.instance_context,
-                        &storage_state.storage_configuration,
-                        &storage_state.dataflow_parameters,
-                        backpressure_metrics,
-                    );
+                    let (upsert, health_update, snapshot_progress, upsert_token) =
+                        crate::upsert::upsert(
+                            &upsert_input.enter(scope),
+                            upsert_envelope.clone(),
+                            refine_antichain(&resume_upper),
+                            previous,
+                            previous_token,
+                            base_source_config.clone(),
+                            &storage_state.instance_context,
+                            &storage_state.storage_configuration,
+                            &storage_state.dataflow_parameters,
+                            backpressure_metrics,
+                        );
 
                     // Even though we register the `persist_sink` token at a top-level,
                     // which will stop any data from being committed, we also register
                     // a token for the `upsert` operator which may be in the middle of
                     // rehydration processing the `persist_source` input above.
                     needed_tokens.push(upsert_token);
-
-                    use mz_timely_util::probe::ProbeNotify;
-                    let handle = mz_timely_util::probe::Handle::default();
-                    let upsert = upsert.inner.probe_notify_with(vec![handle.clone()]);
-                    let probe = mz_timely_util::probe::source(
-                        scope.clone(),
-                        format!("upsert_probe({export_id})"),
-                        handle,
-                    );
 
                     // If configured, delay raw sources until we rehydrate the upsert
                     // source. Otherwise, drop the token, unblocking the sources at the
@@ -351,20 +343,20 @@ where
                             &base_source_config,
                             rehydrated_token,
                             refine_antichain(&resume_upper),
-                            &probe,
+                            &snapshot_progress,
                         );
                     } else {
                         drop(rehydrated_token)
                     };
 
-                    // If backpressure is enabled, we probe the upsert operator's
-                    // output, which is the easiest way to extract frontier information.
+                    // If backpressure from persist is enabled, we connect the upsert operator's
+                    // snapshot progress to the persist source feedback handle.
                     let upsert = match feedback_handle {
                         Some(feedback_handle) => {
-                            probe.connect_loop(feedback_handle);
-                            upsert.as_collection()
+                            snapshot_progress.connect_loop(feedback_handle);
+                            upsert
                         }
-                        None => upsert.as_collection(),
+                        None => upsert,
                     };
 
                     (
