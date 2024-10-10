@@ -4962,10 +4962,18 @@ def workflow_crash_on_replica_expiration_index(
         # now() + 10s
         expected_expiration_timestamp_sec = int(time.time()) + 10
 
-        expiration_timestamp_sec = metrics.get_value("mz_dataflow_replica_expiration_timestamp_seconds") / 1000
-        assert \
-            (expected_expiration_timestamp_sec - 10) < expiration_timestamp_sec < (expected_expiration_timestamp_sec + 10),\
-            f"expiration_timestamp: expected={expected_expiration_timestamp_sec}[{datetime.fromtimestamp(expected_expiration_timestamp_sec)}], got={expiration_timestamp_sec}[{[{datetime.fromtimestamp(expiration_timestamp_sec)}]}]"
+        expiration_timestamp_sec = (
+            metrics.get_value("mz_dataflow_replica_expiration_timestamp_seconds") / 1000
+        )
+        assert (
+            (expected_expiration_timestamp_sec - 10)
+            < expiration_timestamp_sec
+            < (expected_expiration_timestamp_sec + 10)
+        ), f"expiration_timestamp: expected={expected_expiration_timestamp_sec}[{datetime.fromtimestamp(expected_expiration_timestamp_sec)}], got={expiration_timestamp_sec}[{[{datetime.fromtimestamp(expiration_timestamp_sec)}]}]"
 
-        expiration_remaining = metrics.get_value("mz_dataflow_replica_expiration_remaining_seconds")
-        assert expiration_remaining < 10.0, f"expiration_remaining: expected < 10s, got={expiration_remaining}"
+        expiration_remaining = metrics.get_value(
+            "mz_dataflow_replica_expiration_remaining_seconds"
+        )
+        assert (
+            expiration_remaining < 10.0
+        ), f"expiration_remaining: expected < 10s, got={expiration_remaining}"
