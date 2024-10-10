@@ -413,6 +413,12 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.k8s-controller]]
+version = "0.3.3"
+when = "2024-08-20"
+user-id = 274184
+user-login = "alex-hunt-materialize"
+
 [[publisher.linux-raw-sys]]
 version = "0.3.4"
 when = "2023-04-22"

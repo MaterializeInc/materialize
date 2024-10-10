@@ -56,6 +56,7 @@ use crate::deployment::preflight::{PreflightInput, PreflightOutput};
 use crate::deployment::state::DeploymentState;
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 
+pub use crate::deployment::state::DeploymentStatus;
 pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 mod deployment;

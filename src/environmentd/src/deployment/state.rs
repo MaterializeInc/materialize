@@ -195,7 +195,7 @@ impl DeploymentStateHandle {
 
 /// Describes the status of a deployment.
 ///
-/// This is a simplified representation of [`DeploymentState`], suitable for
+/// This is a simplified representation of `DeploymentState`, suitable for
 /// announcement to the external orchestrator.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DeploymentStatus {
