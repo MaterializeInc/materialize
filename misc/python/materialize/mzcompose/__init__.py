@@ -88,6 +88,7 @@ def get_default_system_parameters(
         "enable_comment": "true",
         "enable_compute_chunked_stack": "true",
         "enable_connection_validation_syntax": "true",
+        "enable_continual_task_builtins": "true",
         "enable_copy_to_expr": "true",
         "enable_create_continual_task": "true",
         "enable_create_table_from_source": "true",
