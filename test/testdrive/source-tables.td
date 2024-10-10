@@ -10,9 +10,6 @@
 $ set-arg-default default-replica-size=1
 $ set-arg-default single-replica-cluster=quickstart
 
-# TODO(def-) Remove when database-issues#8515 and database-issues#8526 are fixed
-$ skip-if
-SELECT true
 
 #
 # Validate feature flag
@@ -55,7 +52,24 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 > SELECT count(*) FROM bids2
 255
 
+
+# Validate that the available source references table was correctly populated
+> SELECT u.name, u.namespace, u.columns
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_references u ON s.id = u.source_id
+  WHERE
+  s.name = 'auction_house'
+  ORDER BY u.name;
+accounts auction {id,org_id,balance}
+auctions auction {id,seller,item,end_time}
+bids auction {id,buyer,auction_id,amount,bid_time}
+organizations auction {id,name}
+users auction {id,org_id,name}
+
 > DROP SOURCE auction_house CASCADE;
+
+> SELECT count(*) FROM mz_internal.mz_source_references;
+0
 
 #
 # Single-output load generator source using source-fed tables
@@ -275,15 +289,40 @@ var1 5678 <null>
 var0 5555 6666
 var1 4444 12
 
+# Validate that the available source references table reflects the state of the upstream
+# when the create source was run
+> SELECT u.name, u.namespace, u.columns
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_references u ON s.id = u.source_id
+  WHERE
+  s.name = 'mysql_source'
+  ORDER BY u.name;
+mysql_table public {a,b}
+
+# Create a new table in MySQL and refresh to see if the new available reference is picked up
+$ mysql-execute name=mysql
+USE public;
+CREATE TABLE mysql_table_new (foo INTEGER, bar INTEGER);
+
+> REFRESH SOURCE REFERENCES mysql_source;
+
+> SELECT u.name, u.namespace, u.columns
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_references u ON s.id = u.source_id
+  WHERE
+  s.name = 'mysql_source'
+  ORDER BY u.name;
+mysql_table public {a,b,c}
+mysql_table_new public {foo,bar}
+
 > DROP SOURCE mysql_source CASCADE;
 
 # ensure that CASCADE propagates to the tables
 ! SELECT * FROM mysql_table_3;
 contains:unknown catalog item 'mysql_table_3'
 
-# TODO(def-) Remove when database-issues#8515 and database-issues#8526 are fixed
-$ skip-end
-
+> SELECT count(*) FROM mz_internal.mz_source_references;
+0
 
 #
 # Kafka source using source-fed tables

@@ -1236,6 +1236,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::Inserted(_)
         | ExecuteResponse::Copied(_)
         | ExecuteResponse::Raised
+        | ExecuteResponse::Refreshed
         | ExecuteResponse::ReassignOwned
         | ExecuteResponse::RevokedPrivilege
         | ExecuteResponse::AlteredDefaultPrivileges

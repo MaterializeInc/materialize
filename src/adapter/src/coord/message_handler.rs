@@ -529,6 +529,7 @@ impl Coordinator {
                 create_progress_subsource_stmt,
                 create_source_stmt,
                 subsources,
+                available_source_references,
             } => {
                 self.plan_purified_create_source(
                     &ctx,
@@ -536,6 +537,7 @@ impl Coordinator {
                     create_progress_subsource_stmt,
                     create_source_stmt,
                     subsources,
+                    available_source_references,
                 )
                 .await
             }
@@ -553,6 +555,15 @@ impl Coordinator {
                 )
                 .await
             }
+            PurifiedStatement::PurifiedRefreshSourceReferences {
+                stmt,
+                available_source_references,
+            } => self.plan_purified_refresh_source_references(
+                ctx.session(),
+                stmt,
+                &params,
+                available_source_references,
+            ),
             o @ (PurifiedStatement::PurifiedAlterSource { .. }
             | PurifiedStatement::PurifiedCreateSink(..)
             | PurifiedStatement::PurifiedCreateTableFromSource { .. }) => {
@@ -566,7 +577,8 @@ impl Coordinator {
                     }
                     PurifiedStatement::PurifiedCreateSink(stmt) => Statement::CreateSink(stmt),
                     PurifiedStatement::PurifiedCreateSource { .. }
-                    | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. } => {
+                    | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
+                    | PurifiedStatement::PurifiedRefreshSourceReferences { .. } => {
                         unreachable!("not part of exterior match stmt")
                     }
                 };

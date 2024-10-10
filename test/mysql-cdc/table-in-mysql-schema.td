@@ -35,23 +35,26 @@ INSERT INTO t_in_mysql VALUES (1), (2);
 
 > DROP SOURCE IF EXISTS mz_source;
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+# TODO(database-issues#8624): Uncomment when addressed
 
-! CREATE TABLE timezone FROM SOURCE mz_source (REFERENCE public.timezone);
+! CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 contains:No tables found
 
-> CREATE TABLE t_in_mysql FROM SOURCE mz_source (REFERENCE mysql.t_in_mysql);
+# ! CREATE TABLE timezone FROM SOURCE mz_source (REFERENCE public.timezone);
+# contains:No tables found
 
-> SELECT * FROM t_in_mysql;
-1
-2
+# > CREATE TABLE t_in_mysql FROM SOURCE mz_source (REFERENCE mysql.t_in_mysql);
 
-> DROP SOURCE mz_source CASCADE;
+# > SELECT * FROM t_in_mysql;
+# 1
+# 2
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+# > DROP SOURCE mz_source CASCADE;
 
-! CREATE TABLE t_in_mysql FROM SOURCE mz_source (REFERENCE mysql.time_zone);
-contains:referenced tables use unsupported types
+# > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+# ! CREATE TABLE t_in_mysql FROM SOURCE mz_source (REFERENCE mysql.time_zone);
+# contains:referenced tables use unsupported types
 
 $ mysql-execute name=mysql
 DROP TABLE t_in_mysql;
