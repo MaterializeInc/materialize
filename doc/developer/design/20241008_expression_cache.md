@@ -72,7 +72,7 @@ struct Expressions {
     physical_plan: DataflowDescription<mz_compute_types::plan::Plan>,
     dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
     notices: SmallVec<[Arc<OptimizerNotice>; 4]>,
-    optimizer_feature_overrides: OptimizerFeatureOverrides,
+    optimizer_feature_overrides: OptimizerFeatures,
 }
 
 struct ExpressionCache {
@@ -85,13 +85,13 @@ impl ExpressionCache {
     fn new(&mut self, deploy_generation: u64, information_needed_to_connect_to_durable_store: _) -> Self;
 
     /// Remove all entries in current deploy generation that depend on a global ID that is not
-    /// present in `current_ids` or that do not have a matching `optimizer_feature_overrides`.
+    /// present in `current_ids` or that do not have a matching `optimizer_feature`.
     ///
     /// If `remove_prior_gens` is `true`, all previous generations are durably removed from the
     /// cache.
     ///
     /// Returns all cached expressions in the current deploy generation.
-    fn open(&mut self, current_ids: &BTreeSet<GlobalId>, optimizer_feature_overrides: &OptimizerFeatureOverrides, remove_prior_gens: bool) -> Vec<(GlobalId, Expressions)>;
+    fn open(&mut self, current_ids: &BTreeSet<GlobalId>, optimizer_feature: &OptimizerFeatures, remove_prior_gens: bool) -> Vec<(GlobalId, Expressions)>;
 
     /// Durably inserts `expressions` into current deploy generation.
     ///
