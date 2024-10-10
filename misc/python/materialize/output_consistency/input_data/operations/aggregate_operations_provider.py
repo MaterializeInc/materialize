@@ -151,12 +151,13 @@ AGGREGATE_OPERATION_TYPES.append(
 AGGREGATE_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "string_agg",
-        {4: "string_agg($, $ ORDER BY $, $)"},
+        {5: "string_agg($, $ ORDER BY $, $, $)"},
         [
             StringOperationParam(),
             # separator value
             StringOperationParam(),
             RowIndicesParam(index_of_param_to_share_data_source=0),
+            RowIndicesParam(index_of_param_to_share_data_source=1),
             SameOperationParam(index_of_previous_param=0),
         ],
         StringReturnTypeSpec(),
