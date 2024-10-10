@@ -263,7 +263,7 @@ impl Coordinator {
                     .with_label_values(&[session_type])
                     .inc();
 
-                self.builtin_table_update().execute(vec![update]).await
+                self.builtin_table_update().execute(vec![update]).await.0
             }
             ActiveComputeSink::CopyTo(_) => {
                 self.metrics

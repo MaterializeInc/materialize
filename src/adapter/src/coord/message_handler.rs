@@ -323,7 +323,7 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn storage_usage_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
-        let fut = self.builtin_table_update().execute(expired).await;
+        let (fut, _) = self.builtin_table_update().execute(expired).await;
         task::spawn(|| "storage_usage_pruning_apply", async move {
             fut.await;
         });
@@ -685,7 +685,9 @@ impl Coordinator {
                             .await;
                     }
                 }
-                Deferred::GroupCommit => self.group_commit(Some(write_lock_guard), None).await,
+                Deferred::GroupCommit => {
+                    self.group_commit(Some(write_lock_guard), None).await;
+                }
             }
         }
         // N.B. if no deferred plans, write lock is released by drop
@@ -800,6 +802,7 @@ impl Coordinator {
             self.builtin_table_update()
                 .execute(builtin_table_updates)
                 .await
+                .0
                 .instrument(info_span!("coord::message_cluster_event::table_updates"))
                 .await;
 
