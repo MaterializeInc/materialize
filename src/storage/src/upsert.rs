@@ -828,11 +828,6 @@ where
         // of updates, all at the same initial timestamp) from our persist
         // input.
         let mut snapshotting_persist = true;
-        // While we're snapshotting persist, we keep track of the lowest
-        // observed timestamp. And we know that we're out of snapshotting as
-        // soon as we observe a persist_upper such that `persist_lower <
-        // persist_upper`.
-        let mut persist_lower = Antichain::new();
 
         let mut stash = vec![];
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
@@ -871,9 +866,6 @@ where
                     tracing::debug!(?persist_event, "persist input");
                     match persist_event {
                         AsyncEvent::Data(ts, data) => {
-                            // Keep track of the times we have seen.
-                            persist_lower.insert(ts.clone());
-
                             persist_stash.extend(data.into_iter().map(|((key, value), ts, diff)| {
                                 (key, value, ts, diff)
                             }))
@@ -916,7 +908,7 @@ where
                         // Determine if this is the last time we call
                         // consolidate_snapshot_chunk, and update our
                         // `snapshotting_persist` state.
-                        let last_snapshot = snapshotting_persist && PartialOrder::less_than(&persist_lower, &persist_upper);
+                        let last_snapshot = snapshotting_persist && PartialOrder::less_than(&resume_upper, &persist_upper);
 
                         // Sort by ts and only present updates that are not
                         // beyond the resume upper.
@@ -929,12 +921,14 @@ where
                             )
                         });
 
-                        // Find the prefix that we can emit
+                        // Find the prefix that we can ingest.
                         let idx = persist_stash.partition_point(|(_, _, ts, _)| {
-                            !persist_lower.less_than(ts)
+                            let first_source_snapshot = ts == &G::Timestamp::minimum();
+                            let rehydration_snapshot = !resume_upper.less_equal(ts);
+                            first_source_snapshot || rehydration_snapshot
                         });
 
-                        tracing::debug!(?persist_stash, %idx, %last_snapshot, ?resume_upper, ?persist_lower, ?persist_upper, "ingesting persist snapshot!");
+                        tracing::debug!(?persist_stash, %idx, %last_snapshot, ?resume_upper, ?persist_upper, "ingesting persist snapshot!");
 
                         snapshotting_persist = !last_snapshot;
 
@@ -951,10 +945,9 @@ where
                                 if let Some(_ts) = persist_upper.clone().into_option() {
                                     // Needed for the with-permit change.
                                     //let _ = snapshot_cap.try_downgrade(&ts);
-
-                                    if last_snapshot {
-                                        tracing::debug!("releasing backpressure permit!");
-                                    }
+                                    //if last_snapshot && permit.is_some() {
+                                    //    tracing::debug!("releasing backpressure permit!");
+                                    //}
                                 }
                             }
                             Err(e) => {
@@ -1005,7 +998,12 @@ where
                             );
                         }
 
-                    } else {
+                    }
+
+                    // We don't have an else here, because we might notice we're
+                    // done snapshotting but already have some persist updates
+                    // staged. We have to work them off eagerly here.
+                    if !snapshotting_persist {
                         tracing::debug!(?persist_stash, ?persist_upper, "ingesting persist updates!");
 
                         ingest_state_updates::<_, G, _, _, _>(
