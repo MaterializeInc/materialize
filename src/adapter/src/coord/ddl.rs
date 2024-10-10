@@ -37,7 +37,7 @@ use mz_ore::task;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
-use mz_sql::catalog::{CatalogCluster, CatalogSchema};
+use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::plan::ConnectionDetails;
 use mz_sql::session::metadata::SessionMetadata;
@@ -367,13 +367,13 @@ impl Coordinator {
                 }
                 catalog::Op::CreateClusterReplica {
                     cluster_id,
-                    id,
+                    name,
                     config,
                     ..
                 } => {
                     cluster_replicas_to_create.push((
                         *cluster_id,
-                        *id,
+                        name.clone(),
                         config.location.num_processes(),
                     ));
                 }
@@ -563,7 +563,11 @@ impl Coordinator {
             }
         }
         let now = to_datetime((catalog.config().now)());
-        for (cluster_id, replica_id, num_processes) in cluster_replicas_to_create {
+        for (cluster_id, replica_name, num_processes) in cluster_replicas_to_create {
+            let replica_id = catalog
+                .resolve_replica_in_cluster(&cluster_id, &replica_name)
+                .expect("just created")
+                .replica_id();
             cluster_replica_statuses.initialize_cluster_replica_statuses(
                 cluster_id,
                 replica_id,

@@ -1101,6 +1101,19 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("unknown cluster replica: {cluster_id}.{replica_id}"))
     }
 
+    pub(super) fn resolve_replica_in_cluster(
+        &self,
+        cluster_id: &ClusterId,
+        replica_name: &str,
+    ) -> Result<&ClusterReplica, SqlCatalogError> {
+        let cluster = self.get_cluster(*cluster_id);
+        let replica_id = cluster
+            .replica_id_by_name_
+            .get(replica_name)
+            .ok_or_else(|| SqlCatalogError::UnknownClusterReplica(replica_name.to_string()))?;
+        Ok(&cluster.replicas_by_id_[replica_id])
+    }
+
     /// Get system configuration `name`.
     pub fn get_system_configuration(&self, name: &str) -> Result<&dyn Var, Error> {
         Ok(self.system_configuration.get(name)?)

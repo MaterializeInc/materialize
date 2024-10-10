@@ -99,7 +99,6 @@ pub enum Op {
     },
     CreateClusterReplica {
         cluster_id: ClusterId,
-        id: ReplicaId,
         name: String,
         config: ReplicaConfig,
         owner_id: RoleId,
@@ -874,7 +873,6 @@ impl Catalog {
             }
             Op::CreateClusterReplica {
                 cluster_id,
-                id,
                 name,
                 config,
                 owner_id,
@@ -886,7 +884,8 @@ impl Catalog {
                     )));
                 }
                 let cluster = state.get_cluster(cluster_id);
-                tx.insert_cluster_replica(cluster_id, id, &name, config.clone().into(), owner_id)?;
+                let id =
+                    tx.insert_cluster_replica(cluster_id, &name, config.clone().into(), owner_id)?;
                 if let ReplicaLocation::Managed(ManagedReplicaLocation {
                     size,
                     disk,
