@@ -196,9 +196,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
     pub(crate) fn flatten(&self) -> FlatTrace<T> {
         let since = self.spine.since.clone();
         let mut legacy_batches = BTreeMap::new();
-        // Since we store all batches in the legacy-batch collection for the moment,
-        // this doesn't need to be mutable.
-        let hollow_batches = BTreeMap::new();
+        let mut hollow_batches = BTreeMap::new();
         let mut spine_batches = BTreeMap::new();
         let mut merges = BTreeMap::new();
 
@@ -207,10 +205,14 @@ impl<T: Timestamp + Lattice> Trace<T> {
             let desc = batch.desc.clone();
             let mut parts = Vec::with_capacity(batch.parts.len());
             let mut descs = Vec::with_capacity(batch.parts.len());
-            for id_batch in &batch.parts {
-                parts.push(id_batch.id);
-                descs.push(id_batch.batch.desc.clone());
-                legacy_batches.insert(Arc::clone(&id_batch.batch), ());
+            for IdHollowBatch { id, batch } in &batch.parts {
+                parts.push(*id);
+                descs.push(batch.desc.clone());
+                if batch.desc.lower() == batch.desc.upper() {
+                    hollow_batches.insert(*id, Arc::clone(batch));
+                } else {
+                    legacy_batches.insert(Arc::clone(batch), ());
+                }
             }
 
             let spine_batch = ThinSpineBatch {
@@ -289,9 +291,14 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
         let mut pop_batch =
             |id: SpineId, expected_desc: Option<&Description<T>>| -> Result<_, String> {
-                let mut batch = hollow_batches
-                    .remove(&id)
-                    .or_else(|| legacy_batches.pop())
+                if let Some(batch) = hollow_batches.remove(&id) {
+                    if let Some(desc) = expected_desc {
+                        assert_eq!(*desc, batch.desc);
+                    }
+                    return Ok(IdHollowBatch { id, batch });
+                }
+                let mut batch = legacy_batches
+                    .pop()
                     .ok_or_else(|| format!("missing referenced hollow batch {id:?}"))?;
 
                 let Some(expected_desc) = expected_desc else {
@@ -528,8 +535,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
     /// Returns true if this did work and false if it left the spine unchanged.
     #[must_use]
     pub fn exert(&mut self, fuel: usize) -> (Vec<FueledMergeReq<T>>, bool) {
-        let fuel = isize::try_from(fuel).unwrap_or(isize::MAX);
-
         let mut merge_reqs = Vec::new();
         let did_work = self.spine.exert(
             fuel,
@@ -1159,22 +1164,33 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// permitted to perform proportionate work.
     ///
     /// Returns true if this did work and false if it left the spine unchanged.
-    fn exert(&mut self, effort: isize, log: &mut SpineLog<'_, T>) -> bool {
+    fn exert(&mut self, effort: usize, log: &mut SpineLog<'_, T>) -> bool {
         self.tidy_layers();
         if self.reduced() {
             return false;
         }
 
         if self.merging.iter().any(|b| b.merge.is_some()) {
+            let fuel = isize::try_from(effort).unwrap_or(isize::MAX);
             // If any merges exist, we can directly call `apply_fuel`.
-            self.apply_fuel(&effort, log);
+            self.apply_fuel(&fuel, log);
         } else {
             // Otherwise, we'll need to introduce fake updates to move merges
             // along.
 
-            // TODO: Tracked in database-issues#8530. Once we've finished deleting the legacy
-            // spine-diff code, push an empty batch here to move things along.
-            return false;
+            // Introduce an empty batch with roughly *effort number of virtual updates.
+            let level = usize::cast_from(effort.next_power_of_two().trailing_zeros());
+            let id = self.next_id();
+            self.introduce_batch(
+                SpineBatch::empty(
+                    id,
+                    self.upper.clone(),
+                    self.upper.clone(),
+                    self.since.clone(),
+                ),
+                level,
+                log,
+            );
         }
         true
     }
