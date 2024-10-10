@@ -4,9 +4,8 @@
 
 [<img src="https://github.com/MaterializeInc/materialize/assets/23521087/39270ecb-7ac4-4829-b98b-c5b5699a16b8" width=35%>](https://materialize.com)
 
-Materialize is a cloud-native **data warehouse** purpose-built for **operational
-workloads** where an analytical data warehouse would be too slow, and a stream
-processor would be too complicated.
+Materialize is the **cloud operational data store** purpose-built to use SQL to
+transform, deliver, and act on fast-changing data.
 
 Using SQL and common tools in the wider data ecosystem, Materialize allows you
 to build real-time automation, engaging customer experiences, and interactive
