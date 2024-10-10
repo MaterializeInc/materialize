@@ -452,8 +452,7 @@ pub trait StorageController: Debug {
     /// Alters the data config for the specified source exports of the specified ingestions.
     async fn alter_ingestion_export_data_configs(
         &mut self,
-        // Primary ingestion id, source-export id, and new data config
-        source_exports: Vec<(GlobalId, GlobalId, SourceExportDataConfig)>,
+        source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     async fn alter_table_desc(

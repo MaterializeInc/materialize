@@ -3526,7 +3526,7 @@ impl Coordinator {
 
         let mut source_connections = BTreeMap::new();
         let mut sink_connections = BTreeMap::new();
-        let mut source_export_data_configs = Vec::new();
+        let mut source_export_data_configs = BTreeMap::new();
 
         while let Some(id) = connections.pop_front() {
             for id in self.catalog.get_entry(&id).used_by() {
@@ -3557,15 +3557,12 @@ impl Coordinator {
                     CatalogItemType::Table => {
                         // This is a source-fed table that reference a schema registry
                         // connection as a part of its encoding / data config
-                        if let Some((ingestion_id, _, _, export_data_config)) =
-                            entry.source_export_details()
-                        {
+                        if let Some((_, _, _, export_data_config)) = entry.source_export_details() {
                             let data_config = export_data_config.clone();
-                            source_export_data_configs.push((
-                                ingestion_id,
+                            source_export_data_configs.insert(
                                 *id,
                                 data_config.into_inline_connection(self.catalog().state()),
-                            ));
+                            );
                         }
                     }
                     t => unreachable!("connection dependency not expected on {}", t),
