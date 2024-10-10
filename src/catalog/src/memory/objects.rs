@@ -1821,15 +1821,20 @@ impl CatalogEntry {
     /// ingestion it is an export of, as well as the item it exports.
     pub fn source_export_details(
         &self,
-    ) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
+    ) -> Option<(
+        GlobalId,
+        &UnresolvedItemName,
+        &SourceExportDetails,
+        &SourceExportDataConfig<ReferencedConnection>,
+    )> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::IngestionExport {
                     ingestion_id,
                     external_reference,
                     details,
-                    data_config: _,
-                } => Some((*ingestion_id, external_reference, details)),
+                    data_config,
+                } => Some((*ingestion_id, external_reference, details, data_config)),
                 _ => None,
             },
             CatalogItem::Table(table) => match &table.data_source {
@@ -1837,8 +1842,8 @@ impl CatalogEntry {
                     ingestion_id,
                     external_reference,
                     details,
-                    data_config: _,
-                }) => Some((*ingestion_id, external_reference, details)),
+                    data_config,
+                }) => Some((*ingestion_id, external_reference, details, data_config)),
                 _ => None,
             },
             _ => None,
@@ -2629,7 +2634,12 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn source_export_details(
         &self,
-    ) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
+    ) -> Option<(
+        GlobalId,
+        &UnresolvedItemName,
+        &SourceExportDetails,
+        &SourceExportDataConfig<ReferencedConnection>,
+    )> {
         self.source_export_details()
     }
 

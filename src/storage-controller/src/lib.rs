@@ -77,7 +77,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceConnection, SourceData, SourceDesc,
-    SourceExport,
+    SourceExport, SourceExportDataConfig,
 };
 use mz_storage_types::AlterCompatible;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -967,6 +967,80 @@ where
                 o => {
                     tracing::warn!("update_source_connection called on {:?}", o);
                     Err(StorageError::IdentifierInvalid(id))?;
+                }
+            }
+        }
+
+        for id in ingestions_to_run {
+            self.run_ingestion(id)?;
+        }
+        Ok(())
+    }
+
+    async fn alter_ingestion_export_data_configs(
+        &mut self,
+        source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        // Also have to let StorageCollections know!
+        self.storage_collections
+            .alter_ingestion_export_data_configs(source_exports.clone())
+            .await?;
+
+        let mut ingestions_to_run = BTreeSet::new();
+
+        for (source_export_id, new_data_config) in source_exports {
+            // We need to adjust the data config on the CollectionState for
+            // the source export collection directly
+            let source_export_collection = self
+                .collections
+                .get_mut(&source_export_id)
+                .ok_or_else(|| StorageError::IdentifierMissing(source_export_id))?;
+            let ingestion_id = match &mut source_export_collection.data_source {
+                DataSource::IngestionExport {
+                    ingestion_id,
+                    details: _,
+                    data_config,
+                } => {
+                    *data_config = new_data_config.clone();
+                    *ingestion_id
+                }
+                o => {
+                    tracing::warn!("alter_ingestion_export_data_configs called on {:?}", o);
+                    Err(StorageError::IdentifierInvalid(source_export_id))?
+                }
+            };
+            // We also need to adjust the data config on the CollectionState of the
+            // Ingestion that the export is associated with.
+            let ingestion_collection = self
+                .collections
+                .get_mut(&ingestion_id)
+                .ok_or_else(|| StorageError::IdentifierMissing(ingestion_id))?;
+
+            match &mut ingestion_collection.data_source {
+                DataSource::Ingestion(ingestion_desc) => {
+                    let source_export = ingestion_desc
+                        .source_exports
+                        .get_mut(&source_export_id)
+                        .ok_or_else(|| StorageError::IdentifierMissing(source_export_id))?;
+
+                    // If the data config hasn't changed, there's no sense in
+                    // re-rendering the dataflow.
+                    if source_export.data_config != new_data_config {
+                        tracing::info!(?source_export_id, from = ?source_export.data_config, to = ?new_data_config, "alter_ingestion_export_data_configs, updating");
+                        source_export.data_config = new_data_config;
+
+                        ingestions_to_run.insert(ingestion_id);
+                    } else {
+                        tracing::warn!(
+                            "alter_ingestion_export_data_configs called on \
+                                    export {source_export_id} of {ingestion_id} but \
+                                    the data config was the same"
+                        );
+                    }
+                }
+                o => {
+                    tracing::warn!("alter_ingestion_export_data_configs called on {:?}", o);
+                    Err(StorageError::IdentifierInvalid(ingestion_id))?;
                 }
             }
         }

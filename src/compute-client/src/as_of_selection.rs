@@ -760,6 +760,7 @@ mod tests {
     use mz_storage_types::controller::{CollectionMetadata, StorageError};
     use mz_storage_types::parameters::StorageParameters;
     use mz_storage_types::read_holds::ReadHoldError;
+    use mz_storage_types::sources::SourceExportDataConfig;
     use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
 
     use super::*;
@@ -870,6 +871,13 @@ mod tests {
             &self,
             _ingestion_id: GlobalId,
             _source_desc: SourceDesc,
+        ) -> Result<(), StorageError<Self::Timestamp>> {
+            unimplemented!()
+        }
+
+        async fn alter_ingestion_export_data_configs(
+            &self,
+            _source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
         ) -> Result<(), StorageError<Self::Timestamp>> {
             unimplemented!()
         }

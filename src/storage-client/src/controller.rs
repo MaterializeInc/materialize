@@ -449,6 +449,12 @@ pub trait StorageController: Debug {
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
+    /// Alters the data config for the specified source exports of the specified ingestions.
+    async fn alter_ingestion_export_data_configs(
+        &mut self,
+        source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
     async fn alter_table_desc(
         &mut self,
         table_id: GlobalId,
