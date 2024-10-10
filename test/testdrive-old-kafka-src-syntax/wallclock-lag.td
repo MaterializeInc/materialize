@@ -1,0 +1,98 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test the contents of `mz_wallclock_lag_history`.
+#
+# These tests rely on testdrive's retry feature, as `mz_wallclock_lag_history`
+# is only refreshed periodically, so data is likely not immediately available.
+
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET wallclock_lag_refresh_interval = '1s'
+
+> CREATE CLUSTER storage SIZE '1'
+> CREATE CLUSTER compute SIZE '1', REPLICATION FACTOR 2
+
+# Set up a bunch of frontiered objects and test that their wallclock lags get
+# reported and are reasonably small.
+
+> CREATE SOURCE src IN CLUSTER storage FROM LOAD GENERATOR counter (UP TO 100)
+
+> CREATE TABLE tbl (a int)
+
+> CREATE VIEW src_plus_tbl AS SELECT counter + a AS a FROM src, tbl
+> CREATE INDEX idx IN CLUSTER compute ON src_plus_tbl (a)
+> CREATE MATERIALIZED VIEW mv IN CLUSTER compute AS SELECT * FROM src_plus_tbl
+
+> CREATE MATERIALIZED VIEW mv_const IN CLUSTER compute AS SELECT 1
+> CREATE DEFAULT INDEX idx_const IN CLUSTER compute ON mv_const
+
+> CREATE CONNECTION kafka_conn
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+> CREATE CONNECTION csr_conn
+  TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}')
+> CREATE SINK snk
+  IN CLUSTER storage
+  FROM mv
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+> SELECT DISTINCT ON(o.name, r.name)
+    o.name, r.name, l.lag >= '0s', l.lag < '10s'
+  FROM mz_internal.mz_wallclock_lag_history l
+  JOIN mz_objects o ON o.id = l.object_id
+  LEFT JOIN mz_cluster_replicas r ON r.id = l.replica_id
+  WHERE l.object_id LIKE 'u%'
+  ORDER BY o.name, r.name, l.occurred_at DESC
+idx          r1     true  true
+idx          r2     true  true
+idx_const    r1     true  true
+idx_const    r2     true  true
+mv           r1     true  true
+mv           r2     true  true
+mv           <null> true  true
+mv_const     r1     true  true
+mv_const     r2     true  true
+mv_const     <null> true  true
+snk          <null> true  true
+src          <null> true  true
+src_progress <null> true  true
+tbl          <null> true  true
+
+> SELECT DISTINCT ON(o.name)
+    o.name, l.lag >= '0s', l.lag < '10s'
+  FROM mz_internal.mz_wallclock_global_lag_history l
+  JOIN mz_objects o ON o.id = l.object_id
+  WHERE l.object_id LIKE 'u%'
+  ORDER BY o.name, l.occurred_at DESC
+idx          true  true
+idx_const    true  true
+mv           true  true
+mv_const     true  true
+snk          true  true
+src          true  true
+src_progress true  true
+tbl          true  true
+
+> SELECT DISTINCT ON(o.name)
+    o.name, l.lag >= '0s', l.lag < '10s'
+  FROM mz_internal.mz_wallclock_global_lag_recent_history l
+  JOIN mz_objects o ON o.id = l.object_id
+  WHERE l.object_id LIKE 'u%'
+  ORDER BY o.name, l.occurred_at DESC
+idx          true  true
+idx_const    true  true
+mv           true  true
+mv_const     true  true
+snk          true  true
+src          true  true
+src_progress true  true
+tbl          true  true
