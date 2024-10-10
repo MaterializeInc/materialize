@@ -244,7 +244,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '30d';
 # Test that retraction diffs within the expiration time are generated after the replica expires and panics
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET compute_replica_expiration_offset = '30s';
+ALTER SYSTEM SET compute_replica_expiration_offset = '50s';
 > CREATE CLUSTER test (SIZE = '1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
@@ -254,7 +254,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '30s';
 > CREATE VIEW events_view AS
   SELECT event_ts, content
   FROM events
-  WHERE mz_now() <= event_ts + INTERVAL '45s';
+  WHERE mz_now() <= event_ts + INTERVAL '80s';
 > CREATE DEFAULT INDEX ON events_view;
 > INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
 # Retraction diffs are not generated
@@ -262,7 +262,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '30s';
   WHERE name LIKE '%events_view_primary_idx';
 1000
 # Sleep until the replica expires
-> SELECT mz_unsafe.mz_sleep(32);
+> SELECT mz_unsafe.mz_sleep(60);
 <null>
 # Retraction diffs are now within the expiration time and should be generated
 > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
