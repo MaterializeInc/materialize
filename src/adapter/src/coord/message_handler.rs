@@ -20,7 +20,6 @@ use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
 use mz_ore::cast::usize_to_u64;
-use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -54,7 +53,6 @@ impl Coordinator {
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move Futures of inner function calls onto the heap
     /// (i.e. Box it).
-    #[instrument]
     pub(crate) async fn handle_message(&mut self, msg: Message) -> () {
         match msg {
             Message::Command(otel_ctx, cmd) => {
