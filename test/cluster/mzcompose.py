@@ -4980,5 +4980,5 @@ def workflow_crash_on_replica_expiration_index(
         )
         # Ensure the expiration_remaining is within the configured offset.
         assert (
-            1.0  < expiration_remaining < float(offset)
+            1.0 < expiration_remaining < float(offset)
         ), f"expiration_remaining: expected < 10s, got={expiration_remaining}"
