@@ -735,10 +735,8 @@ pub struct CreateContinualTaskPlan {
     // `continual_task.expr`. None on restart.
     pub placeholder_id: Option<mz_expr::LocalId>,
     pub desc: RelationDesc,
-    // TODO(ct): Multiple inputs.
     pub input_id: GlobalId,
     pub continual_task: MaterializedView,
-    // TODO(ct): replace, drop_ids, if_not_exists
 }
 
 #[derive(Debug, Clone)]
