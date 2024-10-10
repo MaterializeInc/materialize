@@ -1246,7 +1246,6 @@ impl UnopenedPersistCatalogState {
                         &write_handle,
                         || fuel.get(),
                         || wait.get(),
-                        None,
                     )
                     .await;
             });
