@@ -2576,8 +2576,15 @@ impl Coordinator {
                 .catalog()
                 .resolve_full_name(entry.name(), None)
                 .to_string();
+            let is_timeline_epoch_ms = self.get_timeline_context(*id).is_timeline_epoch_ms();
             let (_optimized_plan, physical_plan, _metainfo) = self
-                .optimize_create_continual_task(&ct, *id, self.owned_catalog(), debug_name)
+                .optimize_create_continual_task(
+                    &ct,
+                    *id,
+                    self.owned_catalog(),
+                    debug_name,
+                    is_timeline_epoch_ms,
+                )
                 .expect("builtin CT should optimize successfully");
 
             // Determine an as of for the new continual task.
