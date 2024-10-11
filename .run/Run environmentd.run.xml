@@ -1,0 +1,22 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Run environmentd" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+    <option name="buildProfileId" value="dev" />
+    <option name="command" value="run --bin environmentd -- --startup-log-filter=warn --system-parameter-default=log_filter=warn --internal-http-listen-addr=0.0.0.0:6878 --orchestrator=process --orchestrator-process-secrets-directory=$PROJECT_DIR$/mzdata/secrets --orchestrator-process-tcp-proxy-listen-addr=0.0.0.0 --orchestrator-process-prometheus-service-discovery-directory=$PROJECT_DIR$/mzdata/prometheus --orchestrator-process-scratch-directory=$PROJECT_DIR$/scratch --secrets-controller=local-file --persist-consensus-url=postgres://root@localhost:26257/materialize?options=--search_path=consensus --persist-blob-url=file://$PROJECT_DIR$/mzdata/persist/blob --timestamp-oracle-url=postgres://root@localhost:26257/materialize?options=--search_path=tsoracle --environment-id=local-az1-a1e5718e-9753-483c-9cb0-fe8f9e715f24-0 --bootstrap-role=materialize   " />
+    <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+    <envs />
+    <option name="emulateTerminal" value="true" />
+    <option name="channel" value="DEFAULT" />
+    <option name="requiredFeatures" value="true" />
+    <option name="allFeatures" value="false" />
+    <option name="withSudo" value="false" />
+    <option name="buildTarget" value="REMOTE" />
+    <option name="backtrace" value="SHORT" />
+    <option name="isRedirectInput" value="false" />
+    <option name="redirectInputPath" value="" />
+    <method v="2">
+      <option name="RunConfigurationTask" enabled="true" run_configuration_name="Script environmentd-reset" run_configuration_type="ShConfigurationType" />
+      <option name="RunConfigurationTask" enabled="true" run_configuration_name="Build clusterd environmentd" run_configuration_type="CargoCommandRunConfiguration" />
+      <option name="RunConfigurationTask" enabled="true" run_configuration_name="Script macOS sign" run_configuration_type="ShConfigurationType" />
+    </method>
+  </configuration>
+</component>
