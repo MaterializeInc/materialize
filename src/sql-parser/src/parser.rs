@@ -3585,14 +3585,19 @@ impl<'a> Parser<'a> {
 
         // TODO(ct3): Multiple outputs.
         let name = RawItemName::Name(self.parse_item_name()?);
-        self.expect_token(&Token::LParen)?;
-        let columns = self.parse_comma_separated(|parser| {
-            Ok(CteMutRecColumnDef {
-                name: parser.parse_identifier()?,
-                data_type: parser.parse_data_type()?,
-            })
-        })?;
-        self.expect_token(&Token::RParen)?;
+        let columns = match self.consume_token(&Token::LParen) {
+            true => {
+                let columns = self.parse_comma_separated(|parser| {
+                    Ok(CteMutRecColumnDef {
+                        name: parser.parse_identifier()?,
+                        data_type: parser.parse_data_type()?,
+                    })
+                })?;
+                self.expect_token(&Token::RParen)?;
+                Some(columns)
+            }
+            false => None,
+        };
         let in_cluster = self.parse_optional_in_cluster()?;
 
         // TODO(ct3): Multiple inputs.
