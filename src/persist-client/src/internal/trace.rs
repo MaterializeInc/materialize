@@ -208,6 +208,13 @@ impl<T: Timestamp + Lattice> Trace<T> {
             for IdHollowBatch { id, batch } in &batch.parts {
                 parts.push(*id);
                 descs.push(batch.desc.clone());
+                // Ideally, we'd like to put all batches in the hollow_batches collection, since
+                // tracking the spine id reduces ambiguity and makes diffing cheaper. However,
+                // we currently keep most batches in the legacy collection for backwards
+                // compatibility.
+                // As an exception, we add batches with empty time ranges to hollow_batches:
+                // they're otherwise not guaranteed to be unique, and since we only started writing
+                // them down recently there's no backwards compatibility risk.
                 if batch.desc.lower() == batch.desc.upper() {
                     hollow_batches.insert(*id, Arc::clone(batch));
                 } else {
