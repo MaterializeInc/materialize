@@ -371,7 +371,8 @@ impl Coordinator {
         subsource_stmt: CreateSubsourceStatement<mz_sql::names::Aug>,
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
         let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
-        let source_id = self.catalog_mut().allocate_user_id().await?;
+        let id_ts = self.get_local_read_ts().await;
+        let source_id = self.catalog_mut().allocate_user_id(id_ts).await?;
         let plan = self.plan_statement(
             session,
             Statement::CreateSubsource(subsource_stmt),
@@ -482,7 +483,8 @@ impl Coordinator {
             p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
         };
 
-        let source_id = self.catalog_mut().allocate_user_id().await?;
+        let id_ts = self.get_local_read_ts().await;
+        let source_id = self.catalog_mut().allocate_user_id(id_ts).await?;
         let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
         let of_source = ResolvedItemName::Item {
             id: source_id,
@@ -672,7 +674,8 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
-        let connection_gid = match self.catalog_mut().allocate_user_id().await {
+        let id_ts = self.get_local_read_ts().await;
+        let connection_gid = match self.catalog_mut().allocate_user_id(id_ts).await {
             Ok(gid) => gid,
             Err(err) => return ctx.retire(Err(err.into())),
         };
@@ -903,7 +906,8 @@ impl Coordinator {
         } else {
             None
         };
-        let table_id = self.catalog_mut().allocate_user_id().await?;
+        let id_ts = self.get_local_read_ts().await;
+        let table_id = self.catalog_mut().allocate_user_id(id_ts).await?;
         let data_source = match table.data_source {
             plan::TableDataSource::TableWrites { defaults } => {
                 TableDataSource::TableWrites { defaults }
@@ -1081,7 +1085,8 @@ impl Coordinator {
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+        let id_ts = self.get_local_read_ts().await;
+        let id = return_if_err!(self.catalog_mut().allocate_user_id(id_ts).await, ctx);
 
         if let Some(cluster) = self.catalog().try_get_cluster(in_cluster) {
             mz_ore::soft_assert_or_log!(
@@ -1212,7 +1217,8 @@ impl Coordinator {
             },
             resolved_ids,
         };
-        let id = self.catalog_mut().allocate_user_id().await?;
+        let id_ts = self.get_local_read_ts().await;
+        let id = self.catalog_mut().allocate_user_id(id_ts).await?;
         let op = catalog::Op::CreateItem {
             id,
             name: plan.name,
