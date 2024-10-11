@@ -84,14 +84,14 @@ impl ExpressionCache {
     /// Creates a new [`ExpressionCache`] for `deploy_generation`.
     fn new(&mut self, deploy_generation: u64, information_needed_to_connect_to_durable_store: _) -> Self;
 
-    /// Remove all entries in current deploy generation that depend on a global ID that is not
-    /// present in `current_ids` or that do not have a matching `optimizer_feature`.
+    /// Reconciles all entries in current deploy generation with the current objects, `current_ids`,
+    /// and current optimizer features, `optimizer_features`.
     ///
     /// If `remove_prior_gens` is `true`, all previous generations are durably removed from the
     /// cache.
     ///
-    /// Returns all cached expressions in the current deploy generation.
-    fn open(&mut self, current_ids: &BTreeSet<GlobalId>, optimizer_feature: &OptimizerFeatures, remove_prior_gens: bool) -> Vec<(GlobalId, Expressions)>;
+    /// Returns all cached expressions in the current deploy generation, after reconciliation.
+    fn open(&mut self, current_ids: &BTreeSet<GlobalId>, optimizer_features: &OptimizerFeatures, remove_prior_gens: bool) -> Vec<(GlobalId, Expressions)>;
 
     /// Durably inserts `expressions` into current deploy generation.
     ///
