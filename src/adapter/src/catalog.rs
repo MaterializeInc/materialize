@@ -541,7 +541,7 @@ impl Catalog {
             .with_default_deploy_generation()
             .build()
             .await?;
-        let storage = openable_storage.open(now(), bootstrap_args).await?;
+        let storage = openable_storage.open(now().into(), bootstrap_args).await?;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(
             persist_client,
@@ -697,13 +697,25 @@ impl Catalog {
         self.storage.lock().await
     }
 
-    pub async fn allocate_user_id(&self) -> Result<(CatalogItemId, GlobalId), Error> {
+    pub async fn current_upper(&self) -> mz_repr::Timestamp {
+        self.storage().await.current_upper().await
+    }
+
+    pub async fn allocate_user_id(
+        &self,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<(CatalogItemId, GlobalId), Error> {
         self.storage()
             .await
-            .allocate_user_id()
+            .allocate_user_id(commit_ts)
             .await
             .maybe_terminate("allocating user ids")
             .err_into()
+    }
+
+    pub async fn allocate_user_id_for_test(&self) -> Result<(CatalogItemId, GlobalId), Error> {
+        let commit_ts = self.storage().await.current_upper().await;
+        self.allocate_user_id(commit_ts).await
     }
 
     /// Get the next user item ID without allocating it.
@@ -716,11 +728,14 @@ impl Catalog {
     }
 
     #[cfg(test)]
-    pub async fn allocate_system_id(&self) -> Result<(CatalogItemId, GlobalId), Error> {
+    pub async fn allocate_system_id(
+        &self,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<(CatalogItemId, GlobalId), Error> {
         use mz_ore::collections::CollectionExt;
         self.storage()
             .await
-            .allocate_system_ids(1)
+            .allocate_system_ids(1, commit_ts)
             .await
             .maybe_terminate("allocating system ids")
             .map(|ids| ids.into_element())
@@ -736,10 +751,13 @@ impl Catalog {
             .err_into()
     }
 
-    pub async fn allocate_user_cluster_id(&self) -> Result<ClusterId, Error> {
+    pub async fn allocate_user_cluster_id(
+        &self,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<ClusterId, Error> {
         self.storage()
             .await
-            .allocate_user_cluster_id()
+            .allocate_user_cluster_id(commit_ts)
             .await
             .maybe_terminate("allocating user cluster ids")
             .err_into()
@@ -2220,7 +2238,7 @@ mod tests {
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
-    use mz_ore::now::{to_datetime, SYSTEM_TIME};
+    use mz_ore::now::to_datetime;
     use mz_ore::{assert_err, assert_ok, task};
     use mz_persist_client::PersistClient;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
@@ -2341,10 +2359,11 @@ mod tests {
             .await
             .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
+            let commit_ts = catalog.current_upper().await;
             catalog
                 .transact(
                     None,
-                    mz_repr::Timestamp::MIN,
+                    commit_ts,
                     None,
                     vec![Op::CreateDatabase {
                         name: "test".to_string(),
@@ -2581,10 +2600,11 @@ mod tests {
                     &mut LocalExpressionCache::Closed,
                 )
                 .expect("unable to parse view");
+            let commit_ts = catalog.current_upper().await;
             catalog
                 .transact(
                     None,
-                    SYSTEM_TIME().into(),
+                    commit_ts,
                     None,
                     vec![Op::CreateItem {
                         item,
@@ -3474,8 +3494,9 @@ mod tests {
             let schema_spec = schema.id().clone();
             let schema_name = &schema.name().schema;
             let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
+            let id_ts = catalog.storage().await.current_upper().await;
             let (mv_id, mv_gid) = catalog
-                .allocate_user_id()
+                .allocate_user_id(id_ts)
                 .await
                 .expect("unable to allocate id");
             let mv = catalog
@@ -3486,10 +3507,11 @@ mod tests {
                     &BTreeMap::new(), &mut LocalExpressionCache::Closed
                 )
                 .expect("unable to deserialize item");
+            let commit_ts = catalog.current_upper().await;
             catalog
                 .transact(
                     None,
-                    0.into(),
+                    commit_ts,
                     None,
                     vec![Op::CreateItem {
                         id: mv_id,
@@ -3583,10 +3605,11 @@ mod tests {
         assert_err!(writer_catalog.resolve_database(db_name));
         assert_err!(read_only_catalog.resolve_database(db_name));
 
+        let commit_ts = writer_catalog.current_upper().await;
         writer_catalog
             .transact(
                 None,
-                SYSTEM_TIME().into(),
+                commit_ts,
                 None,
                 vec![Op::CreateDatabase {
                     name: db_name.to_string(),

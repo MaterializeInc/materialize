@@ -58,7 +58,8 @@ async fn datadriven() {
                     let mut catalog = catalog.lock().await;
                     match test_case.directive.as_str() {
                         "add-table" => {
-                            let (id, global_id) = catalog.allocate_user_id().await.unwrap();
+                            let (id, global_id) =
+                                catalog.allocate_user_id_for_test().await.unwrap();
                             let database = catalog.resolve_database(DEFAULT_DATABASE_NAME).unwrap();
                             let database_name = database.name.clone();
                             let database_id = database.id();
@@ -72,10 +73,11 @@ async fn datadriven() {
                                 .unwrap();
                             let schema_name = schema.name.schema.clone();
                             let schema_spec = schema.id.clone();
+                            let commit_ts = catalog.current_upper().await;
                             catalog
                                 .transact(
                                     None,
-                                    mz_repr::Timestamp::MIN,
+                                    commit_ts,
                                     None,
                                     vec![Op::CreateItem {
                                         id,

@@ -111,7 +111,7 @@ pub(crate) async fn migrate(
 
     // Load items into catalog. We make sure to consolidate the old updates with the new updates to
     // avoid trying to apply unmigrated items.
-    let commit_ts = tx.commit_ts();
+    let commit_ts = tx.upper();
     let mut item_updates = into_consolidatable_updates_startup(item_updates, commit_ts);
     let op_item_updates = tx.get_and_commit_op_updates();
     let op_item_updates = into_consolidatable_updates_startup(op_item_updates, commit_ts);

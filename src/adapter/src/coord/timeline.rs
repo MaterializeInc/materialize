@@ -171,6 +171,28 @@ impl Coordinator {
         }
     }
 
+    /// Assign a timestamp for a write to the catalog. This timestamp should have the following
+    /// properties:
+    ///
+    ///   - Monotonically increasing.
+    ///   - Greater than or equal to the current catalog upper.
+    ///   - Greater than the largest write timestamp used in the
+    ///     [epoch millisecond timeline](Timeline::EpochMilliseconds).
+    ///
+    /// In general this is fully satisfied by the getting the current write timestamp in the
+    /// [epoch millisecond timeline](Timeline::EpochMilliseconds) from the timestamp oracle,
+    /// however, in read-only mode we cannot modify the timestamp oracle.
+    pub(crate) async fn get_catalog_write_ts(&mut self) -> Timestamp {
+        if self.read_only_controllers {
+            let (write_ts, upper) =
+                futures::future::join(self.peek_local_write_ts(), self.catalog().current_upper())
+                    .await;
+            std::cmp::max(write_ts, upper)
+        } else {
+            self.get_local_write_ts().await.timestamp
+        }
+    }
+
     /// Ensures that a global timeline state exists for `timeline`.
     pub(crate) async fn ensure_timeline_state<'a>(
         &'a mut self,

@@ -100,8 +100,8 @@ pub struct Transaction<'a> {
     // Don't make this a table transaction so that it's not read into the
     // in-memory cache.
     audit_log_updates: Vec<(AuditLogKey, Diff, Timestamp)>,
-    /// The timestamp to commit this transaction at.
-    commit_ts: mz_repr::Timestamp,
+    /// The upper of `durable_catalog` at the start of the transaction.
+    upper: mz_repr::Timestamp,
     /// The ID of the current operation of this transaction.
     op_id: Timestamp,
 }
@@ -131,7 +131,7 @@ impl<'a> Transaction<'a> {
             unfinalized_shards,
             txn_wal_shard,
         }: Snapshot,
-        commit_ts: mz_repr::Timestamp,
+        upper: mz_repr::Timestamp,
     ) -> Result<Transaction, CatalogError> {
         Ok(Transaction {
             durable_catalog,
@@ -185,7 +185,7 @@ impl<'a> Transaction<'a> {
             // value).
             txn_wal_shard: TableTransaction::new(txn_wal_shard)?,
             audit_log_updates: Vec::new(),
-            commit_ts,
+            upper,
             op_id: 0,
         })
     }
@@ -2055,7 +2055,7 @@ impl<'a> Transaction<'a> {
             configs: _,
             settings: _,
             txn_wal_shard: _,
-            commit_ts,
+            upper,
             op_id: _,
         } = &self;
 
@@ -2147,7 +2147,7 @@ impl<'a> Transaction<'a> {
             ))
             .map(|(kind, diff)| StateUpdate {
                 kind,
-                ts: commit_ts.clone(),
+                ts: upper.clone(),
                 diff,
             })
             .collect();
@@ -2167,8 +2167,8 @@ impl<'a> Transaction<'a> {
         self.op_id
     }
 
-    pub fn commit_ts(&self) -> mz_repr::Timestamp {
-        self.commit_ts
+    pub fn upper(&self) -> mz_repr::Timestamp {
+        self.upper
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
@@ -2200,7 +2200,7 @@ impl<'a> Transaction<'a> {
             unfinalized_shards: self.unfinalized_shards.pending(),
             txn_wal_shard: self.txn_wal_shard.pending(),
             audit_log_updates,
-            commit_ts: self.commit_ts,
+            upper: self.upper,
         };
         (txn_batch, self.durable_catalog)
     }
@@ -2210,10 +2210,16 @@ impl<'a> Transaction<'a> {
     /// before proceeding. In general, this must be fatal to the calling process. We do not
     /// panic/halt inside this function itself so that errors can bubble up during initialization.
     ///
-    /// In read-only mode, this will return an error indicating that the catalog is not writeable.
+    /// The transaction is committed at `commit_ts`.
+    ///
+    /// Returns what the upper was directly after the transaction committed.
+    ///
+    /// In read-only mode, this will return an error for non-empty transactions indicating that the
+    /// catalog is not writeable.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn commit_internal(
         self,
+        commit_ts: mz_repr::Timestamp,
     ) -> Result<(&'a mut dyn DurableCatalogState, mz_repr::Timestamp), CatalogError> {
         let (mut txn_batch, durable_catalog) = self.into_parts();
         let TransactionBatch {
@@ -2238,7 +2244,7 @@ impl<'a> Transaction<'a> {
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
-            commit_ts: _,
+            upper,
         } = &mut txn_batch;
         // Consolidate in memory because it will likely be faster than consolidating after the
         // transaction has been made durable.
@@ -2264,7 +2270,15 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
 
-        let upper = durable_catalog.commit_transaction(txn_batch).await?;
+        assert!(
+            commit_ts >= *upper,
+            "expected commit ts, {}, to be greater than or equal to upper, {}",
+            commit_ts,
+            upper
+        );
+        let upper = durable_catalog
+            .commit_transaction(txn_batch, commit_ts)
+            .await?;
         Ok((durable_catalog, upper))
     }
 
@@ -2273,7 +2287,8 @@ impl<'a> Transaction<'a> {
     /// before proceeding. In general, this must be fatal to the calling process. We do not
     /// panic/halt inside this function itself so that errors can bubble up during initialization.
     ///
-    /// In read-only mode, this will return an error indicating that the catalog is not writeable.
+    /// In read-only mode, this will return an error for non-empty transactions indicating that the
+    /// catalog is not writeable.
     ///
     /// IMPORTANT: It is assumed that the committer of this transaction has already applied all
     /// updates from this transaction. Therefore, updates from this transaction will not be returned
@@ -2284,22 +2299,22 @@ impl<'a> Transaction<'a> {
     /// after committing and only then apply the updates in-memory. While this removes assumptions
     /// about the caller in this method, in practice it results in duplicate work on every commit.
     #[mz_ore::instrument(level = "debug")]
-    pub async fn commit(self) -> Result<(), CatalogError> {
+    pub async fn commit(self, commit_ts: mz_repr::Timestamp) -> Result<(), CatalogError> {
         let op_updates = self.get_op_updates();
         assert!(
             op_updates.is_empty(),
             "unconsumed transaction updates: {op_updates:?}"
         );
 
-        let commit_ts = self.commit_ts();
-        let (durable_storage, upper) = self.commit_internal().await?;
+        let (durable_storage, upper) = self.commit_internal(commit_ts).await?;
         // Drain all the updates from the commit since it is assumed that they were already applied.
         let updates = durable_storage.sync_updates(upper).await?;
         // Writable and savepoint catalogs should have consumed all updates before committing a
         // transaction, otherwise the commit was performed with an out of date state.
         // Read-only catalogs can only commit empty transactions, so they don't need to consume all
         // updates before committing.
-        soft_assert_no_log!(durable_storage.is_read_only() || updates.iter().all(|update| update.ts == commit_ts),
+        soft_assert_no_log!(durable_storage.is_read_only() || updates.iter().all
+            (|update| update.ts == commit_ts),
             "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, updates:{updates:?}");
         Ok(())
     }
@@ -2467,8 +2482,8 @@ pub struct TransactionBatch {
     pub(crate) unfinalized_shards: Vec<(proto::UnfinalizedShardKey, (), Diff)>,
     pub(crate) txn_wal_shard: Vec<((), proto::TxnWalShardValue, Diff)>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
-    /// The timestamp to commit this transaction at.
-    pub(crate) commit_ts: mz_repr::Timestamp,
+    /// The upper of the catalog when the transaction started.
+    pub(crate) upper: mz_repr::Timestamp,
 }
 
 impl TransactionBatch {
@@ -2495,7 +2510,7 @@ impl TransactionBatch {
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
-            commit_ts: _,
+            upper: _,
         } = self;
         databases.is_empty()
             && schemas.is_empty()
@@ -3513,13 +3528,13 @@ mod tests {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap();
         let mut savepoint_state = state_builder
             .unwrap_build()
             .await
-            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args())
+            .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap();
 
@@ -3533,7 +3548,8 @@ mod tests {
         let (db_id, db_oid) = txn
             .insert_user_database(db_name, db_owner, db_privileges.clone(), &HashSet::new())
             .unwrap();
-        txn.commit_internal().await.unwrap();
+        let commit_ts = txn.upper();
+        txn.commit_internal(commit_ts).await.unwrap();
         let updates = savepoint_state.sync_to_current_updates().await.unwrap();
         let update = updates.into_element();
 

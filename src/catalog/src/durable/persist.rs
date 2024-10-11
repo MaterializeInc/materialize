@@ -441,8 +441,15 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     pub(crate) async fn compare_and_append<S: IntoStateUpdateKindJson>(
         &mut self,
         updates: Vec<(S, Diff)>,
+        commit_ts: Timestamp,
     ) -> Result<Timestamp, CompareAndAppendError> {
         assert_eq!(self.mode, Mode::Writable);
+        assert!(
+            commit_ts >= self.upper,
+            "expected commit ts, {}, to be greater than or equal to upper, {}",
+            commit_ts,
+            self.upper
+        );
 
         // This awkward code allows us to perform an expensive soft assert that requires cloning
         // `updates` twice, after `updates` has been consumed.
@@ -475,9 +482,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         let updates = updates.into_iter().map(|(kind, diff)| {
             let kind: StateUpdateKindJson = kind.into();
-            ((Into::<SourceData>::into(kind), ()), self.upper, diff)
+            ((Into::<SourceData>::into(kind), ()), commit_ts, diff)
         });
-        let next_upper = self.upper.step_forward();
+        let next_upper = commit_ts.step_forward();
         let res = self
             .write_handle
             .compare_and_append(
@@ -1106,9 +1113,12 @@ impl UnopenedPersistCatalogState {
     async fn open_inner(
         mut self,
         mode: Mode,
-        initial_ts: EpochMillis,
+        initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        // It would be nice to use `initial_ts` here, but it comes from the system clock, not the
+        // timestamp oracle.
+        let mut commit_ts = self.upper;
         self.mode = mode;
 
         // Validate the current deploy generation.
@@ -1140,6 +1150,7 @@ impl UnopenedPersistCatalogState {
         // Fence out previous catalogs.
         loop {
             self.sync_to_current_upper().await?;
+            commit_ts = max(commit_ts, self.upper);
             let (fence_updates, current_fenceable_token) = self
                 .fenceable_token
                 .generate_unfenced_token(self.mode)?
@@ -1155,8 +1166,13 @@ impl UnopenedPersistCatalogState {
                 "fencing previous catalogs"
             );
             if matches!(self.mode, Mode::Writable) {
-                match self.compare_and_append(fence_updates.clone()).await {
-                    Ok(_) => {}
+                match self
+                    .compare_and_append(fence_updates.clone(), commit_ts)
+                    .await
+                {
+                    Ok(upper) => {
+                        commit_ts = upper;
+                    }
                     Err(CompareAndAppendError::Fence(e)) => return Err(e.into()),
                     Err(e @ CompareAndAppendError::UpperMismatch { .. }) => {
                         warn!("catalog write failed due to upper mismatch, retrying: {e:?}");
@@ -1181,7 +1197,7 @@ impl UnopenedPersistCatalogState {
 
         // Perform data migrations.
         if is_initialized && !read_only {
-            upgrade(&mut self).await?;
+            commit_ts = upgrade(&mut self, commit_ts).await?;
         }
 
         debug!(
@@ -1232,7 +1248,7 @@ impl UnopenedPersistCatalogState {
             initialize::initialize(
                 &mut txn,
                 bootstrap_args,
-                initial_ts,
+                initial_ts.into(),
                 catalog_content_version,
             )
             .await?;
@@ -1245,7 +1261,7 @@ impl UnopenedPersistCatalogState {
             let updates = StateUpdate::from_txn_batch_ts(txn_batch, catalog.upper);
             catalog.apply_updates(updates)?;
         } else {
-            txn.commit_internal().await?;
+            txn.commit_internal(commit_ts).await?;
         }
 
         // Now that we've fully opened the catalog at the current version, we can increment the
@@ -1345,7 +1361,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     #[mz_ore::instrument]
     async fn open_savepoint(
         mut self: Box<Self>,
-        initial_ts: EpochMillis,
+        initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Savepoint, initial_ts, bootstrap_args)
@@ -1358,7 +1374,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Readonly, EpochMillis::MIN, bootstrap_args)
+        self.open_inner(Mode::Readonly, EpochMillis::MIN.into(), bootstrap_args)
             .boxed()
             .await
     }
@@ -1366,7 +1382,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     #[mz_ore::instrument]
     async fn open(
         mut self: Box<Self>,
-        initial_ts: EpochMillis,
+        initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Writable, initial_ts, bootstrap_args)
@@ -1648,6 +1664,10 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         }
         Ok(updates)
     }
+
+    async fn current_upper(&mut self) -> Timestamp {
+        self.current_upper().await
+    }
 }
 
 #[async_trait]
@@ -1672,18 +1692,27 @@ impl DurableCatalogState for PersistCatalogState {
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
+        commit_ts: Timestamp,
     ) -> Result<Timestamp, CatalogError> {
         async fn commit_transaction_inner(
             catalog: &mut PersistCatalogState,
             txn_batch: TransactionBatch,
+            commit_ts: Timestamp,
         ) -> Result<Timestamp, CatalogError> {
             // If the current upper does not match the transaction's commit timestamp, then the
             // catalog must have changed since the transaction was started, making the transaction
             // invalid. When/if we want a multi-writer catalog, this will likely have to change
             // from an assert to a retry.
             assert_eq!(
-                catalog.upper, txn_batch.commit_ts,
+                catalog.upper, txn_batch.upper,
                 "only one transaction at a time is supported"
+            );
+
+            assert!(
+                commit_ts >= catalog.upper,
+                "expected commit ts, {}, to be greater than or equal to upper, {}",
+                commit_ts,
+                catalog.upper
             );
 
             let updates = StateUpdate::from_txn_batch(txn_batch).collect();
@@ -1691,17 +1720,17 @@ impl DurableCatalogState for PersistCatalogState {
 
             let next_upper = match catalog.mode {
                 Mode::Writable => catalog
-                    .compare_and_append(updates)
+                    .compare_and_append(updates, commit_ts)
                     .await
                     .map_err(|e| e.unwrap_fence_error())?,
                 Mode::Savepoint => {
-                    let ts = catalog.upper;
-                    let updates =
-                        updates
-                            .into_iter()
-                            .map(|(kind, diff)| StateUpdate { kind, ts, diff });
+                    let updates = updates.into_iter().map(|(kind, diff)| StateUpdate {
+                        kind,
+                        ts: commit_ts,
+                        diff,
+                    });
                     catalog.apply_updates(updates)?;
-                    catalog.upper = catalog.upper.step_forward();
+                    catalog.upper = commit_ts.step_forward();
                     catalog.upper
                 }
                 Mode::Readonly => {
@@ -1722,7 +1751,7 @@ impl DurableCatalogState for PersistCatalogState {
         }
         self.metrics.transaction_commits.inc();
         let counter = self.metrics.transaction_commit_latency_seconds.clone();
-        commit_transaction_inner(self, txn_batch)
+        commit_transaction_inner(self, txn_batch, commit_ts)
             .wall_time()
             .inc_by(counter)
             .await
@@ -1962,7 +1991,7 @@ impl UnopenedPersistCatalogState {
             match self.fenceable_token.generate_unfenced_token(self.mode)? {
                 Some((fence_updates, current_fenceable_token)) => {
                     updates.extend(fence_updates.clone());
-                    match self.compare_and_append(updates).await {
+                    match self.compare_and_append(updates, self.upper).await {
                         Ok(_) => {
                             self.fenceable_token = current_fenceable_token;
                             break prev_value;
@@ -1975,7 +2004,7 @@ impl UnopenedPersistCatalogState {
                     }
                 }
                 None => {
-                    self.compare_and_append(updates)
+                    self.compare_and_append(updates, self.upper)
                         .await
                         .map_err(|e| e.unwrap_fence_error())?;
                     break prev_value;
@@ -2014,7 +2043,7 @@ impl UnopenedPersistCatalogState {
             match self.fenceable_token.generate_unfenced_token(self.mode)? {
                 Some((fence_updates, current_fenceable_token)) => {
                     retractions.extend(fence_updates.clone());
-                    match self.compare_and_append(retractions).await {
+                    match self.compare_and_append(retractions, self.upper).await {
                         Ok(_) => {
                             self.fenceable_token = current_fenceable_token;
                             break;
@@ -2027,7 +2056,7 @@ impl UnopenedPersistCatalogState {
                     }
                 }
                 None => {
-                    self.compare_and_append(retractions)
+                    self.compare_and_append(retractions, self.upper)
                         .await
                         .map_err(|e| e.unwrap_fence_error())?;
                     break;

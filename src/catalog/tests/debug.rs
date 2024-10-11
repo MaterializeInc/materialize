@@ -129,7 +129,7 @@ async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
 
     // Use `NOW_ZERO` for consistent timestamps in the snapshots.
     let _ = openable_state1
-        .open(NOW_ZERO(), &test_bootstrap_args())
+        .open(NOW_ZERO().into(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -275,7 +275,7 @@ async fn test_debug_edit_fencing<'a>(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -329,7 +329,7 @@ async fn test_debug_edit_fencing<'a>(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -368,7 +368,7 @@ async fn test_debug_delete_fencing<'a>(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
     // Drain state updates.
@@ -376,7 +376,8 @@ async fn test_debug_delete_fencing<'a>(state_builder: TestCatalogStateBuilder) {
 
     let mut txn = state.transaction().await.unwrap();
     txn.set_config("joe".to_string(), Some(666)).unwrap();
-    txn.commit().await.unwrap();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
 
     let mut debug_state = state_builder
         .clone()
@@ -423,7 +424,7 @@ async fn test_debug_delete_fencing<'a>(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -462,7 +463,8 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         loop {
             // Drain updates.
             let _ = state.sync_to_current_updates().await?;
-            state.allocate_user_id().await?;
+            let commit_ts = state.current_upper().await;
+            state.allocate_user_id(commit_ts).await?;
             // After winning the race 100 times, sleep to give the debug state a chance to win the
             // race.
             if i > 100 {
@@ -477,7 +479,7 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
     let state_handle = mz_ore::task::spawn(|| "state", async move {
@@ -509,7 +511,7 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
     let configs = state.snapshot().await.unwrap().configs;
@@ -544,7 +546,7 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap()
         .snapshot()

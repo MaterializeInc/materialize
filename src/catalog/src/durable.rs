@@ -21,7 +21,6 @@ use uuid::Uuid;
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
 use mz_repr::{CatalogItemId, GlobalId};
 
@@ -100,7 +99,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// `initial_ts` is used as the initial timestamp for new environments.
     async fn open_savepoint(
         mut self: Box<Self>,
-        initial_ts: EpochMillis,
+        initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
@@ -121,7 +120,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// `initial_ts` is used as the initial timestamp for new environments.
     async fn open(
         mut self: Box<Self>,
-        initial_ts: EpochMillis,
+        initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
@@ -258,6 +257,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
         &mut self,
         target_upper: Timestamp,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
+
+    /// Fetch the current upper of the catalog state.
+    async fn current_upper(&mut self) -> Timestamp;
 }
 
 /// A read-write API for the durable catalog state.
@@ -272,12 +274,17 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
 
-    /// Commits a durable catalog state transaction.
+    /// Commits a durable catalog state transaction. The transaction will be committed at
+    /// `commit_ts`.
     ///
-    /// Returns the upper that the transaction was committed at.
+    /// Returns what the upper was directly after the transaction committed.
+    ///
+    /// Panics if `commit_ts` is not greater than or equal to the most recent upper seen by this
+    /// process.
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
+        commit_ts: Timestamp,
     ) -> Result<Timestamp, CatalogError>;
 
     /// Confirms that this catalog is connected as the current leader.
@@ -286,23 +293,35 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
+    ///
+    /// See [`Self::commit_transaction`] for details on `commit_ts`.
     #[mz_ore::instrument(level = "debug")]
-    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
+    async fn allocate_id(
+        &mut self,
+        id_type: &str,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<u64>, CatalogError> {
         if amount == 0 {
             return Ok(Vec::new());
         }
         let mut txn = self.transaction().await?;
         let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
-        txn.commit_internal().await?;
+        txn.commit_internal(commit_ts).await?;
         Ok(ids)
     }
 
     /// Allocates and returns `amount` system [`CatalogItemId`]s.
+    ///
+    /// See [`Self::commit_transaction`] for details on `commit_ts`.
     async fn allocate_system_ids(
         &mut self,
         amount: u64,
+        commit_ts: Timestamp,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
-        let id = self.allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount).await?;
+        let id = self
+            .allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount, commit_ts)
+            .await?;
         Ok(id
             .into_iter()
             .map(|id| (CatalogItemId::System(id), GlobalId::System(id)))
@@ -310,15 +329,27 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     }
 
     /// Allocates and returns both a user [`CatalogItemId`] and [`GlobalId`].
-    async fn allocate_user_id(&mut self) -> Result<(CatalogItemId, GlobalId), CatalogError> {
-        let id = self.allocate_id(USER_ITEM_ALLOC_KEY, 1).await?;
+    ///
+    /// See [`Self::commit_transaction`] for details on `commit_ts`.
+    async fn allocate_user_id(
+        &mut self,
+        commit_ts: Timestamp,
+    ) -> Result<(CatalogItemId, GlobalId), CatalogError> {
+        let id = self.allocate_id(USER_ITEM_ALLOC_KEY, 1, commit_ts).await?;
         let id = id.into_element();
         Ok((CatalogItemId::User(id), GlobalId::User(id)))
     }
 
     /// Allocates and returns a user [`ClusterId`].
-    async fn allocate_user_cluster_id(&mut self) -> Result<ClusterId, CatalogError> {
-        let id = self.allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1).await?;
+    ///
+    /// See [`Self::commit_transaction`] for details on `commit_ts`.
+    async fn allocate_user_cluster_id(
+        &mut self,
+        commit_ts: Timestamp,
+    ) -> Result<ClusterId, CatalogError> {
+        let id = self
+            .allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1, commit_ts)
+            .await?;
         let id = id.into_element();
         Ok(ClusterId::User(id))
     }

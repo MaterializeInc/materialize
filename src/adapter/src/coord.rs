@@ -3680,7 +3680,7 @@ pub fn serve(
     Config {
         controller_config,
         controller_envd_epoch,
-        storage,
+        mut storage,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -3782,6 +3782,11 @@ pub fn serve(
             )
             .await;
         }
+
+        // Opening the durable catalog uses one or more timestamps without communicating with
+        // the timestamp oracle. Here we make sure to apply the catalog upper with the timestamp
+        // oracle to linearize future operations with opening the catalog.
+        let catalog_upper = storage.current_upper().await;
         // Choose a time at which to boot. This is used, for example, to prune
         // old storage usage data or migrate audit log entries.
         //
@@ -3792,11 +3797,13 @@ pub fn serve(
             .expect("inserted above")
             .oracle;
 
-        let boot_ts = if read_only_controllers {
-            epoch_millis_oracle.read_ts().await
+        let mut boot_ts = if read_only_controllers {
+            let read_ts = epoch_millis_oracle.read_ts().await;
+            std::cmp::max(read_ts, catalog_upper)
         } else {
-            // Getting a write timestamp bumps the write timestamp in the
+            // Getting/applying a write timestamp bumps the write timestamp in the
             // oracle, which we're not allowed in read-only mode.
+            epoch_millis_oracle.apply_write(catalog_upper).await;
             epoch_millis_oracle.write_ts().await.timestamp
         };
 
@@ -3864,6 +3871,11 @@ pub fn serve(
             },
         })
         .await?;
+
+        // Opening the catalog uses one or more timestamps, so push the boot timestamp up to the
+        // current catalog upper.
+        let catalog_upper = catalog.current_upper().await;
+        boot_ts = std::cmp::max(boot_ts, catalog_upper);
 
         if !read_only_controllers {
             epoch_millis_oracle.apply_write(boot_ts).await;
@@ -3953,6 +3965,17 @@ pub fn serve(
                         )
                     })
                     .expect("failed to initialize storage_controller");
+                // Initializing the controller uses one or more timestamps, so push the boot timestamp up to the
+                // current catalog upper.
+                let catalog_upper = handle.block_on(catalog.current_upper());
+                boot_ts = std::cmp::max(boot_ts, catalog_upper);
+                if !read_only_controllers {
+                    let epoch_millis_oracle = &timestamp_oracles
+                        .get(&Timeline::EpochMilliseconds)
+                        .expect("inserted above")
+                        .oracle;
+                    handle.block_on(epoch_millis_oracle.apply_write(boot_ts));
+                }
 
                 let catalog = Arc::new(catalog);
 
