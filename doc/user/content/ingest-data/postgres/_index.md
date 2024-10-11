@@ -1,12 +1,12 @@
 ---
-title: "Overview"
+title: "PostgreSQL"
 description: "Connecting Materialize to a PostgreSQL database for Change Data Capture (CDC)."
 disable_list: true
 menu:
   main:
-    parent: 'postgresql'
-    weight: 1
-    identifier: 'postgresql-overview'
+    parent: 'ingest-data'
+    weight: 10
+    identifier: 'postgresql'
 ---
 
 ## Change Data Capture (CDC)

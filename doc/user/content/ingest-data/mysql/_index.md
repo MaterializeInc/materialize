@@ -1,12 +1,12 @@
 ---
-title: "Overview"
+title: "MySQL"
 description: "Connecting Materialize to a MySQL database for Change Data Capture (CDC)."
 disable_list: true
 menu:
   main:
-    parent: 'mysql'
-    weight: 1
-    identifier: 'mysql-overview'
+    parent: 'ingest-data'
+    identifier: 'mysql'
+    weight: 5
 ---
 
 ## Change Data Capture (CDC)
