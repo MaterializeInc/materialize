@@ -148,10 +148,16 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
             | InternalError_
         ),
     ) -> str:
-        result = str(error.diag.message_primary)
-        if error.diag.message_detail:
-            result += f" ({error.diag.message_detail})"
-        return result
+        if error.diag.message_primary is not None:
+            result = str(error.diag.message_primary)
+            if error.diag.message_detail is not None:
+                result += f" ({error.diag.message_detail})"
+            return result
+
+        if len(error.args) > 0:
+            return str(error.args[0])
+
+        return str(error)
 
 
 class MzDatabaseSqlExecutor(PgWireDatabaseSqlExecutor):
