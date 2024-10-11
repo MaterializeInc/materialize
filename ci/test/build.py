@@ -73,6 +73,7 @@ def maybe_upload_debuginfo(
     # Find all binaries created by the `cargo-bin` pre-image.
     bins, bazel_bins = find_binaries_created_by_cargo_bin(repo, built_images)
     if len(bins) == 0:
+        print("No debuginfo bins were built")
         return
 
     ui.section(f"Uploading debuginfo for {', '.join(bins)}...")
@@ -95,6 +96,7 @@ def maybe_upload_debuginfo(
         # Upload binary and debuginfo to S3 bucket, regardless of whether this
         # is a tag build or not. S3 is cheap.
         build_id = upload_debuginfo_to_s3(bin_path, dbg_path, is_tag_build)
+        print(f"Uploaded debuginfo to S3 with build_id {build_id}")
 
         # Upload debuginfo and sources to Polar Signals (our continuous
         # profiling provider), but only if this is a tag build. Polar Signals is
