@@ -14,14 +14,14 @@ Basic Backup & Restore test with a table
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.persistcli import Persistcli
-from materialize.mzcompose.services.postgres import PostgresAsCockroach
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
-    PostgresAsCockroach(),
+    Cockroach(setup_materialize=True),
     Minio(setup_materialize=True),
     Mc(),
     Materialized(external_minio=True, external_cockroach=True, sanity_restart=False),

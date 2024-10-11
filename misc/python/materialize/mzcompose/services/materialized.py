@@ -179,6 +179,8 @@ class Materialized(Service):
             environment += [
                 f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
                 "MZ_NO_BUILTIN_POSTGRES=1",
+                # For older Materialize versions
+                "MZ_NO_BUILTIN_COCKROACH=1",
                 # Set the adapter stash URL for older environments that need it (versions before
                 # v0.92.0).
                 f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",

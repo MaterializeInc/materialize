@@ -235,7 +235,31 @@ impl PostgresConsensus {
         // this could be a TRUNCATE if we're confident the db won't reuse any state
         let client = self.get_connection().await?;
         client.execute("DROP TABLE consensus", &[]).await?;
-        client.execute(SCHEMA, &[]).await?;
+        let crdb_mode = match client
+            .batch_execute(&format!(
+                "{}{} {}",
+                SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
+            ))
+            .await
+        {
+            Ok(()) => true,
+            Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
+                warn!("unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user");
+                true
+            }
+            Err(e)
+                if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
+                    || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
+            {
+                info!("unable to initiate consensus with CRDB params, this is expected and OK when running against Postgres: {:?}", e);
+                false
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        if !crdb_mode {
+            client.execute(SCHEMA, &[]).await?;
+        }
         Ok(())
     }
 

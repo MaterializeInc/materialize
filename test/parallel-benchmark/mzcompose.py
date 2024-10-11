@@ -27,13 +27,14 @@ from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
+from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -90,7 +91,7 @@ SERVICES = [
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
-    PostgresAsCockroach(),
+    Cockroach(setup_materialize=True),
     Minio(setup_materialize=True),
     KgenService(),
     Postgres(),

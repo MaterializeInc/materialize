@@ -46,7 +46,11 @@ TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
 
 SERVICES = [
     TestCerts(),
-    Cockroach(setup_materialize=True),
+    Cockroach(
+        setup_materialize=True,
+        # Workaround for database-issues#5899
+        restart="on-failure:5",
+    ),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     Postgres(),
