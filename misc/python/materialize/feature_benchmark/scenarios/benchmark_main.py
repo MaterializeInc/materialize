@@ -2199,6 +2199,10 @@ class ReplicaExpiration(Scenario):
   WHERE mz_now() <= event_ts + INTERVAL '30 days';
 
 > CREATE DEFAULT INDEX ON last_30_days
+
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_result_size = '20GB'
 """
             ),
         ]
