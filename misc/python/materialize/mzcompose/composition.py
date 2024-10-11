@@ -236,14 +236,23 @@ class Composition:
                 if self.preserve_ports and not ":" in str(port):
                     # If preserving ports, bind the container port to the same
                     # host port, assuming the host port is available.
-                    ports[i] = f"{port}:{port}"
-                elif ":" in str(port) and not config.get("allow_host_ports", False):
+                    ports[i] = f"127.0.0.1:{port}:{port}"
+                elif ":" in str(port).removeprefix("127.0.0.1::") and not config.get(
+                    "allow_host_ports", False
+                ):
                     # Raise an error for host-bound ports, unless
                     # `allow_host_ports` is `True`
                     raise UIError(
-                        "programming error: disallowed host port in service {name!r}",
+                        f"programming error: disallowed host port in service {name!r}: {port}",
                         hint='Add `"allow_host_ports": True` to the service config to disable this check.',
                     )
+                elif not str(port).startswith("127.0.0.1:"):
+                    # Only bind to localhost, otherwise the service is
+                    # available to anyone with network access to us
+                    if ":" in str(port):
+                        ports[i] = f"127.0.0.1:{port}"
+                    else:
+                        ports[i] = f"127.0.0.1::{port}"
 
             if "allow_host_ports" in config:
                 config.pop("allow_host_ports")
