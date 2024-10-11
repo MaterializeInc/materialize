@@ -36,12 +36,11 @@ from psycopg.errors import (
 from materialize import buildkite, ui
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -54,7 +53,6 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Localstack(),
-    Cockroach(setup_materialize=True),
     Clusterd(name="clusterd1"),
     Clusterd(name="clusterd2"),
     Clusterd(name="clusterd3"),
@@ -64,6 +62,7 @@ SERVICES = [
         propagate_crashes=False,
         external_cockroach=True,
     ),
+    PostgresAsCockroach(),
     Postgres(),
     Redpanda(),
     Toxiproxy(),
@@ -2073,7 +2072,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     for service in ("materialized", "clusterd1"):
         p = c.invoke("logs", service, capture=True)
         for line in p.stdout.splitlines():
-            assert "ERROR" not in line, f"found ERROR in service {service}: {line}"
+            assert " ERROR " not in line, f"found ERROR in service {service}: {line}"
 
 
 def workflow_test_drop_during_reconciliation(c: Composition) -> None:
@@ -2608,6 +2607,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         """
     )
 
+    # Can take a few seconds, don't request the metrics too quickly
+    time.sleep(2)
     # Check that expected metrics exist and have sensible values.
     metrics = fetch_metrics()
 
@@ -2659,6 +2660,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         mv_correction_max_cap_per_worker > 0
     ), f"unexpected persist sink max correction capacity per worker: {mv_correction_max_cap_per_worker}"
 
+    # Can take a few seconds, don't request the metrics too quickly
+    time.sleep(2)
     assert metrics.get_last_command_received("compute") >= before_connection_time
 
 
@@ -3583,9 +3586,10 @@ def workflow_cluster_drop_concurrent(
                 try:
                     thread.join(timeout=10)
                 except InternalError_ as e:
-                    assert (
-                        'query could not complete because relation "materialize.public.counter" was dropped'
-                        in str(e)
+                    assert 'query could not complete because relation "materialize.public.counter" was dropped' in str(
+                        e
+                    ) or 'subscribe has been terminated because underlying relation "materialize.public.counter" was dropped' in str(
+                        e
                     )
             for thread in threads:
                 assert not thread.is_alive(), f"Thread {thread.name} is still running"

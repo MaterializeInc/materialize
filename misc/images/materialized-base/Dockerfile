@@ -10,24 +10,31 @@
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
 
-FROM cockroachdb/cockroach:v24.2.0 AS crdb
-
 MZFROM ubuntu-base
 
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize
 
 RUN apt-get update \
-    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
         ca-certificates \
         curl \
         llvm \
-        postgresql-client-16 \
+        postgresql \
+        postgresql-contrib \
         tini \
+        sudo \
         ssh \
-    && mkdir /mzdata \
-    && mkdir /cockroach-data \
-    && mkdir /scratch \
-    && chown materialize /mzdata /cockroach-data /scratch
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql \
+    && chown materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql \
+    && echo "materialize ALL=(postgres) NOPASSWD: ALL" >> /etc/sudoers \
+    && sed -i "s/^max_connections = .*/max_connections = 5000/" /etc/postgresql/16/main/postgresql.conf \
+    && sed -i "s/^#listen_addresses = .*/listen_addresses = '*'/" /etc/postgresql/16/main/postgresql.conf \
+    && sed -i "s/^port = .*/port = 26257/" /etc/postgresql/16/main/postgresql.conf \
+    && (echo "local all root trust"; echo "host all root 0.0.0.0/0 trust"; cat /etc/postgresql/16/main/pg_hba.conf) > /etc/postgresql/16/main/pg_hba.conf.tmp && mv /etc/postgresql/16/main/pg_hba.conf.tmp /etc/postgresql/16/main/pg_hba.conf
 
-COPY --from=crdb /cockroach/cockroach /usr/local/bin/cockroach
+
+ENV POSTGRES_USER=postgres
+ENV POSTGRES_PASSWORD=postgres
