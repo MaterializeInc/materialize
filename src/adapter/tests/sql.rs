@@ -59,7 +59,7 @@ async fn datadriven() {
                     let mut catalog = catalog.lock().await;
                     match test_case.directive.as_str() {
                         "add-table" => {
-                            let id = catalog.allocate_user_id().await.unwrap();
+                            let id = catalog.allocate_user_id_for_test().await.unwrap();
                             let database = catalog.resolve_database(DEFAULT_DATABASE_NAME).unwrap();
                             let database_name = database.name.clone();
                             let database_id = database.id();
