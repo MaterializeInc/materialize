@@ -450,8 +450,8 @@ fn plan_explainee(
                 sql_bail!("Expected {name} to be a view, not a {item_type}");
             }
             match is_replan {
-                true => crate::plan::Explainee::ReplanView(item.global_id()),
-                false => crate::plan::Explainee::View(item.global_id()),
+                true => crate::plan::Explainee::ReplanView(item.item_id()),
+                false => crate::plan::Explainee::View(item.item_id()),
             }
         }
         Explainee::MaterializedView(name) | Explainee::ReplanMaterializedView(name) => {
@@ -461,8 +461,8 @@ fn plan_explainee(
                 sql_bail!("Expected {name} to be a materialized view, not a {item_type}");
             }
             match is_replan {
-                true => crate::plan::Explainee::ReplanMaterializedView(item.global_id()),
-                false => crate::plan::Explainee::MaterializedView(item.global_id()),
+                true => crate::plan::Explainee::ReplanMaterializedView(item.item_id()),
+                false => crate::plan::Explainee::MaterializedView(item.item_id()),
             }
         }
         Explainee::Index(name) | Explainee::ReplanIndex(name) => {
@@ -472,8 +472,8 @@ fn plan_explainee(
                 sql_bail!("Expected {name} to be an index, not a {item_type}");
             }
             match is_replan {
-                true => crate::plan::Explainee::ReplanIndex(item.global_id()),
-                false => crate::plan::Explainee::Index(item.global_id()),
+                true => crate::plan::Explainee::ReplanIndex(item.item_id()),
+                false => crate::plan::Explainee::Index(item.item_id()),
             }
         }
         Explainee::Select(select, broken) => {

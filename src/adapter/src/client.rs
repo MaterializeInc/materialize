@@ -32,7 +32,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{GlobalId, Row, RowIterator, ScalarType};
+use mz_repr::{CatalogItemId, Row, RowIterator, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
@@ -726,7 +726,7 @@ impl SessionClient {
     /// ones.
     pub async fn insert_rows(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         columns: Vec<usize>,
         rows: Vec<Row>,
         ctx_extra: ExecuteContextExtra,

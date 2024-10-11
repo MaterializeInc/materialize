@@ -172,7 +172,7 @@ pub struct InitializeStateResult {
     /// A set of storage collections to drop (only used by legacy migrations).
     pub storage_collections_to_drop: BTreeSet<CatalogItemId>,
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
-    pub migrated_storage_collections_0dt: BTreeSet<GlobalId>,
+    pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
     pub new_builtins: BTreeSet<CatalogItemId>,
     /// A list of builtin table updates corresponding to the initialized state.
@@ -692,7 +692,7 @@ impl Catalog {
             // Push drop commands.
             match entry.item() {
                 CatalogItem::Log(log) => {
-                    migrated_log_ids.insert(id, log.variant.clone());
+                    migrated_log_ids.insert(log.global_id(), log.variant.clone());
                 }
                 CatalogItem::Index(index) => {
                     if id.is_system() {

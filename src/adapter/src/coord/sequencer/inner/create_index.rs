@@ -149,11 +149,12 @@ impl Coordinator {
         let plan::Explainee::ReplanIndex(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
-        let CatalogItem::Index(item) = self.catalog().get_entry(&id).item() else {
+        let CatalogItem::Index(index) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
+        let id = index.global_id();
 
-        let create_sql = item.create_sql.clone();
+        let create_sql = index.create_sql.clone();
         let plan_result = self
             .catalog_mut()
             .deserialize_plan_with_enable_for_item_parsing(&create_sql, true);
@@ -205,7 +206,8 @@ impl Coordinator {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
 
-        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
+        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&index.global_id())
+        else {
             if !id.is_system() {
                 tracing::error!("cannot find dataflow metainformation for index {id} in catalog");
             }
@@ -223,7 +225,11 @@ impl Coordinator {
 
         let explain = match stage {
             ExplainStage::GlobalPlan => {
-                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+                let Some(plan) = self
+                    .catalog()
+                    .try_get_optimized_plan(&index.global_id())
+                    .cloned()
+                else {
                     tracing::error!("cannot find {stage} for index {id} in catalog");
                     coord_bail!("cannot find {stage} for index in catalog");
                 };
@@ -240,7 +246,11 @@ impl Coordinator {
                 )?
             }
             ExplainStage::PhysicalPlan => {
-                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
+                let Some(plan) = self
+                    .catalog()
+                    .try_get_physical_plan(&index.global_id())
+                    .cloned()
+                else {
                     tracing::error!("cannot find {stage} for index {id} in catalog");
                     coord_bail!("cannot find {stage} for index in catalog");
                 };

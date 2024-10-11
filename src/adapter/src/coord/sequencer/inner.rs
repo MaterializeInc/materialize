@@ -1022,7 +1022,7 @@ impl Coordinator {
                                     coord.catalog().resolve_builtin_storage_collection(
                                         &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                                     );
-                                let source_status_collection_id = Some(
+                                let status_collection_id = Some(
                                     coord
                                         .catalog()
                                         .get_entry(source_status_item_id)
@@ -2352,8 +2352,8 @@ impl Coordinator {
                 );
                 self.sequence_staged(ctx, Span::current(), stage).await;
             }
-            Explainee::MaterializedView(gid) => {
-                self.explain_pushdown_materialized_view(ctx, gid).await;
+            Explainee::MaterializedView(item_id) => {
+                self.explain_pushdown_materialized_view(ctx, item_id).await;
             }
             _ => {
                 ctx.retire(Err(AdapterError::Unsupported(
@@ -2579,9 +2579,13 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
-        let mut source_ids = plan.selection.depends_on();
+        let mut source_ids: BTreeSet<_> = plan
+            .selection
+            .depends_on()
+            .into_iter()
+            .map(|gid| self.catalog().resolve_global_id(&gid).item_id())
+            .collect();
         source_ids.insert(plan.id);
-        let source_ids = source_ids.into_iter().map(|id| id.to_item_id()).collect();
         guard_write_critical_section!(self, ctx, Plan::ReadThenWrite(plan), source_ids);
 
         let plan::ReadThenWritePlan {
@@ -3314,10 +3318,10 @@ impl Coordinator {
             }
         }
 
-        let status_id = Some(
-            self.catalog()
-                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
-        );
+        let status_id = self
+            .catalog()
+            .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY);
+        let status_id = Some(self.catalog().get_entry(status_id).latest_global_id());
 
         let from_entry = self.catalog().get_entry(&sink.from);
         let storage_sink_desc = StorageSinkDesc {
@@ -3897,10 +3901,11 @@ impl Coordinator {
                 let mut item_ids = BTreeSet::new();
                 let mut collections = Vec::with_capacity(sources.len());
                 for (item_id, source) in sources {
+                    let status_id = self.catalog().resolve_builtin_storage_collection(
+                        &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                    );
                     let source_status_collection_id =
-                        Some(self.catalog().resolve_builtin_storage_collection(
-                            &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                        ));
+                        Some(self.catalog().get_entry(status_id).latest_global_id());
 
                     let (data_source, status_collection_id) = match source.data_source {
                         // Subsources use source statuses.

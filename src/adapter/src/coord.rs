@@ -72,7 +72,7 @@ use ipnet::IpNet;
 use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
 use mz_compute_client::as_of_selection;
 use mz_ore::channel::trigger::Trigger;
-use mz_sql::names::{DependencyIds, ResolvedIds, SchemaSpecifier};
+use mz_sql::names::{ResolvedIds, SchemaSpecifier};
 use mz_sql::session::user::User;
 use mz_storage_types::read_holds::ReadHold;
 use std::borrow::Cow;
@@ -2702,7 +2702,7 @@ impl Coordinator {
                             .collect::<Vec<_>>();
                         // Return a metainfo with rendered notices.
                         self.catalog()
-                            .render_notices(metainfo, notice_ids, Some(entry.id()))
+                            .render_notices(metainfo, notice_ids, Some(idx.global_id()))
                     };
 
                     let catalog = self.catalog_mut();
@@ -2760,7 +2760,7 @@ impl Coordinator {
                             .collect::<Vec<_>>();
                         // Return a metainfo with rendered notices.
                         self.catalog()
-                            .render_notices(metainfo, notice_ids, Some(entry.id()))
+                            .render_notices(metainfo, notice_ids, Some(mv.global_id()))
                     };
 
                     let catalog = self.catalog_mut();

@@ -569,6 +569,7 @@ impl CatalogState {
                     name.clone(),
                     CatalogItem::Log(Log {
                         variant: log.variant,
+                        collection_id: id.to_global_id(),
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(acl_items),
@@ -940,7 +941,7 @@ impl CatalogState {
                 };
                 // We allow sinks to break this invariant due to a know issue with `ALTER SINK`.
                 // https://github.com/MaterializeInc/materialize/pull/28708.
-                if !entry.is_sink() && entry.uses().iter().any(|id| *id > entry.id.to_global_id()) {
+                if !entry.is_sink() && entry.uses().iter().any(|id| *id > entry.id) {
                     let msg = format!(
                         "item cannot depend on items with larger GlobalIds, item: {:?}, dependencies: {:?}",
                         entry,
@@ -1544,7 +1545,7 @@ impl CatalogState {
         };
         index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
         let index_item_name = index_name.item.clone();
-        let log_id = self.resolve_builtin_log(log);
+        let (log_item_id, log_global_id) = self.resolve_builtin_log(log);
         self.insert_item(
             index_id.to_item_id(),
             oid,
@@ -1552,7 +1553,7 @@ impl CatalogState {
             CatalogItem::Index(Index {
                 // TODO(alter_table): Allocate a unique GlobalId.
                 collection_id: index_id,
-                on: log_id,
+                on: log_global_id,
                 keys: log
                     .variant
                     .index_by()
@@ -1567,7 +1568,7 @@ impl CatalogState {
                     &log.variant.index_by(),
                 ),
                 conn_id: None,
-                resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id.to_item_id()])),
+                resolved_ids: ResolvedIds(BTreeSet::from_iter([log_item_id])),
                 cluster_id,
                 is_retained_metrics_object: false,
                 custom_logical_compaction_window: None,

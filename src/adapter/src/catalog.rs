@@ -336,7 +336,6 @@ impl Catalog {
                 )
             });
             let bad_notices = bracketed("{", "}", separated(", ", bad_notices));
-            // soft_panic_or_log!(
             error!(
                 "all dropped_notices entries should have `Arc::strong_count(_) == 1`; \
                  bad_notices = {bad_notices}; \
@@ -740,7 +739,7 @@ impl Catalog {
 
     /// Resolves a `BuiltinLog`.
     pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> CatalogItemId {
-        self.state.resolve_builtin_log(builtin)
+        self.state.resolve_builtin_log(builtin).0
     }
 
     /// Resolves a `BuiltinSource`.
@@ -1777,10 +1776,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.get_entry(id)
     }
 
-    fn resolve_global_id(
-        &self,
-        id: &GlobalId,
-    ) -> Result<Box<dyn mz_sql::catalog::CatalogCollectionItem>, SqlCatalogError> {
+    fn resolve_global_id(&self, id: &GlobalId) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
         let entry = self.state.resolve_global_id(id);
         let entry = match &entry.item {
             CatalogItem::Table(table) => {
@@ -1793,7 +1789,7 @@ impl SessionCatalog for ConnCatalog<'_> {
             }
             _ => entry.at_version(RelationVersionSelector::Latest),
         };
-        Ok(entry)
+        entry
     }
 
     fn get_items(&self) -> Vec<&dyn mz_sql::catalog::CatalogItem> {

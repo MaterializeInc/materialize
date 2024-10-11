@@ -420,8 +420,11 @@ impl Catalog {
         self.transient_revision += 1;
 
         // Drop in-memory planning metadata.
-        let drop_ids = drop_ids.into_iter().map(|id| id.to_global_id()).collect();
-        let dropped_notices = self.drop_plans_and_metainfos(&drop_ids);
+        let dropped_global_ids = drop_ids
+            .into_iter()
+            .flat_map(|item_id| self.get_global_ids(&item_id))
+            .collect();
+        let dropped_notices = self.drop_plans_and_metainfos(&dropped_global_ids);
         if self.state.system_config().enable_mz_notices() {
             // Generate retractions for the Builtin tables.
             self.state().pack_optimizer_notices(

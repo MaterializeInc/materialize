@@ -247,10 +247,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Gets an item by its [`GlobalId`].
     ///
     /// Returns an error if there is no item with the associated [`GlobalId`].
-    fn resolve_global_id(
-        &self,
-        id: &GlobalId,
-    ) -> Result<Box<dyn CatalogCollectionItem>, CatalogError>;
+    fn resolve_global_id(&self, id: &GlobalId) -> Box<dyn CatalogCollectionItem>;
 
     /// Gets all items.
     fn get_items(&self) -> Vec<&dyn CatalogItem>;

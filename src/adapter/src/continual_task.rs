@@ -13,15 +13,17 @@ use std::sync::Arc;
 
 use mz_catalog::memory::objects::ContinualTask;
 use mz_expr::visit::Visit;
-use mz_expr::Id;
-use mz_repr::{CatalogItemId, GlobalId};
+use mz_expr::{CollectionPlan, Id};
+use mz_repr::GlobalId;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self, HirRelationExpr};
 use timely::progress::Antichain;
 
+use crate::catalog::CatalogState;
 use crate::AdapterError;
 
 pub fn ct_item_from_plan(
+    catalog: &CatalogState,
     plan: plan::CreateContinualTaskPlan,
     collection_id: GlobalId,
     resolved_ids: ResolvedIds,
@@ -36,6 +38,7 @@ pub fn ct_item_from_plan(
                 create_sql,
                 cluster_id,
                 expr: mut raw_expr,
+                dependencies: _,
                 column_names: _,
                 non_null_assertions: _,
                 compaction_window: _,
@@ -53,6 +56,12 @@ pub fn ct_item_from_plan(
             _ => {}
         })?;
     }
+    // Re-resolve the dependencies after updating the raw_expr.
+    let dependencies = raw_expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| catalog.resolve_global_id(&gid).item_id())
+        .collect();
 
     Ok(ContinualTask {
         create_sql,
@@ -61,6 +70,7 @@ pub fn ct_item_from_plan(
         raw_expr: Arc::new(raw_expr),
         desc,
         resolved_ids,
+        dependencies,
         cluster_id,
         initial_as_of: as_of.map(Antichain::from_elem),
     })

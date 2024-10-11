@@ -47,7 +47,7 @@ pub(crate) struct BuiltinItemMigrationResult {
     /// A set of storage collections to drop (only used by legacy migration).
     pub(crate) storage_collections_to_drop: BTreeSet<CatalogItemId>,
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
-    pub(crate) migrated_storage_collections_0dt: BTreeSet<GlobalId>,
+    pub(crate) migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// Some cleanup action to take once the migration has been made durable.
     pub(crate) cleanup_action: BoxFuture<'static, ()>,
 }
@@ -408,6 +408,12 @@ async fn migrate_builtin_items_0dt(
             })?;
         global_ids
     };
+
+    // 7. Map the migrated `GlobalId`s to their corresponding `CatalogItemId`.
+    let migrated_storage_collections_0dt = migrated_storage_collections_0dt
+        .into_iter()
+        .map(|gid| state.resolve_global_id(&gid).item_id())
+        .collect();
 
     let updates = txn.get_and_commit_op_updates();
     let builtin_table_updates = state.apply_updates_for_bootstrap(updates).await;

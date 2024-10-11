@@ -655,11 +655,13 @@ pub struct SourceReference {
 /// A [`CreateSourcePlan`] and the metadata necessary to sequence it.
 #[derive(Debug)]
 pub struct CreateSourcePlanBundle {
-    /// The ID of this Source in the Catalog.
+    /// ID of this source in the Catalog.
     pub item_id: CatalogItemId,
-    /// The ID of the backing durable pTVC.
+    /// ID used to reference this source from outside the catalog, e.g. compute.
     pub collection_id: GlobalId,
+    /// Details of the source to create.
     pub plan: CreateSourcePlan,
+    /// Other catalog objects that are referenced by this source, determined at name resolution.
     pub resolved_ids: ResolvedIds,
     /// All the available upstream references for this source.
     /// Populated for top-level sources that can contain subsources/tables
@@ -677,7 +679,8 @@ pub struct CreateConnectionPlan {
 
 #[derive(Debug)]
 pub struct ValidateConnectionPlan {
-    pub id: GlobalId,
+    /// ID of the connection in the Catalog.
+    pub id: CatalogItemId,
     /// The connection to validate.
     pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
 }
@@ -709,9 +712,9 @@ pub struct CreateTablePlan {
 pub struct CreateViewPlan {
     pub name: QualifiedItemName,
     pub view: View,
-    /// The ID of the object that this view is replacing, if any.
+    /// The Catalog objects that this view is replacing, if any.
     pub replace: Option<CatalogItemId>,
-    /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
+    /// The Catalog objects that need to be dropped. This includes `replace` and any dependents.
     pub drop_ids: Vec<CatalogItemId>,
     pub if_not_exists: bool,
     /// True if the view contains an expression that can make the exact column list
@@ -723,9 +726,9 @@ pub struct CreateViewPlan {
 pub struct CreateMaterializedViewPlan {
     pub name: QualifiedItemName,
     pub materialized_view: MaterializedView,
-    /// The ID of the object that this view is replacing, if any.
+    /// The Catalog objects that this materialized view is replacing, if any.
     pub replace: Option<CatalogItemId>,
-    /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
+    /// The Catalog objects that need to be dropped. This includes `replace` and any dependents.
     pub drop_ids: Vec<CatalogItemId>,
     pub if_not_exists: bool,
     /// True if the materialized view contains an expression that can make the exact column list
@@ -736,11 +739,13 @@ pub struct CreateMaterializedViewPlan {
 #[derive(Debug, Clone)]
 pub struct CreateContinualTaskPlan {
     pub name: QualifiedItemName,
-    // During initial creation, the `LocalId` placeholder for this CT in
-    // `continual_task.expr`. None on restart.
+    /// During initial creation, the `LocalId` placeholder for this CT in `continual_task.expr`.
+    /// None on restart.
     pub placeholder_id: Option<mz_expr::LocalId>,
     pub desc: RelationDesc,
+    /// ID of the collection we read into this continual task.
     pub input_id: GlobalId,
+    /// Definition for the continual task.
     pub continual_task: MaterializedView,
 }
 
@@ -787,6 +792,7 @@ pub struct ShowVariablePlan {
 
 #[derive(Debug)]
 pub struct InspectShardPlan {
+    /// ID of the storage collection to inspect.
     pub id: GlobalId,
 }
 
@@ -860,7 +866,9 @@ pub struct SubscribePlan {
 
 #[derive(Debug, Clone)]
 pub enum SubscribeFrom {
+    /// ID of the collection to subscribe to.
     Id(GlobalId),
+    /// Query to subscribe to.
     Query {
         expr: MirRelationExpr,
         desc: RelationDesc,
@@ -891,14 +899,14 @@ pub struct ShowCreatePlan {
 
 #[derive(Debug)]
 pub struct ShowColumnsPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub select_plan: SelectPlan,
     pub new_resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug)]
 pub struct CopyFromPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
 }
@@ -929,17 +937,17 @@ pub struct ExplainPlanPlan {
 #[derive(Clone, Debug)]
 pub enum Explainee {
     /// Lookup and explain a plan saved for an view.
-    View(GlobalId),
+    View(CatalogItemId),
     /// Lookup and explain a plan saved for an existing materialized view.
-    MaterializedView(GlobalId),
+    MaterializedView(CatalogItemId),
     /// Lookup and explain a plan saved for an existing index.
-    Index(GlobalId),
+    Index(CatalogItemId),
     /// Replan an existing view.
-    ReplanView(GlobalId),
+    ReplanView(CatalogItemId),
     /// Replan an existing materialized view.
-    ReplanMaterializedView(GlobalId),
+    ReplanMaterializedView(CatalogItemId),
     /// Replan an existing index.
-    ReplanIndex(GlobalId),
+    ReplanIndex(CatalogItemId),
     /// A SQL statement.
     Statement(ExplaineeStatement),
 }
@@ -1597,8 +1605,11 @@ pub struct Secret {
 
 #[derive(Clone, Debug)]
 pub struct Sink {
+    /// Parse-able SQL that is stored durably and defines this sink.
     pub create_sql: String,
+    /// Collection we read into this sink.
     pub from: GlobalId,
+    /// Type of connection to the external service we sink into.
     pub connection: StorageSinkConnection<ReferencedConnection>,
     pub partition_strategy: SinkPartitionStrategy,
     // TODO(guswynn): this probably should just be in the `connection`.
@@ -1608,19 +1619,29 @@ pub struct Sink {
 
 #[derive(Clone, Debug)]
 pub struct View {
+    /// Parse-able SQL that is stored durably and defines this view.
     pub create_sql: String,
+    /// Unoptimized high-level expression from parsing the `create_sql`.
     pub expr: HirRelationExpr,
+    /// All of the catalog objects that are referenced by this view, according to the `expr`.
     pub dependencies: DependencyIds,
+    /// Columns of this view.
     pub column_names: Vec<ColumnName>,
+    /// If this view is created in the temporary schema, e.g. `CREATE TEMPORARY ...`.
     pub temporary: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct MaterializedView {
+    /// Parse-able SQL that is stored durably and defines this materialized view.
     pub create_sql: String,
+    /// Unoptimized high-level expression from parsing the `create_sql`.
     pub expr: HirRelationExpr,
+    /// All of the catalog objects that are referenced by this materialized view, according to the `expr`.
     pub dependencies: DependencyIds,
+    /// Columns of this view.
     pub column_names: Vec<ColumnName>,
+    /// Cluster this materialized view will get installed on.
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,
     pub compaction_window: Option<CompactionWindow>,
@@ -1630,7 +1651,9 @@ pub struct MaterializedView {
 
 #[derive(Clone, Debug)]
 pub struct Index {
+    /// Parse-able SQL that is stored durably and defines this index.
     pub create_sql: String,
+    /// Collection this index is on top of.
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub compaction_window: Option<CompactionWindow>,

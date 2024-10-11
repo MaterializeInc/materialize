@@ -150,6 +150,7 @@ impl Coordinator {
         let CatalogItem::View(item) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
+        let gid = item.global_id();
 
         let create_sql = item.create_sql.clone();
         let plan_result = self
@@ -174,7 +175,7 @@ impl Coordinator {
             config,
             format,
             stage,
-            replan: Some(id),
+            replan: Some(gid),
             desc: None,
             optimizer_trace,
         });

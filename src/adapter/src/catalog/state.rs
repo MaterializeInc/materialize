@@ -596,7 +596,7 @@ impl CatalogState {
             .entry_by_global_id
             .get(&id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"));
-        Ok(self.get_entry(item_id))
+        self.get_entry(item_id)
     }
 
     pub fn get_temp_items(&self, conn: &ConnectionId) -> impl Iterator<Item = ObjectId> + '_ {
@@ -804,7 +804,7 @@ impl CatalogState {
     #[mz_ore::instrument]
     pub(crate) fn parse_item(
         &self,
-        id: CatalogItemId,
+        _id: CatalogItemId,
         kind: &ItemValueKind,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
@@ -966,6 +966,13 @@ impl CatalogState {
 
                 let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
 
+                // Resolve all item dependencies from the HIR expression.
+                let dependencies = raw_expr
+                    .depends_on()
+                    .into_iter()
+                    .map(|gid| self.resolve_global_id(&gid).item_id())
+                    .collect();
+
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
                     raw_expr: raw_expr.into(),
@@ -973,6 +980,7 @@ impl CatalogState {
                     desc,
                     collection_id: *collection,
                     resolved_ids,
+                    dependencies,
                     cluster_id: materialized_view.cluster_id,
                     non_null_assertions: materialized_view.non_null_assertions,
                     custom_logical_compaction_window: materialized_view.compaction_window,
@@ -982,6 +990,7 @@ impl CatalogState {
             }
             (Plan::CreateContinualTask(plan), ItemValueKind::ContinualTask { collection, .. }) => {
                 CatalogItem::ContinualTask(crate::continual_task::ct_item_from_plan(
+                    &self,
                     plan,
                     *collection,
                     resolved_ids,
@@ -1353,8 +1362,13 @@ impl CatalogState {
     /// Optimized lookup for a builtin log.
     ///
     /// Panics if the builtin log doesn't exist in the catalog.
-    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> CatalogItemId {
-        self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin))
+    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> (CatalogItemId, GlobalId) {
+        let item_id = self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin));
+        let log = match self.get_entry(item_id).item() {
+            CatalogItem::Log(log) => log,
+            other => unreachable!("programming error, expected BuiltinLog, found {other:?}"),
+        };
+        (item_id, log.collection_id)
     }
 
     /// Optimized lookup for a builtin storage collection.

@@ -1108,7 +1108,17 @@ impl Source {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Log {
+    /// The category of data this log stores.
     pub variant: LogVariant,
+    /// Id used to reference the storage object for this log.
+    pub collection_id: GlobalId,
+}
+
+impl Log {
+    /// The single [`GlobalId`] that refers to this Log.
+    pub fn global_id(&self) -> GlobalId {
+        self.collection_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1199,6 +1209,13 @@ pub struct View {
     pub resolved_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
     pub dependencies: DependencyIds,
+}
+
+impl View {
+    /// The single [`GlobalId`] this [`View`] can be referenced by.
+    pub fn global_id(&self) -> GlobalId {
+        self.collection_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1296,6 +1313,7 @@ pub struct ContinualTask {
     pub create_sql: String,
     /// [`GlobalId`] used to reference this continual task from outside the catalog.
     pub collection_id: GlobalId,
+    /// [`GlobalId`] of the collection that we read into this continual task.
     pub input_id: GlobalId,
     /// ContinualTasks are self-referential. We make this work by using a
     /// placeholder `LocalId` for the CT itself through name resolution and
@@ -1345,9 +1363,7 @@ impl CatalogItem {
         match self {
             CatalogItem::Table(table) => Box::new(table.collections.values().copied()),
             CatalogItem::Source(source) => Box::new(std::iter::once(source.collection_id)),
-            CatalogItem::Log(log) => {
-                todo!()
-            }
+            CatalogItem::Log(log) => Box::new(std::iter::once(log.collection_id)),
             CatalogItem::Sink(sink) => Box::new(std::iter::once(sink.export_id)),
             CatalogItem::View(view) => Box::new(std::iter::once(view.collection_id)),
             CatalogItem::MaterializedView(mv) => Box::new(std::iter::once(mv.collection_id)),

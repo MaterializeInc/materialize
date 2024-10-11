@@ -2333,7 +2333,7 @@ pub fn plan_view(
     let dependencies = expr
         .depends_on()
         .into_iter()
-        .map(|gid| scx.catalog.resolve_global_id(&gid).expect("TODO").item_id())
+        .map(|gid| scx.catalog.resolve_global_id(&gid).item_id())
         .collect();
 
     let name = if temporary {
@@ -2688,7 +2688,7 @@ pub fn plan_create_materialized_view(
     let dependencies = expr
         .depends_on()
         .into_iter()
-        .map(|gid| scx.catalog.resolve_global_id(&gid).expect("TODO").item_id())
+        .map(|gid| scx.catalog.resolve_global_id(&gid).item_id())
         .collect();
 
     // Check for an object in the catalog with this same name
@@ -2839,7 +2839,7 @@ pub fn plan_create_continual_task(
     let dependencies = expr
         .depends_on()
         .into_iter()
-        .map(|gid| scx.catalog.resolve_global_id(&gid).expect("TODO").item_id())
+        .map(|gid| scx.catalog.resolve_global_id(&gid).item_id())
         .collect();
 
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();

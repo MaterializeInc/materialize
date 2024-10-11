@@ -614,7 +614,7 @@ impl Coordinator {
                     let current_storage_configuration = self.controller.storage.config().clone();
                     mz_ore::task::spawn(|| "coord::validate_connection", async move {
                         let res = match connection
-                            .validate(plan.id.to_item_id(), &current_storage_configuration)
+                            .validate(plan.id, &current_storage_configuration)
                             .await
                         {
                             Ok(()) => Ok(ExecuteResponse::ValidatedConnection),
@@ -734,7 +734,7 @@ impl Coordinator {
     pub(crate) fn insert_constant(
         catalog: &Catalog,
         session: &mut Session,
-        id: GlobalId,
+        id: CatalogItemId,
         constants: MirRelationExpr,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Insert can be queued, so we need to re-verify the id exists.

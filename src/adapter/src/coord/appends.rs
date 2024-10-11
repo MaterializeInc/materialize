@@ -20,7 +20,7 @@ use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
-use mz_repr::{CatalogItemId, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{CatalogItemId, Diff, Row, Timestamp};
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TimestamplessUpdate;

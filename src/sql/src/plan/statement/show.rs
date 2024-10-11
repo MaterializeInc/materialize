@@ -18,7 +18,7 @@ use std::fmt::Write;
 
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
-use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
@@ -644,7 +644,7 @@ pub fn show_columns<'a>(
         Some(&["name", "nullable", "type", "comment"]),
     )?;
     Ok(ShowColumnsSelect {
-        id: entry.global_id(),
+        id: entry.item_id(),
         show_select,
         new_resolved_ids,
     })
@@ -929,7 +929,7 @@ impl<'a> ShowSelect<'a> {
 }
 
 pub struct ShowColumnsSelect<'a> {
-    id: GlobalId,
+    id: CatalogItemId,
     new_resolved_ids: ResolvedIds,
     show_select: ShowSelect<'a>,
 }

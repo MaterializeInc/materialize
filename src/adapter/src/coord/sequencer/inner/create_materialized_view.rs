@@ -21,7 +21,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, GlobalId, Row};
+use mz_repr::{CatalogItemId, Datum, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -180,6 +180,7 @@ impl Coordinator {
         let CatalogItem::MaterializedView(item) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
+        let gid = item.global_id();
 
         let create_sql = item.create_sql.clone();
         let plan_result = self
@@ -204,7 +205,7 @@ impl Coordinator {
             config,
             format,
             stage,
-            replan: Some(id),
+            replan: Some(gid),
             desc: None,
             optimizer_trace,
         });
@@ -232,8 +233,9 @@ impl Coordinator {
         let CatalogItem::MaterializedView(view) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
+        let gid = view.global_id();
 
-        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
+        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&gid) else {
             if !id.is_system() {
                 tracing::error!(
                     "cannot find dataflow metainformation for materialized view {id} in catalog"
@@ -272,7 +274,7 @@ impl Coordinator {
                 Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::GlobalPlan => {
-                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+                let Some(plan) = self.catalog().try_get_optimized_plan(&gid).cloned() else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
                     coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
@@ -288,8 +290,8 @@ impl Coordinator {
                 )?
             }
             ExplainStage::PhysicalPlan => {
-                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
+                    tracing::error!("cannot find {stage} for materialized view {id} in catalog",);
                     coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
                 explain_dataflow(
@@ -885,20 +887,18 @@ impl Coordinator {
     pub(crate) async fn explain_pushdown_materialized_view(
         &self,
         ctx: ExecuteContext,
-        gid: GlobalId,
+        item_id: CatalogItemId,
     ) {
-        let CatalogItem::MaterializedView(mview) = self.catalog().get_entry(&gid).item() else {
+        let CatalogItem::MaterializedView(mview) = self.catalog().get_entry(&item_id).item() else {
             unreachable!() // Asserted in `sequence_explain_pushdown`.
         };
-
+        let gid = mview.global_id();
         let mview = mview.clone();
 
         let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
-            tracing::error!("cannot find plan for materialized view {gid} in catalog");
-            ctx.retire(Err(anyhow!(
-                "cannot find plan for materialized view {gid} in catalog"
-            )
-            .into()));
+            let msg = format!("cannot find plan for materialized view {item_id} in catalog");
+            tracing::error!("{msg}");
+            ctx.retire(Err(anyhow!("{msg}").into()));
             return;
         };
 

@@ -35,7 +35,7 @@ use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec64, Opaque, ShardId};
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};

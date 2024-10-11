@@ -21,7 +21,7 @@ use mz_adapter_types::dyncfgs::{
 use mz_catalog::builtin::MZ_CLUSTER_REPLICA_FRONTIERS;
 use mz_catalog::memory::objects::Cluster;
 use mz_ore::channel::trigger::Trigger;
-use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 

@@ -756,14 +756,7 @@ fn generate_rbac_requirements(
             new_resolved_ids: _,
         }) => {
             let mut privileges = vec![(
-                SystemObjectId::Object(
-                    catalog
-                        .get_item(&id.into())
-                        .name()
-                        .qualifiers
-                        .clone()
-                        .into(),
-                ),
+                SystemObjectId::Object(catalog.get_item(&id).name().qualifiers.clone().into()),
                 AclMode::USAGE,
                 role_id,
             )];
@@ -890,7 +883,7 @@ fn generate_rbac_requirements(
                 | Explainee::ReplanView(id)
                 | Explainee::ReplanMaterializedView(id)
                 | Explainee::ReplanIndex(id) => {
-                    let item = catalog.get_item(&id.into());
+                    let item = catalog.get_item(&id);
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
                 }
@@ -898,7 +891,7 @@ fn generate_rbac_requirements(
                     .depends_on()
                     .into_iter()
                     .map(|id| {
-                        let item = catalog.get_item(&id.into());
+                        let item = catalog.resolve_global_id(&id);
                         let schema_id: ObjectId = item.name().qualifiers.clone().into();
                         (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)
                     })
@@ -918,7 +911,7 @@ fn generate_rbac_requirements(
         Plan::ExplainSinkSchema(plan::ExplainSinkSchemaPlan { sink_from, .. }) => {
             RbacRequirements {
                 privileges: {
-                    let item = catalog.get_item(&sink_from.into());
+                    let item = catalog.resolve_global_id(&sink_from);
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
                 },
