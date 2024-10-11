@@ -49,7 +49,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::controller::error::{
-    CollectionMissing, HydrationCheckBadTarget, ERROR_TARGET_REPLICA_FAILED,
+    CollectionLookupError, CollectionMissing, HydrationCheckBadTarget, ERROR_TARGET_REPLICA_FAILED,
 };
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
@@ -621,6 +621,34 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             status.worker_id,
             status.hydrated,
         );
+    }
+
+    /// Returns `true` if the given collection is hydrated on at least one
+    /// replica.
+    ///
+    /// This also returns `true` in case this cluster does not have any
+    /// replicas.
+    #[mz_ore::instrument(level = "debug")]
+    pub fn collection_hydrated(
+        &self,
+        collection_id: GlobalId,
+    ) -> Result<bool, CollectionLookupError> {
+        if self.replicas.is_empty() {
+            return Ok(true);
+        }
+
+        for replica_state in self.replicas.values() {
+            let collection_state = replica_state
+                .collections
+                .get(&collection_id)
+                .ok_or(CollectionLookupError::CollectionMissing(collection_id))?;
+
+            if collection_state.hydrated() {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 
     /// Returns `true` if each non-transient, non-excluded collection is hydrated on at
