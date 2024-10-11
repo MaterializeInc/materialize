@@ -239,3 +239,20 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '30d';
 1000
 > DROP MATERIALIZED VIEW events_mv CASCADE;
 > DROP CLUSTER test CASCADE;
+
+# Test refresh schedules
+
+## CREATE TABLE t (id int, ts timestamp);
+## CREATE MATERIALIZED VIEW mv1 with (refresh at creation, refresh EVERY '7 days' ALIGNED TO '2024-06-04 12:00:00') as select * from t where id < 10;
+##     - `2024-10-15 12:00:00.000`
+## CREATE MATERIALIZED VIEW mv2 with (refresh at creation, refresh EVERY '30 days' ALIGNED TO '2024-06-04 12:00:00') as select * from t where id < 15;
+##     - `2024-11-01 12:00:00.000`
+## CREATE MATERIALIZED VIEW mv3 with (refresh at creation, refresh EVERY '60 days' ALIGNED TO '2024-06-04 12:00:00') as select * from mv2 where id < 15;
+##     - `2024-12-01 12:00:00.000`
+
+## CREATE VIEW v1 as select * from mv1 union all select * from mv2 where mz_now() <= ts + interval '4 days';
+## CREATE VIEW v2 as select * from mv2 union all select * from mv3 where mz_now() <= ts + interval '4 days';
+## CREATE VIEW v3 as select * from mv2 union all select * from mv3 where mz_now() <= ts + interval '4 days';
+
+# Test dataflows multiple inputs (unions/joins), each of which can have a refresh schedule: meet(inputs)
+# Test dataflows that recursively depend on MVs with refresh schedules

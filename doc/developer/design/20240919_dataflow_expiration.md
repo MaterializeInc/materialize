@@ -69,6 +69,15 @@ else:
 # The `upper` for a dataflow considering all its transitive inputs
 inputs_upper := meet(for all inputs i: i_upper)
 
+# Compute the upper of replica_expiration and any set refresh schedule
+# TODO: expiration_upper is only available in the optimizer, but replica_expiration
+# is only available in cluster.
+fn expiration_upper(obj, replica_expiration) :=
+  match obj:
+    Index(inputs) => meet(for all o in inputs: expiration_upper(o, replica_expiration))
+    MV(inputs, refresh schedule) => refresh_schedule.round_up_timestamp(meet(for all o in inputs: expiration_upper(o, replica_expiration)))
+    Table/Source/..? => 1s.round_up_timestamp(expiration_time)
+
 # Dataflow expiration logic
 if compute_replica_expiration_offset is not set:
   dataflow_replication := []
@@ -78,14 +87,9 @@ else for dataflows of type in [materialized view, index, subscribe]:
     # Dataflows that do not depend on any source or table are not in the
     # EpochMilliseconds timeline
     dataflow_expiration := []
-  else if refresh_interval set in any transitive dependency of dataflow:
-    dataflow_expiration := []
-  else if inputs_upper == []:
-    dataflow_expiration := []
-  else if inputs_upper > expiration:
-    dataflow_expiration := inputs_upper
   else:
-    dataflow_expiration := replica_expiration
+    replica_expiration_upper := expiration_upper(dataflow, replica_expiration)
+    dataflow_expiration := join(replica_expiration_upper, inputs_upper)
 
 dataflow_until := dataflow_until.meet(dataflow_expiration)
 ```
