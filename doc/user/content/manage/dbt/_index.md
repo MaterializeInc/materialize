@@ -7,9 +7,10 @@ aliases:
   - /integrations/dbt/
 menu:
   main:
-    parent: manage-dbt
-    name: "Overview"
-    weight: 5
+    parent: manage
+    weight: 10
+    identifier: "manage-dbt"
+
 ---
 
 {{< note >}}
