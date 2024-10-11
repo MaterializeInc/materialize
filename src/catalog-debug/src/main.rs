@@ -9,6 +9,7 @@
 
 //! Debug utility for Catalog storage.
 
+use std::cmp::max;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fs::File;
@@ -533,9 +534,9 @@ async fn upgrade_check(
         .context("loading secrets reader")?;
 
     let now = SYSTEM_TIME.clone();
-    let mut storage = openable_state
+    let (mut storage, boot_ts) = openable_state
         .open_savepoint(
-            now(),
+            now().into(),
             &BootstrapArgs {
                 default_cluster_replica_size:
                     "DEFAULT CLUSTER REPLICA SIZE IS ONLY USED FOR NEW ENVIRONMENTS".into(),
@@ -553,7 +554,7 @@ async fn upgrade_check(
         .0
         .clone();
 
-    let boot_ts = now().into();
+    let boot_ts = max(now().into(), boot_ts.step_forward());
     // BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
     // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     // Because of that we purposefully move this Future onto the heap (i.e. Box it).

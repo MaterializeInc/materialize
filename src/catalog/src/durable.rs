@@ -18,13 +18,6 @@ use async_trait::async_trait;
 use mz_audit_log::VersionedEvent;
 use uuid::Uuid;
 
-use mz_controller_types::{ClusterId, ReplicaId};
-use mz_ore::collections::CollectionExt;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::EpochMillis;
-use mz_persist_client::PersistClient;
-use mz_repr::GlobalId;
-
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError, FenceError};
 pub use crate::durable::metrics::Metrics;
@@ -42,6 +35,11 @@ pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
 pub use crate::durable::upgrade::CATALOG_VERSION;
 use crate::memory;
+use mz_controller_types::{ClusterId, ReplicaId};
+use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_persist_client::PersistClient;
+use mz_repr::GlobalId;
 
 pub mod debug;
 mod error;
@@ -97,9 +95,9 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// `initial_ts` is used as the initial timestamp for new environments.
     async fn open_savepoint(
         mut self: Box<Self>,
-        initial_ts: EpochMillis,
+        initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
+    ) -> Result<(Box<dyn DurableCatalogState>, Timestamp), CatalogError>;
 
     /// Opens the catalog in read only mode. All mutating methods
     /// will return an error.
@@ -118,9 +116,9 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// `initial_ts` is used as the initial timestamp for new environments.
     async fn open(
         mut self: Box<Self>,
-        initial_ts: EpochMillis,
+        initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
+    ) -> Result<(Box<dyn DurableCatalogState>, Timestamp), CatalogError>;
 
     /// Opens the catalog for manual editing of the underlying data. This is helpful for
     /// fixing a corrupt catalog.
@@ -272,6 +270,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
+        commit_ts: Timestamp,
     ) -> Result<Timestamp, CatalogError>;
 
     /// Confirms that this catalog is connected as the current leader.
@@ -281,53 +280,84 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Allocates and returns `amount` IDs of `id_type`.
     #[mz_ore::instrument(level = "debug")]
-    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
+    async fn allocate_id(
+        &mut self,
+        id_type: &str,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<u64>, CatalogError> {
         if amount == 0 {
             return Ok(Vec::new());
         }
         let mut txn = self.transaction().await?;
         let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
-        txn.commit_internal().await?;
+        txn.commit_internal(commit_ts.into()).await?;
         Ok(ids)
     }
 
     /// Allocates and returns `amount` system [`GlobalId`]s.
-    async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
-        let id = self.allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount).await?;
+    async fn allocate_system_ids(
+        &mut self,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<GlobalId>, CatalogError> {
+        let id = self
+            .allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount, commit_ts)
+            .await?;
         Ok(id.into_iter().map(GlobalId::System).collect())
     }
 
     /// Allocates and returns a user [`GlobalId`].
-    async fn allocate_user_id(&mut self) -> Result<GlobalId, CatalogError> {
-        let id = self.allocate_id(USER_ITEM_ALLOC_KEY, 1).await?;
+    async fn allocate_user_id(&mut self, commit_ts: Timestamp) -> Result<GlobalId, CatalogError> {
+        let id = self.allocate_id(USER_ITEM_ALLOC_KEY, 1, commit_ts).await?;
         let id = id.into_element();
         Ok(GlobalId::User(id))
     }
 
     /// Allocates and returns a user [`ClusterId`].
-    async fn allocate_user_cluster_id(&mut self) -> Result<ClusterId, CatalogError> {
-        let id = self.allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1).await?;
+    async fn allocate_user_cluster_id(
+        &mut self,
+        commit_ts: Timestamp,
+    ) -> Result<ClusterId, CatalogError> {
+        let id = self
+            .allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1, commit_ts)
+            .await?;
         let id = id.into_element();
         Ok(ClusterId::User(id))
     }
 
     /// Allocates and returns a user [`ReplicaId`].
-    async fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
-        let id = self.allocate_id(USER_REPLICA_ID_ALLOC_KEY, 1).await?;
+    async fn allocate_user_replica_id(
+        &mut self,
+        commit_ts: Timestamp,
+    ) -> Result<ReplicaId, CatalogError> {
+        let id = self
+            .allocate_id(USER_REPLICA_ID_ALLOC_KEY, 1, commit_ts)
+            .await?;
         let id = id.into_element();
         Ok(ReplicaId::User(id))
     }
 
     /// Allocates and returns a system [`ReplicaId`].
-    async fn allocate_system_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
-        let id = self.allocate_id(SYSTEM_REPLICA_ID_ALLOC_KEY, 1).await?;
+    async fn allocate_system_replica_id(
+        &mut self,
+        commit_ts: Timestamp,
+    ) -> Result<ReplicaId, CatalogError> {
+        let id = self
+            .allocate_id(SYSTEM_REPLICA_ID_ALLOC_KEY, 1, commit_ts)
+            .await?;
         let id = id.into_element();
         Ok(ReplicaId::System(id))
     }
 
     /// Allocates and returns storage usage IDs.
-    async fn allocate_storage_usage_ids(&mut self, amount: u64) -> Result<Vec<u64>, CatalogError> {
-        self.allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, amount).await
+    async fn allocate_storage_usage_ids(
+        &mut self,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<u64>, CatalogError> {
+        self.allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, amount, commit_ts)
+            .await
     }
 }
 
