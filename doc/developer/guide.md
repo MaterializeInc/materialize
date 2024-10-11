@@ -583,8 +583,8 @@ If you are using Rust-Analyzer, you should configure it to conform to our
 
 [RustRover] is another option for an IDE with good code navigation features.
 This is a good choice for developers who prefer the JetBrains ecosystem. This repo
-provides some example run configurations to help get started with running and debugging
-Materialize in RustRover.
+provides some example [run configurations](https://github.com/MaterializeInc/materialize/tree/main/.run)
+to help get started with running and debugging Materialize in RustRover.
 
 If you are a Materialize employee, ask in the #jetbrains channel on Slack for 
 access to a corporate JetBrains license. If you're not yet sure you want to use
