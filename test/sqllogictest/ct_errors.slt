@@ -52,3 +52,10 @@ statement error CONTINUAL TASK cannot use view as an input
 CREATE CONTINUAL TASK nope (key INT, val STRING) ON INPUT some_view AS (
     INSERT INTO nope SELECT * FROM foo;
 )
+
+# Must provide columns for recursive CTs
+statement error statement 1: INSERT has more expressions than target columns
+CREATE CONTINUAL TASK nope ON INPUT foo AS (
+    DELETE FROM nope;
+    INSERT INTO nope SELECT *, 'bar' FROM foo;
+)

@@ -19,9 +19,16 @@ statement ok
 INSERT INTO small VALUES (1, 'v0')
 
 statement ok
-CREATE CONTINUAL TASK stj (key INT, val STRING) ON INPUT big AS (
-    INSERT INTO stj SELECT b.key, s.val FROM big b JOIN small s ON b.key = s.key;
+CREATE CONTINUAL TASK stj ON INPUT big AS (
+    INSERT INTO stj SELECT b.key AS k, s.val AS v FROM big b JOIN small s ON b.key = s.key;
 )
+
+# Can rename columns via AS when we don't specify them explictly in the CT
+query TTTT
+SHOW COLUMNS FROM stj;
+----
+k  true  integer  (empty)
+v  true  text  (empty)
 
 statement ok
 INSERT INTO big VALUES (1)

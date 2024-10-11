@@ -1399,7 +1399,7 @@ impl_display_t!(CreateMaterializedViewStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateContinualTaskStatement<T: AstInfo> {
     pub name: T::ItemName,
-    pub columns: Vec<CteMutRecColumnDef<T>>,
+    pub columns: Option<Vec<CteMutRecColumnDef<T>>>,
     pub in_cluster: Option<T::ClusterName>,
     pub as_of: Option<u64>,
 
@@ -1420,9 +1420,11 @@ impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE CONTINUAL TASK ");
         f.write_node(&self.name);
-        f.write_str(" (");
-        f.write_node(&display::comma_separated(&self.columns));
-        f.write_str(")");
+        if let Some(columns) = &self.columns {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(columns));
+            f.write_str(")");
+        }
 
         if let Some(cluster) = &self.in_cluster {
             f.write_str(" IN CLUSTER ");

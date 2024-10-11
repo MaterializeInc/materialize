@@ -2766,18 +2766,21 @@ pub fn plan_create_continual_task(
     // the same nullability. So, start by assuming all columns are non-nullable,
     // and then make them nullable below if any of the exprs plan them as
     // nullable.
-    let mut desc = {
-        let mut desc_columns = Vec::with_capacity(stmt.columns.capacity());
-        for col in stmt.columns.iter() {
-            desc_columns.push((
-                normalize::column_name(col.name.clone()),
-                ColumnType {
-                    scalar_type: scalar_type_from_sql(scx, &col.data_type)?,
-                    nullable: false,
-                },
-            ));
+    let mut desc = match stmt.columns {
+        None => None,
+        Some(columns) => {
+            let mut desc_columns = Vec::with_capacity(columns.capacity());
+            for col in columns.iter() {
+                desc_columns.push((
+                    normalize::column_name(col.name.clone()),
+                    ColumnType {
+                        scalar_type: scalar_type_from_sql(scx, &col.data_type)?,
+                        nullable: false,
+                    },
+                ));
+            }
+            Some(RelationDesc::from_names_and_types(desc_columns))
         }
-        RelationDesc::from_names_and_types(desc_columns)
     };
     let input = scx.get_item_by_resolved_name(&stmt.input)?;
     match input.item_type() {
@@ -2805,11 +2808,22 @@ pub fn plan_create_continual_task(
     let ct_name = stmt.name;
     let placeholder_id = match &ct_name {
         ResolvedItemName::ContinualTask { id, name } => {
+            let desc = match desc.as_ref().cloned() {
+                Some(x) => x,
+                None => {
+                    // The user didn't specify the CT's columns. Take a wild
+                    // guess that the CT has the same shape as the input. It's
+                    // fine if this is wrong, we'll get an error below after
+                    // planning the query.
+                    let input_name = scx.catalog.resolve_full_name(input.name());
+                    input.desc(&input_name)?.into_owned()
+                }
+            };
             qcx.ctes.insert(
                 *id,
                 CteDesc {
                     name: name.item.clone(),
-                    desc: desc.clone(),
+                    desc,
                 },
             );
             Some(*id)
@@ -2830,49 +2844,60 @@ pub fn plan_create_continual_task(
         // QueryLifetime, see comment in `plan_view`.
         assert!(finishing.is_trivial(expr.arity()));
         expr.bind_parameters(params)?;
-
-        // We specify the columns for DELETE, so if any columns types don't
-        // match, it's because it's an INSERT.
-        if desc_query.arity() > desc.arity() {
-            sql_bail!(
-                "statement {}: INSERT has more expressions than target columns",
-                idx
-            );
-        }
-        if desc_query.arity() < desc.arity() {
-            sql_bail!(
-                "statement {}: INSERT has more target columns than expressions",
-                idx
-            );
-        }
-        // Ensure the types of the source query match the types of the target table,
-        // installing assignment casts where necessary and possible.
-        let target_types = desc.iter_types().map(|x| &x.scalar_type);
-        let expr = cast_relation(&qcx, CastContext::Assignment, expr, target_types);
-        let expr = expr.map_err(|e| {
-            sql_err!(
-                "statement {}: column {} is of type {} but expression is of type {}",
-                idx,
-                desc.get_name(e.column).as_str().quoted(),
-                qcx.humanize_scalar_type(&e.target_type),
-                qcx.humanize_scalar_type(&e.source_type),
-            )
-        })?;
-
-        // Update ct nullability as necessary. The `ne` above verified that the
-        // types are the same len.
-        let zip_types = || desc.iter_types().zip(desc_query.iter_types());
-        let updated = zip_types().any(|(ct, q)| q.nullable && !ct.nullable);
-        if updated {
-            let new_types = zip_types().map(|(ct, q)| {
-                let mut ct = ct.clone();
-                if q.nullable {
-                    ct.nullable = true;
+        let expr = match desc.as_mut() {
+            None => {
+                desc = Some(desc_query);
+                expr
+            }
+            Some(desc) => {
+                // We specify the columns for DELETE, so if any columns types don't
+                // match, it's because it's an INSERT.
+                if desc_query.arity() > desc.arity() {
+                    sql_bail!(
+                        "statement {}: INSERT has more expressions than target columns",
+                        idx
+                    );
                 }
-                ct
-            });
-            desc = RelationDesc::from_names_and_types(desc.iter_names().cloned().zip(new_types));
-        }
+                if desc_query.arity() < desc.arity() {
+                    sql_bail!(
+                        "statement {}: INSERT has more target columns than expressions",
+                        idx
+                    );
+                }
+                // Ensure the types of the source query match the types of the target table,
+                // installing assignment casts where necessary and possible.
+                let target_types = desc.iter_types().map(|x| &x.scalar_type);
+                let expr = cast_relation(&qcx, CastContext::Assignment, expr, target_types);
+                let expr = expr.map_err(|e| {
+                    sql_err!(
+                        "statement {}: column {} is of type {} but expression is of type {}",
+                        idx,
+                        desc.get_name(e.column).as_str().quoted(),
+                        qcx.humanize_scalar_type(&e.target_type),
+                        qcx.humanize_scalar_type(&e.source_type),
+                    )
+                })?;
+
+                // Update ct nullability as necessary. The `ne` above verified that the
+                // types are the same len.
+                let zip_types = || desc.iter_types().zip(desc_query.iter_types());
+                let updated = zip_types().any(|(ct, q)| q.nullable && !ct.nullable);
+                if updated {
+                    let new_types = zip_types().map(|(ct, q)| {
+                        let mut ct = ct.clone();
+                        if q.nullable {
+                            ct.nullable = true;
+                        }
+                        ct
+                    });
+                    *desc = RelationDesc::from_names_and_types(
+                        desc.iter_names().cloned().zip(new_types),
+                    );
+                }
+
+                expr
+            }
+        };
         match stmt {
             ast::ContinualTaskStmt::Insert(_) => exprs.push(expr),
             ast::ContinualTaskStmt::Delete(_) => exprs.push(expr.negate()),
@@ -2885,6 +2910,7 @@ pub fn plan_create_continual_task(
         .reduce(|acc, expr| acc.union(expr))
         .ok_or_else(|| sql_err!("TODO(ct3)"))?;
 
+    let desc = desc.ok_or_else(|| sql_err!("TODO(ct3)"))?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
     if let Some(dup) = column_names.iter().duplicates().next() {
         sql_bail!("column {} specified more than once", dup.as_str().quoted());
