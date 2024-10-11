@@ -683,15 +683,6 @@ impl Catalog {
             .err_into()
     }
 
-    pub async fn allocate_storage_usage_ids(&self, amount: u64) -> Result<Vec<u64>, Error> {
-        self.storage()
-            .await
-            .allocate_storage_usage_ids(amount)
-            .await
-            .maybe_terminate("allocating storage usage id")
-            .err_into()
-    }
-
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
         self.state.resolve_database(database_name)
     }

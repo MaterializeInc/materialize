@@ -15,11 +15,9 @@ use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 use maplit::btreemap;
-use mz_audit_log::VersionedStorageUsage;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
-use mz_ore::cast::usize_to_u64;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
@@ -271,37 +269,15 @@ impl Coordinator {
             self.get_local_write_ts().await.timestamp.into()
         };
 
-        let mut ops = Vec::with_capacity(shards_usage.by_shard.len());
-        let mut storage_usage_ids: Vec<_> = match self
-            .catalog()
-            .allocate_storage_usage_ids(usize_to_u64(shards_usage.by_shard.len()))
-            .await
-        {
-            Ok(storage_usage_ids) => storage_usage_ids,
-            Err(err) => {
-                tracing::warn!("Failed to allocate IDs for storage metrics: {:?}", err);
-                return;
-            }
-        };
-        // Reverse so we can pop IDs from the back in order.
-        storage_usage_ids.reverse();
-
-        for (shard_id, shard_usage) in shards_usage.by_shard {
-            let id = storage_usage_ids
-                .pop()
-                .expect("allocated the correct amount above");
-            let metric = VersionedStorageUsage::new(
-                id,
-                Some(shard_id.to_string()),
-                shard_usage.size_bytes(),
+        let ops = shards_usage
+            .by_shard
+            .into_iter()
+            .map(|(shard_id, shard_usage)| Op::WeirdStorageUsageUpdates {
+                object_id: Some(shard_id.to_string()),
+                size_bytes: shard_usage.size_bytes(),
                 collection_timestamp,
-            );
-            let builtin_table_update = self.catalog().pack_storage_usage_update(metric, 1);
-            ops.push(Op::WeirdBuiltinTableUpdates {
-                builtin_table_update,
-                audit_log: Vec::new(),
-            });
-        }
+            })
+            .collect();
 
         match self.catalog_transact_inner(None, ops).await {
             Ok(table_updates) => {

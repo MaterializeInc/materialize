@@ -1520,7 +1520,7 @@ impl Coordinator {
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }
-                | Op::WeirdBuiltinTableUpdates { .. }
+                | Op::WeirdStorageUsageUpdates { .. }
                 | Op::TransactionDryRun => {}
             }
         }
