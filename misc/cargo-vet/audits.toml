@@ -1853,6 +1853,12 @@ user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-03-04"
 end = "2024-11-16"
 
+[[trusted.k8s-controller]]
+criteria = "maintained-and-necessary"
+user-id = 274184 # alex-hunt-materialize
+start = "2024-06-06"
+end = "2025-10-09"
+
 [[trusted.launchdarkly-server-sdk]]
 criteria = "safe-to-deploy"
 user-id = 144672

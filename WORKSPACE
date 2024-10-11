@@ -595,6 +595,7 @@ crates_repository(
         "//:src/orchestrator-kubernetes/Cargo.toml",
         "//:src/orchestrator-process/Cargo.toml",
         "//:src/orchestrator-tracing/Cargo.toml",
+        "//:src/orchestratord/Cargo.toml",
         "//:src/orchestrator/Cargo.toml",
         "//:src/ore-proc/Cargo.toml",
         "//:src/ore/Cargo.toml",
