@@ -470,7 +470,7 @@ class Composition:
             name: The name of the workflow to run.
             args: The arguments to pass to the workflow function.
         """
-        print(f"-- Running workflow {name}")
+        print(f"--- Running workflow {name}")
         func = self.workflows[name]
         parser = WorkflowArgumentParser(name, inspect.getdoc(func), list(args))
         try:
