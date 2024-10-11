@@ -58,8 +58,7 @@ use crate::ExecuteContext;
 // `sequence_create_role_for_startup` for this purpose.
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
 // `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
-mod alter_set_cluster;
-mod cluster;
+
 mod inner;
 
 impl Coordinator {
