@@ -140,8 +140,9 @@ impl Coordinator {
 
             match plan {
                 Plan::CreateSource(plan) => {
+                    let id_ts = self.get_local_read_ts().await;
                     let source_id =
-                        return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+                        return_if_err!(self.catalog_mut().allocate_user_id(id_ts).await, ctx);
                     let result = self
                         .sequence_create_source(
                             ctx.session_mut(),

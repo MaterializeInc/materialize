@@ -483,7 +483,9 @@ impl Catalog {
             .with_default_deploy_generation()
             .build()
             .await?;
-        let storage = openable_storage.open(now(), &test_bootstrap_args()).await?;
+        let storage = openable_storage
+            .open(now().into(), &test_bootstrap_args())
+            .await?;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
             .await
@@ -608,13 +610,18 @@ impl Catalog {
         self.storage.lock().await
     }
 
-    pub async fn allocate_user_id(&self) -> Result<GlobalId, Error> {
+    pub async fn allocate_user_id(&self, commit_ts: mz_repr::Timestamp) -> Result<GlobalId, Error> {
         self.storage()
             .await
-            .allocate_user_id()
+            .allocate_user_id(commit_ts)
             .await
             .maybe_terminate("allocating user ids")
             .err_into()
+    }
+
+    pub async fn allocate_user_id_for_test(&self) -> Result<GlobalId, Error> {
+        let commit_ts = self.storage().await.upper().await;
+        self.allocate_user_id(commit_ts).await
     }
 
     /// Get the next user item ID without allocating it.
@@ -627,11 +634,14 @@ impl Catalog {
     }
 
     #[cfg(test)]
-    pub async fn allocate_system_id(&self) -> Result<GlobalId, Error> {
+    pub async fn allocate_system_id(
+        &self,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<GlobalId, Error> {
         use mz_ore::collections::CollectionExt;
         self.storage()
             .await
-            .allocate_system_ids(1)
+            .allocate_system_ids(1, commit_ts)
             .await
             .maybe_terminate("allocating system ids")
             .map(|ids| ids.into_element())
@@ -647,10 +657,13 @@ impl Catalog {
             .err_into()
     }
 
-    pub async fn allocate_user_cluster_id(&self) -> Result<ClusterId, Error> {
+    pub async fn allocate_user_cluster_id(
+        &self,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<ClusterId, Error> {
         self.storage()
             .await
-            .allocate_user_cluster_id()
+            .allocate_user_cluster_id(commit_ts)
             .await
             .maybe_terminate("allocating user cluster ids")
             .err_into()
@@ -3215,8 +3228,9 @@ mod tests {
             let schema_spec = schema.id().clone();
             let schema_name = &schema.name().schema;
             let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
+            let id_ts = catalog.storage().await.upper().await;
             let mv_id = catalog
-                .allocate_user_id()
+                .allocate_user_id(id_ts)
                 .await
                 .expect("unable to allocate id");
             let mv = catalog
