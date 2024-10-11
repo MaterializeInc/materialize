@@ -113,10 +113,6 @@ skip this step**. For production scenarios, we recommend configuring one of the
 network security options below.
 {{< /note >}}
 
-{{< note >}}
-Support for AWS PrivateLink connections is planned for a future release.
-{{< /note >}}
-
 There are various ways to configure your database's network to allow Materialize
 to connect:
 
@@ -127,7 +123,10 @@ to connect:
 - **Use an SSH tunnel:** If your database is running in a private network, you
     can use an SSH tunnel to connect Materialize to the database.
 
-Select the option that works best for you.
+- **Use AWS PrivateLink**: If your database is running in a private network, you
+    can use [AWS PrivateLink](/ingest-data/network-security/privatelink/) to
+    connect Materialize to the database. For details, see [AWS
+    PrivateLink](/ingest-data/network-security/privatelink/).
 
 {{< tabs >}}
 
