@@ -212,12 +212,14 @@ impl Coordinator {
     /// All applicable pending writes will be combined into a single Append command and sent to
     /// STORAGE as a single batch. All applicable writes will happen at the same timestamp and all
     /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
+    ///
+    /// Returns the timestamp of the write.
     #[instrument(name = "coord::group_commit", fields(has_write_lock=write_lock_guard.is_some()))]
     pub(crate) async fn group_commit(
         &mut self,
         write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
         permit: Option<GroupCommitPermit>,
-    ) {
+    ) -> Timestamp {
         let (write_lock_guard, pending_writes): (_, Vec<_>) = if let Some(guard) = write_lock_guard
         {
             // If the caller passed in the write lock, then we can execute a group commit.
@@ -415,6 +417,8 @@ impl Coordinator {
             }
             .instrument(span),
         );
+
+        timestamp
     }
 
     /// Submit a write to be executed during the next group commit and trigger a group commit.
@@ -541,12 +545,16 @@ impl<'a> BuiltinTableAppend<'a> {
     /// Submit a write to a system table.
     ///
     /// This method will block the Coordinator on acquiring a write timestamp from the timestamp
-    /// oracle, and then returns a `Future` that will complete once the write has been applied.
+    /// oracle, and then returns a `Future` that will complete once the write has been applied and
+    /// the write timestamp.
     ///
-    /// Note: When in read-only mode, this will buffer the update and the
+    /// Note: When in read-only mode, this will buffer the update, the
     /// returned future will resolve immediately, without the update actually
-    /// having been written.
-    pub async fn execute(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
+    /// having been written, and no timestamp is returned.
+    pub async fn execute(
+        self,
+        mut updates: Vec<BuiltinTableUpdate>,
+    ) -> (BuiltinTableAppendNotify, Option<Timestamp>) {
         if self.coord.controller.read_only() {
             self.coord
                 .buffered_builtin_table_updates
@@ -554,7 +562,7 @@ impl<'a> BuiltinTableAppend<'a> {
                 .expect("in read-only mode")
                 .append(&mut updates);
 
-            return futures::future::ready(()).boxed();
+            return (futures::future::ready(()).boxed(), None);
         }
 
         let (tx, rx) = oneshot::channel();
@@ -569,13 +577,13 @@ impl<'a> BuiltinTableAppend<'a> {
             updates,
             source: BuiltinTableUpdateSource::Internal(tx),
         });
-        self.coord.group_commit(None, None).await;
+        let write_ts = self.coord.group_commit(None, None).await;
 
         // Avoid excessive group commits by resetting the periodic table advancement timer. The
         // group commit triggered by above will already advance all tables.
         self.coord.advance_timelines_interval.reset();
 
-        Box::pin(rx.map(|_| ()))
+        (Box::pin(rx.map(|_| ())), Some(write_ts))
     }
 
     /// Submit a write to a system table, blocking until complete.
@@ -587,7 +595,7 @@ impl<'a> BuiltinTableAppend<'a> {
     /// returned future will resolve immediately, without the update actually
     /// having been written.
     pub async fn blocking(self, updates: Vec<BuiltinTableUpdate>) {
-        let notify = self.execute(updates).await;
+        let (notify, _) = self.execute(updates).await;
         notify.await;
     }
 }

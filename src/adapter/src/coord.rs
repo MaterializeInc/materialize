@@ -2200,17 +2200,15 @@ impl Coordinator {
 
         let builtin_update_start = Instant::now();
         info!("startup: coordinator init: bootstrap: generate builtin updates beginning");
-        let builtin_updates_fut = if self.controller.read_only() {
+        if self.controller.read_only() {
             info!("coordinator init: bootstrap: stashing builtin table updates while in read-only mode");
 
             self.buffered_builtin_table_updates
                 .as_mut()
                 .expect("in read-only mode")
                 .append(&mut builtin_table_updates);
-
-            futures::future::ready(()).boxed()
         } else {
-            self.bootstrap_tables(&entries, builtin_table_updates).await
+            self.bootstrap_tables(&entries, builtin_table_updates).await;
         };
         info!(
             "startup: coordinator init: bootstrap: generate builtin updates complete in {:?}",
@@ -2289,9 +2287,9 @@ impl Coordinator {
         // Run all of our final steps concurrently.
         let final_steps_start = Instant::now();
         info!(
-            "startup: coordinator init: bootstrap: concurrently update builtin tables and migrate builtin tables beginning"
+            "startup: coordinator init: bootstrap: migrate builtin tables in read-only mode beginning"
         );
-        futures::future::join_all([migrated_updates_fut, builtin_updates_fut])
+        migrated_updates_fut
             .instrument(info_span!("coord::bootstrap::final"))
             .await;
 
@@ -2303,7 +2301,7 @@ impl Coordinator {
         self.bootstrap_introspection_subscribes().await;
 
         info!(
-            "startup: coordinator init: bootstrap: concurrently update builtin tables and migrate builtin tables complete in {:?}", final_steps_start.elapsed()
+            "startup: coordinator init: bootstrap: migrate builtin tables in read-only mode complete in {:?}", final_steps_start.elapsed()
         );
 
         info!(
@@ -2314,14 +2312,16 @@ impl Coordinator {
     }
 
     /// Prepares tables for writing by resetting them to a known state and
-    /// appending the given builtin table updates.
+    /// appending the given builtin table updates. The timestamp oracle
+    /// will be advanced to the write timestamp of the append when this
+    /// method returns.
     #[allow(clippy::async_yields_async)]
     #[instrument]
     async fn bootstrap_tables(
         &mut self,
         entries: &[CatalogEntry],
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
-    ) -> BuiltinTableAppendNotify {
+    ) {
         // Advance all tables to the current timestamp
         debug!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
@@ -2400,11 +2400,13 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to append");
 
         debug!("coordinator init: sending builtin table updates");
-        let builtin_updates_fut = self
+        let (_builtin_updates_fut, write_ts) = self
             .builtin_table_update()
             .execute(builtin_table_updates)
             .await;
-        builtin_updates_fut
+        if let Some(write_ts) = write_ts {
+            self.apply_local_write(write_ts).await;
+        }
     }
 
     /// Initializes all storage collections required by catalog objects in the storage controller.
