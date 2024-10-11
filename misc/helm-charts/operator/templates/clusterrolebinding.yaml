@@ -17,7 +17,7 @@ roleRef:
   kind: ClusterRole
   name: {{ include "materialize-operator.fullname" . }}
 subjects:
-  - kind: ServiceAccount
-    name: {{ include "materialize-operator.serviceAccountName" . }}
-    namespace: {{ .Release.Namespace }}
+- kind: ServiceAccount
+  name: {{ include "materialize-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
 {{- end }}

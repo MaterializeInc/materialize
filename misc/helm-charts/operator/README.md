@@ -37,19 +37,31 @@ The following table lists the configurable parameters of the Materialize operato
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `cockroachdb.caCert` |  | ``"-----BEGIN CERTIFICATE-----\nTODO\n-----END CERTIFICATE-----\n"`` |
+| `cockroachdb.endpoint` |  | ``"cockroachdb-public.cockroachdb.svc.cluster.local"`` |
+| `cockroachdb.password` |  | ``"password"`` |
+| `cockroachdb.port` |  | ``26257`` |
+| `cockroachdb.username` |  | ``"environment-controller"`` |
 | `networkPolicies.enabled` |  | ``false`` |
 | `networkPolicies.useNativeKubernetesPolicy` |  | ``true`` |
 | `observability.enabled` |  | ``false`` |
 | `observability.prometheus.enabled` |  | ``false`` |
+| `operator.args.cloudProvider` |  | ``"local"`` |
+| `operator.args.environmentdTargetArch` |  | ``"amd64"`` |
+| `operator.args.localDevelopment` |  | ``true`` |
+| `operator.args.manageCockroachDatabase` |  | ``true`` |
+| `operator.args.region` |  | ``"kind"`` |
+| `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
-| `operator.image.repository` |  | ``"materialized/operator"`` |
-| `operator.image.tag` |  | ``"latest"`` |
-| `operator.resources.limits.memory` |  | ``"2056Mi"`` |
-| `operator.resources.requests.cpu` |  | ``"1000m"`` |
-| `operator.resources.requests.memory` |  | ``"1024Mi"`` |
+| `operator.image.repository` |  | ``"materialize/orchestratord"`` |
+| `operator.image.tag` |  | ``"mzbuild-JPR2YHIWZJA4CPH2HROPU6MHM5BA3X5U"`` |
+| `operator.resources.limits.cpu` |  | ``"500m"`` |
+| `operator.resources.limits.memory` |  | ``"512Mi"`` |
+| `operator.resources.requests.cpu` |  | ``"100m"`` |
+| `operator.resources.requests.memory` |  | ``"128Mi"`` |
 | `rbac.create` |  | ``true`` |
 | `serviceAccount.create` |  | ``true`` |
-| `serviceAccount.name` |  | ``""`` |
+| `serviceAccount.name` |  | ``"orchestratord"`` |
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example:
 

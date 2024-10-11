@@ -9,22 +9,41 @@
 
 operator:
   image:
-    repository: materialized/operator
-    tag: latest
+    repository: materialize/orchestratord
+    tag: mzbuild-JPR2YHIWZJA4CPH2HROPU6MHM5BA3X5U
     pullPolicy: IfNotPresent
+  args:
+    startupLogFilter: "INFO,mz_orchestratord=TRACE"
+    cloudProvider: "local"
+    region: "kind"
+    manageCockroachDatabase: true
+    localDevelopment: true
+    environmentdTargetArch: "amd64"
   resources:
     requests:
-      cpu: 1000m
-      memory: 1024Mi
+      cpu: 100m
+      memory: 128Mi
     limits:
-      memory: 2056Mi
+      cpu: 500m
+      memory: 512Mi
+
+# TODO: Change with Postgres
+cockroachdb:
+  endpoint: "cockroachdb-public.cockroachdb.svc.cluster.local"
+  port: 26257
+  username: "environment-controller"
+  password: "password"
+  caCert: |
+    -----BEGIN CERTIFICATE-----
+    TODO
+    -----END CERTIFICATE-----
 
 rbac:
   create: true
 
 serviceAccount:
   create: true
-  name: ""
+  name: "orchestratord"
 
 observability:
   enabled: false

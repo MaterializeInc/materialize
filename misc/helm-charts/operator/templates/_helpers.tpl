@@ -71,3 +71,32 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Create the name of the cluster role to use
+*/}}
+{{- define "materialize-operator.clusterRoleName" -}}
+{{- if .Values.rbac.clusterRole.create }}
+{{- default (include "materialize-operator.fullname" .) .Values.rbac.clusterRole.name }}
+{{- else }}
+{{- default "default" .Values.rbac.clusterRole.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create the name of the cluster role binding to use
+*/}}
+{{- define "materialize-operator.clusterRoleBindingName" -}}
+{{- if .Values.rbac.clusterRoleBinding.create }}
+{{- default (include "materialize-operator.fullname" .) .Values.rbac.clusterRoleBinding.name }}
+{{- else }}
+{{- default "default" .Values.rbac.clusterRoleBinding.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create the CockroachDB connection string
+*/}}
+{{- define "materialize-operator.cockroachdbConnectionString" -}}
+postgresql://{{ .Values.cockroachdb.username }}:{{ .Values.cockroachdb.password }}@{{ .Values.cockroachdb.endpoint }}:{{ .Values.cockroachdb.port }}/defaultdb?sslmode=verify-full&sslrootcert=/path/to/ca.crt
+{{- end }}

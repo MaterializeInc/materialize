@@ -1,0 +1,52 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: materializes.materialize.cloud
+spec:
+  group: materialize.cloud
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                organizationId:
+                  type: string
+                environmentdImageRef:
+                  type: string
+                externalIdPrefix:
+                  type: string
+                hostname:
+                  type: string
+                requestRollout:
+                  type: string
+                forceRollout:
+                  type: string
+                inPlaceRollout:
+                  type: boolean
+              required:
+                - organizationId
+                - environmentdImageRef
+                - externalIdPrefix
+                - hostname
+  scope: Namespaced
+  names:
+    plural: materializes
+    singular: materialize
+    kind: Materialize
+    shortNames:
+      - mz

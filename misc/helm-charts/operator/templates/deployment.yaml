@@ -25,8 +25,24 @@ spec:
     spec:
       serviceAccountName: {{ include "materialize-operator.serviceAccountName" . }}
       containers:
-        - name: {{ .Chart.Name }}
-          image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
-          imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
-          resources:
-            {{- toYaml .Values.operator.resources | nindent 12 }}
+      - name: {{ .Chart.Name }}
+        image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
+        imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+        args:
+        - "--startup-log-filter={{ .Values.operator.args.startupLogFilter }}"
+        - "--cloud-provider={{ .Values.operator.args.cloudProvider }}"
+        - "--region={{ .Values.operator.args.region }}"
+        {{- if .Values.operator.args.manageCockroachDatabase }}
+        - "--manage-cockroach-database"
+        {{- end }}
+        {{- if .Values.operator.args.localDevelopment }}
+        - "--local-development"
+        {{- end }}
+        - "--environmentd-target-arch={{ .Values.operator.args.environmentdTargetArch }}"
+        - "--cockroach-endpoint={{ .Values.cockroachdb.endpoint }}"
+        - "--cockroach-port={{ .Values.cockroachdb.port }}"
+        - "--cockroach-username={{ .Values.cockroachdb.username }}"
+        - "--cockroach-password={{ .Values.cockroachdb.password }}"
+        - "--cockroach-ca-cert={{ .Values.cockroachdb.caCert | replace "\n" "\\n" }}"
+        resources:
+          {{- toYaml .Values.operator.resources | nindent 12 }}
