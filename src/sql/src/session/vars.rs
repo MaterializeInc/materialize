@@ -1021,9 +1021,15 @@ impl ConnectionCounter {
     }
 
     fn assert(&self) {
-        self.non_reserved_remaining();
-        self.reserved_remaining();
-        self.non_reserved_limit();
+        // Don't log this error because it has a high chance of blowing up Sentry.
+        mz_ore::soft_assert_no_log!(
+            self.current <= self.limit,
+            "have more connections than our limit"
+        );
+        mz_ore::soft_assert_no_log!(
+            self.superuser_reserved <= self.limit,
+            "have more superuser connections than our limit"
+        );
     }
 
     /// Whether a non-reserved connection is available.
@@ -1044,16 +1050,16 @@ impl ConnectionCounter {
 
     /// The number of reserved connections available.
     pub fn reserved_remaining(&self) -> u64 {
-        // Panic because there should never be more connections than the total limit.
-        self.limit.checked_sub(self.current).expect("underflow")
+        // It's possible when reducing the limit that current number of open
+        // connections could be greater limit so just saturate at our bounds.
+        self.limit.saturating_sub(self.current)
     }
 
     /// The total limit for non-reserved connections.
     pub fn non_reserved_limit(&self) -> u64 {
-        // Panic because superuser_reserved should always be <= limit.
-        self.limit
-            .checked_sub(self.superuser_reserved)
-            .expect("underflow")
+        // It's possible when reducing the limit that current number of open
+        // connections could be greater limit so just saturate at our bounds.
+        self.limit.saturating_sub(self.superuser_reserved)
     }
 
     /// The total limit for reserved connections.
