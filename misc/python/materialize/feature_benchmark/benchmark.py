@@ -211,14 +211,21 @@ class Benchmark:
                 unit=MeasurementUnit.COUNT,
             )
             print(f"{i}: {messages_measurement}")
-            self._messages_aggregation.append_measurement(messages_measurement)
+            if not self._filter or not self._filter.filter(messages_measurement):
+                self._messages_aggregation.append_measurement(messages_measurement)
 
     def _collect_memory_measurement(
         self, i: int, memory_measurement_type: MeasurementType, aggregation: Aggregation
     ) -> None:
+        if memory_measurement_type == MeasurementType.MEMORY_MZ:
+            value = self._executor.DockerMemMz()
+        elif memory_measurement_type == MeasurementType.MEMORY_CLUSTERD:
+            value = self._executor.DockerMemClusterd()
+        else:
+            raise ValueError(f"Unknown measurement type {memory_measurement_type}")
         memory_measurement = Measurement(
             type=memory_measurement_type,
-            value=self._executor.DockerMemMz() / 2**20,  # Convert to Mb
+            value=value / 2**20,  # Convert to Mb
             unit=MeasurementUnit.MEGABYTE,
         )
 

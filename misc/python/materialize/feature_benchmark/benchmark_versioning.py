@@ -10,7 +10,7 @@ from pathlib import Path
 
 from materialize import MZ_ROOT
 
-FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.3.0"
+FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.4.0"
 FEATURE_BENCHMARK_FRAMEWORK_HASH_FILE = Path(__file__).relative_to(MZ_ROOT)
 
 FEATURE_BENCHMARK_FRAMEWORK_DIR = Path(__file__).resolve().parent
@@ -18,12 +18,12 @@ FEATURE_BENCHMARK_SCENARIOS_DIR = FEATURE_BENCHMARK_FRAMEWORK_DIR / "scenarios"
 
 # Consider increasing the #FEATURE_BENCHMARK_FRAMEWORK_VERSION if changes are expected to impact results!
 SHA256_OF_FRAMEWORK: dict[str, str] = {
-    "*": "d999cf93ce56bf54b8cf3c1e425410303b6fb1f511aa646b2fc6998f50e179bd"
+    "*": "83ac95bbe391e9cdcab5cabafbae59f95c17c7f50e8c5b66c7705ce8cd6f1f93",
 }
 
 # Consider increasing the scenario's class #version() if changes are expected to impact results!
 SHA256_BY_SCENARIO_FILE: dict[str, str] = {
-    "benchmark_main.py": "c17e514f96b2ec00bee85c55b2132713ffca98d8772797c881c2cfce9ef89745",
+    "benchmark_main.py": "aca597f4eedb9c3e9ea08327b9997dab9ccb7202a0fe7df35181958d7413356b",
     "concurrency.py": "2e9c149c136b83b3853abc923a1adbdaf55a998ab4557712f8424c8b16f2adb1",
     "customer.py": "d1e72837a342c3ebf1f4a32ec583b1b78a78644cdba495030a6df45ebbffe703",
     "optbench.py": "ae411afe1ba595021f2f9d2d21500ba0c1c6941561493eabcae113373f493bfa",
