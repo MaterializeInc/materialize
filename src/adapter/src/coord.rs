@@ -3044,17 +3044,17 @@ impl Coordinator {
                 // Observe the number of messages we're processing at once.
                 message_batch.observe(f64::cast_lossy(messages.len()));
 
-                for msg in messages.drain(..) {
-                    // All message processing functions trace. Start a parent span
-                    // for them to make it easy to find slow messages.
-                    let msg_kind = msg.kind();
-                    let span = span!(
+                // All message processing functions trace. Start a parent span
+                // for them to make it easy to find slow messages.
+                let span = span!(
                         target: "mz_adapter::coord::handle_message_loop",
                         Level::INFO,
                         "coord::handle_message",
-                        kind = msg_kind
                     );
-                    let otel_context = span.context().span().span_context().clone();
+                let otel_context = span.context().span().span_context().clone();
+
+                for msg in messages.drain(..) {
+                    let msg_kind = msg.kind();
 
                     // Record the last kind of message in case we get stuck. For
                     // execute commands, we additionally stash the user's SQL,
@@ -3077,7 +3077,7 @@ impl Coordinator {
                     };
 
                     let start = Instant::now();
-                    self.handle_message(msg).instrument(span).await;
+                    self.handle_message(msg).await;
                     let duration = start.elapsed();
 
                     self.metrics
