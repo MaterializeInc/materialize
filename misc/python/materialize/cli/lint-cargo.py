@@ -52,7 +52,13 @@ def check_default_members(workspace: Workspace) -> bool:
     crates = set(str(c.path.relative_to(c.root)) for c in workspace.crates.values())
     default_members = set(workspace.default_members)
 
-    missing = crates - EXCLUDED - default_members
+    missing = list(
+        filter(
+            # We filter all WASM crates since they need to be explicitly targeted.
+            lambda crate: not crate.startswith("misc/wasm"),
+            crates - EXCLUDED - default_members,
+        )
+    )
     success = len(missing) == 0
     if not success:
         print(
