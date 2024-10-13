@@ -723,12 +723,11 @@ EXPLAIN OPTIMIZED PLAN FOR SELECT stddev(x), sum(x) FROM t_variance;
 ----
 Explained Query:
   Return
-    Project (#4, #3)
+    Project (#3, #1)
       Map (sqrtf64(case when ((#0) IS NULL OR (#1) IS NULL OR (case when (#2 = 0) then null else #2 end) IS NULL OR (case when (0 = (#2 - 1)) then null else (#2 - 1) end) IS NULL) then null else greatest(((#0 - ((#1 * #1) / bigint_to_double(case when (#2 = 0) then null else #2 end))) / bigint_to_double(case when (0 = (#2 - 1)) then null else (#2 - 1) end)), 0) end))
         Union
-          Project (#0..=#2, #1)
-            Get l0
-          Map (null, null, 0, null)
+          Get l0
+          Map (null, null, 0)
             Union
               Negate
                 Project ()

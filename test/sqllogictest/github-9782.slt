@@ -76,33 +76,35 @@ EXPLAIN WITH(arity, join implementations) SELECT *  FROM table_f1 , ( table_f4_f
 ----
 Explained Query:
   Return // { arity: 4 }
-    Project (#0, #2, #3, #1) // { arity: 4 }
-      CrossJoin type=differential // { arity: 4 }
+    Project (#0, #1, #1, #1) // { arity: 4 }
+      CrossJoin type=differential // { arity: 2 }
         implementation
           %0:table_f1[×] » %1[×]
         ArrangeBy keys=[[]] // { arity: 1 }
           ReadStorage materialize.public.table_f1 // { arity: 1 }
-        ArrangeBy keys=[[]] // { arity: 3 }
-          Union // { arity: 3 }
-            Negate // { arity: 3 }
-              Project (#0..=#2) // { arity: 3 }
-                Join on=(#0 = #3) type=differential // { arity: 4 }
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Union // { arity: 1 }
+            Negate // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Join on=(#0 = #1) type=differential // { arity: 2 }
                   implementation
                     %0:l1[#0]Kf » %1[#0]Kf
-                  ArrangeBy keys=[[#0]] // { arity: 3 }
-                    Get l1 // { arity: 3 }
+                  ArrangeBy keys=[[#0]] // { arity: 1 }
+                    Get l1 // { arity: 1 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
                     Project (#0) // { arity: 1 }
                       Distinct project=[#0, #1] // { arity: 2 }
                         Project (#1, #2) // { arity: 2 }
                           Get l0 // { arity: 3 }
-            Get l1 // { arity: 3 }
-            Filter (#0 = #1) // { arity: 3 }
-              Get l0 // { arity: 3 }
+            Get l1 // { arity: 1 }
+            Project (#0) // { arity: 1 }
+              Filter (#0 = #1) // { arity: 3 }
+                Get l0 // { arity: 3 }
   With
     cte l1 =
-      Filter (#0 = #1) AND (#0 = #2) AND (#1 = #2) // { arity: 3 }
-        ReadStorage materialize.public.table_f4_f5_f6 // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        Filter (#0 = #1) AND (#0 = #2) AND (#1 = #2) // { arity: 3 }
+          ReadStorage materialize.public.table_f4_f5_f6 // { arity: 3 }
     cte l0 =
       Project (#0..=#2) // { arity: 3 }
         Join on=(#1 = #3) type=differential // { arity: 4 }

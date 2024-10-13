@@ -191,6 +191,28 @@ impl EquivalencePropagation {
                 }
             }
             MirRelationExpr::Project { input, outputs } => {
+                // Equivalences about `input` may allow us to renumber `outputs` to use earlier columns.
+                let input_equivalences = derived
+                    .last_child()
+                    .value::<Equivalences>()
+                    .expect("Equivalences required");
+                if let Some(equivs) = input_equivalences {
+                    for output in outputs.iter_mut() {
+                        for class in equivs.classes.iter() {
+                            if let Some(pos) = class
+                                .iter()
+                                .position(|e| e == &MirScalarExpr::Column(*output))
+                            {
+                                if let Some(expr) = class[..pos].iter().find(|e| e.is_column()) {
+                                    if let MirScalarExpr::Column(col) = expr {
+                                        *output = *col;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Transform `outer_equivalences` to one relevant for `input`.
                 outer_equivalences.permute(outputs);
                 self.apply(
