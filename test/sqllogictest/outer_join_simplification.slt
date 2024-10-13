@@ -302,12 +302,13 @@ foo left join baz on foo.b = baz.b
 where foo.a = 7;
 ----
 Explained Query:
-  Project (#0..=#2, #11..=#13, #15, #16)
-    Map ((#6) IS NULL, case when #10 then null else #1 end, case when #10 then null else #4 end, case when #10 then null else #5 end, (#9) IS NULL, case when #14 then null else #7 end, case when #14 then null else #8 end)
-      Join on=(#1 = #3 AND #7 = case when (#6) IS NULL then null else #4 end) type=delta
-        ArrangeBy keys=[[#1]]
-          Filter (#0 = 7)
-            ReadStorage materialize.public.foo
+  Project (#16, #0, #1, #10..=#12, #14, #15)
+    Map ((#5) IS NULL, case when #9 then null else #0 end, case when #9 then null else #3 end, case when #9 then null else #4 end, (#8) IS NULL, case when #13 then null else #6 end, case when #13 then null else #7 end, 7)
+      Join on=(#0 = #2 AND #6 = case when (#5) IS NULL then null else #3 end) type=delta
+        ArrangeBy keys=[[#0]]
+          Project (#1, #2)
+            Filter (#0 = 7)
+              ReadStorage materialize.public.foo
         ArrangeBy keys=[[#0], [case when (#3) IS NULL then null else #1 end]]
           Union
             Map (true)

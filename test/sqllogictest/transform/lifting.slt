@@ -911,22 +911,24 @@ query T multiline
 explain with(arity, join implementations) select * from t1 as a1 join t1 as a2 on (a2.f2 = (select 6 from t1)) where a2.f2 = 9;
 ----
 Explained Query:
-  CrossJoin type=delta // { arity: 4 }
-    implementation
-      %0:t1 » %2[×]U » %1:t1[×]ef
-      %1:t1 » %2[×]U » %0:t1[×]
-      %2 » %1:t1[×]ef » %0:t1[×]
-    ArrangeBy keys=[[]] // { arity: 2 }
-      ReadStorage materialize.public.t1 // { arity: 2 }
-    ArrangeBy keys=[[]] // { arity: 2 }
-      Filter (#1 = 9) // { arity: 2 }
+  Map (9) // { arity: 4 }
+    CrossJoin type=delta // { arity: 3 }
+      implementation
+        %0:t1 » %2[×]U » %1:t1[×]ef
+        %1:t1 » %2[×]U » %0:t1[×]
+        %2 » %1:t1[×]ef » %0:t1[×]
+      ArrangeBy keys=[[]] // { arity: 2 }
         ReadStorage materialize.public.t1 // { arity: 2 }
-    ArrangeBy keys=[[]] // { arity: 0 }
-      Project () // { arity: 0 }
-        Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
-          Reduce aggregates=[count(*)] // { arity: 1 }
-            Project () // { arity: 0 }
-              ReadStorage materialize.public.t1 // { arity: 2 }
+      ArrangeBy keys=[[]] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Filter (#1 = 9) // { arity: 2 }
+            ReadStorage materialize.public.t1 // { arity: 2 }
+      ArrangeBy keys=[[]] // { arity: 0 }
+        Project () // { arity: 0 }
+          Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
+            Reduce aggregates=[count(*)] // { arity: 1 }
+              Project () // { arity: 0 }
+                ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
 
