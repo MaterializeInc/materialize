@@ -28,10 +28,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
+use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
+use ipnet::IpNet;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -350,6 +352,7 @@ impl Plan {
                 ObjectType::Schema => "drop schema",
                 ObjectType::Func => "drop function",
                 ObjectType::ContinualTask => "drop continual task",
+                ObjectType::NetworkPolicy => "drop network policy",
             },
             Plan::DropOwned(_) => "drop owned",
             Plan::EmptyQuery => "do nothing",
@@ -390,6 +393,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
                 ObjectType::ContinualTask => "alter continual task",
+                ObjectType::NetworkPolicy => "alter network policy",
             },
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
@@ -424,6 +428,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
                 ObjectType::ContinualTask => "alter continual task owner",
+                ObjectType::NetworkPolicy => "alter network policy owner",
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
             Plan::Declare(_) => "declare",
@@ -1552,6 +1557,62 @@ impl ConnectionDetails {
                 mz_storage_types::connections::Connection::MySql(c.clone())
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Ord, PartialOrd, Hash)]
+pub struct NetworkPolicyRule {
+    pub name: String,
+    pub action: NetworkPolicyRuleAction,
+    pub address: PolicyAddress,
+    pub direction: NetworkPolicyRuleDirection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd, Hash)]
+pub enum NetworkPolicyRuleAction {
+    Allow,
+}
+
+impl std::fmt::Display for NetworkPolicyRuleAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Allow => write!(f, "allow"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Ord, PartialOrd, Hash)]
+pub enum NetworkPolicyRuleDirection {
+    Ingress,
+}
+
+impl std::fmt::Display for NetworkPolicyRuleDirection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ingress => write!(f, "ingress"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
+pub struct PolicyAddress(pub IpNet);
+impl PolicyAddress {
+    pub fn to_string(&self) -> String {
+        self.0.to_string()
+    }
+}
+impl From<String> for PolicyAddress {
+    fn from(value: String) -> Self {
+        Self(IpNet::from_str(&value).expect("expected"))
+    }
+}
+
+impl Serialize for PolicyAddress {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
     }
 }
 

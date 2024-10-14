@@ -29,8 +29,8 @@ use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
-    Database, DefaultPrivileges, Index, MaterializedView, Role, Schema, Secret, Sink, Source,
-    SourceReferences, Table, TableDataSource, Type, View,
+    Database, DefaultPrivileges, Index, MaterializedView, NetworkPolicy, Role, Schema, Secret,
+    Sink, Source, SourceReferences, Table, TableDataSource, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -49,6 +49,7 @@ use mz_repr::namespaces::{
     MZ_INTROSPECTION_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA, SYSTEM_SCHEMAS,
     UNSTABLE_SCHEMAS,
 };
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc};
 use mz_secrets::InMemorySecretsController;
@@ -118,6 +119,10 @@ pub struct CatalogState {
     pub(super) roles_by_name: BTreeMap<String, RoleId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) roles_by_id: BTreeMap<RoleId, Role>,
+    pub(super) network_policies_by_name: BTreeMap<String, NetworkPolicyId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) network_policies_by_id: BTreeMap<NetworkPolicyId, NetworkPolicy>,
+
     #[serde(skip)]
     pub(super) system_configuration: SystemVars,
     pub(super) default_privileges: DefaultPrivileges,
@@ -171,8 +176,10 @@ impl CatalogState {
             temporary_schemas: Default::default(),
             clusters_by_id: Default::default(),
             clusters_by_name: Default::default(),
+            network_policies_by_name: Default::default(),
             roles_by_name: Default::default(),
             roles_by_id: Default::default(),
+            network_policies_by_id: Default::default(),
             config: CatalogConfig {
                 start_time: Default::default(),
                 start_instant: Instant::now(),
@@ -340,7 +347,7 @@ impl CatalogState {
     /// Returns all the IDs of all objects that depend on `ids`, including `ids` themselves.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
-    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
     /// objects.
     pub(super) fn object_dependents(
         &self,
@@ -369,6 +376,12 @@ impl CatalogState {
                     ));
                 }
                 id @ ObjectId::Role(_) => {
+                    let unseen = seen.insert(id.clone());
+                    if unseen {
+                        dependents.push(id.clone());
+                    }
+                }
+                id @ ObjectId::NetworkPolicy(_) => {
                     let unseen = seen.insert(id.clone());
                     if unseen {
                         dependents.push(id.clone());
@@ -724,6 +737,16 @@ impl CatalogState {
         }
         membership.insert(RoleId::Public);
         membership
+    }
+
+    pub fn get_network_policy(&self, id: &NetworkPolicyId) -> &NetworkPolicy {
+        self.network_policies_by_id
+            .get(id)
+            .expect("catalog out of sync")
+    }
+
+    pub fn get_network_policies(&self) -> impl Iterator<Item = &NetworkPolicyId> {
+        self.network_policies_by_id.keys()
     }
 
     /// Returns the URL for POST-ing data to a webhook source, if `id` corresponds to a webhook
@@ -1764,6 +1787,9 @@ impl CatalogState {
             ObjectId::ClusterReplica(cluster_replica_id) => {
                 CommentObjectId::ClusterReplica(cluster_replica_id)
             }
+            ObjectId::NetworkPolicy(network_policy_id) => {
+                CommentObjectId::NetworkPolicy(network_policy_id)
+            }
         }
     }
 
@@ -1945,6 +1971,20 @@ impl CatalogState {
         }
     }
 
+    pub fn ensure_not_reserved_network_policy(
+        &self,
+        network_policy_id: &NetworkPolicyId,
+    ) -> Result<(), Error> {
+        if network_policy_id.is_builtin() {
+            let policy = self.get_network_policy(network_policy_id);
+            Err(Error::new(ErrorKind::ReservedNetworkPolicyName(
+                policy.name.clone(),
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn ensure_grantable_role(&self, role_id: &RoleId) -> Result<(), Error> {
         let is_grantable = !role_id.is_public() && !role_id.is_system();
         if is_grantable {
@@ -2020,6 +2060,7 @@ impl CatalogState {
             ),
             ObjectId::Item(id) => Some(*self.get_entry(id).owner_id()),
             ObjectId::Role(_) => None,
+            ObjectId::NetworkPolicy(id) => Some(self.get_network_policy(id).owner_id.clone()),
         }
     }
 
@@ -2031,6 +2072,7 @@ impl CatalogState {
             ObjectId::Schema(_) => mz_sql::catalog::ObjectType::Schema,
             ObjectId::Role(_) => mz_sql::catalog::ObjectType::Role,
             ObjectId::Item(id) => self.get_entry(id).item_type().into(),
+            ObjectId::NetworkPolicy(_) => mz_sql::catalog::ObjectType::NetworkPolicy,
         }
     }
 
@@ -2139,7 +2181,8 @@ impl CatalogState {
             | CommentObjectId::Database(_)
             | CommentObjectId::Schema(_)
             | CommentObjectId::Cluster(_)
-            | CommentObjectId::ClusterReplica(_) => None,
+            | CommentObjectId::ClusterReplica(_)
+            | CommentObjectId::NetworkPolicy(_) => None,
         }
     }
 
@@ -2184,6 +2227,7 @@ impl CatalogState {
                 }
                 .to_string()
             }
+            CommentObjectId::NetworkPolicy(id) => self.get_network_policy(&id).name.clone(),
         }
     }
 }

@@ -550,6 +550,13 @@ pub static MAX_CONTINUAL_TASKS: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_NETWORK_POLICIES: VarDefinition = VarDefinition::new(
+    "max_network_policies",
+    value!(u32; 25),
+    "The maximum number of network policies in the region.",
+    true,
+);
+
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
 // query.
 //

@@ -23,14 +23,14 @@ use mz_catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinView, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP,
 };
 use mz_catalog::durable::objects::{
-    ClusterKey, DatabaseKey, DurableType, ItemKey, RoleKey, SchemaKey,
+    ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, RoleKey, SchemaKey,
 };
 use mz_catalog::durable::{CatalogError, DurableCatalogError};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
-    Role, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table, TableDataSource,
-    TemporaryItem, Type, UpdateFrom,
+    NetworkPolicy, Role, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
+    TableDataSource, TemporaryItem, Type, UpdateFrom,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::controller::ComputeReplicaConfig;
@@ -79,6 +79,7 @@ struct InProgressRetractions {
     databases: BTreeMap<DatabaseKey, Database>,
     schemas: BTreeMap<SchemaKey, Schema>,
     clusters: BTreeMap<ClusterKey, Cluster>,
+    network_policies: BTreeMap<NetworkPolicyKey, NetworkPolicy>,
     items: BTreeMap<ItemKey, CatalogEntry>,
     temp_items: BTreeMap<GlobalId, CatalogEntry>,
     introspection_source_indexes: BTreeMap<GlobalId, CatalogEntry>,
@@ -208,6 +209,9 @@ impl CatalogState {
             }
             StateUpdateKind::Cluster(cluster) => {
                 self.apply_cluster_update(cluster, diff, retractions);
+            }
+            StateUpdateKind::NetworkPolicy(network_policy) => {
+                self.apply_network_policy_update(network_policy, diff, retractions);
             }
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
                 self.apply_introspection_source_index_update(
@@ -393,6 +397,28 @@ impl CatalogState {
             |cluster| cluster.id,
             diff,
             &mut retractions.clusters,
+        );
+    }
+
+    #[instrument(level = "debug")]
+    fn apply_network_policy_update(
+        &mut self,
+        policy: mz_catalog::durable::NetworkPolicy,
+        diff: StateDiff,
+        retractions: &mut InProgressRetractions,
+    ) {
+        apply_inverted_lookup(
+            &mut self.network_policies_by_name,
+            &policy.name,
+            policy.id,
+            diff,
+        );
+        apply_with_update(
+            &mut self.network_policies_by_id,
+            policy,
+            |policy| policy.id,
+            diff,
+            &mut retractions.network_policies,
         );
     }
 
@@ -1155,6 +1181,9 @@ impl CatalogState {
                     .pack_audit_log_update(&audit_log.event, diff)
                     .expect("could not pack audit log update")]
             }
+            StateUpdateKind::NetworkPolicy(policy) => self
+                .pack_network_policy_update(&policy.id, diff)
+                .expect("could not pack audit log update"),
             StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
@@ -1626,7 +1655,8 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | StateUpdateKind::Schema(_)
             | StateUpdateKind::DefaultPrivilege(_)
             | StateUpdateKind::SystemPrivilege(_)
-            | StateUpdateKind::SystemConfiguration(_) => push_update(
+            | StateUpdateKind::SystemConfiguration(_)
+            | StateUpdateKind::NetworkPolicy(_) => push_update(
                 update,
                 diff,
                 &mut pre_cluster_retractions,

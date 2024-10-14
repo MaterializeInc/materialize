@@ -25,6 +25,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
@@ -44,8 +45,8 @@ use mz_sql::names::{
 use mz_sql::plan::{
     ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
     CreateClusterManagedPlan, CreateClusterPlan, CreateClusterVariant, CreateSourcePlan,
-    HirRelationExpr, Ingestion as PlanIngestion, PlanError, WebhookBodyFormat, WebhookHeaders,
-    WebhookValidation,
+    HirRelationExpr, Ingestion as PlanIngestion, NetworkPolicyRule, PlanError, WebhookBodyFormat,
+    WebhookHeaders, WebhookValidation,
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
@@ -1083,6 +1084,72 @@ pub struct ContinualTask {
     pub cluster_id: ClusterId,
     /// See the comment on [MaterializedView::initial_as_of].
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct NetworkPolicy {
+    pub name: String,
+    pub id: NetworkPolicyId,
+    pub oid: u32,
+    pub rules: Vec<NetworkPolicyRule>,
+    pub owner_id: RoleId,
+    pub privileges: PrivilegeMap,
+}
+
+impl From<NetworkPolicy> for durable::NetworkPolicy {
+    fn from(policy: NetworkPolicy) -> durable::NetworkPolicy {
+        durable::NetworkPolicy {
+            id: policy.id,
+            oid: policy.oid,
+            name: policy.name,
+            rules: policy.rules,
+            owner_id: policy.owner_id,
+            privileges: policy.privileges.into_all_values().collect(),
+        }
+    }
+}
+
+impl From<durable::NetworkPolicy> for NetworkPolicy {
+    fn from(
+        durable::NetworkPolicy {
+            id,
+            oid,
+            name,
+            rules,
+            owner_id,
+            privileges,
+        }: durable::NetworkPolicy,
+    ) -> Self {
+        NetworkPolicy {
+            id,
+            oid,
+            name,
+            rules,
+            owner_id,
+            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+        }
+    }
+}
+
+impl UpdateFrom<durable::NetworkPolicy> for NetworkPolicy {
+    fn update_from(
+        &mut self,
+        durable::NetworkPolicy {
+            id,
+            oid,
+            name,
+            rules,
+            owner_id,
+            privileges,
+        }: durable::NetworkPolicy,
+    ) {
+        self.id = id;
+        self.oid = oid;
+        self.name = name;
+        self.rules = rules;
+        self.owner_id = owner_id;
+        self.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+    }
 }
 
 impl CatalogItem {
@@ -2467,6 +2534,24 @@ impl mz_sql::catalog::CatalogRole for Role {
     }
 }
 
+impl mz_sql::catalog::CatalogNetworkPolicy for NetworkPolicy {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn id(&self) -> NetworkPolicyId {
+        self.id
+    }
+
+    fn owner_id(&self) -> RoleId {
+        self.owner_id
+    }
+
+    fn privileges(&self) -> &PrivilegeMap {
+        &self.privileges
+    }
+}
+
 impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
     fn name(&self) -> &str {
         &self.name
@@ -2708,6 +2793,7 @@ pub enum StateUpdateKind {
     SystemPrivilege(MzAclItem),
     SystemConfiguration(durable::objects::SystemConfiguration),
     Cluster(durable::objects::Cluster),
+    NetworkPolicy(durable::objects::NetworkPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
     SourceReferences(durable::objects::SourceReferences),
@@ -2784,6 +2870,7 @@ pub enum BootstrapStateUpdateKind {
     SystemPrivilege(MzAclItem),
     SystemConfiguration(durable::objects::SystemConfiguration),
     Cluster(durable::objects::Cluster),
+    NetworkPolicy(durable::objects::NetworkPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
     SourceReferences(durable::objects::SourceReferences),
@@ -2815,6 +2902,7 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
                 StateUpdateKind::SourceReferences(kind)
             }
             BootstrapStateUpdateKind::Cluster(kind) => StateUpdateKind::Cluster(kind),
+            BootstrapStateUpdateKind::NetworkPolicy(kind) => StateUpdateKind::NetworkPolicy(kind),
             BootstrapStateUpdateKind::IntrospectionSourceIndex(kind) => {
                 StateUpdateKind::IntrospectionSourceIndex(kind)
             }
@@ -2853,6 +2941,9 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
                 Ok(BootstrapStateUpdateKind::SystemConfiguration(kind))
             }
             StateUpdateKind::Cluster(kind) => Ok(BootstrapStateUpdateKind::Cluster(kind)),
+            StateUpdateKind::NetworkPolicy(kind) => {
+                Ok(BootstrapStateUpdateKind::NetworkPolicy(kind))
+            }
             StateUpdateKind::IntrospectionSourceIndex(kind) => {
                 Ok(BootstrapStateUpdateKind::IntrospectionSourceIndex(kind))
             }

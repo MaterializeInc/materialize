@@ -36,6 +36,7 @@ use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{
@@ -43,7 +44,7 @@ use mz_sql::catalog::{
     RoleMembership, RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
-use mz_sql::plan::ClusterSchedule;
+use mz_sql::plan::{ClusterSchedule, NetworkPolicyRule};
 use proptest_derive::Arbitrary;
 
 use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
@@ -205,6 +206,49 @@ impl DurableType for Role {
 
     fn key(&self) -> Self::Key {
         RoleKey { id: self.id }
+    }
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct NetworkPolicy {
+    pub name: String,
+    pub id: NetworkPolicyId,
+    pub oid: u32,
+    pub rules: Vec<NetworkPolicyRule>,
+    pub owner_id: RoleId,
+    pub(crate) privileges: Vec<MzAclItem>,
+}
+
+impl DurableType for NetworkPolicy {
+    type Key = NetworkPolicyKey;
+    type Value = NetworkPolicyValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            NetworkPolicyKey { id: self.id },
+            NetworkPolicyValue {
+                oid: self.oid,
+                name: self.name,
+                rules: self.rules,
+                owner_id: self.owner_id,
+                privileges: self.privileges,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            oid: value.oid,
+            name: value.name,
+            rules: value.rules,
+            owner_id: value.owner_id,
+            privileges: value.privileges,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        NetworkPolicyKey { id: self.id }
     }
 }
 
@@ -1014,6 +1058,7 @@ pub struct Snapshot {
     pub items: BTreeMap<proto::ItemKey, proto::ItemValue>,
     pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
     pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
+    pub network_policies: BTreeMap<proto::NetworkPolicyKey, proto::NetworkPolicyValue>,
     pub cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
     pub introspection_sources: BTreeMap<
         proto::ClusterIntrospectionSourceIndexKey,
@@ -1244,6 +1289,20 @@ pub struct RoleValue {
     pub(crate) attributes: RoleAttributes,
     pub(crate) membership: RoleMembership,
     pub(crate) vars: RoleVars,
+    pub(crate) oid: u32,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+pub struct NetworkPolicyKey {
+    pub(crate) id: NetworkPolicyId,
+}
+
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
+pub struct NetworkPolicyValue {
+    pub(crate) name: String,
+    pub(crate) rules: Vec<NetworkPolicyRule>,
+    pub(crate) owner_id: RoleId,
+    pub(crate) privileges: Vec<MzAclItem>,
     pub(crate) oid: u32,
 }
 

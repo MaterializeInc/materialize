@@ -54,6 +54,7 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
             items,
             comments,
             clusters,
+            network_policies,
             cluster_replicas,
             introspection_sources,
             id_allocator,
@@ -77,6 +78,7 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
             .field("items", items)
             .field("comments", comments)
             .field("clusters", clusters)
+            .field("network_policies", network_policies)
             .field("cluster_replicas", cluster_replicas)
             .field("introspection_sources", introspection_sources)
             .field("id_allocator", id_allocator)
