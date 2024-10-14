@@ -876,6 +876,11 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("value out of range")
 
+        if "coalesce could not convert type integer[] to numeric[]" in mz_error_msg:
+            return YesIgnore(
+                "database-issues#8648: coalesce could not convert type integer[] to numeric[]"
+            )
+
         return NoIgnore()
 
     def _shall_ignore_content_mismatch(
