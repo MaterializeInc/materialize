@@ -212,7 +212,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             True,
         ) and expression.has_any_characteristic({ExpressionCharacteristics.NULL}):
             return YesIgnore(
-                "#28806: table functions: combination with operations with NULL"
+                "database-issues#8410: table functions: combination with operations with NULL"
             )
 
         return super()._matches_problematic_operation_or_function_invocation(
@@ -443,7 +443,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
 
             if casting_target.value == "DECIMAL(39)":
                 return YesIgnore(
-                    "#24678: different specification of default DECIMAL type"
+                    "database-issues#7344: different specification of default DECIMAL type"
                 )
 
         if db_operation.is_tagged(TAG_EQUALITY_ORDERING):
@@ -615,7 +615,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             )
         ):
             return YesIgnore(
-                "#27078: different error handling when extracting from timestamp"
+                "database-issues#8019: different error handling when extracting from timestamp"
             )
 
         if (
@@ -841,12 +841,12 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if "aggregate functions are not allowed in table function" in mz_error_msg:
             return YesIgnore(
-                "#28390: aggregate functions are not allowed in table function arguments"
+                "database-issues#8313: aggregate functions are not allowed in table function arguments"
             )
 
         if "table functions are not allowed in other table functions" in mz_error_msg:
             return YesIgnore(
-                "#28393: table functions are not allowed in other table functions"
+                "database-issues#8315: table functions are not allowed in other table functions"
             )
 
         if (
@@ -854,7 +854,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             in mz_error_msg
         ):
             return YesIgnore(
-                "#28871: table functions are not allowed in aggregate function calls"
+                "database-issues#8422: table functions are not allowed in aggregate function calls"
             )
 
         if (
@@ -1005,7 +1005,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
             if value1_str == value2_str:
                 return YesIgnore(
-                    "#24687: different representation of floating-point type"
+                    "database-issues#7348: different representation of floating-point type"
                 )
 
         if (

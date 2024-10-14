@@ -24,7 +24,7 @@ def schemas() -> str:
 
 
 @disabled(
-    "#24479 and compaction not predicable and now() not appropriate while mz_now() not applicable"
+    "database-issues#7310 and compaction not predicable and now() not appropriate while mz_now() not applicable"
 )
 class RetainHistoryOnMv(Check):
     def _can_run(self, e: Executor) -> bool:
@@ -274,7 +274,7 @@ class RetainHistoryOnMv(Check):
 
 
 @disabled(
-    "#24479 and compaction not predicable and now() not appropriate while mz_now() not applicable"
+    "database-issues#7310 and compaction not predicable and now() not appropriate while mz_now() not applicable"
 )
 class RetainHistoryOnKafkaSource(Check):
     def _can_run(self, e: Executor) -> bool:
