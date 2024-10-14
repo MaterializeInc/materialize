@@ -14,18 +14,14 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import boto3
-
-from materialize import bazel, elf, mzbuild, spawn, ui
+from materialize import bazel, mzbuild, spawn, ui
+from materialize.ci_util.upload_debug_symbols_to_s3 import (
+    DEBUGINFO_BINS,
+    upload_debuginfo_to_s3,
+)
 from materialize.mzbuild import CargoBuild, Repository, ResolvedImage
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
-
-# The S3 bucket in which to store debuginfo.
-DEBUGINFO_S3_BUCKET = "materialize-debuginfo"
-
-# The binaries for which debuginfo should be uploaded to S3 and Polar Signals.
-DEBUGINFO_BINS = ["environmentd", "clusterd", "balancerd"]
 
 
 def main() -> None:
@@ -71,7 +67,9 @@ def maybe_upload_debuginfo(
     DEBUGINFO_BINS were built."""
 
     # Find all binaries created by the `cargo-bin` pre-image.
-    bins, bazel_bins = find_binaries_created_by_cargo_bin(repo, built_images)
+    bins, bazel_bins = find_binaries_created_by_cargo_bin(
+        repo, built_images, DEBUGINFO_BINS
+    )
     if len(bins) == 0:
         print("No debuginfo bins were built")
         return
@@ -107,7 +105,7 @@ def maybe_upload_debuginfo(
 
 
 def find_binaries_created_by_cargo_bin(
-    repo: Repository, built_images: set[ResolvedImage]
+    repo: Repository, built_images: set[ResolvedImage], bin_names: set[str]
 ) -> tuple[set[str], dict[str, str]]:
     bins: set[str] = set()
     bazel_bins: dict[str, str] = dict()
@@ -115,7 +113,7 @@ def find_binaries_created_by_cargo_bin(
         for pre_image in image.image.pre_images:
             if isinstance(pre_image, CargoBuild):
                 for bin in pre_image.bins:
-                    if bin in DEBUGINFO_BINS:
+                    if bin in bin_names:
                         bins.add(bin)
                     if repo.rd.bazel:
                         bazel_bins[bin] = pre_image.bazel_bins[bin]
@@ -132,36 +130,6 @@ def get_bin_path(repo: Repository, bin: str, bazel_bins: dict[str, str]) -> Path
     else:
         cargo_profile = "release" if repo.rd.release_mode else "debug"
         return repo.rd.cargo_target_dir() / cargo_profile / bin
-
-
-def upload_debuginfo_to_s3(bin_path: Path, dbg_path: Path, is_tag_build: bool) -> str:
-    s3 = boto3.client("s3")
-
-    with open(bin_path, "rb") as exe, open(dbg_path, "rb") as dbg:
-        build_id = elf.get_build_id(exe)
-        assert build_id.isalnum()
-        assert len(build_id) > 0
-
-        dbg_build_id = elf.get_build_id(dbg)
-        assert build_id == dbg_build_id
-
-        for fileobj, name in [
-            (exe, "executable"),
-            (dbg, "debuginfo"),
-        ]:
-            key = f"buildid/{build_id}/{name}"
-            print(f"Uploading {name} to s3://{DEBUGINFO_S3_BUCKET}/{key}...")
-            fileobj.seek(0)
-            s3.upload_fileobj(
-                Fileobj=fileobj,
-                Bucket=DEBUGINFO_S3_BUCKET,
-                Key=key,
-                ExtraArgs={
-                    "Tagging": f"ephemeral={'false' if is_tag_build else 'true'}",
-                },
-            )
-
-        return build_id
 
 
 def upload_debuginfo_to_polarsignals(
