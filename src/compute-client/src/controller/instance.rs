@@ -1443,8 +1443,6 @@ where
         mut read_hold: ReadHold<T>,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
-        limit: Option<usize>,
-        offset: usize,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -1473,8 +1471,8 @@ where
                 requested_at: Instant::now(),
                 _read_hold: read_hold,
                 peek_response_tx,
-                limit,
-                offset,
+                limit: finishing.limit.map(usize::cast_from),
+                offset: finishing.offset,
             },
         );
 
