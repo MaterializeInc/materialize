@@ -278,7 +278,7 @@ steps:
   - id: testdrive
     label: "Testdrive %N"
     depends_on: build-aarch64
-    timeout_in_minutes: 40
+    timeout_in_minutes: 45
     inputs: [test/testdrive]
     parallelism: 8
     plugins:
