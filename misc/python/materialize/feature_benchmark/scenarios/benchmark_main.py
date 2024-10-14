@@ -2185,15 +2185,21 @@ class SwapSchema(Scenario):
 
 
 class ReplicaExpiration(Scenario):
+    # Too slow with larger scale
+    FIXED_SCALE = True
+
     def init(self) -> list[Action]:
         return [
             TdAction(
                 """
-> CREATE TABLE events (
-    content TEXT,
-    event_ts TIMESTAMP
+> CREATE TABLE events_scale (
+    scale INT NOT NULL,
+    event_ts TIMESTAMP NOT NULL
   );
-> CREATE VIEW last_30_days AS
+> CREATE VIEW events AS
+    SELECT concat('somelongstringthatdoesntmattermuchatallbutrequiresmemorytostoreXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX', x::text) AS content, (SELECT event_ts FROM events_scale LIMIT 1) AS event_ts FROM generate_series(1, (SELECT scale FROM events_scale LIMIT 1)) x;
+
+> CREATE MATERIALIZED VIEW last_30_days AS
   SELECT event_ts, content
   FROM events
   WHERE mz_now() <= event_ts + INTERVAL '30 days';
@@ -2207,7 +2213,7 @@ class ReplicaExpiration(Scenario):
         return Td(
             dedent(
                 f"""
-                > DELETE FROM events;
+                > DELETE FROM events_scale;
 
                 > SELECT COUNT(*) FROM last_30_days
                 0
@@ -2216,7 +2222,7 @@ class ReplicaExpiration(Scenario):
                   /* A */
                 1
 
-                > INSERT INTO events SELECT concat('somelongstringthatdoesntmattermuchatallbutrequiresmemorytostoreXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX', x::text), now() FROM generate_series(1, {self.n()}) AS x
+                > INSERT INTO events_scale VALUES ({self.n()}, now());
 
                 > SELECT COUNT(*) FROM last_30_days
                 {self.n()}
