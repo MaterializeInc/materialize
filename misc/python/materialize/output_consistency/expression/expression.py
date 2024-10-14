@@ -175,12 +175,14 @@ class LeafExpression(Expression):
         data_type: DataType,
         characteristics: set[ExpressionCharacteristics],
         storage_layout: ValueStorageLayout,
+        data_source: DataSource | None,
         is_aggregate: bool = False,
         is_expect_error: bool = False,
     ):
         super().__init__(characteristics, storage_layout, is_aggregate, is_expect_error)
         self.column_name = column_name
         self.data_type = data_type
+        self.data_source = data_source
 
     def hash(self) -> int:
         return stable_int_hash(self.column_name)
@@ -226,7 +228,7 @@ class LeafExpression(Expression):
         return self.own_characteristics
 
     def get_data_source(self) -> DataSource | None:
-        raise NotImplementedError
+        return self.data_source
 
     def get_source_column_identifier(self) -> SourceColumnIdentifier | None:
         data_source = self.get_data_source()
