@@ -75,6 +75,7 @@ bin/ci-builder run stable zstd --rm parallel-workload-queries.log || true
 echo "Uploading log artifacts"
 mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-ps-a.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml')
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
+CI_EXTRA_ARGS_OLD="${CI_EXTRA_ARGS:-}"
 unset CI_EXTRA_ARGS # We don't want extra args for the annotation
 # Continue even if ci-annotate-errors fails
 CI_ANNOTATE_ERRORS_RESULT=0
@@ -85,7 +86,7 @@ timeout 300 buildkite-agent artifact upload "$artifacts_str" || true
 bin/ci-builder run stable bin/ci-annotate-errors --test-cmd="$(cat test_cmd)" --test-desc="$(cat test_desc)" "${artifacts[@]}" > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
 buildkite-agent artifact upload "ci-annotate-errors.log"
 
-if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for DFR)" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for CTF)" ] && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ]; then
+if [ -z "$CI_EXTRA_ARGS_OLD" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for DFR)" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for CTF)" ] && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] && [ ! -s services.log ]; then
     echo "+++ services.log is empty, failing"
     exit 1
 fi
