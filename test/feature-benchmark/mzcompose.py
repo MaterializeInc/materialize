@@ -9,8 +9,8 @@
 
 """
 Simple benchmark of mostly individual queries using testdrive. Can find
-wallclock/memory/messages regressions in single-connection query executions,
-not suitable for concurrency.
+wallclock/memorys regressions in single-connection query executions, not
+suitable for concurrency.
 """
 
 import argparse
@@ -154,7 +154,7 @@ def run_one_scenario(
     scenario_name = scenario_class.__name__
     print(f"--- Now benchmarking {scenario_name} ...")
 
-    measurement_types = [MeasurementType.WALLCLOCK, MeasurementType.MESSAGES]
+    measurement_types = [MeasurementType.WALLCLOCK]
     if args.measure_memory:
         measurement_types.append(MeasurementType.MEMORY_MZ)
         measurement_types.append(MeasurementType.MEMORY_CLUSTERD)
@@ -796,7 +796,6 @@ def _create_feature_benchmark_result_entry(
         scale=scale or "default",
         is_regression=is_regression,
         wallclock=measurements[MeasurementType.WALLCLOCK],
-        messages=measurements[MeasurementType.MESSAGES],
         memory_mz=measurements[MeasurementType.MEMORY_MZ],
         memory_clusterd=measurements[MeasurementType.MEMORY_CLUSTERD],
     )
