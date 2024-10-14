@@ -1070,14 +1070,9 @@ where
         for response in peek_responses {
             self.deliver_response(response);
         }
-        for peek in to_drop
-            .into_iter()
-            .filter_map(|uuid| self.remove_peek(uuid))
-        {
-            // Error delivery is best-effort, so ignore send failures.
-            let _ = peek
-                .peek_response_tx
-                .send(PeekResponse::Error(ERROR_TARGET_REPLICA_FAILED.into()));
+        for uuid in to_drop {
+            let response = PeekResponse::Error(ERROR_TARGET_REPLICA_FAILED.into());
+            self.finish_peek(uuid, response);
         }
 
         Ok(())
@@ -1469,7 +1464,7 @@ where
                 // TODO(guswynn): can we just hold the `tracing::Span` here instead?
                 otel_ctx: otel_ctx.clone(),
                 requested_at: Instant::now(),
-                _read_hold: read_hold,
+                read_hold,
                 peek_response_tx,
                 limit: finishing.limit.map(usize::cast_from),
                 offset: finishing.offset,
@@ -1494,28 +1489,28 @@ where
     /// Cancels an existing peek request.
     #[mz_ore::instrument(level = "debug")]
     pub fn cancel_peek(&mut self, uuid: Uuid, reason: PeekResponse) {
-        // Remove the peek.
-        // This will also propagate the cancellation to the replicas.
-        let Some(peek) = self.remove_peek(uuid) else {
+        let Some(peek) = self.peeks.get_mut(&uuid) else {
             tracing::warn!("did not find pending peek for {uuid}");
             return;
         };
 
+        let duration = peek.requested_at.elapsed();
+        self.metrics
+            .observe_peek_response(&PeekResponse::Canceled, duration);
+
+        // Enqueue a notification for the cancellation.
         let otel_ctx = peek.otel_ctx.clone();
         otel_ctx.attach_as_parent();
-        // Cancellations are best-effort, ignore errors.
-        let _ = peek.peek_response_tx.send(reason);
 
-        let response = PeekResponse::Canceled;
-        let duration = peek.requested_at.elapsed();
-        self.metrics.observe_peek_response(&response, duration);
-
-        // Enqueue the response to the cancellation.
         self.deliver_response(ComputeControllerResponse::PeekNotification(
             uuid,
             PeekNotification::Canceled,
             otel_ctx,
         ));
+
+        // Finish the peek.
+        // This will also propagate the cancellation to the replicas.
+        self.finish_peek(uuid, reason);
     }
 
     /// Assigns a read policy to specific identifiers.
@@ -1681,24 +1676,27 @@ where
         }
     }
 
-    /// Removes a registered peek and clean up associated state.
+    /// Fulfills a registered peek and cleans up associated state.
     ///
     /// As part of this we:
+    ///  * Send a `PeekResponse` through the peek's response channel.
     ///  * Emit a `CancelPeek` command to instruct replicas to stop spending resources on this
     ///    peek, and to allow the `ComputeCommandHistory` to reduce away the corresponding `Peek`
     ///    command.
     ///  * Remove the read hold for this peek, unblocking compaction that might have waited on it.
-    #[must_use]
-    fn remove_peek(&mut self, uuid: Uuid) -> Option<PendingPeek<T>> {
-        let peek = self.peeks.remove(&uuid);
+    fn finish_peek(&mut self, uuid: Uuid, response: PeekResponse) {
+        let Some(peek) = self.peeks.remove(&uuid) else {
+            return;
+        };
 
-        if peek.is_some() {
-            // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
-            // (by dropping it), to avoid the edge case that caused database-issues#4812.
-            self.send(ComputeCommand::CancelPeek { uuid });
-        }
+        // The recipient might not be interested in the peek response anymore, which is fine.
+        let _ = peek.peek_response_tx.send(response);
 
-        peek
+        // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
+        // (by dropping it), to avoid the edge case that caused database-issues#4812.
+        self.send(ComputeCommand::CancelPeek { uuid });
+
+        drop(peek.read_hold);
     }
 
     /// Handles a response from a replica. Replica IDs are re-used across replica restarts, so we
@@ -1799,24 +1797,19 @@ where
             return;
         }
 
-        let peek = self.remove_peek(uuid).expect("Known to exist");
-
         let duration = peek.requested_at.elapsed();
         self.metrics.observe_peek_response(&response, duration);
 
         let notification = PeekNotification::new(&response, peek.offset, peek.limit);
-
-        // Peek cancellations are best-effort, so we might still receive a response for a canceled
-        // peek, but the recipient is gone. Ignore errors for this case.
-        let _ = peek.peek_response_tx.send(response);
-
         // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
         // currently want the parent to be whatever the compute worker did with this peek.
         self.deliver_response(ComputeControllerResponse::PeekNotification(
             uuid,
             notification,
             otel_ctx,
-        ))
+        ));
+
+        self.finish_peek(uuid, response)
     }
 
     fn handle_copy_to_response(
@@ -2542,7 +2535,7 @@ struct PendingPeek<T: Timestamp> {
     /// Used to track peek durations.
     requested_at: Instant,
     /// The read hold installed to serve this peek.
-    _read_hold: ReadHold<T>,
+    read_hold: ReadHold<T>,
     /// The channel to send peek results.
     peek_response_tx: oneshot::Sender<PeekResponse>,
     /// An optional limit of the peek's result size.
