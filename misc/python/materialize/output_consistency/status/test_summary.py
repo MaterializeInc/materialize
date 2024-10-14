@@ -247,6 +247,15 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
 
         return "\n".join(output)
 
+    def format_used_ignore_entries(self) -> str:
+        output = []
+
+        for ignore_reason in self.used_ignore_reasons:
+            output.append(f"* {ignore_reason}")
+
+        output.sort()
+        return "\n".join(output)
+
     def count_used_ops(self) -> int:
         return len(self.stats_by_operation_variant)
 
