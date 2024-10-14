@@ -177,7 +177,9 @@ class ConsistencyTestRunner:
 
         for query in queries:
             if ENABLE_ADDING_WHERE_CONDITIONS:
-                self.query_generator.add_random_where_condition_to_query(query)
+                self.query_generator.add_random_where_condition_to_query(
+                    query, test_summary
+                )
             success = self.execution_manager.execute_query(query, test_summary)
 
             if not success and (

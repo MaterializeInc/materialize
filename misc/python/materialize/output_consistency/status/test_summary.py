@@ -115,6 +115,7 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
     count_predefined_queries: int = 0
     count_generated_select_expressions: int = 0
     count_ignored_select_expressions: int = 0
+    used_ignore_reasons: set[str] = field(default_factory=set)
 
     def __post_init__(self):
         self.mode = "LIVE_DATABASE" if not self.dry_run else "DRY_RUN"
@@ -169,8 +170,11 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
             + other.count_ignored_select_expressions
         )
 
-    def add_failures(self, failures: list[TestFailureDetails]):
+    def add_failures(self, failures: list[TestFailureDetails]) -> None:
         self.failures.extend(failures)
+
+    def record_ignore_reason_usage(self, reason: str) -> None:
+        self.used_ignore_reasons.add(reason)
 
     def all_passed(self) -> bool:
         all_passed = (
