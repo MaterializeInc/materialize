@@ -7,7 +7,7 @@
 Materialize is the **cloud operational data store** purpose-built to use SQL to
 transform, deliver, and act on fast-changing data.
 
-Using SQL and common tools in the wider data ecosystem, Materialize allows you
+Using SQL bla bla bla  and common tools in the wider data ecosystem, Materialize allows you
 to build real-time automation, engaging customer experiences, and interactive
 data products that drive value for your business while reducing the cost of
 [data freshness](https://materialize.com/blog/decouple-cost-and-freshness/).
