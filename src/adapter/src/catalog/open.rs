@@ -12,16 +12,18 @@
 mod builtin_item_migration;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
+use ipnet::IpNet;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::dyncfgs::ENABLE_CONTINUAL_TASK_BUILTINS;
 use mz_catalog::builtin::{
     Builtin, BuiltinTable, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
-    BUILTIN_PREFIXES, BUILTIN_ROLES, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
-    RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    BUILTIN_NETWORK_POLICIES, BUILTIN_PREFIXES, BUILTIN_ROLES,
+    MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -53,6 +55,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::SchemaId;
+use mz_sql::plan::{NetworkPolicyRule, PolicyAddress};
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
@@ -222,6 +225,8 @@ impl Catalog {
             clusters_by_id: BTreeMap::new(),
             roles_by_name: BTreeMap::new(),
             roles_by_id: BTreeMap::new(),
+            network_policies_by_id: BTreeMap::new(),
+            network_policies_by_name: BTreeMap::new(),
             system_configuration: {
                 let mut s =
                     SystemVars::new(config.active_connection_count).set_unsafe(config.unsafe_mode);
@@ -298,6 +303,7 @@ impl Catalog {
             add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
             add_new_builtin_roles_migration(&mut txn)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
+            add_new_builtin_network_policies_migration(&mut txn)?;
             (migrated_builtins, new_builtins)
         };
         remove_pending_cluster_replicas_migration(&mut txn)?;
@@ -347,6 +353,7 @@ impl Catalog {
                 | BootstrapStateUpdateKind::SystemPrivilege(_)
                 | BootstrapStateUpdateKind::SystemConfiguration(_)
                 | BootstrapStateUpdateKind::Cluster(_)
+                | BootstrapStateUpdateKind::NetworkPolicy(_)
                 | BootstrapStateUpdateKind::IntrospectionSourceIndex(_)
                 | BootstrapStateUpdateKind::ClusterReplica(_)
                 | BootstrapStateUpdateKind::SystemObjectMapping(_) => {
@@ -1053,6 +1060,40 @@ fn add_new_builtin_clusters_migration(
                     workload_class: None,
                 },
                 &HashSet::new(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn add_new_builtin_network_policies_migration(
+    txn: &mut mz_catalog::durable::Transaction<'_>,
+) -> Result<(), mz_catalog::durable::CatalogError> {
+    let policy_names: BTreeSet<_> = txn
+        .get_network_policies()
+        .map(|policy| policy.name)
+        .collect();
+    for policy in BUILTIN_NETWORK_POLICIES {
+        let rules: Vec<NetworkPolicyRule> = policy
+            .rules
+            .into_iter()
+            .map(|(name, action, direction, ip_str)| NetworkPolicyRule {
+                name: name.to_string(),
+                action: action.clone(),
+                direction: direction.clone(),
+                address: PolicyAddress(
+                    IpNet::from_str(ip_str).expect("builtin must provide valid ip"),
+                ),
+            })
+            .collect();
+        if !policy_names.contains(policy.name) {
+            txn.insert_builtin_network_policy(
+                policy.id.to_owned(),
+                policy.name.to_string(),
+                rules,
+                policy.privellages.to_vec(),
+                policy.owner_id.to_owned(),
+                policy.oid,
             )?;
         }
     }
