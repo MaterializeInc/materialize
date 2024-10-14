@@ -45,8 +45,9 @@ class ConstantExpression(LeafExpression):
             data_type,
             characteristics,
             ValueStorageLayout.ANY,
-            is_aggregate,
-            False,
+            data_source=None,
+            is_aggregate=is_aggregate,
+            is_expect_error=False,
         )
         self.value = value
         self.add_quotes = add_quotes

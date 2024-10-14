@@ -47,8 +47,9 @@ class DataValue(LeafExpression):
             data_type,
             characteristics,
             ValueStorageLayout.HORIZONTAL,
-            False,
-            False,
+            data_source=DataSource(table_index=None),
+            is_aggregate=False,
+            is_expect_error=False,
         )
         self.value = value
         self.vertical_table_indices: set[int] = set()
@@ -71,9 +72,6 @@ class DataValue(LeafExpression):
 
     def collect_vertical_table_indices(self) -> set[int]:
         return self.vertical_table_indices
-
-    def get_data_source(self) -> DataSource | None:
-        return DataSource(table_index=None)
 
     def get_source_column_identifier(self) -> SourceColumnIdentifier:
         source_column_identifier = super().get_source_column_identifier()

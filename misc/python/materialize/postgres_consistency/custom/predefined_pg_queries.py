@@ -55,11 +55,14 @@ def create_custom_pg_consistency_queries() -> list[QueryTemplate]:
 
 
 def create_pg_timezone_abbrevs_query() -> QueryTemplate:
-    abbrev_col_expr = _create_simple_leaf_expression("abbrev", TEXT_DATA_TYPE)
+    data_source = DataSource(custom_db_object_name="pg_catalog.pg_timezone_abbrevs")
+    abbrev_col_expr = _create_simple_leaf_expression(
+        "abbrev", TEXT_DATA_TYPE, data_source
+    )
     pg_timezone_abbrevs_cols: list[Expression] = [
         abbrev_col_expr,
-        _create_simple_leaf_expression("utc_offset", INTERVAL_TYPE),
-        _create_simple_leaf_expression("is_dst", BOOLEAN_DATA_TYPE),
+        _create_simple_leaf_expression("utc_offset", INTERVAL_TYPE, data_source),
+        _create_simple_leaf_expression("is_dst", BOOLEAN_DATA_TYPE, data_source),
     ]
     pg_timezone_abbrevs = QueryTemplate(
         expect_error=False,
@@ -68,7 +71,7 @@ def create_pg_timezone_abbrevs_query() -> QueryTemplate:
         storage_layout=ValueStorageLayout.VERTICAL,
         contains_aggregations=False,
         row_selection=ALL_ROWS_SELECTION,
-        data_source=DataSource(custom_db_object_name="pg_catalog.pg_timezone_abbrevs"),
+        data_source=data_source,
         custom_order_expressions=[abbrev_col_expr],
     )
 
@@ -76,15 +79,18 @@ def create_pg_timezone_abbrevs_query() -> QueryTemplate:
 
 
 def create_pg_timezone_names_query() -> QueryTemplate:
-    pg_timezone_name_col_expr = _create_simple_leaf_expression("name", TEXT_DATA_TYPE)
+    data_source = DataSource(custom_db_object_name="pg_catalog.pg_timezone_names")
+    pg_timezone_name_col_expr = _create_simple_leaf_expression(
+        "name", TEXT_DATA_TYPE, data_source
+    )
     pg_timezone_abbrev_col_expr = _create_simple_leaf_expression(
-        "abbrev", TEXT_DATA_TYPE
+        "abbrev", TEXT_DATA_TYPE, data_source
     )
     pg_timezone_names_cols: list[Expression] = [
         pg_timezone_name_col_expr,
         pg_timezone_abbrev_col_expr,
-        _create_simple_leaf_expression("utc_offset", INTERVAL_TYPE),
-        _create_simple_leaf_expression("is_dst", BOOLEAN_DATA_TYPE),
+        _create_simple_leaf_expression("utc_offset", INTERVAL_TYPE, data_source),
+        _create_simple_leaf_expression("is_dst", BOOLEAN_DATA_TYPE, data_source),
     ]
 
     no_posix_timezones = ExpressionWithArgs(
@@ -182,7 +188,7 @@ def create_pg_timezone_names_query() -> QueryTemplate:
         storage_layout=ValueStorageLayout.VERTICAL,
         contains_aggregations=False,
         row_selection=ALL_ROWS_SELECTION,
-        data_source=DataSource(custom_db_object_name="pg_catalog.pg_timezone_names"),
+        data_source=data_source,
         custom_order_expressions=[
             order_by_sanitized_name_expr,
             pg_timezone_abbrev_col_expr,
@@ -193,11 +199,12 @@ def create_pg_timezone_names_query() -> QueryTemplate:
 
 
 def _create_simple_leaf_expression(
-    column_name: str, data_type: DataType
+    column_name: str, data_type: DataType, data_source: DataSource
 ) -> LeafExpression:
     return LeafExpression(
         column_name=column_name,
         data_type=data_type,
+        data_source=data_source,
         characteristics=set(),
         storage_layout=ValueStorageLayout.VERTICAL,
     )

@@ -31,11 +31,17 @@ class DataColumn(LeafExpression):
 
     def __init__(self, data_type: DataType, row_values_of_column: list[DataValue]):
         column_name = f"{data_type.internal_identifier.lower()}_val"
+        # data_source will be assigned later
         super().__init__(
-            column_name, data_type, set(), ValueStorageLayout.VERTICAL, False, False
+            column_name,
+            data_type,
+            set(),
+            ValueStorageLayout.VERTICAL,
+            data_source=None,
+            is_aggregate=False,
+            is_expect_error=False,
         )
         self.values = row_values_of_column
-        self.data_source: DataSource | None = None
 
     def assign_data_source(self, data_source: DataSource, force: bool) -> None:
         if self.data_source is not None:

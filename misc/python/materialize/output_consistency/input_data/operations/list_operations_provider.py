@@ -22,6 +22,9 @@ from materialize.output_consistency.input_data.params.list_operation_param impor
     ListOfOtherElementOperationParam,
     ListOperationParam,
 )
+from materialize.output_consistency.input_data.params.row_indices_param import (
+    RowIndicesParam,
+)
 from materialize.output_consistency.input_data.params.same_operation_param import (
     SameOperationParam,
 )
@@ -99,10 +102,11 @@ LIST_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "list_agg",
         {
-            2: "list_agg($ ORDER BY row_index, $)",
+            3: "list_agg($ ORDER BY $, $)",
         },
         [
             AnyOperationParam(include_record_type=True),
+            RowIndicesParam(index_of_param_to_share_data_source=0),
             SameOperationParam(index_of_previous_param=0),
         ],
         ListReturnTypeSpec(),

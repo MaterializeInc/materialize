@@ -175,12 +175,14 @@ class LeafExpression(Expression):
         data_type: DataType,
         characteristics: set[ExpressionCharacteristics],
         storage_layout: ValueStorageLayout,
+        data_source: DataSource | None,
         is_aggregate: bool = False,
         is_expect_error: bool = False,
     ):
         super().__init__(characteristics, storage_layout, is_aggregate, is_expect_error)
         self.column_name = column_name
         self.data_type = data_type
+        self.data_source = data_source
 
     def hash(self) -> int:
         return stable_int_hash(self.column_name)
@@ -194,16 +196,21 @@ class LeafExpression(Expression):
     def to_sql(
         self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
     ) -> str:
-        return self.to_sql_as_column(sql_adjuster, include_alias)
+        return self.to_sql_as_column(
+            sql_adjuster, include_alias, self.column_name, self.get_data_source()
+        )
 
     def to_sql_as_column(
-        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool
+        self,
+        sql_adjuster: SqlDialectAdjuster,
+        include_alias: bool,
+        column_name: str,
+        data_source: DataSource | None,
     ) -> str:
         if include_alias:
-            data_source = self.get_data_source()
             assert data_source is not None, "data source is None"
-            return f"{data_source.alias()}.{self.column_name}"
-        return self.column_name
+            return f"{data_source.alias()}.{column_name}"
+        return column_name
 
     def collect_leaves(self) -> list[LeafExpression]:
         return [self]
@@ -221,7 +228,7 @@ class LeafExpression(Expression):
         return self.own_characteristics
 
     def get_data_source(self) -> DataSource | None:
-        raise NotImplementedError
+        return self.data_source
 
     def get_source_column_identifier(self) -> SourceColumnIdentifier | None:
         data_source = self.get_data_source()
