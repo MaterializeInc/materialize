@@ -705,7 +705,10 @@ fn generate_rbac_requirements(
                                 role_id,
                             ))
                         }
-                        ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => None,
+                        ObjectId::Cluster(_)
+                        | ObjectId::Database(_)
+                        | ObjectId::Role(_)
+                        | ObjectId::NetworkPolicy(_) => None,
                     })
                     .collect()
             };
@@ -737,7 +740,8 @@ fn generate_rbac_requirements(
                 ObjectId::Cluster(_)
                 | ObjectId::ClusterReplica(_)
                 | ObjectId::Database(_)
-                | ObjectId::Role(_) => None,
+                | ObjectId::Role(_)
+                | ObjectId::NetworkPolicy(_) => None,
             };
             let privileges = match container_id {
                 Some(id) => vec![(id, AclMode::USAGE, role_id)],
@@ -1179,7 +1183,10 @@ fn generate_rbac_requirements(
                         role_id,
                     )]
                 }
-                ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => Vec::new(),
+                ObjectId::Cluster(_)
+                | ObjectId::Database(_)
+                | ObjectId::Role(_)
+                | ObjectId::NetworkPolicy(_) => Vec::new(),
             };
             RbacRequirements {
                 role_membership: BTreeSet::from([*new_owner]),
@@ -1303,7 +1310,10 @@ fn generate_rbac_requirements(
                                 role_id,
                             ))
                         }
-                        ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => {}
+                        ObjectId::Cluster(_)
+                        | ObjectId::Database(_)
+                        | ObjectId::Role(_)
+                        | ObjectId::NetworkPolicy(_) => {}
                     },
                     SystemObjectId::System => {}
                 }
@@ -1506,6 +1516,10 @@ fn ownership_err(
                     let name = catalog.resolve_full_name(item.name());
                     (item.item_type().into(), name.to_string())
                 }
+                ObjectId::NetworkPolicy(id) => (
+                    ObjectType::NetworkPolicy,
+                    catalog.get_network_policy(&id).name().to_string(),
+                ),
                 ObjectId::Role(_) => unreachable!("roles have no owner"),
             })
             .collect();
@@ -1701,6 +1715,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Cluster) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::ClusterReplica) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Secret) => AclMode::USAGE,
+        SystemObjectType::Object(ObjectType::NetworkPolicy) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Connection) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Database) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
@@ -1734,7 +1749,8 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::Secret
         | ObjectType::Connection
         | ObjectType::Database
-        | ObjectType::Func => AclMode::empty(),
+        | ObjectType::Func
+        | ObjectType::NetworkPolicy => AclMode::empty(),
     }
 }
 

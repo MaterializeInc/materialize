@@ -1238,6 +1238,7 @@ Snapshot {
             ),
         },
     },
+    network_policies: {},
     cluster_replicas: {
         ClusterReplicaKey {
             id: Some(

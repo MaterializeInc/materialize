@@ -37,6 +37,7 @@ pub mod explain;
 pub mod fixed_length;
 pub mod global_id;
 pub mod namespaces;
+pub mod network_policy_id;
 pub mod optimize;
 pub mod refresh_schedule;
 pub mod role_id;
