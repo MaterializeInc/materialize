@@ -194,16 +194,21 @@ class LeafExpression(Expression):
     def to_sql(
         self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
     ) -> str:
-        return self.to_sql_as_column(sql_adjuster, include_alias)
+        return self.to_sql_as_column(
+            sql_adjuster, include_alias, self.column_name, self.get_data_source()
+        )
 
     def to_sql_as_column(
-        self, sql_adjuster: SqlDialectAdjuster, include_alias: bool
+        self,
+        sql_adjuster: SqlDialectAdjuster,
+        include_alias: bool,
+        column_name: str,
+        data_source: DataSource | None,
     ) -> str:
         if include_alias:
-            data_source = self.get_data_source()
             assert data_source is not None, "data source is None"
-            return f"{data_source.alias()}.{self.column_name}"
-        return self.column_name
+            return f"{data_source.alias()}.{column_name}"
+        return column_name
 
     def collect_leaves(self) -> list[LeafExpression]:
         return [self]
