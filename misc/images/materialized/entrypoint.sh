@@ -40,12 +40,12 @@ hosted offering we run these services scaled across many machines.
 EOF
 
 if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
-  sudo -u postgres /usr/lib/postgresql/16/bin/pg_ctl -D /var/lib/postgresql/16/main start -o "-c config_file=/etc/postgresql/16/main/postgresql.conf"
+  /usr/lib/postgresql/16/bin/pg_ctl -D /var/lib/postgresql/16/main start -o "-c config_file=/etc/postgresql/16/main/postgresql.conf"
 
-  sudo -u postgres psql -c "SELECT 1 FROM pg_roles WHERE rolname = 'root'" | grep -q 1 || ( \
-    sudo -u postgres psql -c "CREATE ROLE root WITH LOGIN PASSWORD 'root'" && \
-    sudo -u postgres psql -c "CREATE DATABASE root" && \
-    sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE root TO root")
+  psql -U postgres -c "SELECT 1 FROM pg_roles WHERE rolname = 'root'" | grep -q 1 || ( \
+    psql -U postgres -c "CREATE ROLE root WITH LOGIN PASSWORD 'root'" && \
+    psql -U postgres -c "CREATE DATABASE root" && \
+    psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE root TO root")
   psql -U root -c "CREATE SCHEMA IF NOT EXISTS consensus"
   psql -U root -c "CREATE SCHEMA IF NOT EXISTS storage"
   psql -U root -c "CREATE SCHEMA IF NOT EXISTS adapter"

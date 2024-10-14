@@ -23,18 +23,10 @@ RUN apt-get update \
         postgresql \
         postgresql-contrib \
         tini \
-        sudo \
         ssh \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
     && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql \
-    && chown materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql \
-    && echo "materialize ALL=(postgres) NOPASSWD: ALL" >> /etc/sudoers \
-    && sed -i "s/^max_connections = .*/max_connections = 5000/" /etc/postgresql/16/main/postgresql.conf \
-    && sed -i "s/^#listen_addresses = .*/listen_addresses = '*'/" /etc/postgresql/16/main/postgresql.conf \
-    && sed -i "s/^port = .*/port = 26257/" /etc/postgresql/16/main/postgresql.conf \
-    && (echo "local all root trust"; echo "host all root 0.0.0.0/0 trust"; cat /etc/postgresql/16/main/pg_hba.conf) > /etc/postgresql/16/main/pg_hba.conf.tmp && mv /etc/postgresql/16/main/pg_hba.conf.tmp /etc/postgresql/16/main/pg_hba.conf
+    && chown -R materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/lib/postgresql/16/main
 
-
-ENV POSTGRES_USER=postgres
-ENV POSTGRES_PASSWORD=postgres
+COPY postgresql.conf pg_hba.conf /etc/postgresql/16/main/
