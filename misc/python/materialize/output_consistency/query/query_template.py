@@ -42,6 +42,7 @@ from materialize.output_consistency.selection.column_selection import (
 from materialize.output_consistency.selection.row_selection import (
     DataRowSelection,
 )
+from materialize.output_consistency.sub_query.sub_query_expression import SubQuery
 
 
 class QueryTemplate:
@@ -164,6 +165,14 @@ class QueryTemplate:
 
     def has_limit(self) -> bool:
         return self.limit is not None
+
+    def has_sub_queries(self) -> bool:
+        return len(self.collect_sub_queries()) > 0
+
+    def collect_sub_queries(self) -> list[SubQuery]:
+        # TODO: implement
+        # TODO: handle nested sub-queries
+        pass
 
     def _get_space_separator(self, output_format: QueryOutputFormat) -> str:
         return "\n  " if output_format == QueryOutputFormat.MULTI_LINE else " "

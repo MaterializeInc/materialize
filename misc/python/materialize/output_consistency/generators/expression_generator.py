@@ -50,6 +50,8 @@ from materialize.output_consistency.operation.operation import (
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
+from materialize.output_consistency.sub_query.sub_query_expression import SubQuery
+from materialize.output_consistency.sub_query.sub_query_param import SubQueryParam
 
 NESTING_LEVEL_ROOT = 0
 NESTING_LEVEL_OUTERMOST_ARG = 1
@@ -160,7 +162,18 @@ class ExpressionGenerator:
     def generate_boolean_expression(
         self,
         use_aggregation: bool,
-        storage_layout: ValueStorageLayout | None,
+        storage_layout: ValueStorageLayout,
+        nesting_level: int = NESTING_LEVEL_ROOT,
+    ) -> ExpressionWithArgs | None:
+        return self.generate_expression_of_type(
+            DataTypeCategory.BOOLEAN, use_aggregation, storage_layout, nesting_level
+        )
+
+    def generate_expression_of_type(
+        self,
+        data_type_category: DataTypeCategory,
+        use_aggregation: bool,
+        storage_layout: ValueStorageLayout,
         nesting_level: int = NESTING_LEVEL_ROOT,
     ) -> ExpressionWithArgs | None:
         return self.generate_expression_for_data_type_category(
@@ -355,6 +368,9 @@ class ExpressionGenerator:
             ]
             return RowIndicesExpression(expression_to_share_data_source)
 
+        if isinstance(param, SubQueryParam):
+            return self._generate_sub_query(param)
+
         create_complex_arg = (
             arg_context.requires_aggregation()
             or self.randomized_picker.random_boolean(
@@ -380,6 +396,35 @@ class ExpressionGenerator:
             0, len(param.values) - 1
         )
         return param.get_enum_constant(enum_constant_index)
+
+    def _generate_sub_query(self, param: SubQueryParam) -> SubQuery:
+        use_aggregation = self.randomized_picker.random_boolean(0.8)
+        storage_layout = (
+            ValueStorageLayout.HORIZONTAL
+            if self.randomized_picker.random_boolean(
+                probability.HORIZONTAL_LAYOUT_WHEN_AGGREGATED
+                if use_aggregation
+                else probability.HORIZONTAL_LAYOUT_WHEN_NOT_AGGREGATED
+            )
+            else ValueStorageLayout.VERTICAL
+        )
+        expression = self.generate_expression_of_type(
+            param.data_type.category,
+            use_aggregation=use_aggregation,
+            storage_layout=storage_layout,
+        )
+        where_expression = self.generate_boolean_expression(
+            use_aggregation=False, storage_layout=storage_layout
+        )
+        limit = 1 if not use_aggregation else None
+        return SubQuery(
+            subquery_expression=expression,
+            storage_layout=storage_layout,
+            characteristics=set(),
+            is_aggregate=use_aggregation,
+            where_filter=where_expression,
+            limit=limit,
+        )
 
     def _generate_simple_arg_for_param(
         self,
@@ -418,6 +463,7 @@ class ExpressionGenerator:
             and nesting_level == NESTING_LEVEL_OUTERMOST_ARG
         )
 
+        # TODO: try to include dynamic ones
         suitable_operations = self._get_operations_of_category(
             param, arg_context, must_use_aggregation, allow_aggregation
         )
