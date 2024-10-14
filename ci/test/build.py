@@ -10,8 +10,6 @@
 # by the Apache License, Version 2.0.
 
 import os
-import subprocess
-import tempfile
 from pathlib import Path
 
 from materialize import bazel, mzbuild, spawn, ui
@@ -96,13 +94,6 @@ def maybe_upload_debuginfo(
         build_id = upload_debuginfo_to_s3(bin_path, dbg_path, is_tag_build)
         print(f"Uploaded debuginfo to S3 with build_id {build_id}")
 
-        # Upload debuginfo and sources to Polar Signals (our continuous
-        # profiling provider), but only if this is a tag build. Polar Signals is
-        # expensive, so we don't want to upload development or unstable builds
-        # that won't ever be profiled by Polar Signals.
-        if is_tag_build:
-            upload_debuginfo_to_polarsignals(repo, build_id, bin_path, dbg_path)
-
 
 def find_binaries_created_by_cargo_bin(
     repo: Repository, built_images: set[ResolvedImage], bin_names: set[str]
@@ -130,81 +121,6 @@ def get_bin_path(repo: Repository, bin: str, bazel_bins: dict[str, str]) -> Path
     else:
         cargo_profile = "release" if repo.rd.release_mode else "debug"
         return repo.rd.cargo_target_dir() / cargo_profile / bin
-
-
-def upload_debuginfo_to_polarsignals(
-    repo: Repository,
-    build_id: str,
-    bin_path: Path,
-    dbg_path: Path,
-) -> None:
-    ui.section(f"Uploading debuginfo for {bin_path} to Polar Signals...")
-
-    polar_signals_api_token = os.environ["POLAR_SIGNALS_API_TOKEN"]
-
-    spawn.run_with_retries(
-        lambda: spawn.runv(
-            [
-                "parca-debuginfo",
-                "upload",
-                "--store-address=grpc.polarsignals.com:443",
-                "--no-extract",
-                dbg_path,
-            ],
-            cwd=repo.rd.root,
-            env=dict(os.environ, PARCA_DEBUGINFO_BEARER_TOKEN=polar_signals_api_token),
-        )
-    )
-
-    print(f"Constructing source tarball for {bin_path}...")
-    with tempfile.NamedTemporaryFile() as tarball:
-        p1 = subprocess.Popen(
-            ["llvm-dwarfdump", "--show-sources", bin_path],
-            stdout=subprocess.PIPE,
-        )
-        p2 = subprocess.Popen(
-            [
-                "tar",
-                "-cf",
-                tarball.name,
-                "--zstd",
-                "-T",
-                "-",
-                "--ignore-failed-read",
-            ],
-            stdin=p1.stdout,
-            # Suppress noisy warnings about missing files.
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-        # This causes p1 to receive SIGPIPE if p2 exits early,
-        # like in the shell.
-        assert p1.stdout
-        p1.stdout.close()
-
-        for p in [p1, p2]:
-            if p.wait():
-                raise subprocess.CalledProcessError(p.returncode, p.args)
-
-        print(f"Uploading source tarball for {bin_path} to Polar Signals...")
-        spawn.run_with_retries(
-            lambda: spawn.runv(
-                [
-                    "parca-debuginfo",
-                    "upload",
-                    "--store-address=grpc.polarsignals.com:443",
-                    "--type=sources",
-                    f"--build-id={build_id}",
-                    tarball.name,
-                ],
-                cwd=repo.rd.root,
-                env=dict(
-                    os.environ,
-                    PARCA_DEBUGINFO_BEARER_TOKEN=polar_signals_api_token,
-                ),
-            )
-        )
 
 
 if __name__ == "__main__":
