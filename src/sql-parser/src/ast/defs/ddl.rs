@@ -215,7 +215,7 @@ pub struct AvroDocOn<T: AstInfo> {
     pub identifier: DocOnIdentifier<T>,
     pub for_schema: DocOnSchema,
 }
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DocOnSchema {
     KeyOnly,
     ValueOnly,

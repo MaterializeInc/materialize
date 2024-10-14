@@ -601,7 +601,11 @@ pub fn plan_explain_schema(
         ident!("mz_explain_schema"),
     ]));
 
-    crate::pure::add_materialize_comments(scx.catalog, &mut statement)?;
+    crate::pure::purify_create_sink_avro_doc_on_options(
+        scx.catalog,
+        *statement.from.item_id(),
+        &mut statement.format,
+    )?;
     let default_strategy = DEFAULT_SINK_PARTITION_STRATEGY.get(scx.catalog.system_vars().dyncfgs());
     statement.with_options.push(CreateSinkOption {
         name: CreateSinkOptionName::PartitionStrategy,
