@@ -113,7 +113,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         aws_region=args.aws_region,
         validate_catalog_store=True,
         default_timeout=args.default_timeout,
-        volumes_extra=["mzdata:/mzdata"],
         external_minio=True,
         fivetran_destination=True,
         fivetran_destination_files_path="/share/tmp",

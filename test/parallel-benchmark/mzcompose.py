@@ -427,7 +427,7 @@ def run_once(
             Testdrive(
                 no_reset=True,
                 materialize_url=args.mz_url,
-                no_consistency_checks=True,
+                consistency_checks=False,
             )
         ]
         target = parse_pg_conn_string(args.mz_url)

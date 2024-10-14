@@ -47,7 +47,7 @@ class Testdrive(Service):
         aws_endpoint: str | None = "http://minio:9000",
         aws_access_key_id: str | None = "minioadmin",
         aws_secret_access_key: str | None = "minioadmin",
-        no_consistency_checks: bool = False,
+        consistency_checks: bool = True,
         external_metadata_store: bool = False,
         external_minio: bool = False,
         fivetran_destination: bool = False,
@@ -76,6 +76,7 @@ class Testdrive(Service):
 
         volumes = [
             volume_workdir,
+            "mzdata:/mzdata",
             *(v for v in DEFAULT_MZ_VOLUMES if v.startswith("tmp:")),
         ]
         if volumes_extra:
@@ -134,7 +135,7 @@ class Testdrive(Service):
         elif seed is not None:
             entrypoint.append(f"--seed={seed}")
 
-        if no_consistency_checks:
+        if not consistency_checks:
             entrypoint.append("--consistency-checks=disable")
 
         if fivetran_destination:
