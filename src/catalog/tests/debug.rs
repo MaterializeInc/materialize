@@ -56,6 +56,7 @@ impl Debug for HiddenUserVersionTrace<'_> {
             default_privileges,
             id_allocator,
             items,
+            network_policies,
             roles,
             schemas,
             settings,
@@ -86,6 +87,7 @@ impl Debug for HiddenUserVersionTrace<'_> {
             .field("default_privileges", default_privileges)
             .field("id_allocator", id_allocator)
             .field("items", items)
+            .field("network_policies", network_policies)
             .field("roles", roles)
             .field("schemas", schemas)
             .field("settings", settings)

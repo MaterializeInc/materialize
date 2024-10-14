@@ -262,6 +262,13 @@ impl CatalogState {
                         }
                     }
                 }
+                CommentObjectId::NetworkPolicy(network_policy_id) => {
+                    if !self.network_policies_by_id.contains_key(&network_policy_id) {
+                        comment_inconsistencies
+                            .push(CommentInconsistency::Dangling(comment_object_id));
+                    }
+                }
+
                 CommentObjectId::Role(role_id) => {
                     if !self.roles_by_id.contains_key(&role_id) {
                         comment_inconsistencies

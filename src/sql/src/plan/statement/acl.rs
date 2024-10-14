@@ -634,7 +634,8 @@ pub fn plan_alter_default_privileges(
         | ObjectType::Connection
         | ObjectType::Cluster
         | ObjectType::Database
-        | ObjectType::Schema => {}
+        | ObjectType::Schema
+        | ObjectType::NetworkPolicy => {}
     }
 
     let acl_mode = privilege_spec_to_acl_mode(
