@@ -860,8 +860,6 @@ where
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
-        limit: Option<usize>,
-        offset: usize,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -897,8 +895,6 @@ where
                 read_hold,
                 target_replica,
                 peek_response_tx,
-                limit,
-                offset,
             )
             .expect("validated")
         });
