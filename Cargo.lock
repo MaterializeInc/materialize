@@ -2039,7 +2039,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7607a2b757394485453343a681df6083872b3f0a"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#ea2e3e13bbd5cdd31f60f091a3625d954d7347f8"
 dependencies = [
  "fnv",
  "serde",
@@ -2093,7 +2093,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7607a2b757394485453343a681df6083872b3f0a"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#ea2e3e13bbd5cdd31f60f091a3625d954d7347f8"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -9751,13 +9751,12 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
 dependencies = [
  "bincode",
  "crossbeam-channel",
  "getopts",
  "serde",
- "serde_derive",
  "smallvec",
  "timely_bytes",
  "timely_communication",
@@ -9768,19 +9767,18 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
 dependencies = [
  "bincode",
  "byteorder",
  "crossbeam-channel",
  "getopts",
  "serde",
- "serde_derive",
  "timely_bytes",
  "timely_logging",
 ]
@@ -9788,7 +9786,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -9798,7 +9796,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#50f5e056d9ebbad31adb8747ac293c137fcb9ae8"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
 
 [[package]]
 name = "tiny-keccak"
