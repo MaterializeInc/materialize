@@ -25,7 +25,6 @@ class RootScenario:
         MeasurementType.WALLCLOCK: 0.10,
         # Increased the other measurements since they are easy to regress now
         # that we take the run with the minimum wallclock time:
-        MeasurementType.MESSAGES: 0.20,
         MeasurementType.MEMORY_MZ: 0.20,
         MeasurementType.MEMORY_CLUSTERD: 0.20,
     }

@@ -47,7 +47,6 @@ class Benchmark:
         self._filter = filter
         self._termination_conditions = termination_conditions
         self._performance_aggregation = aggregation_class()
-        self._messages_aggregation = aggregation_class()
         self._default_size = default_size
         self._seed = seed
 
@@ -97,7 +96,6 @@ class Benchmark:
             if self.shall_terminate(performance_measurement):
                 return [
                     self._performance_aggregation,
-                    self._messages_aggregation,
                     self._memory_mz_aggregation,
                     self._memory_clusterd_aggregation,
                 ]
@@ -168,7 +166,6 @@ class Benchmark:
         )
 
         self._collect_performance_measurement(i, performance_measurement)
-        self._collect_message_count(i)
 
         if self._memory_mz_aggregation:
             self._collect_memory_measurement(
@@ -201,18 +198,6 @@ class Benchmark:
         if not self._filter or not self._filter.filter(performance_measurement):
             print(f"{i} {performance_measurement}")
             self._performance_aggregation.append_measurement(performance_measurement)
-
-    def _collect_message_count(self, i: int) -> None:
-        messages = self._executor.Messages()
-        if messages is not None:
-            messages_measurement = Measurement(
-                type=MeasurementType.MESSAGES,
-                value=messages,
-                unit=MeasurementUnit.COUNT,
-            )
-            print(f"{i}: {messages_measurement}")
-            if not self._filter or not self._filter.filter(messages_measurement):
-                self._messages_aggregation.append_measurement(messages_measurement)
 
     def _collect_memory_measurement(
         self, i: int, memory_measurement_type: MeasurementType, aggregation: Aggregation
