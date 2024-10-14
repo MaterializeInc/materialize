@@ -627,7 +627,6 @@ impl Coordinator {
             if !peeks_to_drop.is_empty() {
                 for (dropped_name, uuid) in peeks_to_drop {
                     if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
-                        // Client may have left.
                         let cancel_reason = PeekResponse::Error(format!(
                             "query could not complete because {dropped_name} was dropped"
                         ));
