@@ -2046,10 +2046,6 @@ fn source_sink_cluster_config(
         Some(in_cluster) => scx.catalog.get_cluster(in_cluster.id),
     };
 
-    if cluster.replica_ids().len() > 1 {
-        sql_bail!("cannot create {ty} in cluster with more than one replica")
-    }
-
     Ok(cluster.id())
 }
 
