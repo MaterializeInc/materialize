@@ -14,22 +14,22 @@ package mz_pgcopy.copy;
 import "google/protobuf/empty.proto";
 
 message ProtoCopyFormatParams {
-    oneof kind {
-        ProtoCopyTextFormatParams text = 1;
-        ProtoCopyCsvFormatParams csv = 2;
-        google.protobuf.Empty binary = 3;
-    }
+  oneof kind {
+    ProtoCopyTextFormatParams text = 1;
+    ProtoCopyCsvFormatParams csv = 2;
+    google.protobuf.Empty binary = 3;
+  }
 }
 
 message ProtoCopyTextFormatParams {
-    string null = 1;
-    uint32 delimiter = 2;
+  string null = 1;
+  uint32 delimiter = 2;
 }
 
 message ProtoCopyCsvFormatParams {
-    uint32 delimiter = 1;
-    uint32 quote = 2;
-    uint32 escape = 3;
-    bool header = 4;
-    string null = 5;
+  uint32 delimiter = 1;
+  uint32 quote = 2;
+  uint32 escape = 3;
+  bool header = 4;
+  string null = 5;
 }

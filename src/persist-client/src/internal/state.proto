@@ -21,192 +21,192 @@ import "persist-types/src/arrow.proto";
 import "persist/src/persist.proto";
 
 message ProtoU64Antichain {
-    repeated int64 elements = 1;
+  repeated int64 elements = 1;
 }
 
 message ProtoU64Description {
-    ProtoU64Antichain lower = 1;
-    ProtoU64Antichain upper = 2;
-    ProtoU64Antichain since = 3;
+  ProtoU64Antichain lower = 1;
+  ProtoU64Antichain upper = 2;
+  ProtoU64Antichain since = 3;
 }
 
 message ProtoHollowBatchPart {
-    oneof kind {
-        string key = 1;
-        bytes inline = 5;
-    }
-    ProtoU64Antichain ts_rewrite = 4;
+  oneof kind {
+    string key = 1;
+    bytes inline = 5;
+  }
+  ProtoU64Antichain ts_rewrite = 4;
 
-    // Only set when Kind is Key
-    uint64 encoded_size_bytes = 2;
-    bytes key_lower = 3;
-    optional bytes structured_key_lower = 10;
-    optional int64 diffs_sum = 6;
-    oneof format {
-        google.protobuf.Empty row = 7;
-        uint64 row_and_columnar = 8;
-    }
-    optional uint64 schema_id = 9;
+  // Only set when Kind is Key
+  uint64 encoded_size_bytes = 2;
+  bytes key_lower = 3;
+  optional bytes structured_key_lower = 10;
+  optional int64 diffs_sum = 6;
+  oneof format {
+    google.protobuf.Empty row = 7;
+    uint64 row_and_columnar = 8;
+  }
+  optional uint64 schema_id = 9;
 
-    optional bytes key_stats = 536870906;
+  optional bytes key_stats = 536870906;
 
-    reserved 536870907 to 536870911;
+  reserved 536870907 to 536870911;
 }
 
 message ProtoInlineBatchPart {
-    ProtoU64Description desc = 1;
-    uint64 index = 2;
-    mz_persist.gen.persist.ProtoColumnarRecords updates = 3;
+  ProtoU64Description desc = 1;
+  uint64 index = 2;
+  mz_persist.gen.persist.ProtoColumnarRecords updates = 3;
 }
 
 enum ProtoRunOrder {
-    // The ordering of the data is not available; it can only be determined heuristically
-    // once the part is fetched by inspecting the batch description.
-    UNKNOWN = 0;
-    // No particular order.
-    UNORDERED = 1;
-    // Ordered by the codec-encoded bytes of the key, value, and timestamp.
-    CODEC = 2;
-    // Ordered by the structured encoding of the key, value, and timestamp.
-    STRUCTURED = 3;
+  // The ordering of the data is not available; it can only be determined heuristically
+  // once the part is fetched by inspecting the batch description.
+  UNKNOWN = 0;
+  // No particular order.
+  UNORDERED = 1;
+  // Ordered by the codec-encoded bytes of the key, value, and timestamp.
+  CODEC = 2;
+  // Ordered by the structured encoding of the key, value, and timestamp.
+  STRUCTURED = 3;
 }
 
 // Data that should be common across all parts in a run.
 message ProtoRunMeta {
-    ProtoRunOrder order = 1;
-    optional uint64 schema_id = 2;
+  ProtoRunOrder order = 1;
+  optional uint64 schema_id = 2;
 }
 
 message ProtoHollowBatch {
-    ProtoU64Description desc = 1;
-    repeated ProtoHollowBatchPart parts = 4;
-    uint64 len = 3;
-    repeated uint64 runs = 5;
-    repeated ProtoRunMeta run_meta = 6;
+  ProtoU64Description desc = 1;
+  repeated ProtoHollowBatchPart parts = 4;
+  uint64 len = 3;
+  repeated uint64 runs = 5;
+  repeated ProtoRunMeta run_meta = 6;
 
-    repeated string deprecated_keys = 2;
+  repeated string deprecated_keys = 2;
 }
 
 message ProtoSpineId {
-    uint64 lo = 1;
-    uint64 hi = 2;
+  uint64 lo = 1;
+  uint64 hi = 2;
 }
 
 message ProtoIdHollowBatch {
-    ProtoSpineId id = 1;
-    ProtoHollowBatch batch = 2;
+  ProtoSpineId id = 1;
+  ProtoHollowBatch batch = 2;
 }
 
 message ProtoSpineBatch {
-    uint64 level = 1;
-    ProtoU64Description desc = 2;
-    repeated ProtoSpineId parts = 3;
-    repeated ProtoU64Description descs = 4;
+  uint64 level = 1;
+  ProtoU64Description desc = 2;
+  repeated ProtoSpineId parts = 3;
+  repeated ProtoU64Description descs = 4;
 }
 
 message ProtoIdSpineBatch {
-    ProtoSpineId id = 1;
-    ProtoSpineBatch batch = 2;
+  ProtoSpineId id = 1;
+  ProtoSpineBatch batch = 2;
 }
 
 message ProtoCompaction {
-    uint64 start_ms = 1;
+  uint64 start_ms = 1;
 }
 
 message ProtoMerge {
-    ProtoU64Antichain since = 1;
-    uint64 remaining_work = 2;
-    ProtoCompaction active_compaction = 3;
+  ProtoU64Antichain since = 1;
+  uint64 remaining_work = 2;
+  ProtoCompaction active_compaction = 3;
 }
 
 message ProtoIdMerge {
-    ProtoSpineId id = 1;
-    ProtoMerge merge = 2;
+  ProtoSpineId id = 1;
+  ProtoMerge merge = 2;
 }
 
 message ProtoHollowRollup {
-    string key = 1;
-    optional uint64 encoded_size_bytes = 2;
+  string key = 1;
+  optional uint64 encoded_size_bytes = 2;
 }
 
 message ProtoTrace {
-    ProtoU64Antichain since = 1;
-    repeated ProtoHollowBatch legacy_batches = 2;
-    repeated ProtoIdHollowBatch hollow_batches = 3;
-    repeated ProtoIdSpineBatch spine_batches = 4;
-    repeated ProtoIdMerge merges = 5;
+  ProtoU64Antichain since = 1;
+  repeated ProtoHollowBatch legacy_batches = 2;
+  repeated ProtoIdHollowBatch hollow_batches = 3;
+  repeated ProtoIdSpineBatch spine_batches = 4;
+  repeated ProtoIdMerge merges = 5;
 }
 
 message ProtoLeasedReaderState {
-    ProtoU64Antichain since = 1;
-    uint64 seqno = 2;
-    uint64 last_heartbeat_timestamp_ms = 3;
-    uint64 lease_duration_ms = 4;
-    ProtoHandleDebugState debug = 5;
+  ProtoU64Antichain since = 1;
+  uint64 seqno = 2;
+  uint64 last_heartbeat_timestamp_ms = 3;
+  uint64 lease_duration_ms = 4;
+  ProtoHandleDebugState debug = 5;
 }
 
 message ProtoCriticalReaderState {
-    ProtoU64Antichain since = 1;
-    int64 opaque = 2;
-    string opaque_codec = 3;
-    ProtoHandleDebugState debug = 4;
+  ProtoU64Antichain since = 1;
+  int64 opaque = 2;
+  string opaque_codec = 3;
+  ProtoHandleDebugState debug = 4;
 }
 
 message ProtoWriterState {
-    uint64 last_heartbeat_timestamp_ms = 1;
-    uint64 lease_duration_ms = 2;
-    string most_recent_write_token = 3;
-    ProtoU64Antichain most_recent_write_upper = 4;
-    ProtoHandleDebugState debug = 5;
+  uint64 last_heartbeat_timestamp_ms = 1;
+  uint64 lease_duration_ms = 2;
+  string most_recent_write_token = 3;
+  ProtoU64Antichain most_recent_write_upper = 4;
+  ProtoHandleDebugState debug = 5;
 }
 
 message ProtoHandleDebugState {
-    string hostname = 1;
-    string purpose = 2;
+  string hostname = 1;
+  string purpose = 2;
 }
 
 message ProtoVersionedData {
-    uint64 seqno = 1;
-    bytes data = 2;
+  uint64 seqno = 1;
+  bytes data = 2;
 }
 
 message ProtoInlinedDiffs {
-    uint64 lower = 1;
-    uint64 upper = 2;
+  uint64 lower = 1;
+  uint64 upper = 2;
 
-    repeated ProtoVersionedData diffs = 3;
+  repeated ProtoVersionedData diffs = 3;
 }
 
 message ProtoEncodedSchemas {
-    bytes key = 1;
-    bytes key_data_type = 3;
-    bytes val = 2;
-    bytes val_data_type = 4;
+  bytes key = 1;
+  bytes key_data_type = 3;
+  bytes val = 2;
+  bytes val_data_type = 4;
 }
 
 message ProtoRollup {
-    string applier_version = 11;
+  string applier_version = 11;
 
-    string shard_id = 1;
-    string key_codec = 2;
-    string val_codec = 3;
-    string ts_codec = 4;
-    string diff_codec = 5;
-    uint64 seqno = 6;
-    uint64 walltime_ms = 15;
-    string hostname = 14;
-    uint64 last_gc_req = 10;
-    map<uint64, ProtoHollowRollup> rollups = 16;
+  string shard_id = 1;
+  string key_codec = 2;
+  string val_codec = 3;
+  string ts_codec = 4;
+  string diff_codec = 5;
+  uint64 seqno = 6;
+  uint64 walltime_ms = 15;
+  string hostname = 14;
+  uint64 last_gc_req = 10;
+  map<uint64, ProtoHollowRollup> rollups = 16;
 
-    ProtoTrace trace = 7;
-    map<string, ProtoLeasedReaderState> leased_readers = 8;
-    map<string, ProtoCriticalReaderState> critical_readers = 13;
-    map<string, ProtoWriterState> writers = 9;
-    map<uint64, ProtoEncodedSchemas> schemas = 18;
+  ProtoTrace trace = 7;
+  map<string, ProtoLeasedReaderState> leased_readers = 8;
+  map<string, ProtoCriticalReaderState> critical_readers = 13;
+  map<string, ProtoWriterState> writers = 9;
+  map<uint64, ProtoEncodedSchemas> schemas = 18;
 
-    ProtoInlinedDiffs diffs = 17;
+  ProtoInlinedDiffs diffs = 17;
 
-    // MIGRATION: We previously stored rollups as a `SeqNo -> string Key` map,
-    // but now the value is a `struct HollowRollup`.
-    map<uint64, string> deprecated_rollups = 12;
+  // MIGRATION: We previously stored rollups as a `SeqNo -> string Key` map,
+  // but now the value is a `struct HollowRollup`.
+  map<uint64, string> deprecated_rollups = 12;
 }

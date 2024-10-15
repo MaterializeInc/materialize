@@ -11,12 +11,11 @@
 
 syntax = "proto3";
 
+package mz_compute_client.service;
+
 import "compute-client/src/protocol/command.proto";
 import "compute-client/src/protocol/response.proto";
 
-package mz_compute_client.service;
-
 service ProtoCompute {
-    rpc CommandResponseStream (stream protocol.command.ProtoComputeCommand)
-        returns (stream protocol.response.ProtoComputeResponse);
+  rpc CommandResponseStream(stream protocol.command.ProtoComputeCommand) returns (stream protocol.response.ProtoComputeResponse);
 }

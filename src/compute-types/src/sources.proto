@@ -9,18 +9,18 @@
 
 syntax = "proto3";
 
+package mz_compute_types.sources;
+
 import "expr/src/linear.proto";
 import "repr/src/relation_and_scalar.proto";
 import "storage-types/src/controller.proto";
 
-package mz_compute_types.sources;
-
 message ProtoSourceInstanceDesc {
-    ProtoSourceInstanceArguments arguments = 1;
-    mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
-    mz_repr.relation_and_scalar.ProtoRelationType typ = 3;
+  ProtoSourceInstanceArguments arguments = 1;
+  mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
+  mz_repr.relation_and_scalar.ProtoRelationType typ = 3;
 }
 
 message ProtoSourceInstanceArguments {
-    optional mz_expr.linear.ProtoMapFilterProject operators = 1;
+  optional mz_expr.linear.ProtoMapFilterProject operators = 1;
 }

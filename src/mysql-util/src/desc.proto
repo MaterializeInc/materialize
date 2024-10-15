@@ -14,14 +14,14 @@ package mz_mysql_util;
 import "repr/src/relation_and_scalar.proto";
 
 message ProtoMySqlTableDesc {
-    string name = 1;
-    string schema_name = 2;
-    repeated ProtoMySqlColumnDesc columns = 3;
-    repeated ProtoMySqlKeyDesc keys = 4;
+  string name = 1;
+  string schema_name = 2;
+  repeated ProtoMySqlColumnDesc columns = 3;
+  repeated ProtoMySqlKeyDesc keys = 4;
 }
 
 message ProtoMySqlColumnMetaEnum {
-    repeated string values = 1;
+  repeated string values = 1;
 }
 
 message ProtoMySqlColumnMetaJson {}
@@ -31,24 +31,24 @@ message ProtoMySqlColumnMetaYear {}
 message ProtoMySqlColumnMetaDate {}
 
 message ProtoMySqlColumnMetaTimestamp {
-    uint32 precision = 1;
+  uint32 precision = 1;
 }
 
 message ProtoMySqlColumnDesc {
-    string name = 1;
-    optional mz_repr.relation_and_scalar.ProtoColumnType column_type = 2;
+  string name = 1;
+  optional mz_repr.relation_and_scalar.ProtoColumnType column_type = 2;
 
-    oneof meta {
-        ProtoMySqlColumnMetaEnum enum = 3;
-        ProtoMySqlColumnMetaJson json = 4;
-        ProtoMySqlColumnMetaYear year = 5;
-        ProtoMySqlColumnMetaDate date = 6;
-        ProtoMySqlColumnMetaTimestamp timestamp = 7;
-    }
+  oneof meta {
+    ProtoMySqlColumnMetaEnum enum = 3;
+    ProtoMySqlColumnMetaJson json = 4;
+    ProtoMySqlColumnMetaYear year = 5;
+    ProtoMySqlColumnMetaDate date = 6;
+    ProtoMySqlColumnMetaTimestamp timestamp = 7;
+  }
 }
 
 message ProtoMySqlKeyDesc {
-    string name = 1;
-    bool is_primary = 2;
-    repeated string columns = 3;
+  string name = 1;
+  bool is_primary = 2;
+  repeated string columns = 3;
 }

@@ -13,40 +13,40 @@
 
 syntax = "proto3";
 
+package mz_compute_types.plan;
+
 import "compute-types/src/plan/threshold.proto";
 import "expr/src/linear.proto";
 import "expr/src/scalar.proto";
-import "repr/src/row.proto";
-import "repr/src/relation_and_scalar.proto";
 import "google/protobuf/empty.proto";
-
-package mz_compute_types.plan;
+import "repr/src/relation_and_scalar.proto";
+import "repr/src/row.proto";
 
 message ProtoAvailableCollections {
-    message ProtoColumnTypes {
-         repeated mz_repr.relation_and_scalar.ProtoColumnType types = 1;
-    }
+  message ProtoColumnTypes {
+    repeated mz_repr.relation_and_scalar.ProtoColumnType types = 1;
+  }
 
-    bool raw = 1;
-    repeated mz_compute_types.plan.threshold.ProtoArrangement arranged = 2;
-    optional ProtoColumnTypes types = 3;
+  bool raw = 1;
+  repeated mz_compute_types.plan.threshold.ProtoArrangement arranged = 2;
+  optional ProtoColumnTypes types = 3;
 }
 
 message ProtoGetPlan {
-    message ProtoGetPlanArrangement {
-        repeated mz_expr.scalar.ProtoMirScalarExpr key = 1;
-        mz_repr.row.ProtoRow seek = 2;
-        mz_expr.linear.ProtoMapFilterProject mfp = 3;
-    };
+  message ProtoGetPlanArrangement {
+    repeated mz_expr.scalar.ProtoMirScalarExpr key = 1;
+    mz_repr.row.ProtoRow seek = 2;
+    mz_expr.linear.ProtoMapFilterProject mfp = 3;
+  }
 
-    oneof kind {
-        google.protobuf.Empty pass_arrangements = 1;
-        ProtoGetPlanArrangement arrangement = 2;
-        mz_expr.linear.ProtoMapFilterProject collection = 3;
-    }
+  oneof kind {
+    google.protobuf.Empty pass_arrangements = 1;
+    ProtoGetPlanArrangement arrangement = 2;
+    mz_expr.linear.ProtoMapFilterProject collection = 3;
+  }
 }
 
 message ProtoLetRecLimit {
-    uint64 max_iters = 1;
-    bool return_at_limit = 2;
+  uint64 max_iters = 1;
+  bool return_at_limit = 2;
 }

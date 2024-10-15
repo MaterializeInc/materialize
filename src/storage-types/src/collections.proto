@@ -9,32 +9,32 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
 package mz_storage_types.collections;
 
+import "google/protobuf/empty.proto";
+
 message GlobalId {
-    oneof value {
-        uint64 system = 1;
-        uint64 user = 2;
-        uint64 transient = 3;
-        google.protobuf.Empty explain = 4;
-    }
+  oneof value {
+    uint64 system = 1;
+    uint64 user = 2;
+    uint64 transient = 3;
+    google.protobuf.Empty explain = 4;
+  }
 }
 
 // Opaque timestamp type that is specific to Materialize.
 message Timestamp {
-    uint64 internal = 1;
+  uint64 internal = 1;
 }
 
 message TimestampAntichain {
-    repeated Timestamp elements = 1;
+  repeated Timestamp elements = 1;
 }
 
 message DurableCollectionMetadata {
-    reserved 1;
-    reserved "remap_shard";
+  reserved 1;
+  reserved "remap_shard";
 
-    // StringWrapper remap_shard = 1;
-    string data_shard = 2;
+  // StringWrapper remap_shard = 1;
+  string data_shard = 2;
 }
