@@ -125,10 +125,14 @@ maybe(
 #
 # 4. `make` 4.2 fails to compile on Linux because of unrecognized symbols so we patch the source.
 #    See: <https://github.com/MaterializeInc/rules_foreign_cc/commit/de4a79280f54d8796e86b7ab0b631939b7b44d05>
+#
+# 5. Mirror the GNU source code for `make` from the `MaterializeInc/toolchains` repository. We've
+#    previously seen the upstream GNU FTP server go down which causes CI to break.
+#    See: <https://github.com/MaterializeInc/rules_foreign_cc/commit/c994a0d6a86480d274dc1937d8861a56e6011cf0>
 
-RULES_FOREIGN_CC_VERSION = "de4a79280f54d8796e86b7ab0b631939b7b44d05"
+RULES_FOREIGN_CC_VERSION = "c994a0d6a86480d274dc1937d8861a56e6011cf0"
 
-RULES_FOREIGN_CC_INTEGRITY = "sha256-WwRg/GJuUjT3SMJEagTni2ZH+g3szIkHaqGgbYCN1u0="
+RULES_FOREIGN_CC_INTEGRITY = "sha256-kFSk41S84sVupSj7p+OxlHV5wXKoo67PvBy2vlXiQsg="
 
 maybe(
     http_archive,
