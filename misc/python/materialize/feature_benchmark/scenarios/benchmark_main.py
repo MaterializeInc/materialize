@@ -1498,10 +1498,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 
     def before(self) -> Action:
         return TdAction(
-            f"""
-> DROP CLUSTER IF EXISTS source_cluster CASCADE;
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
+            """
 > DROP SOURCE IF EXISTS mz_source_pgcdc CASCADE;
             """
         )
@@ -1519,7 +1516,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
   )
 
 > CREATE SOURCE mz_source_pgcdc
-  IN CLUSTER source_cluster
+  IN CLUSTER quickstart
   FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source');
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source_pgcdc';
