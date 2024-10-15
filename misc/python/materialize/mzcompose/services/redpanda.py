@@ -13,7 +13,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
 )
 
-REDPANDA_VERSION = "v24.2.2"
+REDPANDA_VERSION = "v24.2.7"
 
 
 class Redpanda(Service):
