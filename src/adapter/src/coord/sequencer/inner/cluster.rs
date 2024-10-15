@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_catalog::builtin::BUILTINS;
 use mz_catalog::memory::objects::{
     ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged,
 };
@@ -600,7 +601,7 @@ impl Coordinator {
         // of a compute instance, so we create them unconditionally during instance creation.
         // Whether a replica actually maintains introspection arrangements is determined by the
         // per-replica introspection configuration.
-        let introspection_sources = self.catalog_mut().allocate_introspection_sources().await;
+        let introspection_sources = BUILTINS::logs().collect();
         let cluster_variant = match &variant {
             CreateClusterVariant::Managed(plan) => {
                 let logging = if let Some(config) = plan.compute.introspection {

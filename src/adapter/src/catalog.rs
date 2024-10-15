@@ -22,7 +22,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventType, FullNameV1, ObjectType, VersionedStorageUsage};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
-    BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTINS, BUILTIN_PREFIXES,
+    BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTIN_PREFIXES,
     MZ_CATALOG_SERVER_CLUSTER,
 };
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig};
@@ -1136,22 +1136,6 @@ impl Catalog {
         ),
     > {
         self.state.default_privileges.iter()
-    }
-
-    /// Allocate ids for introspection sources. Called once per cluster creation.
-    pub async fn allocate_introspection_sources(&self) -> Vec<(&'static BuiltinLog, GlobalId)> {
-        let log_amount = BUILTINS::logs().count();
-        let system_ids = self
-            .storage()
-            .await
-            .allocate_system_ids(
-                log_amount
-                    .try_into()
-                    .expect("builtin logs should fit into u64"),
-            )
-            .await
-            .unwrap_or_terminate("cannot fail to allocate system ids");
-        BUILTINS::logs().zip(system_ids.into_iter()).collect()
     }
 
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
