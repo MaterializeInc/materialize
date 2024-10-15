@@ -126,7 +126,6 @@ pub const COPY_TO_S3_MULTIPART_PART_SIZE_BYTES: Config<usize> = Config::new(
 /// Used in temporal filters to drop diffs generated at timestamps beyond the expiration time.
 ///
 /// Disabled by default. Once set, cannot be disabled again during the lifetime of a replica.
-/// When set multiple times, existing replicas only accept strictly decreasing offsets.
 pub const COMPUTE_REPLICA_EXPIRATION_OFFSET: Config<Duration> = Config::new(
     "compute_replica_expiration_offset",
     Duration::ZERO,

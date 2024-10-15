@@ -308,52 +308,34 @@ impl ComputeState {
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
+    }
 
-        // Set replica expiration.
-        {
-            let offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.worker_config);
-            if offset.is_zero() {
-                if !self.replica_expiration.is_empty() {
-                    warn!(
-                        current_replica_expiration = ?self.replica_expiration,
-                        "replica_expiration: cannot disable once expiration is enabled",
-                    );
-                }
-            } else {
-                let offset: EpochMillis = offset
-                    .as_millis()
-                    .try_into()
-                    .expect("duration must fit within u64");
-                let replica_expiration_millis = self.init_system_time + offset;
-                let replica_expiration = Timestamp::from(replica_expiration_millis);
+    /// Apply the provided replica expiration `offset` by converting it to a frontier relative to
+    /// the replica's initialization system time.
+    ///
+    /// Only expected to be called once when creating the instance. Guards against calling it
+    /// multiple calls by checking if the offset is non-zero and the local expiration time is set.
+    pub fn apply_expiration_offset(&mut self, offset: Duration) {
+        if !offset.is_zero() && self.replica_expiration.is_empty() {
+            let offset: EpochMillis = offset
+                .as_millis()
+                .try_into()
+                .expect("duration must fit within u64");
+            let replica_expiration_millis = self.init_system_time + offset;
+            let replica_expiration = Timestamp::from(replica_expiration_millis);
 
-                // We only allow updating `replica_expiration` to an earlier time. Allowing it to be
-                // updated to a later time could be surprising since existing dataflows would still
-                // panic at their original expiration.
-                if !self.replica_expiration.less_equal(&replica_expiration) {
-                    info!(
-                        offset = %offset,
-                        replica_expiration_millis = %replica_expiration_millis,
-                        replica_expiration_utc = %mz_ore::now::to_datetime(replica_expiration_millis),
-                        "updating replica_expiration",
-                    );
-                    self.replica_expiration = Antichain::from_elem(replica_expiration);
-                } else {
-                    warn!(
-                        new_offset = %offset,
-                        current_replica_expiration_millis = %replica_expiration_millis,
-                        current_replica_expiration_utc = %mz_ore::now::to_datetime(replica_expiration_millis),
-                        "replica_expiration: ignoring new offset as it is greater than current value",
-                    );
-                }
-            }
+            info!(
+                offset = %offset,
+                replica_expiration_millis = %replica_expiration_millis,
+                replica_expiration_utc = %mz_ore::now::to_datetime(replica_expiration_millis),
+                "setting replica expiration",
+            );
+            self.replica_expiration = Antichain::from_elem(replica_expiration);
 
             // Record the replica expiration in the metrics.
-            if let Some(expiration) = self.replica_expiration.as_option() {
-                self.worker_metrics
-                    .replica_expiration_timestamp_seconds
-                    .set(expiration.into());
-            }
+            self.worker_metrics
+                .replica_expiration_timestamp_seconds
+                .set(replica_expiration.into());
         }
     }
 
@@ -435,6 +417,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     fn handle_create_instance(&mut self, config: InstanceConfig) {
         // Ensure the state is consistent with the config before we initialize anything.
         self.compute_state.apply_worker_config();
+        self.compute_state
+            .apply_expiration_offset(config.expiration_offset);
 
         self.initialize_logging(config.logging);
     }

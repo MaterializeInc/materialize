@@ -26,6 +26,7 @@ use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
 
@@ -368,14 +369,17 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 /// for anything in this struct.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct InstanceConfig {
-    /// TODO(database-issues#7533): Add documentation.
+    /// Specification of introspection logging.
     pub logging: LoggingConfig,
+    /// The offset relative to the replica startup at which it should expire. Zero disables feature.
+    pub expiration_offset: Duration,
 }
 
 impl RustType<ProtoInstanceConfig> for InstanceConfig {
     fn into_proto(&self) -> ProtoInstanceConfig {
         ProtoInstanceConfig {
             logging: Some(self.logging.into_proto()),
+            expiration_offset: Some(self.expiration_offset.into_proto()),
         }
     }
 
@@ -384,6 +388,9 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
             logging: proto
                 .logging
                 .into_rust_if_some("ProtoCreateInstance::logging")?,
+            expiration_offset: proto
+                .expiration_offset
+                .into_rust_if_some("ProtoCreateInstance::expiration_offset")?,
         })
     }
 }

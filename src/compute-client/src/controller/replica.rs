@@ -15,6 +15,7 @@ use std::time::Duration;
 use anyhow::bail;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
 use mz_ore::retry::Retry;
@@ -255,18 +256,26 @@ where
     /// Most `ComputeCommand`s are independent of the target replica, but some
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut ComputeCommand<T>) {
-        if let ComputeCommand::CreateInstance(InstanceConfig { logging }) = command {
-            *logging = self.config.logging.clone();
-        }
-
-        if let ComputeCommand::CreateTimely { config, epoch } = command {
-            *config = TimelyConfig {
-                workers: self.config.location.workers,
-                process: 0,
-                addresses: self.config.location.dataflow_addrs.clone(),
-                arrangement_exert_proportionality: self.config.arrangement_exert_proportionality,
-            };
-            *epoch = self.epoch;
+        match command {
+            ComputeCommand::CreateTimely { config, epoch } => {
+                *config = TimelyConfig {
+                    workers: self.config.location.workers,
+                    process: 0,
+                    addresses: self.config.location.dataflow_addrs.clone(),
+                    arrangement_exert_proportionality: self
+                        .config
+                        .arrangement_exert_proportionality,
+                };
+                *epoch = self.epoch;
+            }
+            ComputeCommand::CreateInstance(InstanceConfig {
+                logging,
+                expiration_offset,
+            }) => {
+                *logging = self.config.logging.clone();
+                *expiration_offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.dyncfg);
+            }
+            _ => {}
         }
     }
 
