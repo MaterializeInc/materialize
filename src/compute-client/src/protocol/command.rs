@@ -9,6 +9,8 @@
 
 //! Compute protocol commands.
 
+use std::time::Duration;
+
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::flat_plan::FlatPlan;
@@ -368,14 +370,17 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 /// for anything in this struct.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct InstanceConfig {
-    /// TODO(database-issues#7533): Add documentation.
+    /// Specification of introspection logging.
     pub logging: LoggingConfig,
+    /// The offset relative to the replica startup at which it should expire. None disables feature.
+    pub expiration_offset: Option<Duration>,
 }
 
 impl RustType<ProtoInstanceConfig> for InstanceConfig {
     fn into_proto(&self) -> ProtoInstanceConfig {
         ProtoInstanceConfig {
             logging: Some(self.logging.into_proto()),
+            expiration_offset: self.expiration_offset.into_proto(),
         }
     }
 
@@ -384,6 +389,7 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
             logging: proto
                 .logging
                 .into_rust_if_some("ProtoCreateInstance::logging")?,
+            expiration_offset: proto.expiration_offset.into_rust()?,
         })
     }
 }
