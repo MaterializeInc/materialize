@@ -69,6 +69,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def workflow_sink_networking(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parse_args(parser)
     c.up(*(["materialized", "toxiproxy"] + get_kafka_services(args.redpanda)))
+    c.setup_quickstart_cluster()
 
     seed = random.getrandbits(16)
     for i, failure_mode in enumerate(
@@ -109,6 +110,7 @@ def workflow_sink_kafka_restart(c: Composition, parser: WorkflowArgumentParser) 
         )
     ):
         c.up(*(["materialized"] + get_kafka_services(args.redpanda)))
+        c.setup_quickstart_cluster()
 
         seed = random.getrandbits(16)
         c.run_testdrive_files(
@@ -140,6 +142,7 @@ def workflow_source_resumption(c: Composition, parser: WorkflowArgumentParser) -
         Testdrive(no_reset=True, consistent_seed=True),
     ):
         c.up(*(["materialized", "clusterd"] + get_kafka_services(args.redpanda)))
+        c.setup_quickstart_cluster()
 
         c.run_testdrive_files("source-resumption/setup.td")
         c.run_testdrive_files("source-resumption/verify.td")
@@ -196,6 +199,7 @@ def workflow_sink_queue_full(c: Composition, parser: WorkflowArgumentParser) -> 
     args = parse_args(parser)
     seed = random.getrandbits(16)
     c.up(*(["materialized", "toxiproxy"] + get_kafka_services(args.redpanda)))
+    c.setup_quickstart_cluster()
     c.run_testdrive_files(
         "--no-reset",
         "--max-errors=1",

@@ -1956,11 +1956,6 @@ where
                 if let Some(_collection) = self.collections.remove(&id) {
                     // Nothing to do, we already dropped read holds in
                     // `drop_sources_unvalidated`.
-                } else {
-                    soft_panic_or_log!(
-                        "DroppedId for ID {id} but we have neither ingestion nor export \
-                         under that ID"
-                    );
                 }
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {

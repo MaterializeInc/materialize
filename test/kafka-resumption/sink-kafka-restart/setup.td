@@ -20,7 +20,9 @@ ALTER SYSTEM SET kafka_transaction_timeout = '10min';
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE SINK output FROM t
+> CREATE SINK output
+  IN CLUSTER singlereplica
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'table-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
