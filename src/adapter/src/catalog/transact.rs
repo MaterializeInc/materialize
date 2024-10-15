@@ -31,6 +31,7 @@ use mz_catalog::memory::objects::{
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
@@ -93,7 +94,7 @@ pub enum Op {
     CreateCluster {
         id: ClusterId,
         name: String,
-        introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_sources: Vec<&'static BuiltinLog>,
         owner_id: RoleId,
         config: ClusterConfig,
     },
@@ -847,6 +848,12 @@ impl Catalog {
                 let privileges: Vec<_> =
                     merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                         .collect();
+                let introspection_source_ids =
+                    tx.allocate_system_item_ids(usize_to_u64(introspection_sources.len()))?;
+                let introspection_sources = introspection_sources
+                    .into_iter()
+                    .zip(introspection_source_ids.into_iter())
+                    .collect();
 
                 tx.insert_user_cluster(
                     id,
