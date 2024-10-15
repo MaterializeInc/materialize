@@ -918,9 +918,11 @@ where
             epoch: ClusterStartupEpoch::new(self.envd_epoch, 0),
         });
 
+        // Send a placeholder instance configuration for the replica task to fill in.
         let dummy_logging_config = Default::default();
         self.send(ComputeCommand::CreateInstance(InstanceConfig {
             logging: dummy_logging_config,
+            expiration_offset: None,
         }));
 
         loop {

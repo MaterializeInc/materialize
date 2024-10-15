@@ -51,6 +51,7 @@ message ProtoComputeCommand {
 
 message ProtoInstanceConfig {
     logging.ProtoLoggingConfig logging = 1;
+    optional mz_proto.ProtoDuration expiration_offset = 2;
 }
 
 message ProtoIndexTarget {
