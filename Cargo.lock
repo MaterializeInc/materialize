@@ -9751,7 +9751,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/antiguru/timely-dataflow.git?branch=no_more_set_external_summary#0aec3d5f52d5eba96e927cc0eacacd7d025ce80d"
 dependencies = [
  "bincode",
  "crossbeam-channel",
@@ -9767,12 +9767,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/antiguru/timely-dataflow.git?branch=no_more_set_external_summary#0aec3d5f52d5eba96e927cc0eacacd7d025ce80d"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/antiguru/timely-dataflow.git?branch=no_more_set_external_summary#0aec3d5f52d5eba96e927cc0eacacd7d025ce80d"
 dependencies = [
  "bincode",
  "byteorder",
@@ -9786,7 +9786,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/antiguru/timely-dataflow.git?branch=no_more_set_external_summary#0aec3d5f52d5eba96e927cc0eacacd7d025ce80d"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -9796,7 +9796,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/antiguru/timely-dataflow.git?branch=no_more_set_external_summary#0aec3d5f52d5eba96e927cc0eacacd7d025ce80d"
 
 [[package]]
 name = "tiny-keccak"
