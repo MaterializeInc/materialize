@@ -105,8 +105,8 @@ More concretely, this feature involves the following changes:
 * If the offset is configured with a non-zero value, compute
   `replica_expiration = now() + offset`. This value indicates the maximum
   time for which the replica is expected to be running.
-  * For running replicas, the `compute_replica_expiration_offset` can only be
-    updated to a value lower than the one currently set.
+  * Existing replicas should be restarted to enable or disable replica
+    expiration for them. 
 * When building a dataflow, compute `dataflow_expiration` as per the logic
   described above. If non-empty, the `dataflow_expiration` is added to the
   dataflow `until` that ensures that any diff beyond this limit is dropped in
