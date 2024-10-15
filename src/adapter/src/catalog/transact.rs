@@ -19,7 +19,7 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
-    ObjectType, SchedulingDecisionsWithReasonsV1, VersionedEvent,
+    ObjectType, SchedulingDecisionsWithReasonsV1, VersionedEvent, VersionedStorageUsage,
 };
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::Transaction;
@@ -33,6 +33,7 @@ use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLoca
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
+use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, GlobalId};
@@ -190,17 +191,16 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
-    /// Performs updates to weird builtin tables, such as
-    /// `mz_cluster_replica_statuses`, which is ephemeral state and should be a
-    /// builtin source.
+    /// Performs updates to the storage usage table, which probably should be a builtin source.
     ///
     /// TODO(jkosh44) In a multi-writer or high availability catalog world, this
-    /// will not work. If a process crashes after updating the durable catalog
+    /// might not work. If a process crashes after collecting storage usage events
     /// but before updating the builtin table, then another listening catalog
     /// will never know to update the builtin table.
-    WeirdBuiltinTableUpdates {
-        builtin_table_update: BuiltinTableUpdate,
-        audit_log: Vec<(EventType, ObjectType, EventDetails)>,
+    WeirdStorageUsageUpdates {
+        object_id: Option<String>,
+        size_bytes: u64,
+        collection_timestamp: EpochMillis,
     },
     /// Performs a dry run of the commit, but errors with
     /// [`AdapterError::TransactionDryRun`].
@@ -2085,23 +2085,17 @@ impl Catalog {
                     EventDetails::ResetAllV1,
                 )?;
             }
-            Op::WeirdBuiltinTableUpdates {
-                builtin_table_update,
-                audit_log,
+            Op::WeirdStorageUsageUpdates {
+                object_id,
+                size_bytes,
+                collection_timestamp,
             } => {
+                let id = tx.allocate_storage_usage_ids()?;
+                let metric =
+                    VersionedStorageUsage::new(id, object_id, size_bytes, collection_timestamp);
+                let builtin_table_update = state.pack_storage_usage_update(metric, 1);
+                let builtin_table_update = state.resolve_builtin_table_update(builtin_table_update);
                 weird_builtin_table_update = Some(builtin_table_update);
-                for (ev_type, ob_type, ev_details) in audit_log {
-                    CatalogState::add_to_audit_log(
-                        &state.system_configuration,
-                        oracle_write_ts,
-                        session,
-                        tx,
-                        audit_events,
-                        ev_type,
-                        ob_type,
-                        ev_details,
-                    )?;
-                }
             }
         };
         Ok((weird_builtin_table_update, temporary_item_updates))
