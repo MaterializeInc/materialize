@@ -98,5 +98,5 @@ Create the name of the cluster role binding to use
 Create the CockroachDB connection string
 */}}
 {{- define "materialize-operator.cockroachdbConnectionString" -}}
-postgresql://{{ .Values.cockroachdb.username }}:{{ .Values.cockroachdb.password }}@{{ .Values.cockroachdb.endpoint }}:{{ .Values.cockroachdb.port }}/defaultdb?sslmode=verify-full&sslrootcert=/cockroach/ca.crt
+postgresql://{{ .Values.cockroachdb.username }}:{{ .Values.cockroachdb.password }}@{{ .Values.cockroachdb.endpoint }}:{{ .Values.cockroachdb.port }}/defaultdb?sslmode=verify-full&sslrootcert=/cockroach/cockroach-certs/ca.crt
 {{- end }}
