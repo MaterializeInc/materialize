@@ -168,6 +168,11 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
                 (ConfigVal::Duration(_), ld::FlagValue::Str(flag)) => {
                     ConfigVal::Duration(humantime::parse_duration(&flag)?)
                 }
+                (ConfigVal::OptDuration(_), ld::FlagValue::Str(flag)) => ConfigVal::OptDuration(
+                    (!flag.is_empty())
+                        .then(|| humantime::parse_duration(&flag))
+                        .transpose()?,
+                ),
                 (ConfigVal::Json(_), ld::FlagValue::Json(flag)) => ConfigVal::Json(flag),
 
                 // Hardcode all others so that if ConfigVal gets new types this match block will
@@ -177,6 +182,7 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
                 | (ConfigVal::Usize(_), _)
                 | (ConfigVal::F64(_), _)
                 | (ConfigVal::Duration(_), _)
+                | (ConfigVal::OptDuration(_), _)
                 | (ConfigVal::Json(_), _)
                 | (ConfigVal::OptUsize(_), _)
                 | (ConfigVal::String(_), _) => anyhow::bail!(
@@ -205,7 +211,10 @@ fn dyn_into_flag(val: ConfigVal) -> Result<ld::FlagValue, anyhow::Error> {
         ConfigVal::OptUsize(_) => anyhow::bail!("OptUsize None cannot be converted to a FlagValue"),
         ConfigVal::F64(v) => ld::FlagValue::Number(v),
         ConfigVal::String(v) => ld::FlagValue::Str(v),
-        ConfigVal::Duration(v) => ld::FlagValue::Str(humantime::format_duration(v).to_string()),
+        ConfigVal::Duration(v) | ConfigVal::OptDuration(Some(v)) => {
+            ld::FlagValue::Str(humantime::format_duration(v).to_string())
+        }
+        ConfigVal::OptDuration(None) => ld::FlagValue::Str("".to_owned()),
         ConfigVal::Json(v) => ld::FlagValue::Json(v),
     })
 }
