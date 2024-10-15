@@ -12,16 +12,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use crate::catalog::{
-    catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
-    is_reserved_role_name, object_type_to_audit_object_type,
-    system_object_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogState,
-    UpdatePrivilegeVariant,
-};
-use crate::coord::cluster_scheduling::SchedulingDecision;
-use crate::coord::ConnMeta;
-use crate::util::ResultExt;
-use crate::AdapterError;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
@@ -63,6 +53,17 @@ use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::controller::StorageController;
 use tracing::{info, trace};
+
+use crate::catalog::{
+    catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
+    is_reserved_role_name, object_type_to_audit_object_type,
+    system_object_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogState,
+    UpdatePrivilegeVariant,
+};
+use crate::coord::cluster_scheduling::SchedulingDecision;
+use crate::coord::ConnMeta;
+use crate::util::ResultExt;
+use crate::AdapterError;
 
 #[derive(Debug, Clone)]
 pub enum Op {
