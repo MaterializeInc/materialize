@@ -908,18 +908,24 @@ impl Coordinator {
             plan::TableDataSource::TableWrites { defaults } => {
                 TableDataSource::TableWrites { defaults }
             }
-            plan::TableDataSource::DataSource(data_source_plan) => match data_source_plan {
+            plan::TableDataSource::DataSource {
+                desc: data_source_plan,
+                timeline,
+            } => match data_source_plan {
                 plan::DataSourceDesc::IngestionExport {
                     ingestion_id,
                     external_reference,
                     details,
                     data_config,
-                } => TableDataSource::DataSource(DataSourceDesc::IngestionExport {
-                    ingestion_id,
-                    external_reference,
-                    details,
-                    data_config,
-                }),
+                } => TableDataSource::DataSource {
+                    desc: DataSourceDesc::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                        details,
+                        data_config,
+                    },
+                    timeline,
+                },
                 o => {
                     unreachable!("CREATE TABLE data source got {:?}", o)
                 }
@@ -990,7 +996,10 @@ impl Coordinator {
                             )
                             .await;
                     }
-                    TableDataSource::DataSource(data_source) => {
+                    TableDataSource::DataSource {
+                        desc: data_source,
+                        timeline: _,
+                    } => {
                         match data_source {
                             DataSourceDesc::IngestionExport {
                                 ingestion_id,

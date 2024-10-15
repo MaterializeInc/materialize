@@ -1366,7 +1366,10 @@ pub enum TableDataSource {
 
     /// The table receives its data from the identified `DataSourceDesc`.
     /// This table type does not support INSERT/UPDATE/DELETE statements.
-    DataSource(DataSourceDesc),
+    DataSource {
+        desc: DataSourceDesc,
+        timeline: Timeline,
+    },
 }
 
 #[derive(Clone, Debug)]
