@@ -47,7 +47,7 @@ use mz_sql_parser::ast::{
     MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
     PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy,
     RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, Statement,
-    TableFromSourceOption, TableFromSourceOptionName, UnresolvedItemName,
+    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, UnresolvedItemName,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -1386,7 +1386,7 @@ async fn purify_create_table_from_source(
     } = &mut stmt;
 
     // Columns and constraints cannot be specified by the user but will be populated below.
-    if !columns.is_empty() {
+    if matches!(columns, TableFromSourceColumns::Defined(_)) {
         sql_bail!("CREATE TABLE .. FROM SOURCE column definitions cannot be specified directly");
     }
     if !constraints.is_empty() {
@@ -1713,8 +1713,16 @@ async fn purify_create_table_from_source(
                     );
                 }
             }
-            *columns = gen_columns;
-            *constraints = gen_constraints;
+            match columns {
+                TableFromSourceColumns::Defined(_) => unreachable!(),
+                TableFromSourceColumns::NotSpecified => {
+                    *columns = TableFromSourceColumns::Defined(gen_columns);
+                    *constraints = gen_constraints;
+                }
+                TableFromSourceColumns::Named(_) => {
+                    sql_bail!("columns cannot be named for Postgres sources")
+                }
+            }
             with_options.push(TableFromSourceOption {
                 name: TableFromSourceOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
@@ -1756,8 +1764,16 @@ async fn purify_create_table_from_source(
                     );
                 }
             }
-            *columns = gen_columns;
-            *constraints = gen_constraints;
+            match columns {
+                TableFromSourceColumns::Defined(_) => unreachable!(),
+                TableFromSourceColumns::NotSpecified => {
+                    *columns = TableFromSourceColumns::Defined(gen_columns);
+                    *constraints = gen_constraints;
+                }
+                TableFromSourceColumns::Named(_) => {
+                    sql_bail!("columns cannot be named for MySQL sources")
+                }
+            }
             with_options.push(TableFromSourceOption {
                 name: TableFromSourceOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
@@ -1776,8 +1792,16 @@ async fn purify_create_table_from_source(
             // schema.
             if let Some(desc) = desc {
                 let (gen_columns, gen_constraints) = scx.relation_desc_into_table_defs(&desc)?;
-                *columns = gen_columns;
-                *constraints = gen_constraints;
+                match columns {
+                    TableFromSourceColumns::Defined(_) => unreachable!(),
+                    TableFromSourceColumns::NotSpecified => {
+                        *columns = TableFromSourceColumns::Defined(gen_columns);
+                        *constraints = gen_constraints;
+                    }
+                    TableFromSourceColumns::Named(_) => {
+                        sql_bail!("columns cannot be named for multi-output load generator sources")
+                    }
+                }
             }
             let details = SourceExportStatementDetails::LoadGenerator { output };
             with_options.push(TableFromSourceOption {

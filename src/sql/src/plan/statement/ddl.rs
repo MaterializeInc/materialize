@@ -72,9 +72,10 @@ use mz_sql_parser::ast::{
     PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
     RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
     ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    Statement, TableConstraint, TableFromSourceOption, TableFromSourceOptionName, TableOption,
-    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
+    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
+    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -1689,17 +1690,22 @@ pub fn plan_create_table_from_source(
     let source_connection = &source_item.source_desc()?.expect("is source").connection;
 
     // Some source-types (e.g. postgres, mysql, multi-output load-gen sources) define a value_schema
-    // during purification and populate the `columns` and `constraints` fields for the statement,
+    // during purification and define the `columns` and `constraints` fields for the statement,
     // whereas other source-types (e.g. kafka, single-output load-gen sources) do not, so instead
     // we use the source connection's default schema.
-    let (key_desc, value_desc) = if !columns.is_empty() || !constraints.is_empty() {
-        let desc = plan_source_export_desc(scx, name, columns, constraints)?;
-        (None, desc)
-    } else {
-        let key_desc = source_connection.default_key_desc();
-        let value_desc = source_connection.default_value_desc();
-        (Some(key_desc), value_desc)
-    };
+    let (key_desc, value_desc) =
+        if matches!(columns, TableFromSourceColumns::Defined(_)) || !constraints.is_empty() {
+            let columns = match columns {
+                TableFromSourceColumns::Defined(columns) => columns,
+                _ => unreachable!(),
+            };
+            let desc = plan_source_export_desc(scx, name, columns, constraints)?;
+            (None, desc)
+        } else {
+            let key_desc = source_connection.default_key_desc();
+            let value_desc = source_connection.default_value_desc();
+            (Some(key_desc), value_desc)
+        };
 
     let metadata_columns_desc = match &details {
         SourceExportDetails::Kafka(KafkaSourceExportDetails {
@@ -1708,7 +1714,7 @@ pub fn plan_create_table_from_source(
         _ => vec![],
     };
 
-    let (desc, envelope, encoding) = apply_source_envelope_encoding(
+    let (mut desc, envelope, encoding) = apply_source_envelope_encoding(
         scx,
         &envelope,
         format,
@@ -1719,6 +1725,9 @@ pub fn plan_create_table_from_source(
         metadata_columns_desc,
         source_connection,
     )?;
+    if let TableFromSourceColumns::Named(col_names) = columns {
+        plan_utils::maybe_rename_columns(format!("source table {}", name), &mut desc, col_names)?;
+    }
 
     let data_source = DataSourceDesc::IngestionExport {
         ingestion_id,

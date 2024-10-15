@@ -4476,9 +4476,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(TABLE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_item_name()?;
-        // Columns are not specified by users, but are populated in this
-        // statement after purification, so Optional is used.
-        let (columns, constraints) = self.parse_columns(Optional)?;
+        let (columns, constraints) = self.parse_table_from_source_columns()?;
 
         self.expect_keywords(&[FROM, SOURCE])?;
 
@@ -4573,6 +4571,91 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
         Ok(option)
+    }
+
+    fn parse_table_from_source_columns(
+        &mut self,
+    ) -> Result<(TableFromSourceColumns<Raw>, Vec<TableConstraint<Raw>>), ParserError> {
+        let mut constraints = vec![];
+
+        if !self.consume_token(&Token::LParen) {
+            return Ok((TableFromSourceColumns::NotSpecified, constraints));
+        }
+        if self.consume_token(&Token::RParen) {
+            // Tables with zero columns are a PostgreSQL extension.
+            return Ok((TableFromSourceColumns::NotSpecified, constraints));
+        }
+
+        let mut column_names = vec![];
+        let mut column_defs = vec![];
+        loop {
+            if let Some(constraint) = self.parse_optional_table_constraint()? {
+                constraints.push(constraint);
+            } else if let Some(column_name) = self.consume_identifier()? {
+                let next_token = self.peek_token();
+                match next_token {
+                    Some(Token::Comma) | Some(Token::RParen) => {
+                        column_names.push(column_name);
+                    }
+                    _ => {
+                        let data_type = self.parse_data_type()?;
+                        let collation = if self.parse_keyword(COLLATE) {
+                            Some(self.parse_item_name()?)
+                        } else {
+                            None
+                        };
+                        let mut options = vec![];
+                        loop {
+                            match self.peek_token() {
+                                None | Some(Token::Comma) | Some(Token::RParen) => break,
+                                _ => options.push(self.parse_column_option_def()?),
+                            }
+                        }
+
+                        column_defs.push(ColumnDef {
+                            name: column_name,
+                            data_type,
+                            collation,
+                            options,
+                        });
+                    }
+                }
+            } else {
+                return self.expected(
+                    self.peek_pos(),
+                    "column name or constraint definition",
+                    self.peek_token(),
+                );
+            }
+            if self.consume_token(&Token::Comma) {
+                // Continue.
+            } else if self.consume_token(&Token::RParen) {
+                break;
+            } else {
+                return self.expected(
+                    self.peek_pos(),
+                    "',' or ')' after column definition",
+                    self.peek_token(),
+                );
+            }
+        }
+        if !column_defs.is_empty() && !column_names.is_empty() {
+            return parser_err!(
+                self,
+                self.peek_prev_pos(),
+                "cannot mix column definitions and column names"
+            );
+        }
+
+        let columns = match column_defs.is_empty() {
+            true => match column_names.is_empty() {
+                true => TableFromSourceColumns::NotSpecified,
+                false => TableFromSourceColumns::Named(column_names),
+            },
+            false => TableFromSourceColumns::Defined(column_defs),
+        };
+
+        Ok((columns, constraints))
     }
 
     fn parse_columns(

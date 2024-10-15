@@ -338,6 +338,10 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
+> CREATE TABLE avro_table_append_cols (a, b) FROM SOURCE avro_source (REFERENCE "testdrive-avroavro-${testdrive.seed}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+
 > SELECT * from avro_table_upsert
 key           f1       f2
 ---------------------------
@@ -347,6 +351,17 @@ mammalmore    moose    2
 
 > SELECT * from avro_table_append
 f1       f2
+---------------
+fish     1000
+geese    2
+geese    56
+goose    1
+moose    1
+moose    2
+moose    42
+
+> SELECT * from avro_table_append_cols
+a       b
 ---------------
 fish     1000
 geese    2
