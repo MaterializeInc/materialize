@@ -594,7 +594,7 @@ macro_rules! generate_extracted_config {
                                     if !$allow_multiple && !extracted.seen.insert(option.name.clone()) {
                                         sql_bail!("{} specified more than once", option.name.to_ast_string());
                                     }
-                                    let val = <$t>::try_from_value(option.value)
+                                    let val: $t = $crate::plan::with_options::TryFromValue::try_from_value(option.value)
                                         .map_err(|e| sql_err!("invalid {}: {}", option.name.to_ast_string(), e))?;
                                     generate_extracted_config!(
                                         @ifexpr $allow_multiple,
@@ -616,18 +616,24 @@ macro_rules! generate_extracted_config {
                     let mut options = Vec::new();
                     $(
                         let value = self.[<$option_name:snake>];
-                        let values = generate_extracted_config!(
+                        let values: Vec<_> = generate_extracted_config!(
                             @ifexpr $allow_multiple,
                             value,
-                            vec![value]
+                            Vec::from([value])
                         );
                         for value in values {
                             // If `try_into_value` returns `None`, then there was no option that
                             // generated this value. For example, this can happen when `value` is
                             // `None`.
-                            if let Some(value) = value.try_into_value(catalog) {
-                                let option = $option_ty {name: $option_name, value};
-                                options.push(option);
+                            let maybe_value = <$t as $crate::plan::with_options::TryFromValue<
+                                Option<mz_sql_parser::ast::WithOptionValue<$crate::names::Aug>>
+                            >>::try_into_value(value, catalog);
+                            match maybe_value {
+                                Some(value) => {
+                                    let option = $option_ty {name: $option_name, value};
+                                    options.push(option);
+                                },
+                                None => (),
                             }
                         }
                     )*

@@ -40,7 +40,7 @@ use mz_storage_types::connections::{
 
 use crate::names::Aug;
 use crate::plan::statement::{Connection, ResolvedItemName};
-use crate::plan::with_options::{self, TryFromValue};
+use crate::plan::with_options;
 use crate::plan::{ConnectionDetails, PlanError, SshKey, StatementContext};
 use crate::session::vars::{self, ENABLE_AWS_MSK_IAM_AUTH};
 

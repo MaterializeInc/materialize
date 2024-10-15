@@ -53,7 +53,7 @@ use crate::normalize;
 use crate::plan::query::{plan_expr, plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
-use crate::plan::with_options::{self, TryFromValue};
+use crate::plan::with_options;
 use crate::plan::{
     self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan,
     ExplainSinkSchemaPlan, ExplainTimestampPlan,
