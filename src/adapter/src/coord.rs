@@ -114,7 +114,7 @@ use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, Proces
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
-use mz_orchestrator::ServiceProcessMetrics;
+use mz_orchestrator::{OfflineReason, ServiceProcessMetrics};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
@@ -1431,11 +1431,17 @@ impl ClusterReplicaStatuses {
         num_processes: usize,
         time: DateTime<Utc>,
     ) {
+        tracing::info!(
+            ?cluster_id,
+            ?replica_id,
+            ?time,
+            "initializing cluster replica status"
+        );
         let replica_statuses = self.0.entry(cluster_id).or_default();
         let process_statuses = (0..num_processes)
             .map(|process_id| {
                 let status = ClusterReplicaProcessStatus {
-                    status: ClusterStatus::Offline(None),
+                    status: ClusterStatus::Offline(Some(OfflineReason::Initializing)),
                     time: time.clone(),
                 };
                 (u64::cast_from(process_id), status)
