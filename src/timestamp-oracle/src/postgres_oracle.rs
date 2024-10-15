@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS timestamp_oracle (
 // really get us anything. OTOH, the background jobs that crdb creates to
 // collect these stats fill up the jobs table (slowing down all sorts of
 // things).
-const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled = false);";
+const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled = false)";
 // The `timestamp_oracle` table creates and deletes rows at a high
 // frequency, generating many tombstoned rows. If Cockroach's GC
 // interval is set high (the default is 25h) and these tombstones
@@ -445,7 +445,7 @@ where
 
             let crdb_mode = match client
                 .batch_execute(&format!(
-                    "{}{} {}",
+                    "{}{}; {}",
                     SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
                 ))
                 .await

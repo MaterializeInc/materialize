@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS consensus (
 // really get us anything. OTOH, the background jobs that crdb creates to
 // collect these stats fill up the jobs table (slowing down all sorts of
 // things).
-const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled = false);";
+const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled = false)";
 // The `consensus` table creates and deletes rows at a high frequency, generating many
 // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
 // these tombstones accumulate, scanning over the table will take increasingly and
@@ -201,7 +201,7 @@ impl PostgresConsensus {
 
         let crdb_mode = match client
             .batch_execute(&format!(
-                "{}{} {}",
+                "{}{}; {}",
                 SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
             ))
             .await
@@ -237,7 +237,7 @@ impl PostgresConsensus {
         client.execute("DROP TABLE consensus", &[]).await?;
         let crdb_mode = match client
             .batch_execute(&format!(
-                "{}{} {}",
+                "{}{}; {}",
                 SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
             ))
             .await
