@@ -66,6 +66,10 @@ if [[ $IN_BUILDKITE_PR || $IN_LOCAL_NON_MAIN_BRANCH ]]; then
   COMMON_ANCESTOR="$(get_common_ancestor_commit_of_pr_and_target)"
   # Default is depth 50, which can be insufficient to grab the relevant ancestor commit
   try buf breaking src --against ".git#ref=$COMMON_ANCESTOR,subdir=src,depth=10000" --verbose
+
+  ci_collapsed_heading "Lint protobuf formatting"
+  # Proto formatting
+  try buf format src --diff --exit-code
 fi
 
 try_status_report

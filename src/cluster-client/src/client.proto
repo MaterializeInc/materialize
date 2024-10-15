@@ -19,8 +19,8 @@ message ProtoClusterStartupEpoch {
 }
 
 message ProtoTimelyConfig {
-    uint64 workers = 1;
-    uint64 process = 2;
-    repeated string addresses = 3;
-    uint32 arrangement_exert_proportionality = 5;
+  uint64 workers = 1;
+  uint64 process = 2;
+  repeated string addresses = 3;
+  uint32 arrangement_exert_proportionality = 5;
 }

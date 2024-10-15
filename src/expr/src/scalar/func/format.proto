@@ -9,11 +9,13 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
 package mz_expr.scalar.func.format;
 
-message ProtoDateTimeFormat { repeated ProtoDateTimeFormatNode nodes = 1; }
+import "google/protobuf/empty.proto";
+
+message ProtoDateTimeFormat {
+  repeated ProtoDateTimeFormatNode nodes = 1;
+}
 
 message ProtoDateTimeFormatNode {
   message ProtoField {

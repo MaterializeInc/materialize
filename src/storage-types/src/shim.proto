@@ -17,4 +17,4 @@ package mz_storage_types.shim;
 //
 // The actual definition of `ProtoUpsertValueErrorShim` and its implementation
 // of `prost::Message` happens manually in `shim.rs`
-message ProtoUpsertValueErrorShim { }
+message ProtoUpsertValueErrorShim {}

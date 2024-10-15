@@ -14,118 +14,117 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
 package mz_persist_types.stats;
 
+import "google/protobuf/empty.proto";
+
 message ProtoStructStats {
-    uint64 len = 1;
-    map<string, ProtoDynStats> cols = 2;
+  uint64 len = 1;
+  map<string, ProtoDynStats> cols = 2;
 }
 
 message ProtoDynStats {
-    // ProtoOptionStats could instead be have a `ProtoDynStats some` field and
-    // be in the oneof, but that's unnecesary (we don't need
-    // `OptionStats<OptionStats<T>>`) and causes some problems (OptionStats
-    // would need to represent `some` as a `Box<dyn DynStats>` instead of a `T`,
-    // which is far less ergonomic).
-    optional ProtoOptionStats option = 1;
-    oneof kind {
-        ProtoStructStats struct = 2;
-        ProtoPrimitiveStats primitive = 3;
-        ProtoBytesStats bytes = 4;
-        google.protobuf.Empty none = 5;
-    }
+  // ProtoOptionStats could instead be have a `ProtoDynStats some` field and
+  // be in the oneof, but that's unnecesary (we don't need
+  // `OptionStats<OptionStats<T>>`) and causes some problems (OptionStats
+  // would need to represent `some` as a `Box<dyn DynStats>` instead of a `T`,
+  // which is far less ergonomic).
+  optional ProtoOptionStats option = 1;
+  oneof kind {
+    ProtoStructStats struct = 2;
+    ProtoPrimitiveStats primitive = 3;
+    ProtoBytesStats bytes = 4;
+    google.protobuf.Empty none = 5;
+  }
 }
 
 message ProtoOptionStats {
-    uint64 none = 1;
+  uint64 none = 1;
 }
 
 message ProtoPrimitiveStats {
-    oneof lower {
-        bool lower_bool = 1;
-        uint32 lower_u8 = 2;
-        uint32 lower_u16 = 3;
-        uint32 lower_u32 = 4;
-        uint64 lower_u64 = 5;
-        int32 lower_i8 = 6;
-        int32 lower_i16 = 7;
-        int32 lower_i32 = 8;
-        int64 lower_i64 = 9;
-        float lower_f32 = 10;
-        double lower_f64 = 11;
-        string lower_string = 13;
-    }
-    oneof upper {
-        bool upper_bool = 14;
-        uint32 upper_u8 = 15;
-        uint32 upper_u16 = 16;
-        uint32 upper_u32 = 17;
-        uint64 upper_u64 = 18;
-        int32 upper_i8 = 19;
-        int32 upper_i16 = 20;
-        int32 upper_i32 = 21;
-        int64 upper_i64 = 22;
-        float upper_f32 = 23;
-        double upper_f64 = 24;
-        string upper_string = 26;
-    }
+  oneof lower {
+    bool lower_bool = 1;
+    uint32 lower_u8 = 2;
+    uint32 lower_u16 = 3;
+    uint32 lower_u32 = 4;
+    uint64 lower_u64 = 5;
+    int32 lower_i8 = 6;
+    int32 lower_i16 = 7;
+    int32 lower_i32 = 8;
+    int64 lower_i64 = 9;
+    float lower_f32 = 10;
+    double lower_f64 = 11;
+    string lower_string = 13;
+  }
+  oneof upper {
+    bool upper_bool = 14;
+    uint32 upper_u8 = 15;
+    uint32 upper_u16 = 16;
+    uint32 upper_u32 = 17;
+    uint64 upper_u64 = 18;
+    int32 upper_i8 = 19;
+    int32 upper_i16 = 20;
+    int32 upper_i32 = 21;
+    int64 upper_i64 = 22;
+    float upper_f32 = 23;
+    double upper_f64 = 24;
+    string upper_string = 26;
+  }
 }
 
-
 message ProtoPrimitiveBytesStats {
-    bytes lower = 1;
-    bytes upper = 2;
+  bytes lower = 1;
+  bytes upper = 2;
 }
 
 message ProtoJsonStats {
-    oneof kind {
-        google.protobuf.Empty none = 1;
-        google.protobuf.Empty mixed = 2;
-        google.protobuf.Empty json_nulls = 3;
-        ProtoPrimitiveStats bools = 4;
-        ProtoPrimitiveStats strings = 5;
-        ProtoPrimitiveBytesStats numerics = 9;
-        google.protobuf.Empty lists = 7;
-        ProtoJsonMapStats maps = 8;
-    }
-    reserved 6;
+  oneof kind {
+    google.protobuf.Empty none = 1;
+    google.protobuf.Empty mixed = 2;
+    google.protobuf.Empty json_nulls = 3;
+    ProtoPrimitiveStats bools = 4;
+    ProtoPrimitiveStats strings = 5;
+    ProtoPrimitiveBytesStats numerics = 9;
+    google.protobuf.Empty lists = 7;
+    ProtoJsonMapStats maps = 8;
+  }
+  reserved 6;
 }
 
 message ProtoJsonMapStats {
-    repeated ProtoJsonMapElementStats elements = 1;
+  repeated ProtoJsonMapElementStats elements = 1;
 }
 
 message ProtoJsonMapElementStats {
-    string name = 1;
-    uint64 len = 2;
-    ProtoJsonStats stats = 3;
+  string name = 1;
+  uint64 len = 2;
+  ProtoJsonStats stats = 3;
 }
 
 message ProtoBytesStats {
-    oneof kind {
-        ProtoPrimitiveBytesStats primitive = 1;
-        ProtoJsonStats json = 2;
-        ProtoAtomicBytesStats atomic = 3;
-        ProtoFixedSizeBytesStats fixed_size = 4;
-    }
+  oneof kind {
+    ProtoPrimitiveBytesStats primitive = 1;
+    ProtoJsonStats json = 2;
+    ProtoAtomicBytesStats atomic = 3;
+    ProtoFixedSizeBytesStats fixed_size = 4;
+  }
 }
 
 message ProtoAtomicBytesStats {
-    bytes lower = 1;
-    bytes upper = 2;
+  bytes lower = 1;
+  bytes upper = 2;
 }
 
 message ProtoFixedSizeBytesStats {
-    bytes lower = 1;
-    bytes upper = 2;
+  bytes lower = 1;
+  bytes upper = 2;
 
-    oneof kind {
-        google.protobuf.Empty packed_time = 3;
-        google.protobuf.Empty packed_interval = 4;
-        google.protobuf.Empty packed_numeric = 5;
-        google.protobuf.Empty uuid = 6;
-        google.protobuf.Empty packed_date_time = 7;
-    }
+  oneof kind {
+    google.protobuf.Empty packed_time = 3;
+    google.protobuf.Empty packed_interval = 4;
+    google.protobuf.Empty packed_numeric = 5;
+    google.protobuf.Empty uuid = 6;
+    google.protobuf.Empty packed_date_time = 7;
+  }
 }

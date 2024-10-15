@@ -9,9 +9,9 @@
 
 syntax = "proto3";
 
-import "persist-client/src/batch.proto";
-
 package mz_txn_wal.proto;
+
+import "persist-client/src/batch.proto";
 
 // A wrapper for ProtoBatch with an id to ensure that each unique batch's
 // serialization is unique.

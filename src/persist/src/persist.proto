@@ -21,81 +21,81 @@ package mz_persist.gen.persist;
 import "persist-types/src/arrow.proto";
 
 message ProtoU64Antichain {
-    repeated uint64 elements = 1;
+  repeated uint64 elements = 1;
 }
 
 message ProtoU64Description {
-    ProtoU64Antichain lower = 1;
-    ProtoU64Antichain upper = 2;
-    ProtoU64Antichain since = 3;
+  ProtoU64Antichain lower = 1;
+  ProtoU64Antichain upper = 2;
+  ProtoU64Antichain since = 3;
 }
 
 message ProtoBatchPartInline {
-    ProtoBatchFormat format = 1;
-    // TraceBatchParts can contain partial data for a given trace batch, and so
-    // this desc means only that the records contained in this part have to
-    // abide by the constraints in the description. There may be other parts
-    // for the same trace batch with the same description. However, there will
-    // be only one trace batch with the same description and index.
-    ProtoU64Description desc = 2;
-    uint64 index = 3;
+  ProtoBatchFormat format = 1;
+  // TraceBatchParts can contain partial data for a given trace batch, and so
+  // this desc means only that the records contained in this part have to
+  // abide by the constraints in the description. There may be other parts
+  // for the same trace batch with the same description. However, there will
+  // be only one trace batch with the same description and index.
+  ProtoU64Description desc = 2;
+  uint64 index = 3;
 
-    // Optional metadata for the `format`.
-    oneof format_metadata {
-        // Metadata for the structured format with `[(K, V, T, D, K_S, V_S)]`.
-        uint64 structured_migration = 4;
-    }
+  // Optional metadata for the `format`.
+  oneof format_metadata {
+    // Metadata for the structured format with `[(K, V, T, D, K_S, V_S)]`.
+    uint64 structured_migration = 4;
+  }
 }
 
 enum ProtoBatchFormat {
-    Unknown = 0;
-    // Arrow, which we'd use for the local blob cache if we use it, gets a
-    // structure like `[(K, V, T, D)]` so that we could mmap it and use it
-    // directly as our in-mem batches (which have this structure).
-    ArrowKVTD = 1;
-    // We have more flexibility with Parquet. Initially we'll start with the
-    // same `[(K, V, T, D)]` as our in-mem batches. Another option would be
-    // something like `[(K, [(V, [(T, D)])])]`, which would only store each
-    // key's and each val's data once (this is similar to the
-    // [differential_dataflow::trace::layers::Trie] structure of
-    // [differential_dataflow::trace::implementations::ord::OrdValBatch]).
-    //
-    // Which is better probably comes down to how much duplication we expect of
-    // keys and vals in a batch as well as how big the batches are (the trie
-    // structure introduces more columns, so has some amount of overhead).
-    //
-    // For unsealed batches, we have a better chance of duplicates than trace,
-    // but we probably don't want to pay the cost of converting between the
-    // in-mem `[(K, V, T, D)]` representation and anything else (to keep the hot
-    // path clean). Unsealed batches are also likely to be our smallest. For
-    // this reason, they'll probably always stay as ParquetKvtd.
-    //
-    // For trace batches, we consolidate them before writing them out, so we're
-    // guaranteed to get nothing from the V level of the trie. For duplicate
-    // keys, we'll probably get a good amount of benefit from column specific
-    // compression, and I'd like to exhaust that direction first before dealing
-    // with a trie-like column structure.
-    ParquetKvtd = 2;
-    // Parquet format that understands the structure of the inner data. See the
-    // `metadata` field on `ProtoBatchPartInline` for more information about
-    // how this data is structured in Parquet.
-    //
-    // For example, the initial use of this format will contain the columns
-    // `[(K, V, T, D, K_S, V_S)]` where `K_S` and `V_S` are structured versions
-    // of the opaque data stored in `K` and `V`, respectively. Eventually we'll
-    // stop writing `K` and `V` and migrate entirely to `K_S` and `V_S`.
-    ParquetStructured = 3;
+  Unknown = 0;
+  // Arrow, which we'd use for the local blob cache if we use it, gets a
+  // structure like `[(K, V, T, D)]` so that we could mmap it and use it
+  // directly as our in-mem batches (which have this structure).
+  ArrowKVTD = 1;
+  // We have more flexibility with Parquet. Initially we'll start with the
+  // same `[(K, V, T, D)]` as our in-mem batches. Another option would be
+  // something like `[(K, [(V, [(T, D)])])]`, which would only store each
+  // key's and each val's data once (this is similar to the
+  // [differential_dataflow::trace::layers::Trie] structure of
+  // [differential_dataflow::trace::implementations::ord::OrdValBatch]).
+  //
+  // Which is better probably comes down to how much duplication we expect of
+  // keys and vals in a batch as well as how big the batches are (the trie
+  // structure introduces more columns, so has some amount of overhead).
+  //
+  // For unsealed batches, we have a better chance of duplicates than trace,
+  // but we probably don't want to pay the cost of converting between the
+  // in-mem `[(K, V, T, D)]` representation and anything else (to keep the hot
+  // path clean). Unsealed batches are also likely to be our smallest. For
+  // this reason, they'll probably always stay as ParquetKvtd.
+  //
+  // For trace batches, we consolidate them before writing them out, so we're
+  // guaranteed to get nothing from the V level of the trie. For duplicate
+  // keys, we'll probably get a good amount of benefit from column specific
+  // compression, and I'd like to exhaust that direction first before dealing
+  // with a trie-like column structure.
+  ParquetKvtd = 2;
+  // Parquet format that understands the structure of the inner data. See the
+  // `metadata` field on `ProtoBatchPartInline` for more information about
+  // how this data is structured in Parquet.
+  //
+  // For example, the initial use of this format will contain the columns
+  // `[(K, V, T, D, K_S, V_S)]` where `K_S` and `V_S` are structured versions
+  // of the opaque data stored in `K` and `V`, respectively. Eventually we'll
+  // stop writing `K` and `V` and migrate entirely to `K_S` and `V_S`.
+  ParquetStructured = 3;
 }
 
 message ProtoColumnarRecords {
-    uint64 len = 1;
-    repeated int32 key_offsets = 2;
-    bytes key_data = 3;
-    repeated int32 val_offsets = 4;
-    bytes val_data = 5;
-    repeated int64 timestamps = 6;
-    repeated int64 diffs = 7;
+  uint64 len = 1;
+  repeated int32 key_offsets = 2;
+  bytes key_data = 3;
+  repeated int32 val_offsets = 4;
+  bytes val_data = 5;
+  repeated int64 timestamps = 6;
+  repeated int64 diffs = 7;
 
-    mz_persist_types.arrow.ProtoArrayData key_structured = 8;
-    mz_persist_types.arrow.ProtoArrayData val_structured = 9;
+  mz_persist_types.arrow.ProtoArrayData key_structured = 8;
+  mz_persist_types.arrow.ProtoArrayData val_structured = 9;
 }
