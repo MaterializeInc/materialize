@@ -25,7 +25,7 @@ three
 # Test that the default consumer group ID is
 # `materialize-$ENVIRONMENTID-$CONNECTIONID-$SOURCEID`.
 
-> CREATE CLUSTER topic_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER topic_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE topic
   IN CLUSTER topic_cluster
   FROM KAFKA CONNECTION conn (

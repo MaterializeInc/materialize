@@ -83,61 +83,61 @@ $ kafka-ingest format=avro topic=multi-topic-9 schema=${schema} repeat=${count}
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE CLUSTER s0_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER s0_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE s0 IN CLUSTER s0_cluster
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-0-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE CLUSTER s1_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER s1_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE s1 IN CLUSTER s1_cluster
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE CLUSTER s2_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER s2_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE s2 IN CLUSTER s2_cluster
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE CLUSTER s3_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER s3_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE s3 IN CLUSTER s3_cluster
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-3-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE CLUSTER s4_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER s4_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE s4 IN CLUSTER s4_cluster
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-4-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE CLUSTER s5_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER s5_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE s5 IN CLUSTER s5_cluster
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-5-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE CLUSTER s6_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER s6_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE s6 IN CLUSTER s6_cluster
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-6-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE CLUSTER s7_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER s7_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE s7 IN CLUSTER s7_cluster
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-7-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE CLUSTER s8_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER s8_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE s8 IN CLUSTER s8_cluster
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-8-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE CLUSTER s9_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER s9_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE s9 IN CLUSTER s9_cluster
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-9-${testdrive.seed}')

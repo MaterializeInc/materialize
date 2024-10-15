@@ -167,13 +167,13 @@ $ kafka-ingest format=avro topic=input_dbz key-format=avro key-schema=${dbz-key-
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CLUSTER input_kafka_cdcv2_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER input_kafka_cdcv2_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE input_kafka_cdcv2
   IN CLUSTER input_kafka_cdcv2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
-> CREATE CLUSTER input_kafka_dbz_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER input_kafka_dbz_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE input_kafka_dbz
   IN CLUSTER input_kafka_dbz_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_dbz-${testdrive.seed}')
@@ -204,13 +204,13 @@ Rochester,NY,14618
 New York,NY,10004
 "bad,place""",CA,92679
 
-> CREATE CLUSTER input_csv_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER input_csv_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE input_csv
   IN CLUSTER input_csv_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-static-${testdrive.seed}')
   FORMAT CSV WITH 3 COLUMNS
 
-> CREATE CLUSTER output1_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER output1_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK output1
   IN CLUSTER output1_cluster
   FROM input_kafka_cdcv2
@@ -218,7 +218,7 @@ New York,NY,10004
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER output2_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER output2_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK output2
   IN CLUSTER output2_cluster
   FROM input_kafka_dbz
@@ -226,7 +226,7 @@ New York,NY,10004
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER output3_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER output3_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK output3
   IN CLUSTER output3_cluster
   FROM input_table
@@ -234,7 +234,7 @@ New York,NY,10004
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER output4_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER output4_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK output4
   IN CLUSTER output4_cluster
   FROM input_kafka_cdcv2_mview
@@ -242,7 +242,7 @@ New York,NY,10004
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER output4_view_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER output4_view_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK output4_view
   IN CLUSTER output4_view_cluster
   FROM input_kafka_cdcv2_mview_view
@@ -258,7 +258,7 @@ New York,NY,10004
   ENVELOPE DEBEZIUM
 contains:input_kafka_dbz_view is a view, which cannot be exported as a sink
 
-> CREATE CLUSTER output5_view_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER output5_view_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK output5_view
   IN CLUSTER output5_view_cluster
   FROM input_kafka_dbz_view_mview
@@ -266,7 +266,7 @@ contains:input_kafka_dbz_view is a view, which cannot be exported as a sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER output6_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER output6_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK output6
   IN CLUSTER output6_cluster
   FROM input_table_mview
@@ -282,7 +282,7 @@ contains:input_kafka_dbz_view is a view, which cannot be exported as a sink
   ENVELOPE DEBEZIUM
 contains:input_values_view is a view, which cannot be exported as a sink
 
-> CREATE CLUSTER output8_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER output8_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK output8
   IN CLUSTER output8_cluster
   FROM input_values_mview
@@ -290,7 +290,7 @@ contains:input_values_view is a view, which cannot be exported as a sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER output12_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER output12_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK output12
   IN CLUSTER output12_cluster
   FROM input_kafka_dbz_derived_table
@@ -298,7 +298,7 @@ contains:input_values_view is a view, which cannot be exported as a sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER output13_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER output13_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK output13
   IN CLUSTER output13_cluster
   FROM input_csv
@@ -320,13 +320,13 @@ $ kafka-create-topic topic=progress-test-input
     SECURITY PROTOCOL PLAINTEXT
   );
 
-> CREATE CLUSTER compaction_test_input_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER compaction_test_input_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE compaction_test_input
   IN CLUSTER compaction_test_input_cluster
   FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-test-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
 
-> CREATE CLUSTER compaction_test_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER compaction_test_sink_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK compaction_test_sink
   IN CLUSTER compaction_test_sink_cluster
   FROM compaction_test_input
@@ -347,7 +347,7 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 1	{"before": null, "after": {"row": {"a": 1, "b": 1}}}
 1	{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
-> CREATE CLUSTER compaction_test_sink_check_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER compaction_test_sink_check_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE compaction_test_sink_check
   IN CLUSTER compaction_test_sink_check_cluster
   FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-fixed-${testdrive.seed}')
@@ -367,13 +367,13 @@ $ kafka-create-topic topic=rt-binding-progress-test-input
 $ kafka-ingest format=avro topic=rt-binding-progress-test-input key-format=avro key-schema=${dbz-key-schema} schema=${dbz-schema} timestamp=1
 {"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
-> CREATE CLUSTER rt_binding_progress_test_source_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER rt_binding_progress_test_source_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE rt_binding_progress_test_source
   IN CLUSTER rt_binding_progress_test_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rt-binding-progress-test-input-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER rt_binding_progress_test_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER rt_binding_progress_test_sink_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK rt_binding_progress_test_sink
   IN CLUSTER rt_binding_progress_test_sink_cluster
   FROM rt_binding_progress_test_source

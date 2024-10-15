@@ -33,7 +33,7 @@ ALTER SYSTEM SET enable_comment = true;
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CLUSTER sink1_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER sink1_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK sink1
   IN CLUSTER sink1_cluster
   FROM t
@@ -65,7 +65,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.se
 $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.seed}-key
 {"type":"record","name":"row","doc":"key doc on t","fields":[{"name":"c2","type":"string","doc":"key doc on t.c2"}]}
 
-> CREATE CLUSTER sink2_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER sink2_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK sink2
   IN CLUSTER sink2_cluster
   FROM t
@@ -77,7 +77,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.se
 $ schema-registry-verify schema-type=avro subject=testdrive-sink2-${testdrive.seed}-value
 {"type":"record","name":"envelope","doc":"comment on table t with a \\\\ \\","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","doc":"comment on type point","fields":[{"name":"x","type":["null","int"],"doc":"comment on column point.x"},{"name":"y","type":["null","int"]}]}]},{"name":"c2","type":"string"},{"name":"c3_map_text__text_","type":["null",{"type":"map","values":["null","boolean"]}]},{"name":"c4","type":["null",{"type":"array","items":["null",{"type":"record","name":"record1","namespace":"com.materialize.sink","doc":"comment on type point","fields":[{"name":"x","type":["null","int"],"doc":"comment on column point.x"},{"name":"y","type":["null","int"]}]}]}],"doc":"comment on column t.c4 with an äöü"}]}
 
-> CREATE CLUSTER sink3_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER sink3_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK sink3
   IN CLUSTER sink3_cluster
   FROM t
