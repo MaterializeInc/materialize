@@ -123,7 +123,7 @@ use mz_ore::task::{spawn, JoinHandle};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::vec::VecExt;
-use mz_ore::{instrument, soft_assert_or_log, soft_panic_or_log, stack};
+use mz_ore::{assert_none, instrument, soft_assert_or_log, soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
@@ -1448,8 +1448,8 @@ impl ClusterReplicaStatuses {
             })
             .collect();
         let prev = replica_statuses.insert(replica_id, process_statuses);
-        assert_eq!(
-            prev, None,
+        assert_none!(
+            prev,
             "cluster replica {cluster_id}.{replica_id} statuses already initialized"
         );
     }
