@@ -144,7 +144,7 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 
 pub(crate) const DANGEROUS_ENABLE_SCHEMA_EVOLUTION: Config<bool> = Config::new(
     "persist_dangerous_enable_schema_evolution",
-    false,
+    true,
     "\
 DANGEROUS DO NOT ENABLE IN PRODUCTION OR STAGING ENVIRONMENTS!
 

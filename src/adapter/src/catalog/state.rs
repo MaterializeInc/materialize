@@ -51,7 +51,7 @@ use mz_repr::namespaces::{
     UNSTABLE_SCHEMAS,
 };
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{GlobalId, RelationDesc, RelationVersion};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
 use mz_sql::catalog::{
@@ -110,6 +110,8 @@ pub struct CatalogState {
     pub(super) database_by_id: BTreeMap<DatabaseId, Database>,
     #[serde(serialize_with = "skip_temp_items")]
     pub(super) entry_by_id: BTreeMap<GlobalId, CatalogEntry>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) entry_aliases: BTreeMap<GlobalId, (GlobalId, RelationVersion)>,
     pub(super) ambient_schemas_by_name: BTreeMap<String, SchemaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
@@ -162,6 +164,7 @@ impl CatalogState {
             database_by_name: Default::default(),
             database_by_id: Default::default(),
             entry_by_id: Default::default(),
+            entry_aliases: Default::default(),
             ambient_schemas_by_name: Default::default(),
             ambient_schemas_by_id: Default::default(),
             temporary_schemas: Default::default(),
@@ -591,8 +594,12 @@ impl CatalogState {
     }
 
     pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
-        self.entry_by_id
-            .get(id)
+        self.try_get_entry(id)
+            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
+    }
+
+    pub fn get_entry_mut(&mut self, id: &GlobalId) -> &mut CatalogEntry {
+        self.try_get_entry_mut(id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
     }
 
@@ -669,7 +676,21 @@ impl CatalogState {
     }
 
     pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+        let id = self
+            .entry_aliases
+            .get(id)
+            .map(|(gid, _version)| gid)
+            .unwrap_or(id);
         self.entry_by_id.get(id)
+    }
+
+    pub fn try_get_entry_mut(&mut self, id: &GlobalId) -> Option<&mut CatalogEntry> {
+        let id = self
+            .entry_aliases
+            .get(id)
+            .map(|(gid, _version)| gid)
+            .unwrap_or(id);
+        self.entry_by_id.get_mut(id)
     }
 
     pub(crate) fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {

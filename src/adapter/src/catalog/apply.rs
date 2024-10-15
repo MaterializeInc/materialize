@@ -42,7 +42,9 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationVersionSelector, Timestamp, VersionedRelationDesc};
+use mz_repr::{
+    GlobalId, RelationVersion, RelationVersionSelector, Timestamp, VersionedRelationDesc,
+};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::{
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType, NameReference,
@@ -809,6 +811,8 @@ impl CatalogState {
                         name,
                         owner_id,
                         privileges,
+                        // TODO(alter_table): Do we need to allow versioning temporary items.
+                        aliases: BTreeMap::default(),
                     },
                 };
                 self.insert_entry(entry);
@@ -838,6 +842,7 @@ impl CatalogState {
                     create_sql,
                     owner_id,
                     privileges,
+                    aliases,
                 } = item;
                 let schema = self.find_non_temp_schema(&schema_id);
                 let name = QualifiedItemName {
@@ -865,6 +870,7 @@ impl CatalogState {
                         retraction.name = name;
                         retraction.owner_id = owner_id;
                         retraction.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+                        retraction.aliases = aliases;
 
                         retraction
                     }
@@ -881,6 +887,7 @@ impl CatalogState {
                             name,
                             owner_id,
                             privileges: PrivilegeMap::from_mz_acl_items(privileges),
+                            aliases,
                         }
                     }
                 };
@@ -1094,12 +1101,6 @@ impl CatalogState {
             StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
-    }
-
-    fn get_entry_mut(&mut self, id: &GlobalId) -> &mut CatalogEntry {
-        self.entry_by_id
-            .get_mut(id)
-            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
     }
 
     fn get_schema_mut(
@@ -1316,7 +1317,7 @@ impl CatalogState {
         }
 
         for u in &entry.references().0 {
-            match self.entry_by_id.get_mut(u) {
+            match self.try_get_entry_mut(&u) {
                 Some(metadata) => metadata.referenced_by.push(entry.id()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
@@ -1326,7 +1327,7 @@ impl CatalogState {
             }
         }
         for u in entry.uses() {
-            match self.entry_by_id.get_mut(&u) {
+            match self.try_get_entry_mut(&u) {
                 Some(metadata) => metadata.used_by.push(entry.id()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
@@ -1334,6 +1335,9 @@ impl CatalogState {
                     self.resolve_full_name(entry.name(), entry.conn_id())
                 ),
             }
+        }
+        for (alias, version) in entry.aliases() {
+            self.entry_aliases.insert(*alias, (entry.id(), *version));
         }
         let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema = self.get_schema_mut(
@@ -1378,6 +1382,8 @@ impl CatalogState {
             referenced_by: Vec::new(),
             owner_id,
             privileges,
+            // TODO(alter_table): Bump this up into the arguments?
+            aliases: BTreeMap::default(),
         };
 
         self.insert_entry(entry);
@@ -1395,6 +1401,9 @@ impl CatalogState {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
                 dep_metadata.used_by.retain(|u| *u != metadata.id())
             }
+        }
+        for (alias, _) in metadata.aliases() {
+            self.entry_aliases.remove(alias);
         }
 
         let conn_id = metadata.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);

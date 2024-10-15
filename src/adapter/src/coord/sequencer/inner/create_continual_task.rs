@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mz_catalog::memory::objects::{
@@ -95,6 +96,7 @@ impl Coordinator {
             name: name.clone(),
             owner_id: *session.current_role_id(),
             privileges: PrivilegeMap::new(),
+            aliases: BTreeMap::default(),
         };
         catalog_mut.hack_add_ct(sink_id, fake_entry);
 

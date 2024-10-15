@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
@@ -206,6 +208,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             create_sql: "CREATE VIEW v AS SELECT 1".to_string(),
             owner_id: RoleId::User(1),
             privileges: vec![],
+            aliases: BTreeMap::default(),
         },
         Item {
             id: GlobalId::User(200),
@@ -215,6 +218,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             create_sql: "CREATE MATERIALIZED VIEW mv AS SELECT 2".to_string(),
             owner_id: RoleId::User(2),
             privileges: vec![],
+            aliases: BTreeMap::default(),
         },
     ];
 
@@ -239,6 +243,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             item.create_sql.clone(),
             item.owner_id,
             item.privileges.clone(),
+            item.aliases.clone(),
         )
         .unwrap();
     }

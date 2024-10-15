@@ -513,6 +513,7 @@ pub struct CatalogEntry {
     pub name: QualifiedItemName,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
+    pub aliases: BTreeMap<GlobalId, RelationVersion>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -540,6 +541,7 @@ impl From<CatalogEntry> for durable::Item {
             create_sql: entry.item.into_serialized(),
             owner_id: entry.owner_id,
             privileges: entry.privileges.into_all_values().collect(),
+            aliases: entry.aliases,
         }
     }
 }
@@ -1360,7 +1362,7 @@ impl CatalogItem {
         name: ColumnName,
         typ: ColumnType,
         sql: RawDataType,
-    ) -> Result<(), PlanError> {
+    ) -> Result<RelationVersion, PlanError> {
         let CatalogItem::Table(table) = self else {
             return Err(PlanError::Unsupported {
                 feature: "adding columns to a non-Table".to_string(),
@@ -1392,7 +1394,7 @@ impl CatalogItem {
 
         self.update_sql(update)
             .map_err(|()| PlanError::Unstructured("expected CREATE TABLE statement".to_string()))?;
-        Ok(())
+        Ok(next_version)
     }
 
     /// Updates the create_sql field of this item. Returns an error if this is a builtin item,
@@ -1853,6 +1855,11 @@ impl CatalogEntry {
     /// Returns the global ID of this catalog entry.
     pub fn id(&self) -> GlobalId {
         self.id
+    }
+
+    /// Returns the aliases of this item.
+    pub fn aliases(&self) -> &BTreeMap<GlobalId, RelationVersion> {
+        &self.aliases
     }
 
     /// Returns the OID of this catalog entry.
@@ -2587,7 +2594,21 @@ impl mz_sql::catalog::CatalogItem for VersionedCatalogEntry {
     }
 
     fn id(&self) -> GlobalId {
-        self.entry.id()
+        tracing::info!(aliases = ?self.entry.aliases, "getting id");
+        match self.version {
+            RelationVersionSelector::Latest => self
+                .entry
+                .aliases
+                .last_key_value()
+                .map(|(gid, _version)| *gid)
+                .unwrap_or_else(|| self.entry.id()),
+            RelationVersionSelector::Specific(current_version) => self
+                .entry
+                .aliases
+                .iter()
+                .find_map(|(gid, version)| (*version == current_version).then_some(*gid))
+                .expect("catalog out of sync"),
+        }
     }
 
     fn oid(&self) -> u32 {

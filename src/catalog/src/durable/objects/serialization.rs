@@ -26,7 +26,7 @@ use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
@@ -544,6 +544,16 @@ impl RustType<proto::ItemValue> for ItemValue {
         let definition = proto::CatalogItem {
             value: Some(proto::catalog_item::Value::V1(proto::catalog_item::V1 {
                 create_sql: self.create_sql.clone(),
+                aliases: self
+                    .aliases
+                    .iter()
+                    .map(|(gid, version)| proto::Alias {
+                        id: Some(gid.into_proto()),
+                        version: Some(proto::Version {
+                            value: version.into_raw(),
+                        }),
+                    })
+                    .collect(),
             })),
         };
         proto::ItemValue {
@@ -562,8 +572,19 @@ impl RustType<proto::ItemValue> for ItemValue {
             .ok_or_else(|| TryFromProtoError::missing_field("ItemValue::definition"))?
             .value
             .ok_or_else(|| TryFromProtoError::missing_field("CatalogItem::value"))?;
-        let create_sql = match create_sql_value {
-            proto::catalog_item::Value::V1(c) => c.create_sql,
+        let (create_sql, aliases) = match create_sql_value {
+            proto::catalog_item::Value::V1(c) => {
+                let aliases = c
+                    .aliases
+                    .into_iter()
+                    .map(|alias| {
+                        let gid = alias.id.into_rust_if_some("Alias::id")?;
+                        let version = alias.version.into_rust_if_some("Alias::version")?;
+                        Ok::<_, TryFromProtoError>((gid, version))
+                    })
+                    .collect::<Result<_, _>>()?;
+                (c.create_sql, aliases)
+            }
         };
         Ok(ItemValue {
             schema_id: proto.schema_id.into_rust_if_some("ItemValue::schema_id")?,
@@ -572,7 +593,20 @@ impl RustType<proto::ItemValue> for ItemValue {
             owner_id: proto.owner_id.into_rust_if_some("ItemValue::owner_id")?,
             privileges: proto.privileges.into_rust()?,
             oid: proto.oid,
+            aliases,
         })
+    }
+}
+
+impl RustType<proto::Version> for RelationVersion {
+    fn into_proto(&self) -> proto::Version {
+        proto::Version {
+            value: self.into_raw(),
+        }
+    }
+
+    fn from_proto(proto: proto::Version) -> Result<Self, TryFromProtoError> {
+        Ok(RelationVersion::from_raw(proto.value))
     }
 }
 

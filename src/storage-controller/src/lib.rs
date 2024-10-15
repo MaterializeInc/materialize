@@ -1035,6 +1035,7 @@ where
     async fn alter_table_desc(
         &mut self,
         table_id: GlobalId,
+        new_collection_id: GlobalId,
         new_desc: RelationDesc,
         expected_schema: SchemaId,
         forget_ts: Self::Timestamp,
@@ -1053,23 +1054,28 @@ where
 
             // Before letting StorageCollections know, make sure we know about this
             // collection.
-            let collection = collections
-                .get_mut(&table_id)
+            let existing_collection = collections
+                .get(&table_id)
                 .ok_or(StorageError::IdentifierMissing(table_id))?;
             if !matches!(
-                collection.data_source,
+                existing_collection.data_source,
                 DataSource::Other(DataSourceOther::TableWrites)
             ) {
                 return Err(StorageError::IdentifierInvalid(table_id));
             }
 
             // Now also let StorageCollections know!
-            storage_collections.alter_table_desc(table_id, new_desc.clone())?;
+            storage_collections.alter_table_desc(table_id, new_collection_id, new_desc.clone())?;
+
             // StorageCollections was successfully updated, now we can update our
             // in-memory state.
-            collection.collection_metadata.relation_desc = new_desc.clone();
+            let mut new_collection = existing_collection.clone();
+            new_collection.collection_metadata.relation_desc = new_desc.clone();
+            let shard_id = new_collection.collection_metadata.data_shard;
 
-            collection.collection_metadata.data_shard
+            collections.insert(new_collection_id, new_collection);
+
+            shard_id
         };
 
         let diagnostics = Diagnostics {
@@ -1110,9 +1116,16 @@ where
         let write_handle = self
             .open_data_handles(&table_id, shard_id, new_desc.clone(), &persist_client)
             .await;
-
         self.persist_table_worker
-            .update(table_id, forget_ts, register_ts, write_handle);
+            .update(
+                table_id,
+                new_collection_id,
+                forget_ts,
+                register_ts,
+                write_handle,
+            )
+            .await
+            .expect("persist table worker shutdown");
 
         Ok(schema_id)
     }
@@ -3905,7 +3918,7 @@ where
 }
 
 /// State maintained about individual collections.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CollectionState<T: TimelyTimestamp> {
     /// The source of this collection's data.
     pub data_source: DataSource,
@@ -3919,14 +3932,14 @@ struct CollectionState<T: TimelyTimestamp> {
 }
 
 /// Additional state that the controller maintains for select collection types.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum CollectionStateExtra<T: TimelyTimestamp> {
     Ingestion(IngestionState<T>),
     None,
 }
 
 /// State maintained about ingestions and ingestion exports
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct IngestionState<T: TimelyTimestamp> {
     /// Really only for keeping track of changes to the `derived_since`.
     pub read_capabilities: MutableAntichain<T>,

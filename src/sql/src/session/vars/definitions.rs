@@ -2083,7 +2083,7 @@ feature_flags!(
     {
         name: enable_alter_table_add_column,
         desc: "Enable ALTER TABLE ... ADD COLUMN ...",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {

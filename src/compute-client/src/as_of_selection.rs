@@ -884,6 +884,7 @@ mod tests {
         fn alter_table_desc(
             &self,
             _table_id: GlobalId,
+            _new_collection: GlobalId,
             _new_desc: RelationDesc,
         ) -> Result<(), StorageError<Self::Timestamp>> {
             unimplemented!()

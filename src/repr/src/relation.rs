@@ -389,6 +389,14 @@ impl RelationVersion {
             .expect("added more than u64::MAX columns?");
         RelationVersion(next_version)
     }
+
+    pub fn into_raw(&self) -> u64 {
+        self.0
+    }
+
+    pub fn from_raw(val: u64) -> Self {
+        RelationVersion(val)
+    }
 }
 
 impl From<RelationVersion> for mz_sql_parser::ast::Version {

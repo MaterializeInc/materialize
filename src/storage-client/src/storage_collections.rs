@@ -254,6 +254,7 @@ pub trait StorageCollections: Debug {
     fn alter_table_desc(
         &self,
         table_id: GlobalId,
+        new_collection: GlobalId,
         new_desc: RelationDesc,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
@@ -731,6 +732,10 @@ where
             since_handle,
             write_handle,
         });
+    }
+
+    fn add_to_txns_shard(&self, id: GlobalId) {
+        self.send(BackgroundCmd::AddToTxnsMap(id));
     }
 
     fn send(&self, cmd: BackgroundCmd<T>) {
@@ -1735,25 +1740,30 @@ where
     fn alter_table_desc(
         &self,
         table_id: GlobalId,
+        new_collection_id: GlobalId,
         new_desc: RelationDesc,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         let mut self_collections = self.collections.lock().expect("lock poisoned");
-        let collection = self_collections
-            .get_mut(&table_id)
+        let existing_collection = self_collections
+            .get(&table_id)
             .ok_or_else(|| StorageError::IdentifierMissing(table_id))?;
 
         // TODO(alter_table): To support changing the `RelationDesc` of sources
         // we'll need to cancel the currently running `BackgroundCmd` that
         // fetches recent uppers. See `BackgroundCmd::Register`.
         if !matches!(
-            &collection.description.data_source,
+            &existing_collection.description.data_source,
             DataSource::Other(DataSourceOther::TableWrites)
         ) {
             return Err(StorageError::IdentifierInvalid(table_id));
         }
 
-        collection.collection_metadata.relation_desc = new_desc.clone();
-        collection.description.desc = new_desc.clone();
+        let mut new_collection = existing_collection.clone();
+        new_collection.collection_metadata.relation_desc = new_desc.clone();
+        new_collection.description.desc = new_desc.clone();
+
+        self_collections.insert(new_collection_id, new_collection);
+        self.add_to_txns_shard(new_collection_id);
 
         debug!("altered table {table_id}'s RelationDesc");
 
@@ -1910,7 +1920,7 @@ where
             .map(|(id, since)| ReadHold::new(id, since, self.holds_tx.clone()))
             .collect_vec();
 
-        trace!(?desired_holds, ?acquired_holds, "acquire_read_holds");
+        info!(?desired_holds, ?acquired_holds, "acquire_read_holds");
 
         Ok(acquired_holds)
     }
@@ -2037,7 +2047,7 @@ where
 }
 
 /// State maintained about individual collections.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CollectionState<T> {
     /// Description with which the collection was created
     pub description: CollectionDescription<T>,
@@ -2132,6 +2142,7 @@ enum BackgroundCmd<T: TimelyTimestamp + Lattice + Codec64> {
         SnapshotStatsAsOf<T>,
         oneshot::Sender<SnapshotStatsRes<T>>,
     ),
+    AddToTxnsMap(GlobalId),
 }
 
 /// A newtype wrapper to hang a Debug impl off of.
@@ -2276,7 +2287,10 @@ where
                             };
                             // It's fine if the listener hung up.
                             let _ = tx.send(res);
-                        }
+                        },
+                        BackgroundCmd::AddToTxnsMap(id) => {
+                            self.txns_shards.insert(id);
+                        },
                     }
                 }
                 Some(holds_changes) = self.holds_rx.recv() => {

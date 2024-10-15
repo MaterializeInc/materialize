@@ -35,7 +35,7 @@ use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{strconv, ColumnName, ColumnType, GlobalId};
+use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationVersion};
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
@@ -80,6 +80,7 @@ pub enum Op {
     },
     AlterAddColumn {
         id: GlobalId,
+        alias: GlobalId,
         name: ColumnName,
         typ: ColumnType,
         sql: RawDataType,
@@ -645,13 +646,21 @@ impl Catalog {
 
                 info!("update role {name} ({id})");
             }
-            Op::AlterAddColumn { id, name, typ, sql } => {
+            Op::AlterAddColumn {
+                id,
+                alias,
+                name,
+                typ,
+                sql,
+            } => {
                 let mut new_entry = state.get_entry(&id).clone();
                 let CatalogItem::Table(_table) = &new_entry.item else {
                     return Err(AdapterError::Unsupported("adding columns to non-Table"));
                 };
 
-                new_entry.item.add_column(name, typ, sql)?;
+                let version = new_entry.item.add_column(name, typ, sql)?;
+                new_entry.aliases.insert(alias, version);
+
                 tx.update_item(id, new_entry.into())?;
             }
             Op::CreateDatabase { name, owner_id } => {
@@ -1029,6 +1038,7 @@ impl Catalog {
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
                     let serialized_item = item.to_serialized();
+                    let aliases = [(id, RelationVersion::root())].into_iter().collect();
                     tx.insert_user_item(
                         id,
                         schema_id,
@@ -1037,6 +1047,7 @@ impl Catalog {
                         owner_id,
                         privileges.clone(),
                         &temporary_oids,
+                        aliases,
                     )?;
                     info!(
                         "create {} {} ({})",

@@ -15,6 +15,7 @@ use std::ops::ControlFlow;
 
 use differential_dataflow::lattice::Lattice;
 use futures::FutureExt;
+use mz_ore::assert_none;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
@@ -143,14 +144,16 @@ where
             }
             PersistTableWriteCmd::Update {
                 table_id,
+                new_id,
                 handle,
                 forget_ts: _,
                 register_ts: _,
                 tx,
             } => {
-                write_handles.insert(table_id, handle).expect(
+                write_handles.remove(&table_id).expect(
                     "PersistTableWriteCmd::Update only valid for updating extant write handles",
                 );
+                assert_none!(write_handles.insert(new_id, handle));
                 // We don't care if our waiter has gone away.
                 let _ = tx.send(());
             }

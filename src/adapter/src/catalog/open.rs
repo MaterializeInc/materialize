@@ -216,6 +216,7 @@ impl Catalog {
             database_by_name: BTreeMap::new(),
             database_by_id: BTreeMap::new(),
             entry_by_id: BTreeMap::new(),
+            entry_aliases: BTreeMap::new(),
             ambient_schemas_by_name: BTreeMap::new(),
             ambient_schemas_by_id: BTreeMap::new(),
             clusters_by_name: BTreeMap::new(),
@@ -817,6 +818,8 @@ impl Catalog {
                 serialized_item,
                 owner_id.clone(),
                 privileges.all_values_owned().collect(),
+                // TODO(alter_table): Allow versioning builtin items.
+                BTreeMap::default(),
             )?;
             let updates = txn.get_and_commit_op_updates();
             let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
@@ -957,6 +960,8 @@ fn add_new_remove_old_builtin_items_migration(
                             c.sql.into(),
                             *c.owner_id,
                             acl_items,
+                            // TODO(alter_table): Allow versioning builtin items.
+                            BTreeMap::default(),
                         )?;
                         true
                     }

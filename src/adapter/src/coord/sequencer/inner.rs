@@ -4418,8 +4418,10 @@ impl Coordinator {
             raw_sql_type,
         }: plan::AlterTablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let alias = self.catalog.allocate_user_id().await?;
         let ops = vec![catalog::Op::AlterAddColumn {
             id: relation_id,
+            alias,
             name: column_name,
             typ: column_type,
             sql: raw_sql_type,
@@ -4450,6 +4452,7 @@ impl Coordinator {
                 .storage
                 .alter_table_desc(
                     relation_id,
+                    alias,
                     desc,
                     expected_version.into(),
                     forget_ts,

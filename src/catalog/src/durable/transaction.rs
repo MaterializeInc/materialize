@@ -25,7 +25,7 @@ use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::{Diff, GlobalId, RelationVersion};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
     RoleVars,
@@ -572,10 +572,11 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         temporary_oids: &HashSet<u32>,
+        aliases: BTreeMap<GlobalId, RelationVersion>,
     ) -> Result<u32, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_item(
-            id, oid, schema_id, item_name, create_sql, owner_id, privileges,
+            id, oid, schema_id, item_name, create_sql, owner_id, privileges, aliases,
         )?;
         Ok(oid)
     }
@@ -589,6 +590,7 @@ impl<'a> Transaction<'a> {
         create_sql: String,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
+        aliases: BTreeMap<GlobalId, RelationVersion>,
     ) -> Result<(), CatalogError> {
         match self.items.insert(
             ItemKey { gid: id },
@@ -599,6 +601,7 @@ impl<'a> Transaction<'a> {
                 owner_id,
                 privileges,
                 oid,
+                aliases,
             },
             self.op_id,
         ) {

@@ -53,8 +53,10 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
         tokio::sync::oneshot::Sender<()>,
     ),
     Update {
-        /// Table to update.
+        /// Old GlobalId of the table to update.
         table_id: GlobalId,
+        /// New GlobalId of the table.
+        new_id: GlobalId,
         /// Timestamp to forget the original handle at.
         forget_ts: T,
         /// Timestamp to register the new handle at.
@@ -204,6 +206,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     pub(crate) fn update(
         &self,
         table_id: GlobalId,
+        new_id: GlobalId,
         forget_ts: T,
         register_ts: T,
         handle: WriteHandle<SourceData, (), T, Diff>,
@@ -211,6 +214,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         let (tx, rx) = oneshot::channel();
         self.send(PersistTableWriteCmd::Update {
             table_id,
+            new_id,
             forget_ts,
             register_ts,
             handle,
@@ -278,6 +282,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 }
                 PersistTableWriteCmd::Update {
                     table_id,
+                    new_id,
                     forget_ts,
                     register_ts,
                     handle,
@@ -285,7 +290,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 } => {
                     async {
                         self.drop_handles(vec![table_id], forget_ts).await;
-                        self.register(register_ts, vec![(table_id, handle)]).await;
+                        self.register(register_ts, vec![(new_id, handle)]).await;
                     }
                     .instrument(span)
                     .await;

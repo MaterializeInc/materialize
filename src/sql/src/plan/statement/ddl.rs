@@ -3734,9 +3734,7 @@ pub fn plan_create_index(
     *name = Some(Ident::new(index_name.item.clone())?);
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
-    if let ResolvedItemName::Item { print_id, .. } = &mut stmt.on_name {
-        *print_id = false;
-    }
+
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
     let compaction_window = options.iter().find_map(|o| {
         #[allow(irrefutable_let_patterns)]

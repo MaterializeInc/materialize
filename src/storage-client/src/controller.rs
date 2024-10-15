@@ -471,6 +471,7 @@ pub trait StorageController: Debug {
     async fn alter_table_desc(
         &mut self,
         table_id: GlobalId,
+        new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_schema: SchemaId,
         forget_ts: Self::Timestamp,
