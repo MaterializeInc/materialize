@@ -160,28 +160,44 @@ correct state.
 3. Re-compute and repopulate cache entries that depended on dropped entries via
    `ExpressionCache::insert_expressions`.
 
-### File System Implementation
+### Implementation
 
-One potential implementation is via the filesystem of an attached durable storage to `environmentd`.
-Each cache entry would be saved as a file of the format
-`/path/to/cache/<deploy_generation>/<global_id>`.
+The implementation will use persist for durability. The cache will be a single dedicated shard.
+Each cache entry will be keyed by `(deploy_generation, global_id)` and the value will be a
+serialized version of the expression.
 
-#### Pros
-- No need to worry about coordination across K8s pods.
-- Bulk deletion is a simple directory delete.
+#### Conflict Resolution
 
-#### Cons
-- Need to worry about Flushing/fsync.
-- Need to worry about concurrency.
-- Need to worry about atomicity.
-- Need to worry about mocking things in memory for tests.
-- If we lose the pod, then we also lose the cache.
+It is possible and expected that multiple environments will be writing to the cache at the same
+time. This would manifest in an upper mismatch error during an insert or invalidation. In case of
+this error, the cache should read in all new updates, apply each update as described below, and
+retry the operation from the beginning.
 
-### Persist implementation
+If the update is in a different deploy generation as the current cache, then ignore it. It is in a
+different logical namespace and won't conflict with the operation.
 
-Another potential implementation is via persist. Each cache entry would be keyed by
-`(deploy_generation, global_id)` and the value would be a serialized version of the
-expression.
+If the update is in the same deploy generation, then we must be in a split-brain scenario where
+both the current process and another process think they are the leader. We should still update any
+in-memory state as if the current cache had made that change. This relies on the following
+invariants:
+
+  - Two processes with the same deploy generation MUST be running the same version of code.
+  - A global ID only ever maps to a single object.
+  - Optimization is deterministic.
+
+Therefore, we can be sure that any new global IDs refer to the same object that the current cache
+thinks it refers to. Also, the optimized expressions that the other process produced is identical
+to the optimized expression that the current process would have produced. Eventually, one of the
+processes will be fenced out on some other operation. The reason that we don't panic immediately,
+is because the current process may actually be the leader and enter a live-lock scenario like the
+following:
+
+1. Process `A` starts up and becomes the leader.
+2. Process `B` starts up and becomes the leader.
+3. Process `A` writes to the cache.
+4. Process `B` panics.
+5. Process `A` is fenced.
+6. Go back to step (1).
 
 #### Pros
 - Flushing, concurrency, atomicity, mocking are already implemented by persist.
@@ -199,6 +215,23 @@ require us to finalize old shards during startup which would accumulate shard to
   for persist) and solves at least some of the file system cons.
 - We could use persist for durability, but swap in the `FileBlob` as the blob store and some local
   consensus implementation.
+
+### File System Implementation
+
+One potential implementation is via the filesystem of an attached durable storage to `environmentd`.
+Each cache entry would be saved as a file of the format
+`/path/to/cache/<deploy_generation>/<global_id>`.
+
+#### Pros
+- No need to worry about coordination across K8s pods.
+- Bulk deletion is a simple directory delete.
+
+#### Cons
+- Need to worry about Flushing/fsync.
+- Need to worry about concurrency.
+- Need to worry about atomicity.
+- Need to worry about mocking things in memory for tests.
+- If we lose the pod, then we also lose the cache.
 
 ## Open questions
 
