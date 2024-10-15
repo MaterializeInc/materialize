@@ -41,5 +41,8 @@ def buildifier(version, targets):
             name = "buildifier-{0}".format(target),
             executable = True,
             integrity = integrity,
-            urls = ["https://github.com/bazelbuild/buildtools/releases/download/v{VERSION}/buildifier-{TARGET}".format(VERSION = version, TARGET = target)],
+            urls = [
+                "https://github.com/MaterializeInc/toolchains/releases/download/buildifier-{VERSION}/buildifier-{TARGET}".format(VERSION = version, TARGET = target),
+                "https://github.com/bazelbuild/buildtools/releases/download/v{VERSION}/buildifier-{TARGET}".format(VERSION = version, TARGET = target),
+            ],
         )
