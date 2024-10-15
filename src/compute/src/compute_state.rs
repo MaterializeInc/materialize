@@ -314,9 +314,9 @@ impl ComputeState {
     /// the replica's initialization system time.
     ///
     /// Only expected to be called once when creating the instance. Guards against calling it
-    /// multiple calls by checking if the offset is non-zero and the local expiration time is set.
+    /// multiple times by checking if the offset is non-zero and the local expiration time is set.
     pub fn apply_expiration_offset(&mut self, offset: Duration) {
-        if !offset.is_zero() && self.replica_expiration.is_empty() {
+        if self.replica_expiration.is_empty() {
             let offset: EpochMillis = offset
                 .as_millis()
                 .try_into()
@@ -417,8 +417,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     fn handle_create_instance(&mut self, config: InstanceConfig) {
         // Ensure the state is consistent with the config before we initialize anything.
         self.compute_state.apply_worker_config();
-        self.compute_state
-            .apply_expiration_offset(config.expiration_offset);
+        if let Some(offset) = config.expiration_offset {
+            self.compute_state.apply_expiration_offset(offset);
+        }
 
         self.initialize_logging(config.logging);
     }

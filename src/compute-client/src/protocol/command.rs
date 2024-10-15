@@ -9,6 +9,8 @@
 
 //! Compute protocol commands.
 
+use std::time::Duration;
+
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::flat_plan::FlatPlan;
@@ -26,7 +28,6 @@ use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
 
@@ -371,15 +372,15 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 pub struct InstanceConfig {
     /// Specification of introspection logging.
     pub logging: LoggingConfig,
-    /// The offset relative to the replica startup at which it should expire. Zero disables feature.
-    pub expiration_offset: Duration,
+    /// The offset relative to the replica startup at which it should expire. None disables feature.
+    pub expiration_offset: Option<Duration>,
 }
 
 impl RustType<ProtoInstanceConfig> for InstanceConfig {
     fn into_proto(&self) -> ProtoInstanceConfig {
         ProtoInstanceConfig {
             logging: Some(self.logging.into_proto()),
-            expiration_offset: Some(self.expiration_offset.into_proto()),
+            expiration_offset: self.expiration_offset.into_proto(),
         }
     }
 
@@ -388,9 +389,7 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
             logging: proto
                 .logging
                 .into_rust_if_some("ProtoCreateInstance::logging")?,
-            expiration_offset: proto
-                .expiration_offset
-                .into_rust_if_some("ProtoCreateInstance::expiration_offset")?,
+            expiration_offset: proto.expiration_offset.into_rust()?,
         })
     }
 }

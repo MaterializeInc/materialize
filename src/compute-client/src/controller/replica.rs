@@ -80,6 +80,8 @@ where
         // the replica.
         let (command_tx, command_rx) = unbounded_channel();
 
+        let expiration_offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&dyncfg);
+
         let task = mz_ore::task::spawn(
             || format!("active-replication-replica-{id}"),
             ReplicaTask {
@@ -91,6 +93,7 @@ where
                 epoch,
                 metrics: metrics.clone(),
                 dyncfg,
+                expiration_offset: (!expiration_offset.is_zero()).then(|| expiration_offset),
             }
             .run(),
         );
@@ -140,6 +143,8 @@ struct ReplicaTask<T> {
     metrics: ReplicaMetrics,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
+    /// The offset to use for replica expiration, if any.
+    expiration_offset: Option<Duration>,
 }
 
 impl<T> ReplicaTask<T>
@@ -273,7 +278,7 @@ where
                 expiration_offset,
             }) => {
                 *logging = self.config.logging.clone();
-                *expiration_offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.dyncfg);
+                *expiration_offset = self.expiration_offset;
             }
             _ => {}
         }

@@ -922,7 +922,7 @@ where
         let dummy_logging_config = Default::default();
         self.send(ComputeCommand::CreateInstance(InstanceConfig {
             logging: dummy_logging_config,
-            expiration_offset: Duration::ZERO,
+            expiration_offset: None,
         }));
 
         loop {
