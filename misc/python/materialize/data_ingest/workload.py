@@ -302,18 +302,35 @@ def execute_workload(
     for executor in executors:
         executor.mz_service = workload.mz_service
         conn.autocommit = True
-        with conn.cursor() as cur:
-            try:
-                cur.execute("SET REAL_TIME_RECENCY TO TRUE")
-                cur.execute(
-                    f"SELECT * FROM {executor.table} ORDER BY {order_str}".encode()
-                )
+        correct_once = False
+        sleep_time = 0.1
+        # TODO: Reenable RTR when database-issues#8657 is fixed
+        while sleep_time < 60:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        f"SELECT * FROM {executor.table} ORDER BY {order_str}".encode()
+                    )
+                except:
+                    print(f"Comparing against {type(executor).__name__} failed")
+                    print(traceback.format_exc())
+                    raise
                 actual_result = cur.fetchall()
-                cur.execute("SET REAL_TIME_RECENCY TO FALSE")
-            except Exception as e:
-                print(f"Comparing against {type(executor).__name__} failed: {e}")
-                print(traceback.format_exc())
-                raise
-        conn.autocommit = False
-        if actual_result != expected_result:
+            conn.autocommit = False
+            if actual_result == expected_result:
+                if correct_once:
+                    break
+                print(
+                    "Results match. Check for correctness again to make sure the result is stable"
+                )
+                correct_once = True
+                time.sleep(sleep_time)
+                continue
+            else:
+                print(f"Unexpected ({type(executor).__name__}): {actual_result}")
+            print(f"Results don't match, sleeping for {sleep_time}s")
+            time.sleep(sleep_time)
+            sleep_time *= 2
+        else:
             raise ValueError(f"Unexpected result for {type(executor).__name__}: {actual_result} != {expected_result}")  # type: ignore
