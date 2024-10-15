@@ -313,7 +313,7 @@ c_repositories()
 
 RULES_RUST_VERSION = "0.51.0"
 
-RULES_RUST_INTEGRITY = ""
+RULES_RUST_INTEGRITY = "sha256-BCrPtzRpstGEj+FI2Bw0IsYepHqeGQDxyew29R6OcZM="
 
 maybe(
     http_archive,
