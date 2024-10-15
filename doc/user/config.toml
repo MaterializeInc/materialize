@@ -29,18 +29,6 @@ name = "Ingest data"
 weight= 11
 
 [[menu.main]]
-name = "MySQL"
-parent = 'ingest-data'
-identifier = 'mysql'
-weight = 5
-
-[[menu.main]]
-name = "PostgreSQL"
-parent = 'ingest-data'
-identifier = 'postgresql'
-weight = 10
-
-[[menu.main]]
 name = "SQL Server"
 parent = 'ingest-data'
 identifier = 'sql-server'
