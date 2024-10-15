@@ -26,7 +26,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_repr::role_id::RoleId;
 use mz_sql::ast::{Ident, QualifiedReplica};
-use mz_sql::catalog::{CatalogCluster, ObjectType};
+use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, ObjectType};
 use mz_sql::plan::{
     self, AlterClusterPlanStrategy, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
     AlterClusterSwapPlan, AlterOptionParameter, AlterSetClusterPlan,
@@ -688,10 +688,8 @@ impl Coordinator {
         )?;
 
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
-            let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
             self.create_managed_cluster_replica_op(
                 cluster_id,
-                id,
                 replica_name,
                 &compute,
                 &size,
@@ -718,7 +716,6 @@ impl Coordinator {
     fn create_managed_cluster_replica_op(
         &mut self,
         cluster_id: ClusterId,
-        id: ReplicaId,
         name: String,
         compute: &mz_sql::plan::ComputeReplicaConfig,
         size: &String,
@@ -760,7 +757,6 @@ impl Coordinator {
 
         ops.push(catalog::Op::CreateClusterReplica {
             cluster_id,
-            id,
             name,
             config,
             owner_id,
@@ -890,10 +886,8 @@ impl Coordinator {
                 compute: ComputeReplicaConfig { logging },
             };
 
-            let replica_id = self.catalog_mut().allocate_replica_id(&id).await?;
             ops.push(catalog::Op::CreateClusterReplica {
                 cluster_id: id,
-                id: replica_id,
                 name: replica_name.clone(),
                 config,
                 owner_id: *session.current_role_id(),
@@ -1047,10 +1041,8 @@ impl Coordinator {
 
         // Replicas have the same owner as their cluster.
         let owner_id = cluster.owner_id();
-        let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
         let op = catalog::Op::CreateClusterReplica {
             cluster_id,
-            id,
             name: name.clone(),
             config,
             owner_id,
@@ -1059,6 +1051,11 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), vec![op]).await?;
 
+        let id = self
+            .catalog()
+            .resolve_replica_in_cluster(&cluster_id, &name)
+            .expect("just created")
+            .replica_id();
         self.create_cluster_replica(cluster_id, id).await;
 
         Ok(ExecuteResponse::CreatedClusterReplica)
@@ -1198,11 +1195,9 @@ impl Coordinator {
                         .collect();
                     ops.push(catalog::Op::DropObjects(replica_ids_and_reasons));
                     for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
-                        let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
                         self.create_managed_cluster_replica_op(
                             cluster_id,
-                            id,
-                            name,
+                            name.clone(),
                             &compute,
                             new_size,
                             &mut ops,
@@ -1212,16 +1207,15 @@ impl Coordinator {
                             owner_id,
                             reason.clone(),
                         )?;
-                        create_cluster_replicas.push((cluster_id, id));
+                        create_cluster_replicas.push((cluster_id, name));
                     }
                 }
                 AlterClusterPlanStrategy::For(_) | AlterClusterPlanStrategy::UntilReady { .. } => {
                     for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
-                        let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
+                        let name = format!("{name}{PENDING_REPLICA_SUFFIX}");
                         self.create_managed_cluster_replica_op(
                             cluster_id,
-                            id,
-                            format!("{name}{PENDING_REPLICA_SUFFIX}"),
+                            name.clone(),
                             &compute,
                             new_size,
                             &mut ops,
@@ -1231,7 +1225,7 @@ impl Coordinator {
                             owner_id,
                             reason.clone(),
                         )?;
-                        create_cluster_replicas.push((cluster_id, id));
+                        create_cluster_replicas.push((cluster_id, name));
                     }
                     finalization_needed = NeedsFinalization::Yes;
                 }
@@ -1255,11 +1249,9 @@ impl Coordinator {
             for name in
                 (*replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
             {
-                let id = self.catalog_mut().allocate_replica_id(&cluster_id).await?;
                 self.create_managed_cluster_replica_op(
                     cluster_id,
-                    id,
-                    name,
+                    name.clone(),
                     &compute,
                     new_size,
                     &mut ops,
@@ -1271,7 +1263,7 @@ impl Coordinator {
                     owner_id,
                     reason.clone(),
                 )?;
-                create_cluster_replicas.push((cluster_id, id))
+                create_cluster_replicas.push((cluster_id, name))
             }
         }
 
@@ -1288,7 +1280,12 @@ impl Coordinator {
             _ => {}
         }
         self.catalog_transact(session, ops.clone()).await?;
-        for (cluster_id, replica_id) in create_cluster_replicas {
+        for (cluster_id, replica_name) in create_cluster_replicas {
+            let replica_id = self
+                .catalog()
+                .resolve_replica_in_cluster(&cluster_id, &replica_name)
+                .expect("just created")
+                .replica_id();
             self.create_cluster_replica(cluster_id, replica_id).await;
         }
         Ok(finalization_needed)
