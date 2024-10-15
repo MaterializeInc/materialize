@@ -324,7 +324,6 @@ impl Coordinator {
             cluster_id,
             plan:
                 plan::SubscribePlan {
-                    from,
                     copy_to,
                     emit_progress,
                     output,
@@ -339,10 +338,6 @@ impl Coordinator {
 
         // Collect properties for `DataflowExpirationDesc`.
         let transitive_upper = self.least_valid_write(&id_bundle);
-        let has_transitive_refresh_schedule = from
-            .depends_on()
-            .into_iter()
-            .any(|id| self.catalog.item_has_transitive_refresh_schedule(id));
 
         let sink_id = global_lir_plan.sink_id();
 
@@ -366,9 +361,6 @@ impl Coordinator {
         let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
         df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
-        df_desc
-            .dataflow_expiration_desc
-            .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
 
         // Emit notices.
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);

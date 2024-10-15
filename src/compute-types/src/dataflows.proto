@@ -49,9 +49,18 @@ message ProtoDataflowDescription {
   }
 
   message ProtoDataflowExpirationDesc {
+    message ProtoRefreshDepIndex {
+      uint64 start = 1;
+      uint64 end = 2;
+    }
+    message ProtoRefreshDep {
+      optional ProtoRefreshDepIndex refresh_dep_index = 1;
+      optional mz_repr.refresh_schedule.ProtoRefreshSchedule refresh_schedule = 2;
+    }
     optional mz_repr.antichain.ProtoU64Antichain transitive_upper = 1;
-    bool has_transitive_refresh_schedule = 2;
     bool is_timeline_epoch_ms = 3;
+    repeated ProtoRefreshDep refresh_deps = 4;
+    optional ProtoRefreshDepIndex refresh_deps_index = 5;
   }
 
   repeated ProtoSourceImport source_imports = 1;

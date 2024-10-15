@@ -17,14 +17,17 @@ use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelati
 use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{GlobalId, RelationType};
+use mz_repr::{GlobalId, RelationType, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
+use timely::Container;
 
+use crate::dataflows::proto_dataflow_description::proto_dataflow_expiration_desc::ProtoRefreshDep;
+use crate::dataflows::proto_dataflow_description::proto_dataflow_expiration_desc::ProtoRefreshDepIndex;
 use crate::dataflows::proto_dataflow_description::{
     ProtoDataflowExpirationDesc, ProtoIndexExport, ProtoIndexImport, ProtoSinkExport,
     ProtoSourceImport,
@@ -78,7 +81,7 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub dataflow_expiration_desc: DataflowExpirationDesc<T>,
 }
 
-impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
+impl<P, S> DataflowDescription<P, S, Timestamp> {
     /// Tests if the dataflow refers to a single timestamp, namely
     /// that `as_of` has a single coordinate and that the `until`
     /// value corresponds to the `as_of` value plus one, or `as_of`
@@ -119,26 +122,82 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
     /// which dataflow expiration should be disabled.
     pub fn expire_dataflow_at(
         &self,
-        replica_expiration: &Antichain<mz_repr::Timestamp>,
-    ) -> Antichain<mz_repr::Timestamp> {
+        replica_expiration: &Antichain<Timestamp>,
+    ) -> Antichain<Timestamp> {
         let dataflow_expiration_desc = &self.dataflow_expiration_desc;
 
-        // Disable dataflow expiration if `replica_expiration` is unset, the current dataflow has a
-        // refresh schedule, has a transitive dependency with a refresh schedule, or the dataflow's
-        // timeline is not `Timeline::EpochMilliSeconds`.
-        if replica_expiration.is_empty()
-            || self.refresh_schedule.is_some()
-            || dataflow_expiration_desc.has_transitive_refresh_schedule
-            || !dataflow_expiration_desc.is_timeline_epoch_ms
-        {
+        // Disable dataflow expiration if the dataflow's timeline is not `Timeline::EpochMilliSeconds`.
+        if !dataflow_expiration_desc.is_timeline_epoch_ms {
             return Antichain::default();
         }
 
+        let Some(&replica_expiration_ts) = replica_expiration.as_option() else {
+            return Antichain::default();
+        };
+
+        let expiration_with_refresh =
+            if let Some(refresh_deps_index) = dataflow_expiration_desc.refresh_deps_index {
+                let mut expiration_with_refresh_ts = get_expiration_with_refresh(
+                    refresh_deps_index,
+                    &dataflow_expiration_desc.refresh_deps,
+                    replica_expiration_ts,
+                );
+                apply_optional_refresh_schedule(
+                    &mut expiration_with_refresh_ts,
+                    &self.refresh_schedule,
+                );
+                Antichain::from_elem(expiration_with_refresh_ts)
+            } else {
+                replica_expiration.clone()
+            };
+
         if let Some(upper) = &dataflow_expiration_desc.transitive_upper {
             // Returns empty if `upper` is empty, else the max of `upper` and `replica_expiration`.
-            upper.join(replica_expiration)
+            upper.join(&expiration_with_refresh)
         } else {
-            replica_expiration.clone()
+            expiration_with_refresh
+        }
+    }
+}
+
+fn get_expiration_with_refresh(
+    refresh_deps_index: RefreshDepIndex,
+    refresh_deps: &Vec<RefreshDep>,
+    replica_expiration_ts: Timestamp,
+) -> Timestamp {
+    refresh_deps[refresh_deps_index.start..refresh_deps_index.end]
+        .iter()
+        .map(
+            |RefreshDep {
+                 refresh_dep_index,
+                 refresh_schedule,
+             }| {
+                let mut expiration_with_refresh = refresh_dep_index
+                    .map(|refresh_dep_index| {
+                        get_expiration_with_refresh(
+                            refresh_dep_index,
+                            refresh_deps,
+                            replica_expiration_ts,
+                        )
+                    })
+                    .unwrap_or(replica_expiration_ts);
+                apply_optional_refresh_schedule(&mut expiration_with_refresh, refresh_schedule);
+                expiration_with_refresh
+            },
+        )
+        .reduce(|acc, expiration_with_refresh| acc.meet(&expiration_with_refresh))
+        .unwrap_or(replica_expiration_ts)
+}
+
+fn apply_optional_refresh_schedule(
+    expiration_with_refresh: &mut Timestamp,
+    refresh_schedule: &Option<RefreshSchedule>,
+) {
+    if let Some(refresh_schedule) = refresh_schedule {
+        if let Some(new_expiration_with_refresh) =
+            refresh_schedule.round_up_timestamp(*expiration_with_refresh)
+        {
+            *expiration_with_refresh = new_expiration_with_refresh;
         }
     }
 }
@@ -893,72 +952,121 @@ impl RustType<ProtoBuildDesc> for BuildDesc<FlatPlan> {
 pub struct DataflowExpirationDesc<T> {
     /// The upper of the dataflow considering all transitive dependencies.
     pub transitive_upper: Option<Antichain<T>>,
-    /// Whether the dataflow has a transitive dependency with a refresh schedule.
-    pub has_transitive_refresh_schedule: bool,
     /// Whether the timeline of the dataflow is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
     pub is_timeline_epoch_ms: bool,
+    /// TODO
+    pub refresh_deps: Vec<RefreshDep>,
+    /// TODO
+    pub refresh_deps_index: Option<RefreshDepIndex>,
 }
 
 impl<T> Default for DataflowExpirationDesc<T> {
     fn default() -> Self {
         Self {
             transitive_upper: None,
-            // Assume present unless explicitly checked.
-            has_transitive_refresh_schedule: true,
             // Assume any timeline type possible unless explicitly checked.
             is_timeline_epoch_ms: false,
+            refresh_deps: vec![],
+            refresh_deps_index: None,
         }
     }
 }
 
-impl RustType<ProtoDataflowExpirationDesc> for DataflowExpirationDesc<mz_repr::Timestamp> {
+impl RustType<ProtoDataflowExpirationDesc> for DataflowExpirationDesc<Timestamp> {
     fn into_proto(&self) -> ProtoDataflowExpirationDesc {
         ProtoDataflowExpirationDesc {
             transitive_upper: self.transitive_upper.into_proto(),
-            has_transitive_refresh_schedule: self.has_transitive_refresh_schedule.into_proto(),
             is_timeline_epoch_ms: self.is_timeline_epoch_ms.into_proto(),
+            refresh_deps: self.refresh_deps.into_proto(),
+            refresh_deps_index: self.refresh_deps_index.into_proto(),
         }
     }
 
     fn from_proto(x: ProtoDataflowExpirationDesc) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             transitive_upper: x.transitive_upper.into_rust()?,
-            has_transitive_refresh_schedule: x.has_transitive_refresh_schedule.into_rust()?,
             is_timeline_epoch_ms: x.is_timeline_epoch_ms.into_rust()?,
+            refresh_deps: x.refresh_deps.into_rust()?,
+            refresh_deps_index: x.refresh_deps_index.into_rust()?,
         })
     }
 }
 
-impl Arbitrary for DataflowExpirationDesc<mz_repr::Timestamp> {
+impl Arbitrary for DataflowExpirationDesc<Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any::<bool>(),
-            any::<bool>(),
-            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
+            proptest::collection::vec(any::<Timestamp>(), 1..5),
             any::<bool>(),
         )
             .prop_map(
-                |(
-                    has_transitive_refresh_schedule,
-                    transitive_upper_some,
-                    transitive_upper,
-                    is_timeline_epoch_ms,
-                )| {
+                |(transitive_upper_some, transitive_upper, is_timeline_epoch_ms)| {
                     DataflowExpirationDesc {
                         transitive_upper: if transitive_upper_some {
                             Some(Antichain::from(transitive_upper))
                         } else {
                             None
                         },
-                        has_transitive_refresh_schedule,
                         is_timeline_epoch_ms,
+                        refresh_deps: vec![],
+                        refresh_deps_index: None,
                     }
                 },
             )
             .boxed()
+    }
+}
+
+/// TODO
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct RefreshDep {
+    /// TODO
+    pub refresh_dep_index: Option<RefreshDepIndex>,
+    /// TODO
+    pub refresh_schedule: Option<RefreshSchedule>,
+}
+
+impl RustType<ProtoRefreshDep> for RefreshDep {
+    fn into_proto(&self) -> ProtoRefreshDep {
+        ProtoRefreshDep {
+            refresh_dep_index: self.refresh_dep_index.into_proto(),
+            refresh_schedule: self.refresh_schedule.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoRefreshDep) -> Result<Self, TryFromProtoError> {
+        Ok(RefreshDep {
+            refresh_dep_index: proto.refresh_dep_index.into_rust()?,
+            refresh_schedule: proto.refresh_schedule.into_rust()?,
+        })
+    }
+}
+
+/// TODO
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct RefreshDepIndex {
+    /// TODO
+    pub start: usize,
+    /// TODO
+    pub end: usize,
+}
+
+impl RustType<ProtoRefreshDepIndex> for RefreshDepIndex {
+    fn into_proto(&self) -> ProtoRefreshDepIndex {
+        ProtoRefreshDepIndex {
+            start: self.start.into_proto(),
+            end: self.end.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoRefreshDepIndex) -> Result<Self, TryFromProtoError> {
+        Ok(RefreshDepIndex {
+            start: proto.start.into_rust()?,
+            end: proto.end.into_rust()?,
+        })
     }
 }
 

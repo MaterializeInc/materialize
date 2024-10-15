@@ -21,7 +21,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -575,33 +575,10 @@ impl Coordinator {
 
         // Collect properties for `DataflowExpirationDesc`.
         let transitive_upper = self.least_valid_write(&id_bundle);
-        let has_transitive_refresh_schedule = refresh_schedule.is_some()
-            || raw_expr
-                .depends_on()
-                .into_iter()
-                .any(|id| self.catalog.item_has_transitive_refresh_schedule(id));
-
-        // Collect properties for `DataflowExpirationDesc`.
-        let transitive_upper = self.least_valid_write(&id_bundle);
-        let replica_expiration = Timestamp::default(); // TODO: Can we get replica_expiration information here somehow?
-
-        let mut expiration_with_refresh =
-            raw_expr
-                .depends_on()
-                .into_iter()
-                .fold(Timestamp::MAX, |new_expiration, id| {
-                    new_expiration.meet(
-                        &self
-                            .catalog
-                            .compute_expiration_with_refresh(id, replica_expiration),
-                    )
-                });
-        if let Some(refresh_schedule) = &refresh_schedule {
-            if let Some(next_refresh) = refresh_schedule.round_up_timestamp(expiration_with_refresh)
-            {
-                expiration_with_refresh = next_refresh;
-            }
-        }
+        let mut refresh_deps = Vec::new();
+        let refresh_deps_index = self
+            .catalog
+            .get_refresh_dependencies(raw_expr.depends_on().into_iter(), &mut refresh_deps);
 
         let read_holds_owned;
         let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
@@ -697,9 +674,8 @@ impl Coordinator {
                 df_desc.until = until;
 
                 df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
-                df_desc
-                    .dataflow_expiration_desc
-                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
+                df_desc.dataflow_expiration_desc.refresh_deps = refresh_deps;
+                df_desc.dataflow_expiration_desc.refresh_deps_index = refresh_deps_index;
 
                 let storage_metadata = coord.catalog.state().storage_metadata();
 
