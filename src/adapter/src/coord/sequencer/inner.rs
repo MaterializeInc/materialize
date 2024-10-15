@@ -52,6 +52,7 @@ use mz_sql::names::{
 use mz_sql::plan::{ConnectionDetails, NetworkPolicyRule, StatementContext};
 use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
 use mz_storage_types::sinks::StorageSinkDesc;
+use mz_storage_types::sources::GenericSourceConnection;
 use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::connection::ConnectionId;
@@ -302,21 +303,38 @@ impl Coordinator {
         } in plans
         {
             let name = plan.name.clone();
-            if matches!(
-                plan.source.data_source,
-                mz_sql::plan::DataSourceDesc::Ingestion(_)
-                    | mz_sql::plan::DataSourceDesc::Webhook { .. }
-            ) {
-                if let Some(cluster) = self.catalog().try_get_cluster(
-                    plan.in_cluster
-                        .expect("ingestion, webhook sources must specify cluster"),
-                ) {
-                    mz_ore::soft_assert_or_log!(
-                        cluster.replica_ids().len() <= 1,
-                        "cannot create source in cluster {}; has >1 replicas",
-                        cluster.id()
-                    );
+
+            match plan.source.data_source {
+                plan::DataSourceDesc::Ingestion(ref ingestion) => {
+                    let cluster_id = plan
+                        .in_cluster
+                        .expect("ingestion plans must specify cluster");
+                    match ingestion.desc.connection {
+                        GenericSourceConnection::Postgres(_)
+                        | GenericSourceConnection::MySql(_) => {
+                            if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
+                                mz_ore::soft_assert_or_log!(
+                                    cluster.replica_ids().len() <= 1,
+                                    "cannot create source in cluster {}; has >1 replicas",
+                                    cluster.id()
+                                );
+                            }
+                        }
+                        GenericSourceConnection::Kafka(_)
+                        | GenericSourceConnection::LoadGenerator(_) => {}
+                    }
                 }
+                plan::DataSourceDesc::Webhook { .. } => {
+                    let cluster_id = plan.in_cluster.expect("webhook plans must specify cluster");
+                    if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
+                        mz_ore::soft_assert_or_log!(
+                            cluster.replica_ids().len() <= 1,
+                            "cannot create source in cluster {}; has >1 replicas",
+                            cluster.id()
+                        );
+                    }
+                }
+                plan::DataSourceDesc::IngestionExport { .. } | plan::DataSourceDesc::Progress => {}
             }
 
             // Attempt to reduce the `CHECK` expression, we timeout if this takes too long.

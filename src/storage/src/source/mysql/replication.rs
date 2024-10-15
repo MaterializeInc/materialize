@@ -53,6 +53,7 @@ use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
 use mz_ore::future::InTask;
 use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
 use mz_timely_util::containers::stack::AccountedStackBuilder;
+use rand::Rng;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::core::Map;
@@ -67,7 +68,6 @@ use mz_mysql_util::{
     query_sys_var, MySqlConn, MySqlError, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE,
 };
 use mz_ore::cast::CastFrom;
-use mz_repr::GlobalId;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
 use mz_storage_types::sources::MySqlSourceConnection;
@@ -91,12 +91,6 @@ mod partitions;
 /// Used as a partition id to determine if the worker is
 /// responsible for reading from the MySQL replication stream
 static REPL_READER: &str = "reader";
-
-/// A constant arbitrary offset to add to the source-id to
-/// produce a deterministic server-id for identifying Materialize
-/// as a replica on the upstream MySQL server.
-/// TODO(roshan): Add user-facing documentation for this
-static REPLICATION_SERVER_ID_OFFSET: u32 = 524000;
 
 /// Renders the replication dataflow. See the module documentation for more
 /// information.
@@ -539,20 +533,8 @@ async fn raw_stream<'a>(
     ))
     .await?;
 
-    // Generate a deterministic server-id for identifying us as a replica on the upstream mysql server.
-    // The value does not actually matter since it's irrelevant for GTID-based replication and won't
-    // cause errors if it happens to be the same as another replica in the mysql cluster (based on testing),
-    // but by setting it to a constant value we can make it easier for users to identify Materialize connections
-    let server_id = match config.id {
-        GlobalId::System(id) => id,
-        GlobalId::User(id) => id,
-        GlobalId::Transient(id) => id,
-        _ => unreachable!(),
-    };
-    let server_id = match u32::try_from(server_id) {
-        Ok(id) if id + REPLICATION_SERVER_ID_OFFSET < u32::MAX => id + REPLICATION_SERVER_ID_OFFSET,
-        _ => REPLICATION_SERVER_ID_OFFSET,
-    };
+    let mut rng = rand::thread_rng();
+    let server_id: u32 = rng.gen();
 
     trace!(
         "requesting replication stream with seen_gtids: {seen_gtids:?} \

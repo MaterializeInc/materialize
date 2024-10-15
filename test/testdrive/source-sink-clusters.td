@@ -9,6 +9,7 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET enable_create_table_from_source = true
 
 # Clean up cluster manually, since testdrive does not automatically clean up
 # clusters.
@@ -40,10 +41,6 @@ contains:Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
 # Executing queries on a storage cluster is allowed.
 > SELECT generate_series(1, 1)
 1
-
-# Only one replica of a storage cluster is permitted.
-! CREATE CLUSTER REPLICA storage.r2 SIZE '1'
-contains:cannot create more than one replica of a cluster containing sources or sinks
 
 # Creating sources on clusters containing compute objects is allowed
 > CREATE SOURCE lg2 IN CLUSTER storage FROM LOAD GENERATOR COUNTER (UP TO 100)

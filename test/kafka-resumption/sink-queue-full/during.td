@@ -17,7 +17,9 @@ A,B,0
 > SELECT count(*) FROM largeinput_tbl
 11000001
 
-> CREATE SINK output FROM largeinput_tbl
+> CREATE SINK output
+  IN CLUSTER singlereplica
+  FROM largeinput_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-byo-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
