@@ -63,6 +63,7 @@ def workflow_default(c: Composition) -> None:
 def workflow_simple(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    c.setup_quickstart_cluster()
 
     seed = random.getrandbits(16)
     c.run_testdrive_files(
@@ -78,6 +79,7 @@ def workflow_simple(c: Composition) -> None:
 def workflow_resumption(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    c.setup_quickstart_cluster()
 
     priv_cursor = c.sql_cursor(service="materialized", user="mz_system", port=6877)
     priv_cursor.execute("ALTER SYSTEM SET allow_real_time_recency = true;")
@@ -156,6 +158,7 @@ def workflow_resumption(c: Composition) -> None:
 def workflow_multithreaded(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "materialized")
+    c.setup_quickstart_cluster()
     c.up("testdrive", persistent=True)
 
     value = [201]

@@ -536,7 +536,10 @@ pub fn plan_create_webhook_source(
 
     // We will rewrite the cluster if one is not provided, so we must use the `in_cluster` value
     // we plan to normalize when we canonicalize the create statement.
-    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster)?;
+    let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
+    if in_cluster.replica_ids().len() > 1 {
+        sql_bail!("cannot create source in cluster with more than one replica")
+    }
     let create_sql =
         normalize::create_statement(scx, Statement::CreateWebhookSource(stmt.clone()))?;
 
@@ -675,7 +678,7 @@ pub fn plan_create_webhook_source(
             validate_using,
             body_format,
             headers,
-            cluster_id: Some(in_cluster),
+            cluster_id: Some(in_cluster.id()),
         };
         let data_source = TableDataSource::DataSource {
             desc: data_source,
@@ -710,7 +713,7 @@ pub fn plan_create_webhook_source(
             },
             if_not_exists,
             timeline,
-            in_cluster: Some(in_cluster),
+            in_cluster: Some(in_cluster.id()),
         })
     };
 
@@ -1172,7 +1175,17 @@ pub fn plan_create_source(
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
-    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster)?;
+    let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
+    match stmt.connection {
+        CreateSourceConnection::Postgres { .. }
+        | CreateSourceConnection::Yugabyte { .. }
+        | CreateSourceConnection::MySql { .. } => {
+            if in_cluster.replica_ids().len() > 1 {
+                sql_bail!("cannot create source in cluster with more than one replica")
+            }
+        }
+        CreateSourceConnection::Kafka { .. } | CreateSourceConnection::LoadGenerator { .. } => {}
+    }
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
@@ -1200,7 +1213,7 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         timeline,
-        in_cluster: Some(in_cluster),
+        in_cluster: Some(in_cluster.id()),
     }))
 }
 
@@ -2141,11 +2154,10 @@ fn get_encoding(
 /// If `in_cluster` is `None` we will update it to refer to the default cluster.
 /// Because of this, do not normalize/canonicalize the create SQL statement
 /// until after calling this function.
-fn source_sink_cluster_config(
-    scx: &StatementContext,
-    ty: &'static str,
+fn source_sink_cluster_config<'a, 'ctx>(
+    scx: &'a StatementContext<'ctx>,
     in_cluster: &mut Option<ResolvedClusterName>,
-) -> Result<ClusterId, PlanError> {
+) -> Result<&'a dyn CatalogCluster<'ctx>, PlanError> {
     let cluster = match in_cluster {
         None => {
             let cluster = scx.catalog.resolve_cluster(None)?;
@@ -2158,11 +2170,7 @@ fn source_sink_cluster_config(
         Some(in_cluster) => scx.catalog.get_cluster(in_cluster.id),
     };
 
-    if cluster.replica_ids().len() > 1 {
-        sql_bail!("cannot create {ty} in cluster with more than one replica")
-    }
-
-    Ok(cluster.id())
+    Ok(cluster)
 }
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
@@ -3431,7 +3439,10 @@ fn plan_sink(
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
-    let in_cluster = source_sink_cluster_config(scx, "sink", &mut stmt.in_cluster)?;
+    let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
+    if in_cluster.replica_ids().len() > 1 {
+        sql_bail!("cannot create sink in cluster with more than one replica")
+    }
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
@@ -3446,7 +3457,7 @@ fn plan_sink(
         },
         with_snapshot,
         if_not_exists,
-        in_cluster,
+        in_cluster: in_cluster.id(),
     }))
 }
 
@@ -4986,7 +4997,7 @@ pub fn plan_create_cluster_replica(
         .catalog
         .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
     let current_replica_count = cluster.replica_ids().iter().count();
-    if contains_storage_objects(scx, cluster) && current_replica_count > 0 {
+    if contains_single_replica_objects(scx, cluster) && current_replica_count > 0 {
         let internal_replica_count = cluster.replicas().iter().filter(|r| r.internal()).count();
         return Err(PlanError::CreateReplicaFailStorageObjects {
             current_replica_count,
@@ -5311,14 +5322,21 @@ fn plan_drop_network_policy(
     }
 }
 
-/// Returns `true` if the cluster has any storage object. Return `false` if the cluster has no
-/// objects.
-fn contains_storage_objects(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
+/// Returns `true` if the cluster has any object that requires a single replica.
+/// Returns `false` if the cluster has no objects.
+fn contains_single_replica_objects(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
     cluster.bound_objects().iter().any(|id| {
-        matches!(
-            scx.catalog.get_item(id).item_type(),
-            CatalogItemType::Source | CatalogItemType::Sink
-        )
+        let item = scx.catalog.get_item(id);
+        let single_replica_source = match item.source_desc() {
+            Ok(Some(desc)) => match desc.connection {
+                GenericSourceConnection::Kafka(_) | GenericSourceConnection::LoadGenerator(_) => {
+                    false
+                }
+                GenericSourceConnection::MySql(_) | GenericSourceConnection::Postgres(_) => true,
+            },
+            _ => false,
+        };
+        single_replica_source || matches!(item.item_type(), CatalogItemType::Sink)
     })
 }
 
@@ -5918,7 +5936,8 @@ pub fn plan_alter_cluster(
 
                         // Total number of replicas running is internal replicas
                         // + replication factor.
-                        if contains_storage_objects(scx, cluster) && hypothetical_replica_count > 1
+                        if contains_single_replica_objects(scx, cluster)
+                            && hypothetical_replica_count > 1
                         {
                             return Err(PlanError::CreateReplicaFailStorageObjects {
                                 current_replica_count: cluster.replica_ids().iter().count(),

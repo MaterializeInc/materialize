@@ -34,7 +34,9 @@ New York,NY,10004
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SINK output FROM input_tbl
+> CREATE SINK output
+  IN CLUSTER singlereplica
+  FROM input_tbl
   INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output-byo-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
