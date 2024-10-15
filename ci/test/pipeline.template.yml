@@ -640,7 +640,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: replica-isolation
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      # Runs faster with larger agent
+      queue: hetzner-aarch64-8cpu-16gb
 
   - id: persistence
     label: Persistence tests
