@@ -58,7 +58,8 @@ use types::{
 mod autospill;
 mod memory;
 mod rocksdb;
-mod types;
+// TODO(aljoscha): Move next to upsert module, rename to upsert_types.
+pub(crate) mod types;
 
 pub type UpsertValue = Result<Row, UpsertError>;
 
@@ -314,8 +315,11 @@ where
             )
         };
 
+        // TODO(aljoscha): I don't like how we have basically the same call
+        // three times here, but it's hard working around those impl Futures
+        // that return an impl Trait. Oh well...
         if allow_auto_spill {
-            upsert_inner(
+            upsert_operator(
                 &thin_input,
                 upsert_envelope.key_indices,
                 resume_upper,
@@ -327,11 +331,12 @@ where
                     AutoSpillBackend::new(rocksdb_init_fn, spill_threshold, rocksdb_in_use_metric)
                 },
                 upsert_config,
+                storage_configuration,
                 prevent_snapshot_buffering,
                 snapshot_buffering_max,
             )
         } else {
-            upsert_inner(
+            upsert_operator(
                 &thin_input,
                 upsert_envelope.key_indices,
                 resume_upper,
@@ -341,6 +346,7 @@ where
                 source_config,
                 rocksdb_init_fn,
                 upsert_config,
+                storage_configuration,
                 prevent_snapshot_buffering,
                 snapshot_buffering_max,
             )
@@ -351,7 +357,7 @@ where
             source_config.worker_id,
             source_config.id
         );
-        upsert_inner(
+        upsert_operator(
             &thin_input,
             upsert_envelope.key_indices,
             resume_upper,
@@ -360,6 +366,71 @@ where
             upsert_metrics,
             source_config,
             || async { InMemoryHashMap::default() },
+            upsert_config,
+            storage_configuration,
+            prevent_snapshot_buffering,
+            snapshot_buffering_max,
+        )
+    }
+}
+
+// A shim so we can dispatch based on the dyncfg that tells us which upsert
+// operator to use.
+fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
+    input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    key_indices: Vec<usize>,
+    resume_upper: Antichain<G::Timestamp>,
+    persist_input: Collection<G, Result<Row, DataflowError>, Diff>,
+    persist_token: Option<Vec<PressOnDropButton>>,
+    upsert_metrics: UpsertMetrics,
+    source_config: crate::source::RawSourceCreationConfig,
+    state: F,
+    upsert_config: UpsertConfig,
+    storage_configuration: &StorageConfiguration,
+    prevent_snapshot_buffering: bool,
+    snapshot_buffering_max: Option<usize>,
+) -> (
+    Collection<G, Result<Row, DataflowError>, Diff>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, Infallible>,
+    PressOnDropButton,
+)
+where
+    G::Timestamp: TotalOrder,
+    F: FnOnce() -> Fut + 'static,
+    Fut: std::future::Future<Output = US>,
+    US: UpsertStateBackend<Option<FromTime>>,
+    FromTime: Debug + timely::ExchangeData + Ord,
+{
+    let use_continual_feedback_upsert =
+        dyncfgs::STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT.get(storage_configuration.config_set());
+
+    tracing::info!(id = %source_config.id, %use_continual_feedback_upsert, "upsert operator implementation");
+
+    if use_continual_feedback_upsert {
+        crate::upsert_continual_feedback::upsert_inner(
+            &input,
+            key_indices,
+            resume_upper,
+            persist_input,
+            persist_token,
+            upsert_metrics,
+            source_config,
+            state,
+            upsert_config,
+            prevent_snapshot_buffering,
+            snapshot_buffering_max,
+        )
+    } else {
+        upsert_classic(
+            &input,
+            key_indices,
+            resume_upper,
+            persist_input,
+            persist_token,
+            upsert_metrics,
+            source_config,
+            state,
             upsert_config,
             prevent_snapshot_buffering,
             snapshot_buffering_max,
@@ -429,8 +500,8 @@ where
         .as_collection()
 }
 
-/// Helper method for `upsert_inner` used to stage `data` updates
-/// from the input timely edge.
+/// Helper method for `upsert_classic` used to stage `data` updates
+/// from the input/source timely edge.
 fn stage_input<T, FromTime>(
     stash: &mut Vec<(
         Capability<T>,
@@ -753,11 +824,15 @@ async fn ingest_state_updates<S, G, T, FromTime, E>(
 
 // Created a struct to hold the configs for upserts.
 // So that new configs don't require a new method parameter.
-struct UpsertConfig {
-    shrink_upsert_unused_buffers_by_ratio: usize,
+pub(crate) struct UpsertConfig {
+    pub shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
-fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
+// WIP: As of right now, this mirrors upsert_continual_feedback, so it can be
+// reviewed as a diff. Once the PR review is done, I will revert much of this
+// file to the previous state and then we really only have the new operator impl
+// in upsert_continual_feedback.
+fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
@@ -1179,7 +1254,7 @@ where
 }
 
 #[async_trait::async_trait(?Send)]
-trait UpsertErrorEmitter<G> {
+pub(crate) trait UpsertErrorEmitter<G> {
     async fn emit(&mut self, context: String, e: anyhow::Error);
 }
 
