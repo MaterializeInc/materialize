@@ -135,13 +135,15 @@ impl Coordinator {
 
         let now = self.now();
 
-        let compute_caught_up = self.clusters_caught_up(
-            allowed_lag.into(),
-            cutoff.into(),
-            now.into(),
-            &live_collection_frontiers,
-            &ctx.exclude_collections,
-        );
+        let compute_caught_up = self
+            .clusters_caught_up(
+                allowed_lag.into(),
+                cutoff.into(),
+                now.into(),
+                &live_collection_frontiers,
+                &ctx.exclude_collections,
+            )
+            .await;
 
         tracing::info!(%compute_caught_up, "checked caught-up status of collections");
 
@@ -163,7 +165,7 @@ impl Coordinator {
     /// For this check, zero-replica clusters are always considered caught up.
     /// Their collections would never normally be considered caught up but it's
     /// clearly intentional that they have no replicas.
-    fn clusters_caught_up(
+    async fn clusters_caught_up(
         &self,
         allowed_lag: Timestamp,
         cutoff: Timestamp,
@@ -173,14 +175,16 @@ impl Coordinator {
     ) -> bool {
         let mut result = true;
         for cluster in self.catalog().clusters() {
-            let caught_up = self.collections_caught_up(
-                cluster,
-                allowed_lag.clone(),
-                cutoff.clone(),
-                now.clone(),
-                live_frontiers,
-                exclude_collections,
-            );
+            let caught_up = self
+                .collections_caught_up(
+                    cluster,
+                    allowed_lag.clone(),
+                    cutoff.clone(),
+                    now.clone(),
+                    live_frontiers,
+                    exclude_collections,
+                )
+                .await;
 
             let caught_up = caught_up.unwrap_or_else(|e| {
                 tracing::error!(
@@ -213,7 +217,7 @@ impl Coordinator {
     ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
-    fn collections_caught_up(
+    async fn collections_caught_up(
         &self,
         cluster: &Cluster,
         allowed_lag: Timestamp,
@@ -299,23 +303,45 @@ impl Coordinator {
             let within_lag =
                 PartialOrder::less_equal(live_write_frontier, &bumped_write_plus_allowed_lag);
 
-            if within_lag {
+            // This call is on the expensive side, because we have to do a call
+            // across a task/channel boundary, and our work competes with other
+            // things the compute/instance controller might be doing. But it's
+            // okay because we only do these hydration checks when in read-only
+            // mode, and only rarely.
+            let collection_hydrated = self
+                .controller
+                .compute
+                .collection_hydrated(cluster.id, id)
+                .await?;
+
+            if within_lag && collection_hydrated {
                 // This is a bit spammy, but log caught-up collections while we
                 // investigate why environments are cutting over but then a lot
                 // of compute collections are _not_ in fact hydrated on
                 // clusters.
-                tracing::info!(%id, ?write_frontier, ?live_write_frontier, ?allowed_lag, %cluster.id, "collection is caught up");
-            }
-            if !within_lag {
-                // We are not within the allowed lag!
+                tracing::info!(
+                    %id,
+                    %within_lag,
+                    %collection_hydrated,
+                    ?write_frontier,
+                    ?live_write_frontier,
+                    ?allowed_lag,
+                    %cluster.id,
+                    "collection is caught up");
+            } else {
+                // We are not within the allowed lag, or not hydrated!
                 //
                 // We continue with our loop instead of breaking out early, so
                 // that we log all non-caught-up replicas.
                 tracing::info!(
+                    %id,
+                    %within_lag,
+                    %collection_hydrated,
                     ?write_frontier,
                     ?live_write_frontier,
                     ?allowed_lag,
-                    "collection {id} is not caught up"
+                    %cluster.id,
+                    "collection is not caught up"
                 );
                 all_caught_up = false;
             }

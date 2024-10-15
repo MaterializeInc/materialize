@@ -92,7 +92,7 @@ use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Button, Event, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Filter, FrontierNotificator, Map, Operator};
-use timely::dataflow::{ProbeHandle, Scope};
+use timely::dataflow::Scope;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::{Data, PartialOrder};
@@ -254,10 +254,9 @@ where
             }
         };
 
+        // We don't report a `compute_probe`, our output frontier is equal to
+        // our write frontier, which we report directly.
         let collection = compute_state.expect_collection_mut(sink_id);
-        let mut probe = ProbeHandle::default();
-        let to_append = to_append.probe_with(&mut probe);
-        collection.compute_probe = Some(probe);
         let sink_write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
         collection.sink_write_frontier = Some(Rc::clone(&sink_write_frontier));
 
