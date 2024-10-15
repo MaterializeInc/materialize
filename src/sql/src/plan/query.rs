@@ -87,7 +87,6 @@ use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeUngroupedColumn};
 use crate::plan::statement::{show, StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
-use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidWmrRecursionLimit;
 use crate::plan::{
     literal, transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
