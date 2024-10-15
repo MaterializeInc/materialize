@@ -314,7 +314,7 @@ impl ComputeState {
     /// the replica's initialization system time.
     ///
     /// Only expected to be called once when creating the instance. Guards against calling it
-    /// multiple times by checking if the offset is non-zero and the local expiration time is set.
+    /// multiple times by checking if the local expiration time is set.
     pub fn apply_expiration_offset(&mut self, offset: Duration) {
         if self.replica_expiration.is_empty() {
             let offset: EpochMillis = offset
