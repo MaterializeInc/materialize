@@ -161,7 +161,7 @@ In Materialize, a [source](/sql/create-source) describes an **external** system
 you want to read data from, and provides details about how to decode and
 interpret that data. You can instruct dbt to create a source using the custom
 `source` materialization. Once a source has been defined, it can be referenced
-from another model using the dbt [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source)
+from another model using the dbt [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref)
 or [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) functions.
 
 {{< note >}}
@@ -338,47 +338,89 @@ database.schema.webhook
 
 In dbt, a [model](https://docs.getdbt.com/docs/building-a-dbt-project/building-models#getting-started)
 is a `SELECT` statement that encapsulates a data transformation you want to run
-on top of your database.
+on top of your database. When you use dbt with Materialize, **your models stay
+up-to-date** without manual or configured refreshes. This allows you to
+efficiently transform streaming data using the same thought process you'd use
+for batch transformations against any other database.
 
-When you use dbt with Materialize, **your models stay up-to-date** without
-manual or configured refreshes. This allows you to efficiently transform
-streaming data using the same thought process you'd use for batch
-transformations on top of any other database.
+Depending on your usage patterns, you can transform data using [`view`](#views)
+or [`materialized_view`](#materialized-views) models. For guidance and best
+practices on when to use views and materialized views in Materialize, see
+[Indexed views vs. materialized views](/concepts/views/#indexed-views-vs-materialized-views).
 
 #### Views
 
-dbt models are materialized as `views` by default. So, to create a
-[view](/sql/create-view) in Materialize, you can provide the SQL statement in
-the model (and skip the `materialized` configuration parameter). For example:
+dbt models are materialized as [views](/sql/create-view) by default. Although
+this means you can skip the `materialized` configuration parameter in the model
+definition to create views in Materialize, we recommend explicitly setting the
+materialization type for maintainability.
 
 **Filename:** models/view_a.sql
 ```mzsql
+{{ config(materialized='view') }}
+
+SELECT
+    col_a, ...
+-- Reference model dependencies using the dbt ref() function
+FROM {{ ref('kafka_topic_a') }}
+```
+
+The model above will be compiled to the following SQL statement:
+
+```mzsql
+CREATE VIEW database.schema.view_a AS
+SELECT
+    col_a, ...
+FROM database.schema.kafka_topic_a;
+```
+
+The resulting view **will not** keep results incrementally updated without an
+index (see [Creating an index on a view](#creating-an-index-on-a-view)). Once a
+`view` model has been defined, it can be referenced from another model using
+the dbt [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref)
+function.
+
+##### Creating an index on a view
+
+{{< tip >}}
+For guidance and best practices on how to use indexes in Materialize, see
+[Indexes on views](/concepts/indexes/#indexes-on-views).
+{{</ tip >}}
+
+To keep results **up-to-date** in Materialize, you can create [indexes](/concepts/indexes/)
+on view models using the [`index` configuration parameter](#indexes). This
+allows you to bypass the need for maintaining complex incremental logic or
+re-running dbt to refresh your models.
+
+**Filename:** models/view_a.sql
+```mzsql
+{{ config(materialized='view',
+          indexes=[{'columns': ['col_a'], 'cluster': 'cluster_a'}]) }}
+
 SELECT
     col_a, ...
 FROM {{ ref('kafka_topic_a') }}
 ```
 
-The model above would be compiled to `database.schema.view_a`.
+The model above will be compiled to the following SQL statements:
 
-{{< tip >}}
+```mzsql
+CREATE VIEW database.schema.view_a AS
+SELECT
+    col_a, ...
+FROM database.schema.kafka_topic_a;
 
-- The model depends on the Kafka source defined above. To express this
-  dependency and track the **lineage** of your project, you can use the dbt
-  [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref) function.
+CREATE INDEX database.schema.view_a_idx IN CLUSTER cluster_a ON view_a (col_a);
+```
 
-- To keep your models **up-to-date** in Materialize, you can index the view. In
-  Materialize, [indexes](/concepts/indexes/) on a view maintain view results in
-  memory within a [cluster](/concepts/clusters/ "pools of compute resources
-  (CPU, memory, and scratch disk space)"). As the underlying data changes,
-  indexes **incrementally update** the view results in memory. To index a view,
-  see [Configuration: Indexes](#indexes).
-
-{{</ tip >}}
+As new data arrives, indexes keep view results **incrementally updated** in
+memory within a [cluster](/concepts/clusters/). Indexes help optimize query
+performance and make queries against views fast and computationally free.
 
 #### Materialized views
 
-In Materialize, [materialized views](/concepts/views/#materialized-views)
-**perform incremental updates** as the underlying data changes:
+To materialize a model as a [materialized view](/concepts/views/#materialized-views),
+set the `materialized` configuration parameter to `materialized_view`.
 
 **Filename:** models/materialized_view_a.sql
 ```mzsql
@@ -386,13 +428,66 @@ In Materialize, [materialized views](/concepts/views/#materialized-views)
 
 SELECT
     col_a, ...
+-- Reference model dependencies using the dbt ref() function
 FROM {{ ref('view_a') }}
 ```
 
-The model above would be compiled to `database.schema.materialized_view_a`.
-Here, the model depends on the view defined above, and is referenced as such
-via the dbt [ref()](https://docs.getdbt.com/reference/dbt-jinja-functions/ref)
+The model above will be compiled to the following SQL statement:
+
+```mzsql
+CREATE MATERIALIZED VIEW database.schema.materialized_view_a AS
+SELECT
+    col_a, ...
+FROM database.schema.view_a;
+```
+
+The resulting materialized view will keep results **incrementally updated** in
+durable storage as new data arrives. Once a `materialized_view` model has been
+defined, it can be referenced from another model using the dbt [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref)
 function.
+
+##### Creating an index on a materialized view
+
+{{< tip >}}
+For guidance and best practices on how to use indexes in Materialize, see
+[Indexes on materialized views](/views/#indexes-on-materialized-views).
+{{</ tip >}}
+
+With a materialized view, your models are kept **up-to-date** in Materialize as
+new data arrives. This allows you to bypass the need for maintaining complex
+incremental logic or re-run dbt to refresh your models.
+
+These results are **incrementally updated** in durable storage — which makes
+them available across clusters — but aren't optimized for performance. To make
+results also available in memory within a [cluster](/concepts/clusters/), you
+can create [indexes](/concepts/indexes/) on materialized view models using the
+[`index` configuration parameter](#indexes).
+
+**Filename:** models/materialized_view_a.sql
+```mzsql
+{{ config(materialized='materialized_view')
+          indexes=[{'columns': ['col_a'], 'cluster': 'cluster_b'}]) }}
+
+SELECT
+    col_a, ...
+FROM {{ ref('view_a') }}
+```
+
+The model above will be compiled to the following SQL statements:
+
+```mzsql
+CREATE MATERIALIZED VIEW database.schema.materialized_view_a AS
+SELECT
+    col_a, ...
+FROM database.schema.view_a;
+
+CREATE INDEX database.schema.materialized_view_a_idx IN CLUSTER cluster_b ON materialized_view_a (col_a);
+```
+
+As new data arrives, results are **incrementally updated** in durable storage
+and also accessible in memory within the [cluster](/concepts/clusters/) the
+index is created in. Indexes help optimize query performance and make queries
+against materialized views faster.
 
 ### Sinks
 
@@ -428,8 +523,8 @@ database.schema.kafka_topic_c
 
 Use the `cluster` option to specify the [cluster](/sql/create-cluster/ "pools of
 compute resources (CPU, memory, and scratch disk space)") in which a
-`materialized view`, `index`, `source`, or `sink` model is created. If
-unspecified, the default cluster for the connection is used.
+`materialized_view`, `source`, `sink` model, or `index` configuration is
+created. If unspecified, the default cluster for the connection is used.
 
 ```mzsql
 {{ config(materialized='materialized_view', cluster='cluster_a') }}
@@ -454,7 +549,7 @@ in `dbt_project.yml`.
 #### Databases
 
 Use the `database` option to specify the [database](/sql/namespaces/#database-details)
-in which a `source`, `view`, `materialized view` or `sink` is created. If
+in which a `source`, `view`, `materialized_view` or `sink` is created. If
 unspecified, the default database for the connection is used.
 
 ```mzsql
