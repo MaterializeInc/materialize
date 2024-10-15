@@ -1,0 +1,53 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+suite: test deployment
+templates:
+  - deployment.yaml
+tests:
+  - it: should create a deployment
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: materialize/orchestratord:v0.121.0-dev.0--main.g0c02fecf8c5a05f697925366a1c2baae20472b81
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: IfNotPresent
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: orchestratord
+
+  - it: should set correct arguments
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--startup-log-filter=INFO,mz_orchestratord=TRACE"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--cloud-provider=local"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--region=kind"
+
+  - it: should set resources correctly
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 128Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 500m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 512Mi
