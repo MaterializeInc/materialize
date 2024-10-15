@@ -344,10 +344,10 @@ class Update(DML):
 class ManySmallUpdates(DML):
     """Measure the time it takes for several small UPDATE statements to return to client"""
 
-    SCALE = 3  # runs > 4 hours with SCALE = 4
+    SCALE = 2  # runs ~2.5 hours with SCALE = 3
 
     def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
+        return ScenarioVersion.create(1, 2, 0)
 
     def init(self) -> list[Action]:
         return [
@@ -1387,10 +1387,14 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
 class ManyKafkaSourcesOnSameCluster(Scenario):
     """Measure the time it takes to ingest data from many Kafka sources"""
 
-    SCALE = 2.5  # 316 sources
+    # Runs ~2 hours with 300 sources
+    SCALE = 2  # 100 sources
     FIXED_SCALE = True
 
     COUNT_SOURCE_ENTRIES = 100000
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
 
     def shared(self) -> Action:
         create_topics = "\n".join(
@@ -1949,10 +1953,11 @@ ALTER SYSTEM SET max_clusters = {self.n() * 6};
 class StartupTpch(Scenario):
     """Measure the time it takes to restart a Mz instance populated with TPC-H and have all the dataflows be ready to return something"""
 
-    SCALE = 1.2  # 25ish objects of each kind
-    FIXED_SCALE = (
-        True  # Can not scale to 100s of objects, so --size=+N will have no effect
-    )
+    # Runs ~3 hours with SCALE = 1.2
+    SCALE = 0.1  # 1 object of each kind
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
 
     def init(self) -> Action:
         # We need to massage the SQL statements so that Testdrive doesn't get confused.
