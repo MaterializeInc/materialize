@@ -60,8 +60,6 @@ take care of serializing and deserializing bytes. Additionally, we probably don'
 implementing.
 
 ```Rust
-
-
 /// All the cached expressions for a single `GlobalId`.
 ///
 /// Note: This is just a placeholder for now, don't index too hard on the exact fields. I haven't
@@ -73,6 +71,15 @@ struct Expressions {
     dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
     notices: SmallVec<[Arc<OptimizerNotice>; 4]>,
     optimizer_feature_overrides: OptimizerFeatures,
+}
+
+struct NewEntry {
+    /// `GlobalId` of the new expression.
+    id: GlobalId,
+    /// New `Expressions` to cache.
+    expressions: Expressions,
+    /// `GlobalId`s to invalidate as a result of the new entry.
+    invalidate_ids: BTreeSet<GlobalId>,
 }
 
 struct ExpressionCache {
@@ -93,12 +100,13 @@ impl ExpressionCache {
     /// Returns all cached expressions in the current deploy generation, after reconciliation.
     fn open(&mut self, current_ids: &BTreeSet<GlobalId>, optimizer_features: &OptimizerFeatures, remove_prior_gens: bool) -> Vec<(GlobalId, Expressions)>;
 
-    /// Durably inserts `expressions` into current deploy generation.
+    /// Durably inserts `expressions` into current deploy generation. This may also invalidate
+    /// entries giving by `expressions`.
     ///
-    /// Returns a [`Future`] that completes once `expressions` have been made durable.
+    /// Returns a [`Future`] that completes once the changes have been made durable.
     ///
     /// Panics if any `GlobalId` already exists in the cache.
-    fn insert_expressions(&mut self, expressions: Vec<(GlobalId, Expressions)>) -> impl Future<Output = ()>;
+    fn insert_expressions(&mut self, expressions: Vec<NewEntry>) -> impl Future<Output=()>;
 
     /// Durably remove and return all entries in current deploy generation that depend on an ID in
     /// `dropped_ids` .
@@ -112,17 +120,35 @@ impl ExpressionCache {
 
 Below is a detailed set of steps that will happen in startup.
 
-1. Call `ExpressionCache::open` to remove any invalid entries and retrieve cached entries. When
-   passing in the arguments, `remove_prior_gens == !read_only_mode`.
+1. Call `ExpressionCache::open` to read the cache into memory and perform reconciliation (See
+   [Startup Reconciliation](#startup reconciliation)). When passing in the arguments,
+   `remove_prior_gens == !read_only_mode`.
 2. While opening the catalog, for each object:
     a. If the object is present in the cache, use cached optimized expression.
     b. Else generate the optimized expressions and insert the expressions via
-       `ExpressionCache::insert_expressions`.
+       `ExpressionCache::insert_expressions`. This will also perform any necessary invalidations if
+       the new expression is an index. See ([Create Invalidations](#create invalidations)).
+
+#### Startup Reconciliation
+When opening the cache for the first time, we need to perform the following reconciliation tasks:
+
+  - Remove any entries that exist in the cache but not in the catalog.
+  - If `remove_prior_gens` is true, then remove all prior gens.
+
 
 ### DDL - Create
 
 1. Execute catalog transaction.
 2. Update cache via `ExpressionCache::insert_expressions`.
+
+#### Create Invalidations
+
+When creating and inserting a new index, we need to invalidate some entries that may optimize to
+new expressions. When creating index `i` on object `o`, we need to invalidate the following objects:
+
+  - `o`.
+  - All compute objects that depend directly on `o`.
+  - All compute objects that would directly depend on `o`, if all views were inlined.
 
 ### DDL - Drop
 
