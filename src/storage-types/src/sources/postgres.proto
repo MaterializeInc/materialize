@@ -9,50 +9,50 @@
 
 syntax = "proto3";
 
+package mz_storage_types.sources.postgres;
+
+import "expr/src/scalar.proto";
 import "google/protobuf/empty.proto";
 import "postgres-util/src/desc.proto";
 import "repr/src/global_id.proto";
 import "storage-types/src/connections.proto";
-import "expr/src/scalar.proto";
-
-package mz_storage_types.sources.postgres;
 
 message ProtoCastType {
-    oneof kind {
-        google.protobuf.Empty natural = 1;
-        google.protobuf.Empty text = 2;
-    }
+  oneof kind {
+    google.protobuf.Empty natural = 1;
+    google.protobuf.Empty text = 2;
+  }
 }
 
 message ProtoPostgresColumnCast {
-    mz_expr.scalar.ProtoMirScalarExpr cast = 1;
-    ProtoCastType cast_type = 2;
+  mz_expr.scalar.ProtoMirScalarExpr cast = 1;
+  ProtoCastType cast_type = 2;
 }
 
 message ProtoPostgresSourceConnection {
-    reserved 5, 7;
-    mz_repr.global_id.ProtoGlobalId connection_id = 6;
-    mz_storage_types.connections.ProtoPostgresConnection connection = 1;
-    string publication = 2;
-    ProtoPostgresSourcePublicationDetails details = 4;
+  reserved 5, 7;
+  mz_repr.global_id.ProtoGlobalId connection_id = 6;
+  mz_storage_types.connections.ProtoPostgresConnection connection = 1;
+  string publication = 2;
+  ProtoPostgresSourcePublicationDetails details = 4;
 }
 
 message ProtoPostgresSourcePublicationDetails {
-    reserved 1;
+  reserved 1;
 
-    string slot = 2;
-    optional uint64 timeline_id = 3;
-    string database = 4;
+  string slot = 2;
+  optional uint64 timeline_id = 3;
+  string database = 4;
 }
 
 message ProtoPostgresSourceExportDetails {
-    mz_postgres_util.desc.ProtoPostgresTableDesc table = 1;
-    repeated ProtoPostgresColumnCast column_casts = 2;
+  mz_postgres_util.desc.ProtoPostgresTableDesc table = 1;
+  repeated ProtoPostgresColumnCast column_casts = 2;
 }
 
 // NOTE: this message is encoded and stored as part of source export
 // statement options
 // Be extra careful about changes, ensuring that all changes are backwards compatible
 message ProtoPostgresSourceExportStatementDetails {
-    mz_postgres_util.desc.ProtoPostgresTableDesc table = 1;
+  mz_postgres_util.desc.ProtoPostgresTableDesc table = 1;
 }

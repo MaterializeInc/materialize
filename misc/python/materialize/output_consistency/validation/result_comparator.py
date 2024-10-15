@@ -462,10 +462,9 @@ class ResultComparator:
         if value1 == value2:
             return True
 
-        if isinstance(value1, list) and isinstance(value2, list):
-            return self.is_list_or_tuple_equal(value1, value2, expression)
-
-        if isinstance(value1, tuple) and isinstance(value2, tuple):
+        if (isinstance(value1, list) and isinstance(value2, list)) or (
+            isinstance(value1, tuple) and isinstance(value2, tuple)
+        ):
             return self.is_list_or_tuple_equal(value1, value2, expression)
 
         if isinstance(value1, dict) and isinstance(value2, dict):
@@ -494,7 +493,11 @@ class ResultComparator:
         if len(collection1) != len(collection2):
             return False
 
-        if self.ignore_order_when_comparing_collection(expression):
+        if (
+            self.ignore_order_when_comparing_collection(expression)
+            and self._can_be_sorted(collection1)
+            and self._can_be_sorted(collection2)
+        ):
             collection1 = sorted(collection1)
             collection2 = sorted(collection2)
 
@@ -528,6 +531,13 @@ class ResultComparator:
 
     def ignore_order_when_comparing_collection(self, expression: Expression) -> bool:
         return False
+
+    def _can_be_sorted(self, collection: list[Any] | tuple[Any]) -> bool:
+        for element in collection:
+            if isinstance(element, dict):
+                return False
+
+        return True
 
     def _expression_if_only_one_in_query(
         self, query_execution: QueryExecution

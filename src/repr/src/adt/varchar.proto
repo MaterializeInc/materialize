@@ -12,5 +12,5 @@ syntax = "proto3";
 package mz_repr.adt.varchar;
 
 message ProtoVarCharMaxLength {
-    uint32 value = 1;
+  uint32 value = 1;
 }

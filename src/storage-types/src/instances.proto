@@ -12,8 +12,8 @@ syntax = "proto3";
 package mz_storage_types.instances;
 
 message ProtoStorageInstanceId {
-    oneof kind {
-        uint64 system = 1;
-        uint64 user = 2;
-    }
+  oneof kind {
+    uint64 system = 1;
+    uint64 user = 2;
+  }
 }

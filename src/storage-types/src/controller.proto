@@ -11,25 +11,25 @@
 
 syntax = "proto3";
 
-import "repr/src/relation_and_scalar.proto";
-
 package mz_storage_types.controller;
 
-message ProtoCollectionMetadata {
-    string blob_uri = 1;
-    string consensus_uri = 2;
-    string data_shard = 3;
-    optional string remap_shard = 4;
-    optional string status_shard = 5;
-    optional string txns_shard = 7;
+import "repr/src/relation_and_scalar.proto";
 
-    mz_repr.relation_and_scalar.ProtoRelationDesc relation_desc = 6;
+message ProtoCollectionMetadata {
+  string blob_uri = 1;
+  string consensus_uri = 2;
+  string data_shard = 3;
+  optional string remap_shard = 4;
+  optional string status_shard = 5;
+  optional string txns_shard = 7;
+
+  mz_repr.relation_and_scalar.ProtoRelationDesc relation_desc = 6;
 }
 
 message ProtoDurableCollectionMetadata {
-    // This message is persisted to disk. Changes must be backwards compatible.
-    reserved 1, 2, 4, 5;
-    reserved "remap_shard";
-    string data_shard = 3;
-    // optional string remap_shard = 4;
+  // This message is persisted to disk. Changes must be backwards compatible.
+  reserved 1, 2, 4, 5;
+  reserved "remap_shard";
+  string data_shard = 3;
+  // optional string remap_shard = 4;
 }

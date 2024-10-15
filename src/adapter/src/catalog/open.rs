@@ -29,7 +29,6 @@ use mz_catalog::durable::objects::{
 };
 use mz_catalog::durable::{
     ClusterVariant, ClusterVariantManaged, Transaction, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -37,7 +36,6 @@ use mz_catalog::memory::objects::{
     StateUpdate,
 };
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_cluster_client::ReplicaId;
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{is_cluster_size_v2, ClusterId};
@@ -1148,12 +1146,9 @@ fn add_new_builtin_cluster_replicas_migration(
                 }
             };
 
-            let replica_id = txn.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
-            let replica_id = ReplicaId::System(replica_id);
             let config = builtin_cluster_replica_config(replica_size);
             txn.insert_cluster_replica(
                 cluster.id,
-                replica_id,
                 builtin_replica.name,
                 config,
                 MZ_SYSTEM_ROLE_ID,

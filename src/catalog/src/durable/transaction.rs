@@ -58,7 +58,8 @@ use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
     AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
+    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -504,6 +505,27 @@ impl<'a> Transaction<'a> {
     pub fn insert_cluster_replica(
         &mut self,
         cluster_id: ClusterId,
+        replica_name: &str,
+        config: ReplicaConfig,
+        owner_id: RoleId,
+    ) -> Result<ReplicaId, CatalogError> {
+        let replica_id = match cluster_id {
+            ClusterId::System(_) => self.allocate_system_replica_id()?,
+            ClusterId::User(_) => self.allocate_user_replica_id()?,
+        };
+        self.insert_cluster_replica_with_id(
+            cluster_id,
+            replica_id,
+            replica_name,
+            config,
+            owner_id,
+        )?;
+        Ok(replica_id)
+    }
+
+    pub(crate) fn insert_cluster_replica_with_id(
+        &mut self,
+        cluster_id: ClusterId,
         replica_id: ReplicaId,
         replica_name: &str,
         config: ReplicaConfig,
@@ -654,6 +676,11 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .map(GlobalId::User)
             .collect())
+    }
+
+    pub fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
+        let id = self.get_and_increment_id(USER_REPLICA_ID_ALLOC_KEY.to_string())?;
+        Ok(ReplicaId::User(id))
     }
 
     pub fn allocate_system_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {

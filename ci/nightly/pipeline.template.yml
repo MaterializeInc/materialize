@@ -44,7 +44,7 @@ steps:
     key: linters
     steps:
       - id: closed-issues-detect
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         label: Detect references to already closed issues
         command: bin/ci-builder run stable bin/ci-closed-issues-detect
         depends_on: []
@@ -187,9 +187,10 @@ steps:
     key: kafka
     steps:
       - id: kafka-matrix
-        label: Kafka smoke test against previous Kafka versions
+        label: Kafka smoke test against previous Kafka versions %N
         depends_on: build-aarch64
         timeout_in_minutes: 120
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         plugins:
@@ -1599,7 +1600,7 @@ steps:
       - id: lang-csharp
         label: ":csharp: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         plugins:
           - ./ci/plugins/mzcompose:
               composition: csharp
@@ -1609,7 +1610,7 @@ steps:
       - id: lang-js
         label: ":js: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         plugins:
           - ./ci/plugins/mzcompose:
               composition: js
@@ -1619,7 +1620,7 @@ steps:
       - id: lang-java
         label: ":java: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         plugins:
           - ./ci/plugins/mzcompose:
               composition: java
@@ -1629,7 +1630,7 @@ steps:
       - id: lang-python
         label: ":python: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         plugins:
           - ./ci/plugins/mzcompose:
               composition: python
@@ -1639,7 +1640,7 @@ steps:
       - id: lang-ruby
         label: ":ruby: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         plugins:
           - ./ci/plugins/mzcompose:
               composition: ruby

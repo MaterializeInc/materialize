@@ -17,25 +17,25 @@ syntax = "proto3";
 package mz_persist_client.internal.diff;
 
 enum ProtoStateField {
-    DEPRECATED_ROLLUPS = 0; // Proto doesn't let us reorder this down, sadly
-    ROLLUPS = 8;
-    HOSTNAME = 7;
-    LAST_GC_REQ = 1;
-    LEASED_READERS = 2;
-    CRITICAL_READERS = 6;
-    WRITERS = 3;
-    SCHEMAS = 12;
-    SINCE = 4;
-    LEGACY_BATCHES = 5;
-    HOLLOW_BATCHES = 9;
-    SPINE_BATCHES = 10;
-    SPINE_MERGES = 11;
+  DEPRECATED_ROLLUPS = 0; // Proto doesn't let us reorder this down, sadly
+  ROLLUPS = 8;
+  HOSTNAME = 7;
+  LAST_GC_REQ = 1;
+  LEASED_READERS = 2;
+  CRITICAL_READERS = 6;
+  WRITERS = 3;
+  SCHEMAS = 12;
+  SINCE = 4;
+  LEGACY_BATCHES = 5;
+  HOLLOW_BATCHES = 9;
+  SPINE_BATCHES = 10;
+  SPINE_MERGES = 11;
 }
 
 enum ProtoStateFieldDiffType {
-    INSERT = 0;
-    UPDATE = 1;
-    DELETE = 2;
+  INSERT = 0;
+  UPDATE = 1;
+  DELETE = 2;
 }
 
 // A columnar encoding of Vec<StateFieldDiff<K, V>> with heterogeneous K and V.
@@ -52,19 +52,19 @@ enum ProtoStateFieldDiffType {
 //   data slices based on it's type.) Storing the lengths, OTOH, compresses much
 //   better with protobuf varints.
 message ProtoStateFieldDiffs {
-    repeated ProtoStateField fields = 1;
-    repeated ProtoStateFieldDiffType diff_types = 2;
-    repeated uint64 data_lens = 3;
-    bytes data_bytes = 4;
+  repeated ProtoStateField fields = 1;
+  repeated ProtoStateFieldDiffType diff_types = 2;
+  repeated uint64 data_lens = 3;
+  bytes data_bytes = 4;
 }
 
 message ProtoStateDiff {
-    string applier_version = 1;
+  string applier_version = 1;
 
-    uint64 seqno_from = 2;
-    uint64 seqno_to = 3;
-    uint64 walltime_ms = 6;
-    string latest_rollup_key = 4;
+  uint64 seqno_from = 2;
+  uint64 seqno_to = 3;
+  uint64 walltime_ms = 6;
+  string latest_rollup_key = 4;
 
-    ProtoStateFieldDiffs field_diffs = 5;
+  ProtoStateFieldDiffs field_diffs = 5;
 }

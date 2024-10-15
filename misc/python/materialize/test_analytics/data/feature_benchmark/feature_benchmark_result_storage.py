@@ -24,7 +24,6 @@ class FeatureBenchmarkResultEntry:
     scale: str
     is_regression: bool
     wallclock: ReportMeasurement[float]
-    messages: ReportMeasurement[int]
     memory_mz: ReportMeasurement[float]
     memory_clusterd: ReportMeasurement[float]
 
@@ -73,7 +72,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     {as_sanitized_literal(result_entry.scale)},
                     {result_entry.is_regression},
                     {result_entry.wallclock.result or 'NULL::DOUBLE'},
-                    {result_entry.messages.result or 'NULL::INT'},
+                    NULL::INT,  -- to be removed when we remove the "messages" column
                     {result_entry.memory_mz.result or 'NULL::DOUBLE'},
                     {result_entry.memory_clusterd.result or 'NULL::DOUBLE'},
                     {result_entry.wallclock.min or 'NULL::DOUBLE'},
@@ -122,7 +121,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     {discarded_entry.cycle},
                     {discarded_entry.is_regression},
                     {discarded_entry.wallclock.result or 'NULL::DOUBLE'},
-                    {discarded_entry.messages.result or 'NULL::INT'},
+                    NULL::INT,  -- to be removed when we remove the "messages" column
                     {discarded_entry.memory_mz.result or 'NULL::DOUBLE'},
                     {discarded_entry.memory_clusterd.result or 'NULL::DOUBLE'},
                     {discarded_entry.wallclock.min or 'NULL::DOUBLE'},

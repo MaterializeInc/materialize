@@ -9,6 +9,8 @@
 
 syntax = "proto3";
 
+package mz_compute_types.plan.flat_plan;
+
 import "compute-types/src/plan.proto";
 import "compute-types/src/plan/join.proto";
 import "compute-types/src/plan/reduce.proto";
@@ -20,136 +22,134 @@ import "expr/src/relation.proto";
 import "expr/src/scalar.proto";
 import "repr/src/row.proto";
 
-package mz_compute_types.plan.flat_plan;
-
 message ProtoFlatPlan {
-    message ProtoNode {
-        uint64 id = 1;
-        ProtoFlatPlanNode node = 2;
-    }
+  message ProtoNode {
+    uint64 id = 1;
+    ProtoFlatPlanNode node = 2;
+  }
 
-    repeated ProtoNode nodes = 1;
-    uint64 root = 2;
-    repeated uint64 topological_order = 3;
+  repeated ProtoNode nodes = 1;
+  uint64 root = 2;
+  repeated uint64 topological_order = 3;
 }
 
 message ProtoFlatPlanNode {
-    message ProtoConstant {
-        ProtoConstantRows rows = 1;
-    }
+  message ProtoConstant {
+    ProtoConstantRows rows = 1;
+  }
 
-    message ProtoConstantRows {
-        oneof result {
-            ProtoUpdateVec ok = 1;
-            mz_expr.scalar.ProtoEvalError err = 2;
-        }
+  message ProtoConstantRows {
+    oneof result {
+      ProtoUpdateVec ok = 1;
+      mz_expr.scalar.ProtoEvalError err = 2;
     }
+  }
 
-    message ProtoUpdateVec {
-        repeated ProtoUpdate rows = 1;
-    }
+  message ProtoUpdateVec {
+    repeated ProtoUpdate rows = 1;
+  }
 
-    message ProtoUpdate {
-        mz_repr.row.ProtoRow row = 1;
-        uint64 timestamp = 2;
-        int64 diff = 3;
-    }
+  message ProtoUpdate {
+    mz_repr.row.ProtoRow row = 1;
+    uint64 timestamp = 2;
+    int64 diff = 3;
+  }
 
-    message ProtoGet {
-        mz_expr.id.ProtoId id = 1;
-        ProtoAvailableCollections keys = 2;
-        ProtoGetPlan plan = 3;
-    }
+  message ProtoGet {
+    mz_expr.id.ProtoId id = 1;
+    ProtoAvailableCollections keys = 2;
+    ProtoGetPlan plan = 3;
+  }
 
-    message ProtoLet {
-        mz_expr.id.ProtoLocalId id = 1;
-        uint64 value = 2;
-        uint64 body  = 3;
-    }
+  message ProtoLet {
+    mz_expr.id.ProtoLocalId id = 1;
+    uint64 value = 2;
+    uint64 body = 3;
+  }
 
-    message ProtoLetRec {
-        repeated mz_expr.id.ProtoLocalId ids = 1;
-        repeated uint64 values = 2;
-        repeated ProtoLetRecLimit limits = 3;
-        repeated bool limit_is_some = 4;
-        uint64 body  = 5;
-    }
+  message ProtoLetRec {
+    repeated mz_expr.id.ProtoLocalId ids = 1;
+    repeated uint64 values = 2;
+    repeated ProtoLetRecLimit limits = 3;
+    repeated bool limit_is_some = 4;
+    uint64 body = 5;
+  }
 
-    message ProtoMfp {
-        uint64 input = 1;
-        mz_expr.linear.ProtoMapFilterProject mfp = 2;
-        ProtoInputKeyVal input_key_val = 3;
-    }
+  message ProtoMfp {
+    uint64 input = 1;
+    mz_expr.linear.ProtoMapFilterProject mfp = 2;
+    ProtoInputKeyVal input_key_val = 3;
+  }
 
-    message ProtoInputKeyVal {
-        repeated mz_expr.scalar.ProtoMirScalarExpr key = 1;
-        mz_repr.row.ProtoRow val = 2;
-    }
+  message ProtoInputKeyVal {
+    repeated mz_expr.scalar.ProtoMirScalarExpr key = 1;
+    mz_repr.row.ProtoRow val = 2;
+  }
 
-    message ProtoInputKey {
-        repeated mz_expr.scalar.ProtoMirScalarExpr key = 1;
-    }
+  message ProtoInputKey {
+    repeated mz_expr.scalar.ProtoMirScalarExpr key = 1;
+  }
 
-    message ProtoFlatMap {
-        uint64 input = 1;
-        mz_expr.relation.ProtoTableFunc func = 2;
-        repeated mz_expr.scalar.ProtoMirScalarExpr exprs = 3;
-        mz_expr.linear.ProtoMapFilterProject mfp_after = 4;
-        ProtoInputKey input_key = 5;
-    }
+  message ProtoFlatMap {
+    uint64 input = 1;
+    mz_expr.relation.ProtoTableFunc func = 2;
+    repeated mz_expr.scalar.ProtoMirScalarExpr exprs = 3;
+    mz_expr.linear.ProtoMapFilterProject mfp_after = 4;
+    ProtoInputKey input_key = 5;
+  }
 
-    message ProtoJoin {
-        repeated uint64 inputs = 1;
-        mz_compute_types.plan.join.ProtoJoinPlan plan = 2;
-    }
+  message ProtoJoin {
+    repeated uint64 inputs = 1;
+    mz_compute_types.plan.join.ProtoJoinPlan plan = 2;
+  }
 
-    message ProtoReduce {
-        uint64 input = 1;
-        mz_compute_types.plan.reduce.ProtoKeyValPlan key_val_plan = 2;
-        mz_compute_types.plan.reduce.ProtoReducePlan plan = 3;
-        ProtoInputKey input_key = 4;
-        mz_expr.linear.ProtoMapFilterProject mfp_after = 5;
-    }
+  message ProtoReduce {
+    uint64 input = 1;
+    mz_compute_types.plan.reduce.ProtoKeyValPlan key_val_plan = 2;
+    mz_compute_types.plan.reduce.ProtoReducePlan plan = 3;
+    ProtoInputKey input_key = 4;
+    mz_expr.linear.ProtoMapFilterProject mfp_after = 5;
+  }
 
-    message ProtoTopK {
-        uint64 input = 1;
-        mz_compute_types.plan.top_k.ProtoTopKPlan top_k_plan = 2;
-    }
+  message ProtoTopK {
+    uint64 input = 1;
+    mz_compute_types.plan.top_k.ProtoTopKPlan top_k_plan = 2;
+  }
 
-    message ProtoNegate {
-        uint64 input = 1;
-    }
+  message ProtoNegate {
+    uint64 input = 1;
+  }
 
-    message ProtoThreshold {
-        uint64 input = 1;
-        mz_compute_types.plan.threshold.ProtoThresholdPlan threshold_plan = 2;
-    }
+  message ProtoThreshold {
+    uint64 input = 1;
+    mz_compute_types.plan.threshold.ProtoThresholdPlan threshold_plan = 2;
+  }
 
-    message ProtoUnion {
-        repeated uint64 inputs = 1;
-        bool consolidate_output = 2;
-    }
+  message ProtoUnion {
+    repeated uint64 inputs = 1;
+    bool consolidate_output = 2;
+  }
 
-    message ProtoArrangeBy {
-        uint64 input = 1;
-        ProtoAvailableCollections forms = 2;
-        ProtoInputKey input_key = 3;
-        mz_expr.linear.ProtoMapFilterProject input_mfp = 4;
-    }
+  message ProtoArrangeBy {
+    uint64 input = 1;
+    ProtoAvailableCollections forms = 2;
+    ProtoInputKey input_key = 3;
+    mz_expr.linear.ProtoMapFilterProject input_mfp = 4;
+  }
 
-    oneof kind {
-        ProtoConstant constant = 1;
-        ProtoGet get = 2;
-        ProtoLetRec let_rec = 3;
-        ProtoMfp mfp = 4;
-        ProtoFlatMap flat_map = 5;
-        ProtoJoin join = 6;
-        ProtoReduce reduce = 7;
-        ProtoTopK top_k = 8;
-        ProtoNegate negate = 9;
-        ProtoThreshold threshold = 10;
-        ProtoUnion union = 11;
-        ProtoArrangeBy arrange_by = 12;
-        ProtoLet let = 13;
-    }
+  oneof kind {
+    ProtoConstant constant = 1;
+    ProtoGet get = 2;
+    ProtoLetRec let_rec = 3;
+    ProtoMfp mfp = 4;
+    ProtoFlatMap flat_map = 5;
+    ProtoJoin join = 6;
+    ProtoReduce reduce = 7;
+    ProtoTopK top_k = 8;
+    ProtoNegate negate = 9;
+    ProtoThreshold threshold = 10;
+    ProtoUnion union = 11;
+    ProtoArrangeBy arrange_by = 12;
+    ProtoLet let = 13;
+  }
 }

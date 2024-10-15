@@ -22,121 +22,121 @@ import "repr/src/adt/varchar.proto";
 import "repr/src/global_id.proto";
 
 message ProtoRelationType {
-    message ProtoKey {
-        repeated uint64 keys = 1;
-    }
-    repeated ProtoColumnType column_types = 1;
-    repeated ProtoKey keys = 2;
+  message ProtoKey {
+    repeated uint64 keys = 1;
+  }
+  repeated ProtoColumnType column_types = 1;
+  repeated ProtoKey keys = 2;
 }
 
 message ProtoColumnName {
-    optional string value = 1;
+  optional string value = 1;
 }
 
 message ProtoColumnType {
-    ProtoScalarType scalar_type = 1;
-    bool nullable = 2;
+  ProtoScalarType scalar_type = 1;
+  bool nullable = 2;
 }
 
 message ProtoRelationVersion {
-    uint64 value = 1;
+  uint64 value = 1;
 }
 
 message ProtoColumnMetadata {
-    ProtoRelationVersion added = 1;
-    ProtoRelationVersion dropped = 2;
+  ProtoRelationVersion added = 1;
+  ProtoRelationVersion dropped = 2;
 }
 
 message ProtoRelationDesc {
-    ProtoRelationType typ = 1;
-    repeated ProtoColumnName names = 2;
-    repeated ProtoColumnMetadata metadata = 3;
+  ProtoRelationType typ = 1;
+  repeated ProtoColumnName names = 2;
+  repeated ProtoColumnMetadata metadata = 3;
 }
 
 message ProtoScalarType {
-    message ProtoChar {
-        adt.char.ProtoCharLength length = 1;
-    }
+  message ProtoChar {
+    adt.char.ProtoCharLength length = 1;
+  }
 
-    message ProtoVarChar {
-        adt.varchar.ProtoVarCharMaxLength max_length = 1;
-    }
+  message ProtoVarChar {
+    adt.varchar.ProtoVarCharMaxLength max_length = 1;
+  }
 
-    message ProtoList {
-        reserved 2;
-        reserved "custom_oid";
-        ProtoScalarType element_type = 1;
-        optional global_id.ProtoGlobalId custom_id = 3;
-    }
+  message ProtoList {
+    reserved 2;
+    reserved "custom_oid";
+    ProtoScalarType element_type = 1;
+    optional global_id.ProtoGlobalId custom_id = 3;
+  }
 
-    message ProtoRecordField {
-        ProtoColumnName ColumnName = 1; // TODO: Create and use ProtoColumnName
-        ProtoColumnType ColumnType = 2; // TODO: Create and use ProtoColumnType
-    }
+  message ProtoRecordField {
+    ProtoColumnName ColumnName = 1; // TODO: Create and use ProtoColumnName
+    ProtoColumnType ColumnType = 2; // TODO: Create and use ProtoColumnType
+  }
 
-    message ProtoRecord {
-        reserved 2;
-        reserved "custom_oid";
-        repeated ProtoRecordField fields = 1;
-        optional global_id.ProtoGlobalId custom_id = 4;
-    }
+  message ProtoRecord {
+    reserved 2;
+    reserved "custom_oid";
+    repeated ProtoRecordField fields = 1;
+    optional global_id.ProtoGlobalId custom_id = 4;
+  }
 
-    message ProtoMap {
-        reserved 2;
-        reserved "custom_oid";
-        ProtoScalarType value_type = 1;
-        optional global_id.ProtoGlobalId custom_id = 3;
-    }
+  message ProtoMap {
+    reserved 2;
+    reserved "custom_oid";
+    ProtoScalarType value_type = 1;
+    optional global_id.ProtoGlobalId custom_id = 3;
+  }
 
-    message ProtoRange {
-        ProtoScalarType element_type = 1;
-    }
+  message ProtoRange {
+    ProtoScalarType element_type = 1;
+  }
 
-    message ProtoTimestamp {
-        adt.timestamp.ProtoTimestampPrecision precision = 1;
-    }
+  message ProtoTimestamp {
+    adt.timestamp.ProtoTimestampPrecision precision = 1;
+  }
 
-    message ProtoTimestampTz {
-        adt.timestamp.ProtoTimestampPrecision precision = 1;
-    }
+  message ProtoTimestampTz {
+    adt.timestamp.ProtoTimestampPrecision precision = 1;
+  }
 
-    reserved 10, 11;
-    oneof kind  {
-        google.protobuf.Empty Bool = 1;
-        google.protobuf.Empty Int16 = 2;
-        google.protobuf.Empty Int32 = 3;
-        google.protobuf.Empty Int64 = 4;
-        google.protobuf.Empty Float32 = 5;
-        google.protobuf.Empty Float64 = 6;
-        adt.numeric.ProtoOptionalNumericMaxScale Numeric = 7;
-        google.protobuf.Empty Date = 8;
-        google.protobuf.Empty Time = 9;
-        ProtoTimestamp Timestamp = 37;
-        ProtoTimestampTz TimestampTz = 38;
-        google.protobuf.Empty Interval = 12;
-        google.protobuf.Empty PgLegacyChar = 13;
-        google.protobuf.Empty Bytes = 14;
-        google.protobuf.Empty String = 15;
-        ProtoChar Char = 16;
-        ProtoVarChar VarChar = 17;
-        google.protobuf.Empty Jsonb = 18;
-        google.protobuf.Empty Uuid = 19;
-        ProtoScalarType Array = 20;
-        ProtoList List = 21;
-        ProtoRecord Record = 22;
-        google.protobuf.Empty Oid = 23;
-        ProtoMap Map = 24;
-        google.protobuf.Empty RegProc = 25;
-        google.protobuf.Empty RegType = 26;
-        google.protobuf.Empty RegClass = 27;
-        google.protobuf.Empty Int2Vector = 28;
-        google.protobuf.Empty UInt16 = 29;
-        google.protobuf.Empty UInt32 = 30;
-        google.protobuf.Empty UInt64 = 31;
-        google.protobuf.Empty MzTimestamp = 32;
-        ProtoRange Range = 33;
-        google.protobuf.Empty MzAclItem = 34;
-        google.protobuf.Empty PgLegacyName = 35;
-        google.protobuf.Empty AclItem = 36;
-    }
+  reserved 10, 11;
+  oneof kind {
+    google.protobuf.Empty Bool = 1;
+    google.protobuf.Empty Int16 = 2;
+    google.protobuf.Empty Int32 = 3;
+    google.protobuf.Empty Int64 = 4;
+    google.protobuf.Empty Float32 = 5;
+    google.protobuf.Empty Float64 = 6;
+    adt.numeric.ProtoOptionalNumericMaxScale Numeric = 7;
+    google.protobuf.Empty Date = 8;
+    google.protobuf.Empty Time = 9;
+    ProtoTimestamp Timestamp = 37;
+    ProtoTimestampTz TimestampTz = 38;
+    google.protobuf.Empty Interval = 12;
+    google.protobuf.Empty PgLegacyChar = 13;
+    google.protobuf.Empty Bytes = 14;
+    google.protobuf.Empty String = 15;
+    ProtoChar Char = 16;
+    ProtoVarChar VarChar = 17;
+    google.protobuf.Empty Jsonb = 18;
+    google.protobuf.Empty Uuid = 19;
+    ProtoScalarType Array = 20;
+    ProtoList List = 21;
+    ProtoRecord Record = 22;
+    google.protobuf.Empty Oid = 23;
+    ProtoMap Map = 24;
+    google.protobuf.Empty RegProc = 25;
+    google.protobuf.Empty RegType = 26;
+    google.protobuf.Empty RegClass = 27;
+    google.protobuf.Empty Int2Vector = 28;
+    google.protobuf.Empty UInt16 = 29;
+    google.protobuf.Empty UInt32 = 30;
+    google.protobuf.Empty UInt64 = 31;
+    google.protobuf.Empty MzTimestamp = 32;
+    ProtoRange Range = 33;
+    google.protobuf.Empty MzAclItem = 34;
+    google.protobuf.Empty PgLegacyName = 35;
+    google.protobuf.Empty AclItem = 36;
+  }
 }

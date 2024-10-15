@@ -9,9 +9,9 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
 package mz_repr.role_id;
+
+import "google/protobuf/empty.proto";
 
 message ProtoRoleId {
   oneof kind {

@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use mz_audit_log::VersionedEvent;
 use uuid::Uuid;
 
-use mz_controller_types::{ClusterId, ReplicaId};
+use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
@@ -309,20 +309,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         let id = self.allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(ClusterId::User(id))
-    }
-
-    /// Allocates and returns a user [`ReplicaId`].
-    async fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
-        let id = self.allocate_id(USER_REPLICA_ID_ALLOC_KEY, 1).await?;
-        let id = id.into_element();
-        Ok(ReplicaId::User(id))
-    }
-
-    /// Allocates and returns a system [`ReplicaId`].
-    async fn allocate_system_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
-        let id = self.allocate_id(SYSTEM_REPLICA_ID_ALLOC_KEY, 1).await?;
-        let id = id.into_element();
-        Ok(ReplicaId::System(id))
     }
 }
 

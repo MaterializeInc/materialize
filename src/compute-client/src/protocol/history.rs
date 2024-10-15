@@ -100,7 +100,7 @@ where
         let mut final_configuration = ComputeParameters::default();
 
         let mut initialization_complete = false;
-        let mut read_only = true;
+        let mut allow_writes = false;
 
         for command in self.commands.drain(..) {
             match command {
@@ -135,7 +135,7 @@ where
                     live_peeks.remove(&uuid);
                 }
                 ComputeCommand::AllowWrites => {
-                    read_only = false;
+                    allow_writes = true;
                 }
             }
         }
@@ -243,7 +243,7 @@ where
             self.commands.push(ComputeCommand::InitializationComplete);
         }
 
-        if !read_only {
+        if allow_writes {
             self.commands.push(ComputeCommand::AllowWrites);
         }
 

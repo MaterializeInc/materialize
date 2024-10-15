@@ -111,8 +111,6 @@ class OptbenchTPCH(Scenario):
     QUERY = 1
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
         MeasurementType.WALLCLOCK: 0.20,  # increased because it's easy to regress
-        # optimizer-only, we don't care if there are a few more messages at times (32 vs 4)
-        MeasurementType.MESSAGES: 100,
         MeasurementType.MEMORY_MZ: 0.20,
         MeasurementType.MEMORY_CLUSTERD: 0.20,
     }

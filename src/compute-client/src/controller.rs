@@ -408,6 +408,25 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         result
     }
 
+    /// Returns `true` iff the given collection has been hydrated.
+    ///
+    /// For this check, zero-replica clusters are always considered hydrated.
+    /// Their collections would never normally be considered hydrated but it's
+    /// clearly intentional that they have no replicas.
+    pub async fn collection_hydrated(
+        &self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<bool, anyhow::Error> {
+        let instance = self.instance(instance_id)?;
+
+        let res = instance
+            .call_sync(move |i| i.collection_hydrated(collection_id))
+            .await?;
+
+        Ok(res)
+    }
+
     /// Returns `true` if all non-transient, non-excluded collections are hydrated on any of the
     /// provided replicas.
     ///
@@ -860,8 +879,6 @@ where
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
-        limit: Option<usize>,
-        offset: usize,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -897,8 +914,6 @@ where
                 read_hold,
                 target_replica,
                 peek_response_tx,
-                limit,
-                offset,
             )
             .expect("validated")
         });

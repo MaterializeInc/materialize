@@ -9,13 +9,13 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
 package mz_postgres_util.tunnel;
 
+import "google/protobuf/empty.proto";
+
 message ProtoPostgresFlavor {
-    oneof kind {
-        google.protobuf.Empty vanilla = 1;
-        google.protobuf.Empty yugabyte = 2;
-    }
+  oneof kind {
+    google.protobuf.Empty vanilla = 1;
+    google.protobuf.Empty yugabyte = 2;
+  }
 }

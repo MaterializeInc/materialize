@@ -656,15 +656,6 @@ impl Catalog {
             .err_into()
     }
 
-    pub async fn allocate_replica_id(&self, cluster_id: &ClusterId) -> Result<ReplicaId, Error> {
-        let mut storage = self.storage().await;
-        let id = match cluster_id {
-            ClusterId::User(_) => storage.allocate_user_replica_id().await,
-            ClusterId::System(_) => storage.allocate_system_replica_id().await,
-        };
-        id.maybe_terminate("allocating replica ids").err_into()
-    }
-
     /// Get the next system replica id without allocating it.
     pub async fn get_next_system_replica_id(&self) -> Result<u64, Error> {
         self.storage()
@@ -706,6 +697,15 @@ impl Catalog {
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema_in_database(database_spec, schema_name, conn_id)
+    }
+
+    pub fn resolve_replica_in_cluster(
+        &self,
+        cluster_id: &ClusterId,
+        replica_name: &str,
+    ) -> Result<&ClusterReplica, SqlCatalogError> {
+        self.state
+            .resolve_replica_in_cluster(cluster_id, replica_name)
     }
 
     pub fn resolve_system_schema(&self, name: &'static str) -> SchemaId {

@@ -635,8 +635,6 @@ impl crate::coord::Coordinator {
                 map_filter_project,
                 target_replica,
                 rows_tx,
-                finishing.limit.map(usize::cast_from),
-                finishing.offset,
             )
             .unwrap_or_terminate("cannot fail to peek");
         let duration_histogram = self.metrics.row_set_finishing_seconds();
