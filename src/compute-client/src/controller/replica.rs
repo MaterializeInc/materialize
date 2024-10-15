@@ -93,7 +93,7 @@ where
                 epoch,
                 metrics: metrics.clone(),
                 dyncfg,
-                expiration_offset: (!expiration_offset.is_zero()).then(|| expiration_offset),
+                expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
             }
             .run(),
         );
