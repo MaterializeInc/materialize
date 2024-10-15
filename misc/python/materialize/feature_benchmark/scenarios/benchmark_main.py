@@ -1500,7 +1500,6 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
         return TdAction(
             """
 > DROP SOURCE IF EXISTS mz_source_pgcdc CASCADE;
-> DROP CLUSTER IF EXISTS source_cluster CASCADE
             """
         )
 
@@ -1516,11 +1515,12 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
     PASSWORD SECRET pgpass
   )
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE mz_source_pgcdc
-  IN CLUSTER source_cluster
+  IN CLUSTER quickstart
   FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source');
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source_pgcdc';
+running
 
 > CREATE TABLE pk_table FROM SOURCE mz_source_pgcdc (REFERENCE pk_table);
   /* A */
@@ -1632,9 +1632,11 @@ INSERT INTO pk_table SELECT @i:=@i+1, @i*@i FROM mysql.time_zone t1, mysql.time_
 
     def before(self) -> Action:
         return TdAction(
-            """
+            f"""
+> DROP CLUSTER IF EXISTS source_cluster CASCADE;
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
 > DROP SOURCE IF EXISTS mz_source_mysqlcdc CASCADE;
-> DROP CLUSTER IF EXISTS source_cluster CASCADE
             """
         )
 
@@ -1648,11 +1650,13 @@ INSERT INTO pk_table SELECT @i:=@i+1, @i*@i FROM mysql.time_zone t1, mysql.time_
     PASSWORD SECRET mysqlpass
   )
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE mz_source_mysqlcdc
   IN CLUSTER source_cluster
   FROM MYSQL CONNECTION mysql_conn;
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source_mysqlcdc';
+running
+
 > CREATE TABLE pk_table FROM SOURCE mz_source_mysqlcdc (REFERENCE public.pk_table);
   /* A */
 

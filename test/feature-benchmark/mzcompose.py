@@ -487,6 +487,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # specified root scenario is a leaf
         selected_scenarios = [specified_root_scenario]
 
+    scenario_classes_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
+        selected_scenarios, lambda scenario_cls: scenario_cls.__name__
+    )
+
+    if not scenario_classes_scheduled_to_run:
+        # No need to run the rest of the logic
+        return
+
     dependencies = ["postgres", "mysql"]
 
     if args.redpanda:
@@ -495,10 +503,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
 
     c.up(*dependencies)
-
-    scenario_classes_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
-        selected_scenarios, lambda scenario_cls: scenario_cls.__name__
-    )
 
     if (
         len(scenario_classes_scheduled_to_run) == 0
