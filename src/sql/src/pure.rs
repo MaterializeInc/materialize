@@ -32,7 +32,7 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
-use mz_repr::{strconv, RelationDesc, RelationVersionSelector, Timestamp};
+use mz_repr::{strconv, GlobalId, RelationDesc, RelationVersionSelector, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
@@ -319,31 +319,47 @@ pub async fn purify_statement(
     }
 }
 
-/// Updates the CREATE SINK statement with materialize comments
-pub(crate) fn add_materialize_comments(
+/// Injects `DOC ON` comments into all Avro formats that are using a schema
+/// registry by finding all SQL `COMMENT`s that are attached to the sink's
+/// underlying materialized view (as well as any types referenced by that
+/// underlying materialized view).
+pub(crate) fn purify_create_sink_avro_doc_on_options(
     catalog: &dyn SessionCatalog,
-    stmt: &mut CreateSinkStatement<Aug>,
+    from_id: GlobalId,
+    format: &mut Option<FormatSpecifier<Aug>>,
 ) -> Result<(), PlanError> {
-    // updating avro format with comments so that they are frozen in the `create_sql`
-    let from_id = stmt.from.item_id();
-    let from = catalog.get_item(from_id);
-    let object_ids = from.references().0.clone().into_iter().chain_one(from.id());
+    // Collect all objects referenced by the sink.
+    let from = catalog.get_item(&from_id);
+    let object_ids = from
+        .references()
+        .0
+        .iter()
+        .chain_one(&from.id())
+        .copied()
+        .collect::<Vec<_>>();
 
-    // add comments to the avro doc comments
-    if let Some(
-        FormatSpecifier::Bare(Format::Avro(AvroSchema::Csr { csr_connection }))
-        | FormatSpecifier::KeyValue {
-            key: _,
-            value: Format::Avro(AvroSchema::Csr { csr_connection }),
+    // Collect all Avro formats that use a schema registry, as well as a set of
+    // all identifiers named in user-provided `DOC ON` options.
+    let mut avro_format_options = vec![];
+    for_each_format(format, |doc_on_schema, fmt| match fmt {
+        Format::Avro(AvroSchema::InlineSchema { .. })
+        | Format::Bytes
+        | Format::Csv { .. }
+        | Format::Json { .. }
+        | Format::Protobuf(..)
+        | Format::Regex(..)
+        | Format::Text => (),
+        Format::Avro(AvroSchema::Csr {
+            csr_connection: CsrConnectionAvro { connection, .. },
+        }) => {
+            avro_format_options.push((doc_on_schema, &mut connection.options));
         }
-        | FormatSpecifier::KeyValue {
-            key: Format::Avro(AvroSchema::Csr { csr_connection }),
-            value: _,
-        },
-    ) = &mut stmt.format
-    {
-        let options = &mut csr_connection.connection.options;
-        let user_provided_comments = &options
+    });
+
+    // For each Avro format in the sink, inject the appropriate `DOC ON` options
+    // for each item referenced by the sink.
+    for (for_schema, options) in avro_format_options {
+        let user_provided_comments = options
             .iter()
             .filter_map(|CsrConfigOption { name, .. }| match name {
                 CsrConfigOptionName::AvroDocOn(doc_on) => Some(doc_on.clone()),
@@ -351,12 +367,11 @@ pub(crate) fn add_materialize_comments(
             })
             .collect::<BTreeSet<_>>();
 
-        // Adding existing comments if not already provided by user
-        for object_id in object_ids {
-            let item = catalog.get_item(&object_id);
+        for object_id in &object_ids {
+            let item = catalog.get_item(object_id);
             let full_name = catalog.resolve_full_name(item.name());
             let full_resolved_name = ResolvedItemName::Item {
-                id: object_id,
+                id: *object_id,
                 qualifiers: item.name().qualifiers.clone(),
                 full_name: full_name.clone(),
                 print_id: !matches!(
@@ -366,11 +381,12 @@ pub(crate) fn add_materialize_comments(
                 version: RelationVersionSelector::Latest,
             };
 
-            if let Some(comments_map) = catalog.get_item_comments(&object_id) {
-                // Getting comment on the item
+            if let Some(comments_map) = catalog.get_item_comments(object_id) {
+                // Attach comment for the item itself, if the user has not
+                // already provided an overriding `DOC ON` option for the item.
                 let doc_on_item_key = AvroDocOn {
                     identifier: DocOnIdentifier::Type(full_resolved_name.clone()),
-                    for_schema: DocOnSchema::All,
+                    for_schema,
                 };
                 if !user_provided_comments.contains(&doc_on_item_key) {
                     if let Some(root_comment) = comments_map.get(&None) {
@@ -383,7 +399,9 @@ pub(crate) fn add_materialize_comments(
                     }
                 }
 
-                // Getting comments on columns in the item
+                // Attach comment for each column in the item, if the user has
+                // not already provided an overriding `DOC ON` option for the
+                // column.
                 if let Ok(desc) = item.desc(&full_name) {
                     for (pos, column_name) in desc.iter_names().enumerate() {
                         let comment = comments_map.get(&Some(pos + 1));
@@ -396,7 +414,7 @@ pub(crate) fn add_materialize_comments(
                                         index: pos,
                                     },
                                 }),
-                                for_schema: DocOnSchema::All,
+                                for_schema,
                             };
                             if !user_provided_comments.contains(&doc_on_column_key) {
                                 options.push(CsrConfigOption {
@@ -412,6 +430,7 @@ pub(crate) fn add_materialize_comments(
             }
         }
     }
+
     Ok(())
 }
 
@@ -427,7 +446,6 @@ async fn purify_create_sink(
     mut create_sink_stmt: CreateSinkStatement<Aug>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<PurifiedStatement, PlanError> {
-    add_materialize_comments(&catalog, &mut create_sink_stmt)?;
     // General purification
     let CreateSinkStatement {
         connection,
@@ -436,7 +454,7 @@ async fn purify_create_sink(
         name: _,
         in_cluster: _,
         if_not_exists: _,
-        from: _,
+        from,
         envelope: _,
     } = &mut create_sink_stmt;
 
@@ -522,68 +540,72 @@ async fn purify_create_sink(
         }
     }
 
-    if let Some(format) = format {
-        match format {
-            FormatSpecifier::Bare(
-                Format::Avro(AvroSchema::Csr {
-                    csr_connection: CsrConnectionAvro { connection, .. },
-                })
-                | Format::Protobuf(ProtobufSchema::Csr {
-                    csr_connection: CsrConnectionProtobuf { connection, .. },
-                }),
-            )
-            | FormatSpecifier::KeyValue {
-                key: _,
-                value:
-                    Format::Avro(AvroSchema::Csr {
-                        csr_connection: CsrConnectionAvro { connection, .. },
-                    }),
-            }
-            | FormatSpecifier::KeyValue {
-                key:
-                    Format::Avro(AvroSchema::Csr {
-                        csr_connection: CsrConnectionAvro { connection, .. },
-                    }),
-                value: _,
-            } => {
-                let connection = {
-                    let scx = StatementContext::new(None, &catalog);
-                    let item = scx.get_item_by_resolved_name(&connection.connection)?;
-                    // Get Kafka connection
-                    match item.connection()? {
-                        Connection::Csr(connection) => {
-                            connection.clone().into_inline_connection(&catalog)
-                        }
-                        _ => Err(CsrPurificationError::NotCsrConnection(
-                            scx.catalog.resolve_full_name(item.name()),
-                        ))?,
-                    }
-                };
-
-                let client = connection
-                    .connect(storage_configuration, InTask::No)
-                    .await
-                    .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
-
-                client
-                    .list_subjects()
-                    .await
-                    .map_err(|e| CsrPurificationError::ListSubjectsError(Arc::new(e)))?;
-            }
-            FormatSpecifier::Bare(
-                Format::Avro(AvroSchema::InlineSchema { .. })
-                | Format::Bytes
-                | Format::Csv { .. }
-                | Format::Json { .. }
-                | Format::Protobuf(ProtobufSchema::InlineSchema { .. })
-                | Format::Regex(..)
-                | Format::Text,
-            )
-            | FormatSpecifier::KeyValue { .. } => {}
+    let mut csr_connection_ids = BTreeSet::new();
+    for_each_format(format, |_, fmt| match fmt {
+        Format::Avro(AvroSchema::InlineSchema { .. })
+        | Format::Bytes
+        | Format::Csv { .. }
+        | Format::Json { .. }
+        | Format::Protobuf(ProtobufSchema::InlineSchema { .. })
+        | Format::Regex(..)
+        | Format::Text => (),
+        Format::Avro(AvroSchema::Csr {
+            csr_connection: CsrConnectionAvro { connection, .. },
+        })
+        | Format::Protobuf(ProtobufSchema::Csr {
+            csr_connection: CsrConnectionProtobuf { connection, .. },
+        }) => {
+            csr_connection_ids.insert(*connection.connection.item_id());
         }
+    });
+
+    let scx = StatementContext::new(None, &catalog);
+    for csr_connection_id in csr_connection_ids {
+        let connection = {
+            let item = scx.get_item(&csr_connection_id);
+            // Get Kafka connection
+            match item.connection()? {
+                Connection::Csr(connection) => connection.clone().into_inline_connection(&catalog),
+                _ => Err(CsrPurificationError::NotCsrConnection(
+                    scx.catalog.resolve_full_name(item.name()),
+                ))?,
+            }
+        };
+
+        let client = connection
+            .connect(storage_configuration, InTask::No)
+            .await
+            .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
+
+        client
+            .list_subjects()
+            .await
+            .map_err(|e| CsrPurificationError::ListSubjectsError(Arc::new(e)))?;
     }
 
+    purify_create_sink_avro_doc_on_options(&catalog, *from.item_id(), format)?;
+
     Ok(PurifiedStatement::PurifiedCreateSink(create_sink_stmt))
+}
+
+/// Runs a function on each format within the format specifier.
+///
+/// The function is provided with a `DocOnSchema` that indicates whether the
+/// format is for the key, value, or both.
+///
+// TODO(benesch): rename `DocOnSchema` to the more general `FormatRestriction`.
+fn for_each_format<'a, F>(format: &'a mut Option<FormatSpecifier<Aug>>, mut f: F)
+where
+    F: FnMut(DocOnSchema, &'a mut Format<Aug>),
+{
+    match format {
+        None => (),
+        Some(FormatSpecifier::Bare(fmt)) => f(DocOnSchema::All, fmt),
+        Some(FormatSpecifier::KeyValue { key, value }) => {
+            f(DocOnSchema::KeyOnly, key);
+            f(DocOnSchema::ValueOnly, value);
+        }
+    }
 }
 
 /// Defines whether purification should enforce that at least one valid source
