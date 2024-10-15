@@ -113,10 +113,6 @@ skip this step**. For production scenarios, we recommend configuring one of the
 network security options below.
 {{< /note >}}
 
-{{< note >}}
-Support for AWS PrivateLink connections is planned for a future release.
-{{< /note >}}
-
 There are various ways to configure your database's network to allow Materialize
 to connect:
 
@@ -127,7 +123,10 @@ to connect:
 - **Use an SSH tunnel:** If your database is running in a private network, you
     can use an SSH tunnel to connect Materialize to the database.
 
-Select the option that works best for you.
+- **Use AWS PrivateLink**: If your database is running in a private network, you
+    can use [AWS PrivateLink](/ingest-data/network-security/privatelink/) to
+    connect Materialize to the database. For details, see [AWS
+    PrivateLink](/ingest-data/network-security/privatelink/).
 
 {{< tabs >}}
 
@@ -148,6 +147,102 @@ Select the option that works best for you.
 
     - Set **Type** to **MySQL**.
     - Set **Source** to the IP address in CIDR notation.
+
+{{< /tab >}}
+
+{{< tab "Use AWS PrivateLink">}}
+
+[AWS PrivateLink](https://aws.amazon.com/privatelink/) lets you connect
+Materialize to your RDS instance without exposing traffic to the public
+internet. To use AWS PrivateLink, you create a network load balancer in the
+same VPC as your RDS instance and a VPC endpoint service that Materialize
+connects to. The VPC endpoint service then routes requests from Materialize to
+RDS via the network load balancer.
+
+{{< note >}}
+Materialize provides a Terraform module that automates the creation and
+configuration of AWS resources for a PrivateLink connection. For more details,
+see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
+{{</ note >}}
+
+1. Get the IP address of your RDS instance. You'll need this address to register
+   your RDS instance as the target for the network load balancer in the next
+   step.
+
+    To get the IP address of your RDS instance:
+
+    1. Select your database in the RDS Console.
+
+    1. Find your RDS endpoint under **Connectivity & security**.
+
+    1. Use the `dig` or `nslooklup` command to find the IP address that the
+    endpoint resolves to:
+
+       ```sh
+       dig +short <RDS_ENDPOINT>
+       ```
+
+1. [Create a dedicated target group for your RDS instance](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html).
+
+    - Choose the **IP addresses** type.
+
+    - Set the protocol and port to **TCP** and **5432**.
+
+    - Choose the same VPC as your RDS instance.
+
+    - Use the IP address from the previous step to register your RDS instance as
+      the target.
+
+    **Warning:** The IP address of your RDS instance can change without notice.
+      For this reason, it's best to set up automation to regularly check the IP
+      of the instance and update your target group accordingly. You can use a
+      lambda function to automate this process - see Materialize's
+      [Terraform module for AWS PrivateLink](https://github.com/MaterializeInc/terraform-aws-rds-privatelink/blob/main/lambda_function.py)
+      for an example. Another approach is to [configure an EC2 instance as an
+      RDS router](https://aws.amazon.com/blogs/database/how-to-use-amazon-rds-and-amazon-aurora-with-a-static-ip-address/)
+      for your network load balancer.
+
+1. [Create a network load balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html).
+
+    - For **Network mapping**, choose the same VPC as your RDS instance and
+      select all of the availability zones and subnets that you RDS instance is
+      in.
+
+    - For **Listeners and routing**, set the protocol and port to **TCP**
+      and **5432** and select the target group you created in the previous
+      step.
+
+1. In the security group of your RDS instance, [allow traffic from the network load balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
+
+    If [client IP preservation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-target-groups.html#client-ip-preservation)
+    is disabled, the easiest approach is to add an inbound rule with the VPC
+    CIDR of the network load balancer. If you don't want to grant access to the
+    entire VPC CIDR, you can add inbound rules for the private IP addresses of
+    the load balancer subnets.
+
+    - To find the VPC CIDR, go to your network load balancer and look
+      under **Network mapping**.
+    - To find the private IP addresses of the load balancer subnets, go
+      to **Network Interfaces**, search for the name of the network load
+      balancer, and look on the **Details** tab for each matching network
+      interface.
+
+1. [Create a VPC endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html).
+
+    - For **Load balancer type**, choose **Network** and then select the network
+      load balancer you created in the previous step.
+
+    - After creating the VPC endpoint service, note its **Service name**. You'll
+      use this service name when connecting Materialize later.
+
+    **Remarks**: By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests),
+      while still strictly managing who can view your endpoint via IAM,
+      Materialze will be able to seamlessly recreate and migrate endpoints as
+      we work to stabilize this feature.
+
+1. Go back to the target group you created for the network load balancer and
+   make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html)
+   are reporting the targets as healthy.
 
 {{< /tab >}}
 
@@ -242,7 +337,7 @@ start by selecting the relevant option.
 
 [//]: # "TODO(morsapaes) Replace these Step 6. and 7. with guidance using the
 new progress metrics in mz_source_statistics + console monitoring, when
-available(also for PostgreSQL)."
+available (also for PostgreSQL)."
 
 ### 3. Monitor the ingestion status
 
