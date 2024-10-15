@@ -2600,7 +2600,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn table_details(&self) -> Option<&[Expr<Aug>]> {
+    fn writable_table_details(&self) -> Option<&[Expr<Aug>]> {
         if let CatalogItem::Table(Table {
             data_source: TableDataSource::TableWrites { defaults },
             ..
