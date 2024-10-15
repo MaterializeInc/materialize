@@ -38,6 +38,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     c.up("zookeeper", "kafka", "schema-registry", "materialized")
+    c.setup_quickstart_cluster()
     c.run_testdrive_files(
         f"--seed={args.seed}",
         "--kafka-option=group.id=group1",

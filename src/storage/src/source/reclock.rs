@@ -130,7 +130,8 @@ where
 
         while *self.upper == [IntoTime::minimum()]
             || (PartialOrder::less_equal(&self.source_upper.frontier(), &new_from_upper)
-                && PartialOrder::less_than(&self.upper, &new_into_upper))
+                && PartialOrder::less_than(&self.upper, &new_into_upper)
+                && self.upper.less_equal(&binding_ts))
         {
             // If source is closed, close remap shard as well.
             if new_from_upper.is_empty() {

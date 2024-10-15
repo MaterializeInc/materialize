@@ -47,6 +47,7 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=6
   );
 
 > CREATE SINK multi_broker_sink
+  IN CLUSTER singlereplica
   FROM kafka_multi_broker_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-multi-broker-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

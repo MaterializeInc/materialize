@@ -1915,11 +1915,6 @@ where
                         .read_hold
                         .try_downgrade(Antichain::new())
                         .expect("must be possible");
-                } else {
-                    soft_panic_or_log!(
-                        "DroppedId for ID {id} but we have neither ingestion nor export \
-                         under that ID"
-                    );
                 }
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
