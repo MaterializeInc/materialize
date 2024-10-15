@@ -27,7 +27,7 @@ ALTER SYSTEM SET enable_envelope_materialize = true
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CLUSTER data_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER data_sink_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK data_sink
   IN CLUSTER data_sink_cluster
   FROM data
@@ -123,13 +123,13 @@ $ kafka-create-topic topic=input
 # first create all the sinks, then ingest data, to ensure that
 # input is processed in consistency batches and not all at once
 
-> CREATE CLUSTER input_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER input_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE input
   IN CLUSTER input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE CLUSTER non_keyed_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER non_keyed_sink_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK non_keyed_sink
   IN CLUSTER non_keyed_sink_cluster
   FROM input
@@ -142,7 +142,7 @@ $ kafka-create-topic topic=input
 
 # the sinked relation has the natural primary key (a)
 
-> CREATE CLUSTER non_keyed_sink_of_keyed_relation_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER non_keyed_sink_of_keyed_relation_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK non_keyed_sink_of_keyed_relation
   IN CLUSTER non_keyed_sink_of_keyed_relation_cluster
   FROM input
@@ -151,7 +151,7 @@ $ kafka-create-topic topic=input
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER keyed_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER keyed_sink_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK keyed_sink
   IN CLUSTER keyed_sink_cluster
   FROM input
@@ -160,7 +160,7 @@ $ kafka-create-topic topic=input
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER keyed_sink_of_keyed_relation_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER keyed_sink_of_keyed_relation_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK keyed_sink_of_keyed_relation
   IN CLUSTER keyed_sink_of_keyed_relation_cluster
   FROM input
@@ -169,7 +169,7 @@ $ kafka-create-topic topic=input
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER multi_keyed_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER multi_keyed_sink_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SINK multi_keyed_sink
   IN CLUSTER multi_keyed_sink_cluster
   FROM input

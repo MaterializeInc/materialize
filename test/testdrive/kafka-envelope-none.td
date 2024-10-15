@@ -14,7 +14,7 @@ $ kafka-create-topic topic=missing_keys_or_values partitions=1
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE CLUSTER missing_keys_or_values_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER missing_keys_or_values_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE missing_keys_or_values
   IN CLUSTER missing_keys_or_values_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-missing_keys_or_values-${testdrive.seed}')
