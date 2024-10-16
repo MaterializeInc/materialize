@@ -224,7 +224,7 @@ dependencies unless they are started from within the `nix-shell` environment:
 ```
 
 Note that on macOS, the `mzcompose` tests fail to run from within `nix-shell`,
-as our config does not yet set up [cross-compilation support](misc/python/materialize/xcompile.py)
+as our config does not yet set up [cross-compilation support](/misc/python/materialize/xcompile.py)
 for `x86-64` needed to run `mzcompose`.
 
 ## Building Materialize
@@ -583,7 +583,7 @@ If you are using Rust-Analyzer, you should configure it to conform to our
 
 [RustRover] is another option for an IDE with good code navigation features.
 This is a good choice for developers who prefer the JetBrains ecosystem. This repo
-provides some [example run configurations](misc/editor/rustrover)
+provides some [example run configurations](/misc/editor/rustrover)
 to help get started with running and debugging Materialize in RustRover.
 
 If you are a Materialize employee, ask in the #jetbrains channel on Slack for
