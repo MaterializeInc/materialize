@@ -157,7 +157,7 @@ impl Coordinator {
 
     #[instrument]
     async fn explain_timestamp_real_time_recency(
-        &mut self,
+        &self,
         session: &Session,
         ExplainTimestampRealTimeRecency {
             validity,

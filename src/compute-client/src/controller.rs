@@ -869,7 +869,7 @@ where
 
     /// Initiate a peek request for the contents of the given collection at `timestamp`.
     pub fn peek(
-        &mut self,
+        &self,
         instance_id: ComputeInstanceId,
         peek_target: PeekTarget,
         literal_constraints: Option<Vec<Row>>,

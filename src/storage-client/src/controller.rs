@@ -641,7 +641,7 @@ pub trait StorageController: Debug {
     /// Acquires and returns the desired read holds, advancing them to the since
     /// frontier when necessary.
     fn acquire_read_holds(
-        &mut self,
+        &self,
         desired_holds: Vec<GlobalId>,
     ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
 
@@ -725,7 +725,7 @@ pub trait StorageController: Debug {
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     async fn real_time_recent_timestamp(
-        &mut self,
+        &self,
         source_ids: BTreeSet<GlobalId>,
         timeout: Duration,
     ) -> Result<

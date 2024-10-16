@@ -1772,7 +1772,7 @@ where
     }
 
     fn acquire_read_holds(
-        &mut self,
+        &self,
         desired_holds: Vec<GlobalId>,
     ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError> {
         self.storage_collections.acquire_read_holds(desired_holds)
@@ -2130,7 +2130,7 @@ where
     }
 
     async fn real_time_recent_timestamp(
-        &mut self,
+        &self,
         timestamp_objects: BTreeSet<GlobalId>,
         timeout: Duration,
     ) -> Result<
