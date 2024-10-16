@@ -951,7 +951,7 @@ where
         loop {
             tokio::select! {
                 Some(persist_event) = persist_input.next() => {
-                    tracing::debug!(?persist_event, "persist input");
+                    tracing::trace!(?persist_event, "persist input");
                     match persist_event {
                         AsyncEvent::Data(_ts, data) => {
                             persist_stash.extend(data.into_iter().map(|((key, value), ts, diff)| {
@@ -1055,7 +1055,7 @@ where
                             first_source_snapshot || rehydration_snapshot
                         });
 
-                        tracing::debug!(?persist_stash, %idx, %last_snapshot, ?resume_upper, ?persist_upper, "ingesting persist snapshot chunk");
+                        tracing::debug!(persist_stash = %persist_stash.len(), %idx, %last_snapshot, ?resume_upper, ?persist_upper, "ingesting persist snapshot chunk");
 
                         snapshotting_persist = !last_snapshot;
 
@@ -1128,7 +1128,7 @@ where
                     // done snapshotting but already have some more persist
                     // updates staged. We have to work them off eagerly here.
                     if !snapshotting_persist {
-                        tracing::debug!(?persist_stash, ?persist_upper, "ingesting state updates from persist");
+                        tracing::debug!(persist_stash = %persist_stash.len(), ?persist_upper, "ingesting state updates from persist");
 
                         let state = state.as_mut().expect("missing upsert state");
                         ingest_state_updates::<_, G, _, _, _>(
@@ -1154,7 +1154,7 @@ where
                     let mut partial_drain_time = None;
 
                     for (i, event) in events {
-                        tracing::debug!(?event, "source input");
+                        tracing::trace!(?event, "source input");
 
                         match event {
                             AsyncEvent::Data(cap, mut data) => {
@@ -1209,10 +1209,16 @@ where
                                     continue;
                                 }
 
-                                // Disable the partial drain as this progress event covers
-                                // the `output_cap` time.
-                                partial_drain_time = None;
                                 if state.is_some() {
+                                    // Disable partial drain as soon as we know
+                                    // we received some state updates from the
+                                    // feedback edge/persist. We wouldn't do the
+                                    // partial drain anyways, because the state
+                                    // backend has been yanked. We could
+                                    // simplify this logic but this matches what
+                                    // we had before.
+                                    partial_drain_time = None;
+
                                     let state = state.as_mut().expect("missing upsert state");
                                     drain_staged_input::<_, G, _, _, _>(
                                         &mut stash,
