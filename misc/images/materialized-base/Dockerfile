@@ -10,24 +10,23 @@
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
 
-FROM cockroachdb/cockroach:v24.2.0 AS crdb
-
 MZFROM ubuntu-base
 
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize
 
 RUN apt-get update \
-    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
         ca-certificates \
         curl \
         llvm \
-        postgresql-client-16 \
+        postgresql \
+        postgresql-contrib \
         tini \
         ssh \
-    && mkdir /mzdata \
-    && mkdir /cockroach-data \
-    && mkdir /scratch \
-    && chown materialize /mzdata /cockroach-data /scratch
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql \
+    && chown -R materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/lib/postgresql/16/main
 
-COPY --from=crdb /cockroach/cockroach /usr/local/bin/cockroach
+COPY postgresql.conf pg_hba.conf /etc/postgresql/16/main/

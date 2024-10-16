@@ -21,10 +21,10 @@ from pathlib import Path
 
 from materialize import MZ_ROOT, buildkite, ci_util, file_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.postgres import PostgresAsCockroach
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
 
-SERVICES = [Cockroach(in_memory=True), SqlLogicTest()]
+SERVICES = [PostgresAsCockroach(), SqlLogicTest()]
 
 COCKROACH_DEFAULT_PORT = 26257
 

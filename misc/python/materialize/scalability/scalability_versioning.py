@@ -10,7 +10,7 @@ from pathlib import Path
 
 from materialize import MZ_ROOT
 
-SCALABILITY_FRAMEWORK_VERSION = "1.3.0"
+SCALABILITY_FRAMEWORK_VERSION = "1.4.0"
 SCALABILITY_FRAMEWORK_HASH_FILE = Path(__file__).relative_to(MZ_ROOT)
 
 SCALABILITY_FRAMEWORK_DIR = Path(__file__).resolve().parent
@@ -18,7 +18,7 @@ SCALABILITY_WORKLOADS_DIR = SCALABILITY_FRAMEWORK_DIR / "workload" / "workloads"
 
 # Consider increasing the #SCALABILITY_FRAMEWORK_VERSION if changes are expected to impact results!
 SHA256_OF_FRAMEWORK: dict[str, str] = {
-    "*": "062ebd7410e2f7628b719f0ef553ec0466c9b617310b036b45ac13505dcaceda"
+    "*": "994a3e8f86ecab834bbb2cd384a024d950eef27633c70b781d349ded6c91873d"
 }
 
 # Consider increasing the workload's class #version() if changes are expected to impact results!

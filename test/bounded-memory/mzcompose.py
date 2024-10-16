@@ -20,7 +20,6 @@ from textwrap import dedent
 from materialize.buildkite import shard_list
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
@@ -36,8 +35,7 @@ REPEAT = 16 * 1024
 ITERATIONS = 128
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
-    Materialized(external_cockroach=True),
+    Materialized(),  # overridden below
     Testdrive(
         no_reset=True,
         seed=1,

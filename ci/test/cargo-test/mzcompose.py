@@ -19,10 +19,9 @@ import subprocess
 from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.rustc_flags import Sanitizer
@@ -42,7 +41,7 @@ SERVICES = [
     ),
     SchemaRegistry(),
     Postgres(image="postgres:14.2"),
-    Cockroach(),
+    PostgresAsCockroach(),
     Minio(
         # We need a stable port exposed to the host since we can't pass any arguments
         # to the .pt files used in the tests.

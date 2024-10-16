@@ -16,6 +16,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use deadpool_postgres::tokio_postgres::error::SqlState;
 use deadpool_postgres::{Object, PoolError};
 use dec::Decimal;
 use mz_adapter_types::timestamp_oracle::{
@@ -40,21 +41,32 @@ use crate::{GenericNowFn, TimestampOracle};
 // The timestamp columns are a `DECIMAL` that is big enough to hold
 // `18446744073709551615`, the maximum value of `u64` which is our underlying
 // timestamp type.
-//
-// These `sql_stats_automatic_collection_enabled` are for the cost-based
-// optimizer but all the queries against this table are single-table and very
-// carefully tuned to hit the primary index, so the cost-based optimizer doesn't
-// really get us anything. OTOH, the background jobs that crdb creates to
-// collect these stats fill up the jobs table (slowing down all sorts of
-// things).
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS timestamp_oracle (
     timeline text NOT NULL,
     read_ts DECIMAL(20,0) NOT NULL,
     write_ts DECIMAL(20,0) NOT NULL,
     PRIMARY KEY(timeline)
-) WITH (sql_stats_automatic_collection_enabled = false);
+)
 ";
+
+// These `sql_stats_automatic_collection_enabled` are for the cost-based
+// optimizer but all the queries against this table are single-table and very
+// carefully tuned to hit the primary index, so the cost-based optimizer doesn't
+// really get us anything. OTOH, the background jobs that crdb creates to
+// collect these stats fill up the jobs table (slowing down all sorts of
+// things).
+const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled = false)";
+// The `timestamp_oracle` table creates and deletes rows at a high
+// frequency, generating many tombstoned rows. If Cockroach's GC
+// interval is set high (the default is 25h) and these tombstones
+// accumulate, scanning over the table will take increasingly and
+// prohibitively long.
+//
+// See: https://github.com/MaterializeInc/database-issues/issues/4001
+// See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
+const CRDB_CONFIGURE_ZONE: &str =
+    "ALTER TABLE timestamp_oracle CONFIGURE ZONE USING gc.ttlseconds = 600;";
 
 /// A [`TimestampOracle`] backed by "Postgres".
 #[derive(Debug)]
@@ -431,21 +443,27 @@ where
 
             let client = postgres_client.get_connection().await?;
 
-            // The `timestamp_oracle` table creates and deletes rows at a high
-            // frequency, generating many tombstoned rows. If Cockroach's GC
-            // interval is set high (the default is 25h) and these tombstones
-            // accumulate, scanning over the table will take increasingly and
-            // prohibitively long.
-            //
-            // See: https://github.com/MaterializeInc/database-issues/issues/4001
-            // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-            client
+            let crdb_mode = match client
                 .batch_execute(&format!(
-                    "{} {}",
-                    SCHEMA,
-                    "ALTER TABLE timestamp_oracle CONFIGURE ZONE USING gc.ttlseconds = 600;",
+                    "{}{}; {}",
+                    SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
                 ))
-                .await?;
+                .await
+            {
+                Ok(()) => true,
+                Err(e)
+                    if e.code() == Some(&SqlState::INVALID_PARAMETER_VALUE)
+                        || e.code() == Some(&SqlState::SYNTAX_ERROR) =>
+                {
+                    info!("unable to initiate timestamp_oracle with CRDB params, this is expected and OK when running against Postgres: {:?}", e);
+                    false
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            if !crdb_mode {
+                client.execute(SCHEMA, &[]).await?;
+            }
 
             let oracle = PostgresTimestampOracle {
                 timeline: timeline.clone(),

@@ -14,12 +14,12 @@ from datetime import datetime
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import PostgresAsCockroach
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    PostgresAsCockroach(),
     Materialized(propagate_crashes=True, external_cockroach=True),
     Testdrive(no_reset=True, default_timeout="5s"),
 ]
