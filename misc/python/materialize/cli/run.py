@@ -41,19 +41,6 @@ SANITIZER_TARGET = (
 )
 DEFAULT_POSTGRES = "postgres://root@localhost:26257/materialize"
 
-# sets entitlements on the built binary, e.g. environmentd, so you can inspect it with Instruments
-MACOS_ENTITLEMENTS_DATA = """
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-    <dict>
-        <key>com.apple.security.get-task-allow</key>
-        <true/>
-    </dict>
-</plist>
-"""
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="run",
@@ -122,6 +109,12 @@ def main() -> int:
         help="Only build, don't run",
         action="store_true",
     )
+    # Used in editor configs, such as `misc/editor/rustrover`.
+    parser.add_argument(
+        "--build-and-reset-only",
+        help="Only build and cleanup, don't run",
+        action="store_true",
+    )
     parser.add_argument(
         "--enable-mac-codesigning",
         help="Enables the limited codesigning we do on macOS to support Instruments",
@@ -156,6 +149,10 @@ def main() -> int:
         action="store_true",
     )
     args = parser.parse_intermixed_args()
+
+    # `--build-and-reset-only` implies `--reset`
+    if args.build_and_reset_only:
+        args.reset = args.build_and_reset_only
 
     # Handle `+toolchain` like rustup.
     args.channel = None
@@ -244,6 +241,8 @@ def main() -> int:
                     if p.name != "prometheus" and p.name != "tempo"
                 )
                 paths.extend(p for p in scratch.glob("*"))
+                tmp = pathlib.Path(tempfile.gettempdir())
+                paths.extend(p for p in tmp.glob("environmentd-*"))
                 for path in paths:
                     print(f"Removing {path}...")
                     if path.is_dir():
@@ -259,6 +258,9 @@ def main() -> int:
             except FileNotFoundError:
                 environment_id = f"local-az1-{uuid.uuid4()}-0"
                 environment_file.write_text(environment_id)
+
+            if args.build_and_reset_only:
+                return 0
 
             command += [
                 # Setting the listen addresses below to 0.0.0.0 is required
@@ -297,6 +299,10 @@ def main() -> int:
                     != "1"
                 ):
                     _run_sql(url_without_db, f"CREATE DATABASE {db}")
+
+            if args.build_and_reset_only:
+                return 0
+
             command += [f"--postgres-url={args.postgres}", *args.args]
     elif args.program == "test":
         if args.bazel:
@@ -305,7 +311,7 @@ def main() -> int:
             )
 
         (build_retcode, _) = _cargo_build(args)
-        if args.build_only:
+        if args.build_only or args.build_and_reset_only:
             return build_retcode
 
         command = _cargo_command(args, "test")
@@ -506,12 +512,8 @@ def _macos_codesign(path: str) -> None:
     command = ["codesign"]
     command.extend(["-s", "-", "-f", "--entitlements"])
 
-    # write our entitlements file to a temp path
-    temp = tempfile.NamedTemporaryFile()
-    temp.write(bytes(MACOS_ENTITLEMENTS_DATA, "utf-8"))
-    temp.flush()
-
-    command.append(temp.name)
+    macos_entitlements_data = MZ_ROOT / "misc" / "dist" / "macos-entitlements-data.xml"
+    command.append(macos_entitlements_data)
     command.append(path)
 
     spawn.runv(command, env=env)

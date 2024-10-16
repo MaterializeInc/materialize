@@ -1,0 +1,29 @@
+<!--
+Copyright Materialize, Inc. and contributors. All rights reserved.
+
+Use of this software is governed by the Business Source License
+included in the LICENSE file at the root of this repository.
+
+As of the Change Date specified in that file, in accordance with
+the Business Source License, use of this software will be governed
+by the Apache License, Version 2.0.
+-->
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="run-clippy" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+    <option name="command" value="clippy --all-targets" />
+    <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+    <envs />
+    <option name="emulateTerminal" value="true" />
+    <option name="channel" value="DEFAULT" />
+    <option name="requiredFeatures" value="true" />
+    <option name="allFeatures" value="false" />
+    <option name="withSudo" value="false" />
+    <option name="buildTarget" value="REMOTE" />
+    <option name="backtrace" value="SHORT" />
+    <option name="isRedirectInput" value="false" />
+    <option name="redirectInputPath" value="" />
+    <method v="2">
+      <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+    </method>
+  </configuration>
+</component>
