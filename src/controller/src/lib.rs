@@ -600,7 +600,7 @@ where
     /// If no items in `ids` connect to external systems, this function will
     /// return `Ok(T::minimum)`.
     pub async fn determine_real_time_recent_timestamp(
-        &mut self,
+        &self,
         ids: BTreeSet<GlobalId>,
         timeout: Duration,
     ) -> Result<BoxFuture<'static, Result<T, StorageError<T>>>, StorageError<T>> {

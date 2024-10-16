@@ -183,7 +183,7 @@ impl TimestampProvider for Coordinator {
             .expect("missing collections")
     }
 
-    fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
+    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
         self.acquire_read_holds(id_bundle)
     }
 
@@ -253,7 +253,7 @@ pub trait TimestampProvider {
     ///
     /// The timeline that `id_bundle` belongs to is also returned, if one exists.
     fn determine_timestamp_for(
-        &mut self,
+        &self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
@@ -441,10 +441,7 @@ pub trait TimestampProvider {
 
     /// Acquires [ReadHolds], for the given `id_bundle` at the earliest possible
     /// times.
-    fn acquire_read_holds(
-        &mut self,
-        id_bundle: &CollectionIdBundle,
-    ) -> ReadHolds<mz_repr::Timestamp>;
+    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<mz_repr::Timestamp>;
 
     /// The smallest common valid write frontier among the specified collections.
     ///
@@ -539,7 +536,7 @@ impl Coordinator {
     /// The caller is responsible for eventually dropping those read holds.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn determine_timestamp(
-        &mut self,
+        &self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,

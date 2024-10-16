@@ -729,7 +729,7 @@ impl Coordinator {
 
     #[instrument]
     async fn peek_real_time_recency(
-        &mut self,
+        &self,
         session: &Session,
         PeekStageRealTimeRecency {
             validity,
