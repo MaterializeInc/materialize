@@ -1059,13 +1059,11 @@ async fn purify_create_source(
                             PurifiedSourceExport {
                                 external_reference: export.external_reference,
                                 details: PurifiedExportDetails::LoadGenerator {
-                                    table: Some(
-                                        export
-                                            .meta
-                                            .load_generator_desc()
-                                            .expect("is loadgen")
-                                            .clone(),
-                                    ),
+                                    table: export
+                                        .meta
+                                        .load_generator_desc()
+                                        .expect("is loadgen")
+                                        .clone(),
                                     output: export
                                         .meta
                                         .load_generator_output()
@@ -1622,13 +1620,11 @@ async fn purify_create_table_from_source(
             PurifiedSourceExport {
                 external_reference: export.external_reference,
                 details: PurifiedExportDetails::LoadGenerator {
-                    table: Some(
-                        export
-                            .meta
-                            .load_generator_desc()
-                            .expect("is loadgen")
-                            .clone(),
-                    ),
+                    table: export
+                        .meta
+                        .load_generator_desc()
+                        .expect("is loadgen")
+                        .clone(),
                     output: export
                         .meta
                         .load_generator_output()

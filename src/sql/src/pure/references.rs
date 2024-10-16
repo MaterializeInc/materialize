@@ -54,7 +54,7 @@ pub(super) enum ReferenceMetadata {
     Kafka(String),
     LoadGenerator {
         name: String,
-        desc: RelationDesc,
+        desc: Option<RelationDesc>,
         namespace: String,
         output: LoadGeneratorOutput,
     },
@@ -93,7 +93,7 @@ impl ReferenceMetadata {
         }
     }
 
-    pub(super) fn load_generator_desc(&self) -> Option<&RelationDesc> {
+    pub(super) fn load_generator_desc(&self) -> Option<&Option<RelationDesc>> {
         match self {
             ReferenceMetadata::LoadGenerator { desc, .. } => Some(desc),
             _ => None,
@@ -214,7 +214,7 @@ impl<'a> SourceReferenceClient<'a> {
                     .map(
                         |(view, relation, output)| ReferenceMetadata::LoadGenerator {
                             name: view.to_string(),
-                            desc: relation,
+                            desc: Some(relation),
                             namespace: generator.schema_name().to_string(),
                             output,
                         },
@@ -226,7 +226,7 @@ impl<'a> SourceReferenceClient<'a> {
                     // that uses the load-generator's schema name.
                     references.push(ReferenceMetadata::LoadGenerator {
                         name: generator.schema_name().to_string(),
-                        desc: RelationDesc::empty(),
+                        desc: None,
                         namespace: generator.schema_name().to_string(),
                         output: LoadGeneratorOutput::Default,
                     });
@@ -296,7 +296,9 @@ impl RetrievedSourceReferences {
                     } => SourceReference {
                         name,
                         namespace: Some(namespace),
-                        columns: desc.iter_names().map(|n| n.to_string()).collect(),
+                        columns: desc
+                            .map(|desc| desc.iter_names().map(|n| n.to_string()).collect())
+                            .unwrap_or_default(),
                     },
                 })
                 .collect(),
