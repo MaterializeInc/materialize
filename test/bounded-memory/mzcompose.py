@@ -1221,8 +1221,8 @@ def find_minimal_memory(
         reduce_materialized_memory_by_gb >= 0.1 or reduce_clusterd_memory_by_gb >= 0.1
     )
 
-    min_allowed_materialized_memory_in_gb = 4.0
-    min_allowed_clusterd_memory_in_gb = 2.0
+    min_allowed_materialized_memory_in_gb = 1.5
+    min_allowed_clusterd_memory_in_gb = 0.5
 
     materialized_memory = initial_materialized_memory
     clusterd_memory = initial_clusterd_memory
@@ -1266,8 +1266,8 @@ def find_minimal_memory(
             break
 
     if (
-        materialized_memory != initial_materialized_memory
-        or clusterd_memory != initial_clusterd_memory
+        materialized_memory < initial_materialized_memory
+        or clusterd_memory < initial_clusterd_memory
     ):
         print(f"Validating again the memory configuration for {scenario.name}")
         materialized_memory, clusterd_memory = _validate_new_memory_configuration(
