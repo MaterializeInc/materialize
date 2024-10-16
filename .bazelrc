@@ -66,6 +66,11 @@ common --bes_upload_mode=fully_async
 # Tells `xz` to use all available cores.
 action_env=XZ_OPT=-T0
 
+#
+# Config when running Bazel from a script.
+#
+# Silence most UI output since it's noisy.
+run:script --ui_event_filters=-info,-stdout,-stderr --noshow_progress
 
 # LLVM's libc++ has different assertion modes which can be configured to catch
 # undefined behavior. See: <https://libcxx.llvm.org/Hardening.html>
