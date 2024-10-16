@@ -136,7 +136,12 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
 
         if let Some(upper) = &dataflow_expiration_desc.transitive_upper {
             // Returns empty if `upper` is empty, else the max of `upper` and `replica_expiration`.
-            upper.join(replica_expiration)
+            match upper.join(&replica_expiration).into_option() {
+                None => Antichain::default(),
+                // Advance the result by 1 second to ensure that the dataflow `until` is greater than
+                // the `upper` to avoid an untimely shutdown.
+                Some(ts) => Antichain::from_elem(ts.checked_add(1000).expect("Overflow")),
+            }
         } else {
             replica_expiration.clone()
         }
