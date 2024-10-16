@@ -12,7 +12,6 @@
 //! See row.proto for details.
 
 use std::fmt::Debug;
-use std::io::Cursor;
 use std::ops::AddAssign;
 use std::sync::Arc;
 
@@ -157,7 +156,7 @@ enum DatumColumnEncoder {
         /// Monotonically increasing offsets of each encoded segment.
         offsets: Vec<i32>,
         /// Buffer that contains UTF-8 encoded JSON.
-        buf: Cursor<Vec<u8>>,
+        buf: Vec<u8>,
         /// Null entries, if any.
         nulls: Option<BooleanBufferBuilder>,
     },
@@ -314,10 +313,7 @@ impl DatumColumnEncoder {
                 // Serialize our JSON.
                 json.to_writer(&mut buf)
                     .expect("failed to serialize Datum to jsonb");
-                let offset: i32 = buf
-                    .position()
-                    .try_into()
-                    .expect("wrote more than 4GB of JSON");
+                let offset: i32 = buf.len().try_into().expect("wrote more than 4GB of JSON");
                 offsets.push(offset);
 
                 if let Some(nulls) = nulls {
@@ -647,7 +643,7 @@ impl DatumColumnEncoder {
                 buf,
                 mut nulls,
             } => {
-                let values = Buffer::from_vec(buf.into_inner());
+                let values = Buffer::from_vec(buf);
                 let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
                 let array = StringArray::new(offsets, values, nulls);
@@ -1610,7 +1606,7 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
         ScalarType::Range { .. } => DatumColumnEncoder::Range(BinaryBuilder::new()),
         ScalarType::Jsonb => DatumColumnEncoder::Jsonb {
             offsets: vec![0],
-            buf: Cursor::new(Vec::new()),
+            buf: Vec::new(),
             nulls: None,
         },
         s @ ScalarType::Array(_) | s @ ScalarType::Int2Vector => {
