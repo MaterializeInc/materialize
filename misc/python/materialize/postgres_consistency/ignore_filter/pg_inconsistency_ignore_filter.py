@@ -73,6 +73,9 @@ from materialize.output_consistency.input_data.operations.record_operations_prov
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     TAG_REGEX,
 )
+from materialize.output_consistency.input_data.operations.table_operations_provider import (
+    TAG_TABLE_FUNCTION_WITH_NON_NUMERIC_SORT_ORDER,
+)
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
@@ -1092,7 +1095,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         # use here matches_any_expression instead of matches_specific_select_or_filter_expression on purpose because
         # the concerned expression may affect other columns as well
         if query_template.matches_any_expression(
-            is_table_function,
+            partial(
+                is_operation_tagged, tag=TAG_TABLE_FUNCTION_WITH_NON_NUMERIC_SORT_ORDER
+            ),
             True,
         ) and (query_template.has_offset() or query_template.has_limit()):
             # When table functions are used, a row-order insensitive comparison will be conducted in the result
