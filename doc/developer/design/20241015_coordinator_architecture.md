@@ -13,7 +13,7 @@ Note: Feel free to add or remove sections as needed. However, most design
 docs should at least keep the suggested sections.
 -->
 
-## The Problem
+## Problem
 
 <!--
 What is the user problem we want to solve?
@@ -58,6 +58,42 @@ fulfills `SELECT` queries.
    using a `Terminate` message. Similarly to the startup message, this requires
    a catalog transaction.
 
+The coordinator performs the following planning and sequencing steps on select
+queries, the entry point is `handle_execute`:
+* It validates the portal, sets up logging, and passes control to
+  `handle_execute_inner`.
+* Checks that the transaction mode matches the statement. For selects, this is
+  trivially true as selects can be implicit and explicit transactions.
+* Next, it checks that the query is not DDL, which is true for selects.
+* It resolves the statement, which requires immutable access to the catalog.
+* It checks if the statement requires purification, which is false for selects.
+* Finally, it plans the statement and hands the plan to `sequence_plan`.
+
+For selects, none of the steps require exclusive access to the coordinator.
+
+During sequencing, the coordinator performs roughly the following steps:
+* Validate the plan, check for sufficient RBAC permissions.
+* Jump to `sequence_peek`, which validates the query (`peek_validate`) and then
+  passes control to `sequence_staged` using a `PeekStage` object.
+
+From this point on, the processing advances in steps with the option of
+spawning tasks to advance. Of the steps, only some require coordinator access:
+* `LinearizeTimestamps` spawns a task to query the time stamp oracle if
+  required by the isolation level. For serializable isolation, this should
+  directly advance to `RealTimeRecency`.
+* `RealTimeRecency` determines a query time stamp, which requires spawning a
+  task if in strict serializable isolation.
+* Next, `TimstampReadHold` acquires the read holds to fulfill the current
+  request, if the transaction doesn't already have them. This step requires
+  mutable access to the system state.
+* The next step is `PeekStageOptimize`, spawning a task to optimize the query.
+* The last step is `Finish`, which handles various cases on how to fulfill a
+  peek. It can install a dataflow if needed, and can instruct the compute
+  controller to peek a target. It provides a channel to send results directly
+  to the client task. It requires mutable access as we store information about
+  the peek in various places.
+
+
 The problem is the execute portion of handling queries. The coordinator is
 responsible for planning, sequencing, and executing a query, and while
 individual parts can be offloaded, it needs to advance the state machine for
@@ -78,7 +114,7 @@ This is inefficient for several reasons:
   pipeline only improves overall latency as long as there are space CPU
   resources to handle the offload.
 
-## Success Criteria
+## Success criteria
 
 <!--
 What does a solution to this problem need to accomplish in order to
@@ -100,7 +136,12 @@ A straw man's proposal would be to handle 10k QPS at a 10^-3 latency (p99.9) of
 50ms and 10^-4 latency (p99.99) of 200ms. I made these numbers up, and they
 should merely be used as a guiding principle.
 
-## Out of Scope
+This leaves us with an average blocking request processing time of less than
+100us per request. For the system to be stable, it should probably be less than
+50us to leave headroom for long-running operations and temporary workload
+variations (noise).
+
+## Out of scope
 
 <!--
 What does a solution to this problem not need to address in order to be
@@ -110,7 +151,7 @@ It's important to be clear about what parts of a problem we won't be solving
 and why. This leads to crisper designs, and it aids in focusing the reviewer.
 -->
 
-## Solution Proposal
+## Solution proposal
 
 <!--
 What is your preferred solution, and why have you chosen it over the
@@ -127,7 +168,32 @@ Remember to document any dependencies that may need to break or change as a
 result of this work.
 -->
 
-## Minimal Viable Prototype
+We're running out of options to achieve the target outlined in [Success
+criteria] by just optimizing the current architecture. Instead, we need to
+adjust the architecture to be more cautiously separating parts of request
+processing that need to be serialized by the coordinator versus these parts
+that can be processed on any thread.
+
+Here, we propose approaches that could yield a reduction in average and tail
+latency.
+
+### Planning and sequencing on the client task
+
+Instead of sequencing queries on the coordinator thread, we use the local copy
+of the catalog to plan and sequence the query locally. We need to:
+* Obtain a read time stamp and acquire read holds,
+* Update supporting state around peeks.
+
+This looks like a significant task that requires intimate understanding of how
+query processing works, but has the chance to yield significant improvements.
+
+### Batching of requests
+
+### Caching optimized plans
+
+### Caching results
+
+## Minimal viable prototype
 
 <!--
 Build and share the minimal viable version of your project to validate the
