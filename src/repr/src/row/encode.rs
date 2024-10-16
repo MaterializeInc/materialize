@@ -25,7 +25,7 @@ use arrow::array::{
     UInt8Builder,
 };
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::datatypes::{DataType, Field, Fields, ToByteSlice};
 use bytes::{BufMut, Bytes};
 use chrono::Timelike;
 use dec::{Context, Decimal, OrderedDecimal};
@@ -92,6 +92,10 @@ struct DatumEncoder {
 }
 
 impl DatumEncoder {
+    fn goodput(&self) -> usize {
+        self.encoder.goodput()
+    }
+
     fn push(&mut self, datum: Datum) {
         assert!(
             !datum.is_null() || self.nullable,
@@ -204,6 +208,51 @@ enum DatumColumnEncoder {
 }
 
 impl DatumColumnEncoder {
+    fn goodput(&self) -> usize {
+        match self {
+            DatumColumnEncoder::Bool(a) => a.len(),
+            DatumColumnEncoder::U8(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::U16(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::U32(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::U64(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::I16(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::I32(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::I64(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::F32(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::F64(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::Numeric {
+                binary_values,
+                approx_values,
+                ..
+            } => {
+                binary_values.values_slice().len()
+                    + approx_values.values_slice().to_byte_slice().len()
+            }
+            DatumColumnEncoder::Bytes(a) => a.values_slice().len(),
+            DatumColumnEncoder::String(a) => a.values_slice().len(),
+            DatumColumnEncoder::Date(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::Time(a) => a.len() * PackedNaiveTime::SIZE,
+            DatumColumnEncoder::Timestamp(a) => a.len() * PackedNaiveDateTime::SIZE,
+            DatumColumnEncoder::TimestampTz(a) => a.len() * PackedNaiveDateTime::SIZE,
+            DatumColumnEncoder::MzTimestamp(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::Interval(a) => a.len() * PackedInterval::SIZE,
+            DatumColumnEncoder::Uuid(a) => a.len() * size_of::<Uuid>(),
+            DatumColumnEncoder::AclItem(a) => a.len() * PackedAclItem::SIZE,
+            DatumColumnEncoder::MzAclItem(a) => a.values_slice().len(),
+            DatumColumnEncoder::Range(a) => a.values_slice().len(),
+            DatumColumnEncoder::Jsonb { buf, .. } => buf.len(),
+            DatumColumnEncoder::Array { dims, vals, .. } => {
+                dims.len() * PackedArrayDimension::SIZE + vals.goodput()
+            }
+            DatumColumnEncoder::List { values, .. } => values.goodput(),
+            DatumColumnEncoder::Map { keys, vals, .. } => {
+                keys.values_slice().len() + vals.goodput()
+            }
+            DatumColumnEncoder::Record { fields, .. } => fields.iter().map(|f| f.goodput()).sum(),
+            DatumColumnEncoder::RecordEmpty(a) => a.len(),
+        }
+    }
+
     fn push<'e, 'd>(&'e mut self, datum: Datum<'d>) {
         match (self, datum) {
             (DatumColumnEncoder::Bool(bool_builder), Datum::True) => {
@@ -1275,6 +1324,10 @@ impl RowColumnarEncoder {
 
 impl ColumnEncoder<Row> for RowColumnarEncoder {
     type FinishedColumn = StructArray;
+
+    fn goodput(&self) -> usize {
+        self.encoders.iter().map(|e| e.goodput()).sum()
+    }
 
     fn append(&mut self, val: &Row) {
         let mut num_datums = 0;

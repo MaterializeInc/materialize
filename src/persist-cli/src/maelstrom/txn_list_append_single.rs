@@ -717,6 +717,7 @@ impl Service for TransactorService {
 
 mod codec_impls {
     use arrow::array::{BinaryArray, BinaryBuilder, UInt64Array, UInt64Builder};
+    use arrow::datatypes::ToByteSlice;
     use bytes::Bytes;
     use mz_persist_types::codec_impls::{
         SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder,
@@ -762,6 +763,10 @@ mod codec_impls {
     impl SimpleColumnarData for MaelstromKey {
         type ArrowBuilder = UInt64Builder;
         type ArrowColumn = UInt64Array;
+
+        fn goodput(builder: &Self::ArrowBuilder) -> usize {
+            builder.values_slice().to_byte_slice().len()
+        }
 
         fn push(&self, builder: &mut Self::ArrowBuilder) {
             builder.append_value(self.0);
@@ -829,6 +834,10 @@ mod codec_impls {
     impl SimpleColumnarData for MaelstromVal {
         type ArrowBuilder = BinaryBuilder;
         type ArrowColumn = BinaryArray;
+
+        fn goodput(builder: &Self::ArrowBuilder) -> usize {
+            builder.values_slice().to_byte_slice().len()
+        }
 
         fn push(&self, builder: &mut Self::ArrowBuilder) {
             builder.append_value(&self.encode_to_vec());
