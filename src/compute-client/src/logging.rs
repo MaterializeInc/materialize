@@ -533,6 +533,7 @@ impl LogVariant {
             LogVariant::Compute(ComputeLog::LirMapping) => RelationDesc::builder()
                 .with_column("global_id", ScalarType::String.nullable(false))
                 .with_column("lir_id", ScalarType::UInt64.nullable(false))
+                .with_column("operator", ScalarType::String.nullable(false))
                 .with_column(
                     "address",
                     ScalarType::List {

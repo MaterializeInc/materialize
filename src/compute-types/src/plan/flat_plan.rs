@@ -775,7 +775,7 @@ impl<T> FlatPlanNode<T> {
             FlatPlanNode::Constant { rows } => {
                 let summary = match rows {
                     Ok(rows) => format!("{} rows", rows.len()),
-                    Err(_) => format!("error"),
+                    Err(err) => format!("error ({err})"),
                 };
                 format!("Constant {summary}")
             }
@@ -785,12 +785,12 @@ impl<T> FlatPlanNode<T> {
                     Id::Global(id) => humanizer.humanize_id(*id).unwrap_or_else(|| id.to_string()),
                 };
                 let plan = match plan {
-                    GetPlan::PassArrangements => format!("PassArrangements"),
+                    GetPlan::PassArrangements => "PassArrangements".to_string(),
                     GetPlan::Arrangement(_key, Some(val), _mfp) => {
                         format!("Arrangement (val={})", explainer.expr(val, None))
                     }
-                    GetPlan::Arrangement(_key, None, _mfp) => format!("Arrangement"),
-                    GetPlan::Collection(_mfp) => format!("Collection"),
+                    GetPlan::Arrangement(_key, None, _mfp) => "Arrangement".to_string(),
+                    GetPlan::Collection(_mfp) => "Collection".to_string(),
                 };
 
                 format!("Get::{plan} {id}")
