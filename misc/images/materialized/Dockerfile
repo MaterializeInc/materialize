@@ -11,6 +11,4 @@ MZFROM materialized-base
 
 COPY clusterd environmentd entrypoint.sh /usr/local/bin/
 
-USER materialize
-
 ENTRYPOINT ["tini", "--", "entrypoint.sh"]

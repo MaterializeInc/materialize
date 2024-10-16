@@ -27,6 +27,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
     && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql \
-    && chown -R materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/lib/postgresql/16/main
+    && chown -R materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/log/postgresql /var/lib/postgresql/16/main
 
 COPY postgresql.conf pg_hba.conf /etc/postgresql/16/main/
+
+USER materialize
+
+RUN pg_ctlcluster 16 main start \
+    && psql -U postgres -c "CREATE ROLE root WITH LOGIN PASSWORD 'root'" \
+    && psql -U postgres -c "CREATE DATABASE root OWNER root"
