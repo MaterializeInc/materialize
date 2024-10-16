@@ -132,22 +132,18 @@ impl<P, S> DataflowDescription<P, S, Timestamp> {
         let Some(&replica_expiration_ts) = replica_expiration.as_option() else {
             return Antichain::default();
         };
-
-        let expiration_with_refresh =
+        let mut expiration_with_refresh_ts =
             if let Some(refresh_deps_index) = dataflow_expiration_desc.refresh_deps_index {
-                let mut expiration_with_refresh_ts = get_expiration_with_refresh(
+                get_expiration_with_refresh(
                     refresh_deps_index,
                     &dataflow_expiration_desc.refresh_deps,
                     replica_expiration_ts,
-                );
-                apply_optional_refresh_schedule(
-                    &mut expiration_with_refresh_ts,
-                    &self.refresh_schedule,
-                );
-                Antichain::from_elem(expiration_with_refresh_ts)
+                )
             } else {
-                replica_expiration.clone()
+                replica_expiration_ts
             };
+        apply_optional_refresh_schedule(&mut expiration_with_refresh_ts, &self.refresh_schedule);
+        let expiration_with_refresh = Antichain::from_elem(expiration_with_refresh_ts);
 
         if let Some(upper) = &dataflow_expiration_desc.transitive_upper {
             // Returns empty if `upper` is empty, else the max of `upper` and `replica_expiration`.

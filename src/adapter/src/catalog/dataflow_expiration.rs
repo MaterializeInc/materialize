@@ -16,7 +16,7 @@ impl Catalog {
         deps: impl Iterator<Item = GlobalId>,
         deps_tree: &mut Vec<RefreshDep>,
     ) -> Option<RefreshDepIndex> {
-        let start = deps_tree.len();
+        let mut local_deps = Vec::new();
         for dep in deps {
             let entry = self.get_entry(&dep);
             let refresh_dep_index =
@@ -25,12 +25,14 @@ impl Catalog {
                 .materialized_view()
                 .and_then(|mv| mv.refresh_schedule.clone());
             if refresh_dep_index.is_some() || refresh_schedule.is_some() {
-                deps_tree.push(RefreshDep {
+                local_deps.push(RefreshDep {
                     refresh_dep_index,
                     refresh_schedule,
                 });
             }
         }
+        let start = deps_tree.len();
+        deps_tree.extend(local_deps);
         let end = deps_tree.len();
         (end > start).then_some(RefreshDepIndex { start, end })
     }
