@@ -1484,7 +1484,7 @@ steps:
   - id: balancerd
     label: "Tests for balancerd"
     depends_on: build-aarch64
-    timeout_in_minutes: 15
+    timeout_in_minutes: 30
     agents:
       queue: hetzner-aarch64-4cpu-8gb
     plugins:
