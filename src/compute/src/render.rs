@@ -234,7 +234,7 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (ok_stream, err_stream, token) = persist_source::persist_source(
+                    let (mut ok_stream, err_stream, token) = persist_source::persist_source(
                         inner,
                         *source_id,
                         Arc::clone(&compute_state.persist_clients),
@@ -249,20 +249,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                         start_signal.clone(),
                         |error| panic!("compute_import: {error}"),
                     );
-
-                    let (mut ok_stream, err_stream) = match ct_inserts_transformer {
-                        None => (ok_stream, err_stream),
-                        Some(inserts_transformer_fn) => {
-                            let (oks, errs, ct_times) = inserts_transformer_fn(
-                                ok_stream.as_collection(),
-                                err_stream.as_collection(),
-                            );
-                            // TODO(ct): Ideally this would be encapsulated by ContinualTaskCtx, but
-                            // the types are tricky.
-                            ct_ctx.ct_times.push(ct_times.leave_region().leave_region());
-                            (oks.inner, errs.inner)
-                        }
-                    };
 
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
@@ -279,6 +265,23 @@ pub fn build_compute_dataflow<A: Allocate>(
                     let input_probe =
                         compute_state.input_probe_for(*source_id, dataflow.export_ids());
                     ok_stream = ok_stream.probe_with(&input_probe);
+
+                    // The `suppress_early_progress` operator and the input
+                    // probe both want to work on the untransformed ct input,
+                    // make sure this stays after them.
+                    let (ok_stream, err_stream) = match ct_inserts_transformer {
+                        None => (ok_stream, err_stream),
+                        Some(inserts_transformer_fn) => {
+                            let (oks, errs, ct_times) = inserts_transformer_fn(
+                                ok_stream.as_collection(),
+                                err_stream.as_collection(),
+                            );
+                            // TODO(ct): Ideally this would be encapsulated by ContinualTaskCtx, but
+                            // the types are tricky.
+                            ct_ctx.ct_times.push(ct_times.leave_region().leave_region());
+                            (oks.inner, errs.inner)
+                        }
+                    };
 
                     let (oks, errs) = (
                         ok_stream.as_collection().leave_region().leave_region(),
