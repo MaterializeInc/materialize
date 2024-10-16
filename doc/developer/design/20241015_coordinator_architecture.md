@@ -1,4 +1,4 @@
-# <Insert Name>
+# Designing a faster coordinator
 
 - Associated: (Insert list of associated epics, issues, or PRs)
 
@@ -21,6 +21,43 @@ What is the user problem we want to solve?
 The answer to this question should link to at least one open GitHub
 issue describing the problem.
 -->
+
+The coordinator architecture shows its limits for QPS-bound workloads. We
+serialize most interactions with Materialize on a single-threaded coordinator
+main thread, which performs most steps from accepting a statement to
+fulfillment, with only some parts offloaded to worker threads. This
+architecture is a bottleneck for high QPS workloads, as the coordinator main
+thread can become a bottleneck.
+
+In this document, we analyze what functions we need to perform on the
+coordinator main thread to uphold the guarantees of the system, and in the
+process determine parts that can be handled asynchronously by different
+threads.
+
+The entry point for queries into Materialize is the `pgwire` protocol. Each
+client is handled by its own async task, which interacts with the coordinator
+to fulfill its requests. Here, we're mostly interested on how Materialize
+fulfills `SELECT` queries.
+
+1. A session starts by sending a `Startup` message. This initializes state on
+   the coordinator, including updating the connections table.
+2. The task receives messages from the frontend, including a `Query` message.
+   The task parses the raw query string and executes each contained statement
+   sequentially (`one_query`).
+   1. It declares a query, which binds it to a portal. Do do this, it needs a
+      snapshot of the catalog to describe the statement, which involves a call
+      to the coordinator.
+   2. It executes the portal bound in the previous step, which sends a
+      `Execute` instruction to the coordinator.
+   3. Sends results to the client, and cleans up the portal.
+3. Eventually, the client shuts down, and the task notifies the coordinator
+   using a `Terminate` message. Similarly to the startup message, this requires
+   a catalog transaction.
+
+The problem is the execute portion of handling queries. The coordinator is
+responsible for planning, sequencing, and executing a query, and while
+individual parts can be offloaded, it needs to advance the state machine for
+handling queries.
 
 ## Success Criteria
 
