@@ -114,7 +114,7 @@ impl TimestampProvider for Frontiers {
             .collect()
     }
 
-    fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
+    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
         let mut read_holds = ReadHolds::new();
 
         let mock_read_hold = |id, frontier| {
