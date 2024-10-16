@@ -25,7 +25,7 @@ from materialize.xcompile import Arch
 DEBUGINFO_S3_BUCKET = "materialize-debuginfo"
 
 # The binaries for which debuginfo should be uploaded to S3 and Polar Signals.
-DEBUGINFO_BINS = ["environmentd", "clusterd"]
+DEBUGINFO_BINS = ["environmentd", "clusterd", "balancerd"]
 
 
 def main() -> None:
