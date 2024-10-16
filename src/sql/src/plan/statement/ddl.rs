@@ -2506,7 +2506,7 @@ pub fn plan_create_materialized_view(
     }: MaterializedViewOptionExtracted = stmt.with_options.try_into()?;
 
     let refresh_schedule = {
-        let mut refresh_schedule = RefreshSchedule::empty();
+        let mut refresh_schedule = RefreshSchedule::default();
         let mut on_commits_seen = 0;
         for refresh_option_value in refresh {
             if !matches!(refresh_option_value, RefreshOptionValue::OnCommit) {
@@ -2609,11 +2609,11 @@ pub fn plan_create_materialized_view(
         if on_commits_seen > 1 {
             sql_bail!("REFRESH ON COMMIT cannot be specified multiple times");
         }
-        if on_commits_seen > 0 && refresh_schedule != RefreshSchedule::empty() {
+        if on_commits_seen > 0 && refresh_schedule != RefreshSchedule::default() {
             sql_bail!("REFRESH ON COMMIT is not compatible with any of the other REFRESH options");
         }
 
-        if refresh_schedule == RefreshSchedule::empty() {
+        if refresh_schedule == RefreshSchedule::default() {
             None
         } else {
             Some(refresh_schedule)
