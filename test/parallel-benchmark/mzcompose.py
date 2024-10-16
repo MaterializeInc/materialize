@@ -15,7 +15,6 @@ actions concurrently, measures various kinds of statistics.
 import gc
 import os
 import time
-from collections import defaultdict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -44,9 +43,12 @@ from materialize.mzcompose.test_result import (
     TestFailureDetails,
 )
 from materialize.parallel_benchmark.framework import (
+    DB_FILE,
     LoadPhase,
-    Measurement,
+    MeasurementsStore,
+    MemoryStore,
     Scenario,
+    SQLiteStore,
     State,
 )
 from materialize.parallel_benchmark.scenarios import *  # noqa: F401 F403
@@ -105,24 +107,50 @@ SERVICES = [
 
 
 class Statistics:
-    def __init__(self, times: list[float], durations: list[float]):
-        assert len(times) == len(durations)
-        self.queries: int = len(times)
-        self.qps: float = len(times) / max(times)
-        self.max: float = max(durations)
-        self.min: float = min(durations)
-        self.avg: float = float(numpy.mean(durations))
-        self.p50: float = float(numpy.median(durations))
-        self.p95: float = float(numpy.percentile(durations, 95))
-        self.p99: float = float(numpy.percentile(durations, 99))
-        self.p99_9: float = float(numpy.percentile(durations, 99.9))
-        self.p99_99: float = float(numpy.percentile(durations, 99.99))
-        self.p99_999: float = float(numpy.percentile(durations, 99.999))
-        self.p99_9999: float = float(numpy.percentile(durations, 99.9999))
-        self.p99_99999: float = float(numpy.percentile(durations, 99.99999))
-        self.p99_999999: float = float(numpy.percentile(durations, 99.999999))
-        self.std: float = float(numpy.std(durations, ddof=1))
-        self.slope: float = float(numpy.polyfit(times, durations, 1)[0])
+    def __init__(self, action: str, m: MeasurementsStore, start_time: float):
+        if isinstance(m, MemoryStore):
+            times: list[float] = [x.timestamp - start_time for x in m.data[action]]
+            durations: list[float] = [x.duration * 1000 for x in m.data[action]]
+            self.queries: int = len(times)
+            self.qps: float = len(times) / max(times)
+            self.max: float = max(durations)
+            self.min: float = min(durations)
+            self.avg: float = float(numpy.mean(durations))
+            self.p50: float = float(numpy.median(durations))
+            self.p95: float = float(numpy.percentile(durations, 95))
+            self.p99: float = float(numpy.percentile(durations, 99))
+            self.p99_9: float = float(numpy.percentile(durations, 99.9))
+            self.p99_99: float = float(numpy.percentile(durations, 99.99))
+            self.p99_999: float = float(numpy.percentile(durations, 99.999))
+            self.p99_9999: float = float(numpy.percentile(durations, 99.9999))
+            self.p99_99999: float = float(numpy.percentile(durations, 99.99999))
+            self.p99_999999: float = float(numpy.percentile(durations, 99.999999))
+            self.std: float = float(numpy.std(durations, ddof=1))
+            self.slope: float = float(numpy.polyfit(times, durations, 1)[0])
+        elif isinstance(m, SQLiteStore):
+            cursor = m.conn.cursor()
+            cursor.execute(
+                f"SELECT count(*), count(*) / (max(timestamp) - {start_time}), max(duration) * 1000, min(duration) * 1000, avg(duration) * 1000 FROM measurements WHERE scenario = ? AND action = ?",
+                (m.scenario, action),
+            )
+            self.queries, self.qps, self.max, self.min, self.avg = cursor.fetchone()
+            # TODO: Rest
+            self.median = 0.0
+            self.p50 = 0.0
+            self.p95 = 0.0
+            self.p99 = 0.0
+            self.p99_9 = 0.0
+            self.p99_99 = 0.0
+            self.p99_999 = 0.0
+            self.p99_9999 = 0.0
+            self.p99_99999 = 0.0
+            self.p99_999999 = 0.0
+            self.std = 0.0
+            self.slope = 0.0
+        else:
+            raise ValueError(
+                f"Unknown measurements store (for action {action}): {type(m)}"
+            )
 
     def __str__(self) -> str:
         return f"""  queries: {self.queries:>5}
@@ -171,7 +199,7 @@ def upload_plot(
 def report(
     mz_string: str,
     scenario: Scenario,
-    measurements: dict[str, list[Measurement]],
+    measurements: MeasurementsStore,
     start_time: float,
     guarantees: bool,
     suffix: str,
@@ -179,63 +207,73 @@ def report(
     scenario_name = type(scenario).name()
     stats: dict[str, Statistics] = {}
     failures: list[TestFailureDetails] = []
-    plt.figure(figsize=(10, 6))
-    for key, m in measurements.items():
-        times: list[float] = [x.timestamp - start_time for x in m]
-        durations: list[float] = [x.duration * 1000 for x in m]
-        stats[key] = Statistics(times, durations)
-        plt.scatter(times, durations, label=key[:60], marker=MarkerStyle("+"))
-        print(f"Statistics for {key}:\n{stats[key]}")
-        if key in scenario.guarantees and guarantees:
-            for stat, guarantee in scenario.guarantees[key].items():
-                duration = getattr(stats[key], stat)
+
+    plot = isinstance(measurements, MemoryStore)
+
+    if plot:
+        plt.figure(figsize=(10, 6))
+    for action in measurements.actions():
+        stats[action] = Statistics(action, measurements, start_time)
+        if plot:
+            times: list[float] = [
+                x.timestamp - start_time for x in measurements.data[action]
+            ]
+            durations: list[float] = [
+                x.duration * 1000 for x in measurements.data[action]
+            ]
+            plt.scatter(times, durations, label=action[:60], marker=MarkerStyle("+"))
+        print(f"Statistics for {action}:\n{stats[action]}")
+        if action in scenario.guarantees and guarantees:
+            for stat, guarantee in scenario.guarantees[action].items():
+                duration = getattr(stats[action], stat)
                 less_than = less_than_is_regression(stat)
                 if duration < guarantee if less_than else duration > guarantee:
-                    failure = f"Scenario {scenario_name} failed: {key}: {stat}: {duration:.2f} {'<' if less_than else '>'} {guarantee:.2f}"
+                    failure = f"Scenario {scenario_name} failed: {action}: {stat}: {duration:.2f} {'<' if less_than else '>'} {guarantee:.2f}"
                     print(failure)
                     failures.append(
                         TestFailureDetails(
                             message=failure,
-                            details=str(stats[key]),
+                            details=str(stats[action]),
                             test_class_name_override=scenario_name,
                         )
                     )
                 else:
                     print(
-                        f"Scenario {scenario_name} succeeded: {key}: {stat}: {duration:.2f} {'>=' if less_than else '<='} {guarantee:.2f}"
+                        f"Scenario {scenario_name} succeeded: {action}: {stat}: {duration:.2f} {'>=' if less_than else '<='} {guarantee:.2f}"
                     )
 
-    plt.xlabel("time [s]")
-    plt.ylabel("latency [ms]")
-    plt.yscale("log")
-    plt.title(f"{scenario_name} against {mz_string}")
-    plt.legend(loc="best")
-    plt.grid(True)
-    plt.ylim(bottom=0)
-    plot_path = f"plots/{scenario_name}_{suffix}_timeline.png"
-    plt.savefig(MZ_ROOT / plot_path, dpi=300)
-    upload_plot(plot_path, scenario_name, "timeline")
+    if plot:
+        plt.xlabel("time [s]")
+        plt.ylabel("latency [ms]")
+        plt.yscale("log")
+        plt.title(f"{scenario_name} against {mz_string}")
+        plt.legend(loc="best")
+        plt.grid(True)
+        plt.ylim(bottom=0)
+        plot_path = f"plots/{scenario_name}_{suffix}_timeline.png"
+        plt.savefig(MZ_ROOT / plot_path, dpi=300)
+        upload_plot(plot_path, scenario_name, "timeline")
 
-    plt.clf()
+        plt.clf()
 
-    # Plot CCDF
-    plt.grid(True, which="both")
-    plt.xscale("log")
-    plt.yscale("log")
-    plt.ylabel("CCDF")
-    plt.xlabel("latency [ms]")
-    plt.title(f"{scenario_name} against {mz_string}")
-    for key, m in measurements.items():
-        durations = [x.duration * 1000.0 for x in m]
-        durations.sort()
-        (uniqu_durations, counts) = numpy.unique(durations, return_counts=True)
-        counts = numpy.cumsum(counts)
-        plt.plot(uniqu_durations, 1 - counts / counts.max(), label=key)
-    plt.legend(loc="best")
+        # Plot CCDF
+        plt.grid(True, which="both")
+        plt.xscale("log")
+        plt.yscale("log")
+        plt.ylabel("CCDF")
+        plt.xlabel("latency [ms]")
+        plt.title(f"{scenario_name} against {mz_string}")
+        for key, m in measurements.data.items():
+            durations = [x.duration * 1000.0 for x in m]
+            durations.sort()
+            (uniqu_durations, counts) = numpy.unique(durations, return_counts=True)
+            counts = numpy.cumsum(counts)
+            plt.plot(uniqu_durations, 1 - counts / counts.max(), label=key)
+        plt.legend(loc="best")
 
-    plot_path = f"plots/{scenario_name}_{suffix}_ccdf.png"
-    plt.savefig(MZ_ROOT / plot_path, dpi=300)
-    upload_plot(plot_path, scenario_name, "ccdf")
+        plot_path = f"plots/{scenario_name}_{suffix}_ccdf.png"
+        plt.savefig(MZ_ROOT / plot_path, dpi=300)
+        upload_plot(plot_path, scenario_name, "ccdf")
 
     return stats, failures
 
@@ -248,6 +286,7 @@ def run_once(
     params: str | None,
     args,
     suffix: str,
+    sqlite_store: bool,
 ) -> tuple[dict[Scenario, dict[str, Statistics]], list[TestFailureDetails]]:
     stats: dict[Scenario, dict[str, Statistics]] = {}
     failures: list[TestFailureDetails] = []
@@ -365,7 +404,9 @@ def run_once(
             scenario_name = scenario_class.name()
             print(f"--- Running scenario {scenario_name}")
             state = State(
-                measurements=defaultdict(list),
+                measurements=(
+                    SQLiteStore(scenario_name) if sqlite_store else MemoryStore()
+                ),
                 load_phase_duration=args.load_phase_duration,
                 periodic_dists={pd[0]: int(pd[1]) for pd in args.periodic_dist or []},
             )
@@ -392,6 +433,7 @@ def run_once(
                 )
                 failures.extend(new_failures)
                 stats[scenario] = new_stats
+                state.measurements.close()
 
             if not target:
                 print(
@@ -441,7 +483,10 @@ def check_regressions(
                 this_value = getattr(this_stats[scenario][query], stat)
                 other_value = getattr(other_stats[other_scenario][query], stat)
                 less_than = less_than_is_regression(stat)
-                percentage = f"{(this_value / other_value - 1) * 100:.2f}%"
+                try:
+                    percentage = f"{(this_value / other_value - 1) * 100:.2f}%"
+                except ZeroDivisionError:
+                    percentage = ""
                 threshold = (
                     None
                     if query in ignored_queries
@@ -636,6 +681,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Run against QA Benchmarking staging environment",
     )
 
+    parser.add_argument(
+        "--sqlite-store",
+        action="store_true",
+        help="Store results in SQLite instead of in memory",
+    )
+
     args = parser.parse_args()
 
     if args.scenario:
@@ -651,6 +702,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     sharded_scenarios = buildkite.shard_list(scenarios, lambda s: s.name())
 
+    if not sharded_scenarios:
+        return
+
+    if args.sqlite_store and os.path.exists(DB_FILE):
+        os.remove(DB_FILE)
+
     service_names = ["materialized", "postgres", "mysql"] + (
         ["redpanda"] if args.redpanda else ["zookeeper", "kafka", "schema-registry"]
     )
@@ -663,6 +720,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         params=args.this_params,
         args=args,
         suffix="this",
+        sqlite_store=args.sqlite_store,
     )
     if args.other_tag:
         assert not args.mz_url, "Can't set both --mz-url and --other-tag"
@@ -677,6 +735,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             params=args.other_params,
             args=args,
             suffix="other",
+            sqlite_store=args.sqlite_store,
         )
         failures.extend(other_failures)
         failures.extend(check_regressions(this_stats, other_stats, tag))

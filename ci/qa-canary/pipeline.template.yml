@@ -46,10 +46,11 @@ steps:
     concurrency: 1
     concurrency_group: 'parallel-benchmark-canary'
     agents:
-      queue: linux-aarch64
+      queue: linux-aarch64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: parallel-benchmark
           args:
             - --benchmarking-env
             - --scenario=StagingBench
+            - --sqlite-store
