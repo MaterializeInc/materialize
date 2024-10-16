@@ -2,7 +2,7 @@
 
 ## Versioning
 
-For every change, increment the `version` contained in [Chart.yaml](https://github.com/cockroachdb/helm-charts/blob/master/cockroachdb/Chart.yaml). The `version` should follow the [SEMVER](https://semver.org/) versioning pattern.
+For every change, increment the `version` contained in [Chart.yaml](https://github.com/materializeinc/materialize/blob/main/misc/helm-charts/operator/Chart.yaml). The `version` should follow the [SEMVER](https://semver.org/) versioning pattern.
 
 - For changes that do not affect backward compatibility, increment the PATCH or MINOR version (e.g., `1.1.3` -> `1.1.4`).
 - For changes that affect backward compatibility, increment the MAJOR version (e.g., `1.1.3` -> `2.0.0`).

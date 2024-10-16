@@ -28,7 +28,7 @@ operator:
       memory: 512Mi
 
 # TODO: Change with Postgres
-cockroachdb:
+metadatadb:
   endpoint: "cockroachdb-public.cockroachdb.svc.cluster.local"
   port: 26257
   username: "environment-controller"
@@ -57,10 +57,9 @@ networkPolicies:
 # Users can add environment configurations here:
 # materializeEnvironments:
 #   - name: default-environment
-#     organizationId: 00000000-0000-0000-0000-000000000000
 #     environmentdImageRef: materialize/environmentd:v0.119.2
-#     externalIdPrefix: 11111111-1111-1111-1111-111111111111
-#     hostname: default.materialize.cloud
+#     environmentdCpuAllocation: "500m"
+#     environmentdMemoryAllocation: "1Gi"
 #     requestRollout: 22222222-2222-2222-2222-222222222222
 #     forceRollout: 33333333-3333-3333-3333-333333333333
 #     inPlaceRollout: false

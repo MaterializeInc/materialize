@@ -15,12 +15,25 @@ kind: Materialize
 metadata:
   name: {{ .name }}
 spec:
-  organizationId: {{ .organizationId }}
   environmentdImageRef: {{ .environmentdImageRef }}
-  externalIdPrefix: {{ .externalIdPrefix }}
-  hostname: {{ .hostname }}
+  {{- if .environmentdExtraArgs }}
+  environmentdExtraArgs:
+    {{- toYaml .environmentdExtraArgs | nindent 4 }}
+  {{- end }}
+  {{- if .environmentdCpuAllocation }}
+  environmentdCpuAllocation: {{ .environmentdCpuAllocation }}
+  {{- end }}
+  {{- if .environmentdMemoryAllocation }}
+  environmentdMemoryAllocation: {{ .environmentdMemoryAllocation }}
+  {{- end }}
+  {{- if .requestRollout }}
   requestRollout: {{ .requestRollout }}
+  {{- end }}
+  {{- if .forceRollout }}
   forceRollout: {{ .forceRollout }}
+  {{- end }}
+  {{- if .inPlaceRollout }}
   inPlaceRollout: {{ .inPlaceRollout }}
+  {{- end }}
 {{- end }}
 {{- end }}

@@ -37,11 +37,11 @@ The following table lists the configurable parameters of the Materialize operato
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `cockroachdb.caCert` |  | ``"-----BEGIN CERTIFICATE-----\nTODO\n-----END CERTIFICATE-----\n"`` |
-| `cockroachdb.endpoint` |  | ``"cockroachdb-public.cockroachdb.svc.cluster.local"`` |
-| `cockroachdb.password` |  | ``"password"`` |
-| `cockroachdb.port` |  | ``26257`` |
-| `cockroachdb.username` |  | ``"environment-controller"`` |
+| `metadatadb.caCert` |  | ``"-----BEGIN CERTIFICATE-----\nTODO\n-----END CERTIFICATE-----\n"`` |
+| `metadatadb.endpoint` |  | ``"cockroachdb-public.cockroachdb.svc.cluster.local"`` |
+| `metadatadb.password` |  | ``"password"`` |
+| `metadatadb.port` |  | ``26257`` |
+| `metadatadb.username` |  | ``"environment-controller"`` |
 | `networkPolicies.enabled` |  | ``false`` |
 | `networkPolicies.useNativeKubernetesPolicy` |  | ``true`` |
 | `observability.enabled` |  | ``false`` |
