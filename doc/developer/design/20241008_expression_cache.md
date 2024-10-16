@@ -140,6 +140,7 @@ When opening the cache for the first time, we need to perform the following reco
 
 1. Execute catalog transaction.
 2. Update cache via `ExpressionCache::insert_expressions`.
+3. [Optional for v1] Recompute and insert any invalidated expressions.
 
 #### Create Invalidations
 
