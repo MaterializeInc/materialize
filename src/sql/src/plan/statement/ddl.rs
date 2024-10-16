@@ -96,7 +96,7 @@ use mz_storage_types::sources::kafka::{
     kafka_metadata_columns_desc, KafkaMetadataKind, KafkaSourceConnection, KafkaSourceExportDetails,
 };
 use mz_storage_types::sources::load_generator::{
-    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceConnection,
+    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
     LoadGeneratorSourceExportDetails, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
 };
 use mz_storage_types::sources::mysql::{
@@ -121,8 +121,8 @@ use crate::catalog::{
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
     Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
-    RawDatabaseSpecifier, ResolvedClusterName, ResolvedColumnReference, ResolvedDataType,
-    ResolvedDatabaseSpecifier, ResolvedItemName, SchemaSpecifier, SystemObjectId,
+    ResolvedClusterName, ResolvedColumnReference, ResolvedDataType, ResolvedDatabaseSpecifier,
+    ResolvedItemName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -147,10 +147,9 @@ use crate::plan::{
     CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, FullItemName, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
-    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
-    WebhookHeaders, WebhookValidation,
+    DropOwnedPlan, Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice,
+    QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue,
+    View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_CREATE_CONTINUAL_TASK, ENABLE_KAFKA_SINK_HEADERS,
@@ -897,7 +896,7 @@ pub fn plan_create_source(
             connection
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            let (load_generator, _available_subsources) =
+            let load_generator =
                 load_generator_ast_to_generator(scx, generator, options, include_metadata)?;
 
             let LoadGeneratorOptionExtracted {
@@ -1824,13 +1823,7 @@ pub(crate) fn load_generator_ast_to_generator(
     loadgen: &ast::LoadGenerator,
     options: &[LoadGeneratorOption<Aug>],
     include_metadata: &[SourceIncludeMetadata],
-) -> Result<
-    (
-        LoadGenerator,
-        Option<BTreeMap<FullItemName, (RelationDesc, LoadGeneratorOutput)>>,
-    ),
-    PlanError,
-> {
+) -> Result<LoadGenerator, PlanError> {
     let extracted: LoadGeneratorOptionExtracted = options.to_vec().try_into()?;
     extracted.ensure_only_valid_options(loadgen)?;
 
@@ -1965,24 +1958,7 @@ pub(crate) fn load_generator_ast_to_generator(
         }
     };
 
-    let mut available_subsources = BTreeMap::new();
-    for (name, desc, output) in load_generator.views() {
-        let name = FullItemName {
-            database: RawDatabaseSpecifier::Name(
-                mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME.to_owned(),
-            ),
-            schema: load_generator.schema_name().into(),
-            item: name.to_string(),
-        };
-        available_subsources.insert(name, (desc, output));
-    }
-    let available_subsources = if available_subsources.is_empty() {
-        None
-    } else {
-        Some(available_subsources)
-    };
-
-    Ok((load_generator, available_subsources))
+    Ok(load_generator)
 }
 
 fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(Option<usize>, usize), PlanError> {

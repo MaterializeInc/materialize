@@ -718,7 +718,7 @@ contains: invalid TEXT COLUMNS option value: reference to table_dne not found in
     conflict_schema.another_enum_table AS conflict_enum,
     public.another_enum_table AS public_enum
   );
-contains: invalid TEXT COLUMNS option value: reference to another_enum_table is ambiguous, consider specifying an additional layer of qualification
+contains: invalid TEXT COLUMNS option value: reference another_enum_table is ambiguous, consider specifying an additional layer of qualification
 
 ! CREATE SOURCE enum_source
   IN CLUSTER cdc_cluster

@@ -38,7 +38,7 @@ CREATE VIEW v1 (f1) AS SELECT f1 FROM t1;
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 ! CREATE TABLE v1 FROM SOURCE mz_source (REFERENCE public.v1);
-contains:No tables found
+contains:reference to public.v1 not found in source
 
 ! CREATE VIEW v1 FROM SOURCE mz_source (REFERENCE public.v1);
 contains:Expected AS, found FROM
