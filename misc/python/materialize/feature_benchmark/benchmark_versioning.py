@@ -18,12 +18,12 @@ FEATURE_BENCHMARK_SCENARIOS_DIR = FEATURE_BENCHMARK_FRAMEWORK_DIR / "scenarios"
 
 # Consider increasing the #FEATURE_BENCHMARK_FRAMEWORK_VERSION if changes are expected to impact results!
 SHA256_OF_FRAMEWORK: dict[str, str] = {
-    "*": "c13ba2db3cccea214fbf946ef9037a307dd64b1b2d837611fc407c82cb5d8cfc",
+    "*": "feae83511adb03063ca85e519fae6fed66cee33544e6798d47287d4f749adafb",
 }
 
 # Consider increasing the scenario's class #version() if changes are expected to impact results!
 SHA256_BY_SCENARIO_FILE: dict[str, str] = {
-    "benchmark_main.py": "aca597f4eedb9c3e9ea08327b9997dab9ccb7202a0fe7df35181958d7413356b",
+    "benchmark_main.py": "a898f6d8990476422ef99a6f156a36571d52fab9b10414664d32c023ad591357",
     "concurrency.py": "2e9c149c136b83b3853abc923a1adbdaf55a998ab4557712f8424c8b16f2adb1",
     "customer.py": "d1e72837a342c3ebf1f4a32ec583b1b78a78644cdba495030a6df45ebbffe703",
     "optbench.py": "e0aa427c4af0467a408ebd11fcff55b75da910bae035cf272bebd3924ebc3483",

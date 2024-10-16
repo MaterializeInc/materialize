@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import time
 
-from materialize import ui
 from materialize.feature_benchmark.aggregation import Aggregation
 from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.filter import Filter
@@ -76,9 +76,10 @@ class Benchmark:
     def run(self) -> list[Aggregation]:
         scenario = self.create_scenario_instance()
 
-        ui.header(
-            f"Running scenario {scenario.name()}, scale = {scenario.scale()}, N = {scenario.n()}"
+        print(
+            f"--- Running scenario {scenario.name()}, scale = {scenario.scale()}, N = {scenario.n()}"
         )
+        start_time = time.time()
 
         # Run the shared() section once for both Mzs under measurement
         self.run_shared(scenario)
@@ -101,6 +102,11 @@ class Benchmark:
                 ]
 
             i = i + 1
+
+        duration = time.time() - start_time
+        print(
+            f"Scenario {scenario.name()}, scale = {scenario.scale()}, N = {scenario.n()} took {duration:.0f}s to run"
+        )
 
     def run_shared(self, scenario: Scenario) -> None:
         shared = scenario.shared()
