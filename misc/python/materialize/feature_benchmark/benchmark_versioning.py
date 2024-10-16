@@ -18,7 +18,7 @@ FEATURE_BENCHMARK_SCENARIOS_DIR = FEATURE_BENCHMARK_FRAMEWORK_DIR / "scenarios"
 
 # Consider increasing the #FEATURE_BENCHMARK_FRAMEWORK_VERSION if changes are expected to impact results!
 SHA256_OF_FRAMEWORK: dict[str, str] = {
-    "*": "064aef5f79ef392a0cdad690992e5c94a8daf57b7f03987ae615dd6142d568ce",
+    "*": "d805dc0566e2daa9450ea0c560ef15d4016e44c40c95a6b3f2302d25fc2e031d",
 }
 
 # Consider increasing the scenario's class #version() if changes are expected to impact results!
