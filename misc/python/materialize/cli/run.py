@@ -11,6 +11,7 @@
 
 import argparse
 import atexit
+import getpass
 import os
 import pathlib
 import shlex
@@ -22,8 +23,10 @@ import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
+import pg8000.exceptions
+import pg8000.native
 import psutil
 
 from materialize import MZ_ROOT, rustc_flags, spawn, ui
@@ -215,21 +218,12 @@ def main() -> int:
             _handle_lingering_services(kill=args.reset)
             mzdata = MZ_ROOT / "mzdata"
             scratch = MZ_ROOT / "scratch"
-            db = urlparse(args.postgres).path.removeprefix("/")
-            if db:
-                url_without_db = "/".join(args.postgres.split("/")[:-1])
-                if (
-                    _capture_sql(
-                        url_without_db,
-                        f"SELECT 1 FROM pg_database WHERE datname='{db}'",
-                    )
-                    != "1"
-                ):
-                    _run_sql(url_without_db, f"CREATE DATABASE {db}")
+            urlparse(args.postgres).path.removeprefix("/")
+            dbconn = _connect_sql(args.postgres)
             for schema in ["consensus", "tsoracle", "storage"]:
                 if args.reset:
-                    _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-                _run_sql(args.postgres, f"CREATE SCHEMA IF NOT EXISTS {schema}")
+                    _run_sql(dbconn, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+                _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
             # Keep this after clearing out Postgres. Otherwise there is a race
             # where a ctrl-c could leave persist with references in Postgres to
             # files that have been deleted. There's no race if we reset in the
@@ -286,17 +280,8 @@ def main() -> int:
                 for key, value in get_default_system_parameters().items()
             ]
             env["MZ_SYSTEM_PARAMETER_DEFAULT"] = ";".join(formatted_params)
-            db = urlparse(args.postgres).path.removeprefix("/")
-            if db:
-                url_without_db = "/".join(args.postgres.split("/")[:-1])
-                if (
-                    _capture_sql(
-                        url_without_db,
-                        f"SELECT 1 FROM pg_database WHERE datname='{db}'",
-                    )
-                    != "1"
-                ):
-                    _run_sql(url_without_db, f"CREATE DATABASE {db}")
+            # Connect to the database to ensure it exists.
+            _connect_sql(args.postgres)
             command += [f"--postgres-url={args.postgres}", *args.args]
     elif args.program == "test":
         if args.bazel:
@@ -517,24 +502,46 @@ def _macos_codesign(path: str) -> None:
     spawn.runv(command, env=env)
 
 
-def _run_sql(url: str, sql: str) -> None:
+def _connect_sql(urlstr: str) -> pg8000.native.Connection:
+    url = urlparse(urlstr)
+    database = url.path.removeprefix("/")
+    if not database:
+        raise UIError(f"database name is missing in the postgres URL: {urlstr}")
     try:
-        spawn.runv(["psql", "-AtX", url, "-c", sql])
-    except Exception as e:
+        dbconn = pg8000.native.Connection(
+            host=url.hostname or "localhost",
+            port=url.port or 5432,
+            user=url.username or getpass.getuser(),
+            password=url.password,
+            database=database,
+            startup_params={key: value for key, value in parse_qsl(url.query)},
+        )
+    except pg8000.exceptions.DatabaseError as e:
         raise UIError(
-            f"unable to execute postgres statement: {e}",
-            hint="Have you installed and started Postgres or CockroachDB? Try setting MZDEV_POSTGRES",
+            f"unable to connect to metadata database: {e.args[0]['M']}",
+            hint="""Have you correctly configured CockroachDB or PostgreSQL?
+
+For CockroachDB:
+    Follow the instructions in doc/developer/guide.md#CockroachDB
+
+For PostgreSQL:
+    1. Install PostgreSQL
+    2. Create a database: `createdb materialize`
+    3. Set the MZDEV_POSTGRES environment variable accordingly: `export MZDEV_POSTGRES=postgres://localhost/materialize`""",
         )
 
+    # For CockroachDB, after connecting, we can ensure the database exists. For
+    # PostgreSQL, the database must exist for us to connect to it at all--we
+    # declare it to be the user's problem to create this database.
+    if "crdb_version" in dbconn.parameter_statuses:
+        _run_sql(dbconn, f"CREATE DATABASE IF NOT EXISTS {database}")
 
-def _capture_sql(url: str, sql: str) -> str:
-    try:
-        return spawn.capture(["psql", "-AtX", url, "-c", sql])[:-1]
-    except Exception as e:
-        raise UIError(
-            f"unable to execute postgres statement: {e}",
-            hint="Have you installed and started Postgres or CockroachDB? Try setting MZDEV_POSTGRES",
-        )
+    return dbconn
+
+
+def _run_sql(conn: pg8000.native.Connection, sql: str) -> None:
+    print(f"> {sql}")
+    conn.run(sql)
 
 
 def _handle_lingering_services(kill: bool = False) -> None:
