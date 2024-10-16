@@ -10,10 +10,17 @@
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression import Expression
-from materialize.output_consistency.operation.operation_param import OperationParam
+from materialize.output_consistency.expression.row_indices_expression import (
+    RowIndicesExpression,
+)
+from materialize.output_consistency.generators.arg_context import ArgContext
+from materialize.output_consistency.operation.volatile_data_operation_param import (
+    VolatileDataOperationParam,
+)
+from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 
 
-class RowIndicesParam(OperationParam):
+class RowIndicesParam(VolatileDataOperationParam):
     """
     This is mostly used to support sorting in aggregation functions (e.g., "string_agg($, $ ORDER BY $, $)").
     While sorting should ideally happen by the actual expression, sorting behavior differs between mz and Postgres
@@ -35,3 +42,11 @@ class RowIndicesParam(OperationParam):
         self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
         return False
+
+    def generate_expression(
+        self, arg_context: ArgContext, randomized_picker: RandomizedPicker
+    ) -> Expression:
+        expression_to_share_data_source = arg_context.args[
+            self.index_of_param_to_share_data_source
+        ]
+        return RowIndicesExpression(expression_to_share_data_source)
