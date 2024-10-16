@@ -85,6 +85,7 @@ pub async fn publication_info(
                         AND a.attnum = ANY (b.conkey)
                     WHERE a.attnum > 0::pg_catalog.int2
                         AND NOT a.attisdropped
+                        AND a.attgenerated = ''
                         AND a.attrelid = $1
                     ORDER BY a.attnum",
                 &[&oid],
