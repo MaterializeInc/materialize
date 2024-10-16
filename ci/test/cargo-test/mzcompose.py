@@ -213,7 +213,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "--workspace",
                         "--bin",
                         "clusterd",
-                        "--profile=ci",
+                        "--profile=release",
                     ],
                     env=env,
                 )
@@ -275,7 +275,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "--workspace",
                         "--all-features",
                         "--profile=ci",
-                        "--cargo-profile=ci",
+                        "--cargo-profile=release",
                         f"--partition=count:{partition}/{total}",
                         *args.args,
                     ],

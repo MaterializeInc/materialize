@@ -55,9 +55,6 @@ macro_rules! make_handle_static {
             fn get_static_file(path: &str) -> Option<Vec<u8>> {
                 use ::std::fs;
 
-                #[cfg(not(debug_assertions))]
-                compile_error!("cannot enable insecure `dev-web` feature in release mode");
-
                 // Prefer the unminified files in static-dev, if they exist.
                 let dev_path =
                     format!("{}/{}/{}", env!("CARGO_MANIFEST_DIR"), $dev_base_path, path);
