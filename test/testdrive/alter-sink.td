@@ -123,7 +123,7 @@ contains:canceling statement due to user request
 # The sink will start sinking updates from `post_alter` at the timestamp that
 # the previous dataflow happens to stop. This happens pretty quickly but we
 # wait a few seconds more for good measure to avoid flaking.
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=4s
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
 
 > INSERT INTO created_post_alter VALUES ('hundred', 99);
 
