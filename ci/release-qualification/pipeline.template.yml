@@ -473,3 +473,16 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
+
+  - id: limits
+    label: "Product limits (finding new limits) %N"
+    depends_on: build-aarch64
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: limits
+          run: main
+          args: [--find-limit]
+    timeout_in_minutes: 3600
+    parallelism: 20
