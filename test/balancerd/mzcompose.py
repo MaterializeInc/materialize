@@ -151,19 +151,19 @@ def assert_metrics(c: Composition, contains: str):
 
 
 def sql_cursor(
-    c: Composition, service="balancerd", email="u1@example.com", init_params={}
+    c: Composition, service="balancerd", email="u1@example.com", startup_params={}
 ) -> Cursor:
     return c.sql_cursor(
         service=service,
         user=email,
         password=app_password(email),
         sslmode="require",
-        init_params=init_params,
+        startup_params=startup_params,
     )
 
 
 def pg8000_sql_cursor(
-    c: Composition, service="balancerd", email="u1@example.com", init_params={}
+    c: Composition, service="balancerd", email="u1@example.com", startup_params={}
 ) -> pg8000.Cursor:
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
@@ -174,7 +174,7 @@ def pg8000_sql_cursor(
         user=email,
         password=app_password(email),
         ssl_context=ssl_context,
-        init_params=init_params,
+        startup_params=startup_params,
     )
     return conn.cursor()
 
@@ -455,13 +455,13 @@ def workflow_pgwire_param_rejection(c: Composition) -> None:
     # NOTICE:  startup setting mz_forwarded_for not set: unrecognized configuration parameter "mz_forwarded_for"
     check_error(
         "connect with mz_forwarded_for param",
-        lambda: pg8000_sql_cursor(c, init_params={"mz_forwarded_for": "1.1.1.1"}),
+        lambda: pg8000_sql_cursor(c, startup_params={"mz_forwarded_for": "1.1.1.1"}),
         InterfaceError,
     )
 
     check_error(
         "connect with mz_connection_uuid param",
-        lambda: pg8000_sql_cursor(c, init_params={"mz_connection_uuid": "123456"}),
+        lambda: pg8000_sql_cursor(c, startup_params={"mz_connection_uuid": "123456"}),
         InterfaceError,
     )
 
