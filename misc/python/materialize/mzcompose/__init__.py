@@ -118,6 +118,8 @@ def get_default_system_parameters(
         "enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
+        "kafka_default_metadata_fetch_interval": "1s",
+        "mysql_offset_known_interval": "1s",
         "persist_batch_columnar_format": (
             "both_v2" if version >= MzVersion.parse_mz("v0.112.0-dev") else "row"
         ),
@@ -150,11 +152,13 @@ def get_default_system_parameters(
         "persist_use_critical_since_snapshot": "false" if zero_downtime else "true",
         "persist_use_critical_since_source": "false" if zero_downtime else "true",
         "persist_part_decode_format": "row_with_validate",
+        "pg_offset_known_interval": "1s",
         "statement_logging_default_sample_rate": "0.01",
         "statement_logging_max_sample_rate": "0.01",
         "storage_source_decode_fuel": "100000",
         "storage_use_continual_feedback_upsert": "true",
         "storage_use_reclock_v2": "true",
+        "storage_reclock_to_latest": "true",
         "timestamp_oracle": "postgres",
         "wait_catalog_consolidation_on_startup": "true",
         "with_0dt_deployment_max_wait": "900s",

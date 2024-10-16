@@ -138,8 +138,11 @@ one
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
 
 # Ensure the source reports the previous data.
+> SET transaction_isolation = serializable
 > SELECT count(*) FROM source2_tbl
 100
+
+> RESET transaction_isolation
 
 # Check whether the source is still lumbering along. Correctness has gone out
 # the window here. Data in the new topic will be ignored up until the first new
