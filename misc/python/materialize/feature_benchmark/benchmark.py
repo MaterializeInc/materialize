@@ -95,6 +95,11 @@ class Benchmark:
             performance_measurement = self.run_measurement(scenario, i)
 
             if self.shall_terminate(performance_measurement):
+                duration = time.time() - start_time
+                print(
+                    f"Scenario {scenario.name()}, scale = {scenario.scale()}, N = {scenario.n()} took {duration:.0f}s to run"
+                )
+
                 return [
                     self._performance_aggregation,
                     self._memory_mz_aggregation,
@@ -102,11 +107,6 @@ class Benchmark:
                 ]
 
             i = i + 1
-
-        duration = time.time() - start_time
-        print(
-            f"Scenario {scenario.name()}, scale = {scenario.scale()}, N = {scenario.n()} took {duration:.0f}s to run"
-        )
 
     def run_shared(self, scenario: Scenario) -> None:
         shared = scenario.shared()
