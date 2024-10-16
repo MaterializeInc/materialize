@@ -36,6 +36,9 @@ from materialize.output_consistency.expression.row_indices_expression import (
 from materialize.output_consistency.input_data.operations.equality_operations_provider import (
     EQUALS_OPERATION,
 )
+from materialize.output_consistency.input_data.params.one_of_operation_param import (
+    OneOf,
+)
 from materialize.output_consistency.input_data.params.row_indices_param import (
     RowIndicesParam,
 )
@@ -341,6 +344,10 @@ class ExpressionGenerator:
         arg_context: ArgContext,
         nesting_level: int,
     ) -> Expression:
+        # this one must be at the top
+        if isinstance(param, OneOf):
+            param = param.pick(self.randomized_picker)
+
         if isinstance(param, EnumConstantOperationParam):
             return self._pick_enum_constant(param)
 
