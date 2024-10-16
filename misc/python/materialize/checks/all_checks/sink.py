@@ -1300,8 +1300,15 @@ class SinkPartitionByDebezium(Check):
                 {"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"f1","type":"int"},{"name":"f2","type":["null","string"]}]}]},{"name":"after","type":["null","row"]}]}
 
                 # We check the contents of the sink topics by re-ingesting them.
-                > CREATE SOURCE sink_partition_by_debezium_source
+                >[version<11900] CREATE SOURCE sink_partition_by_debezium_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-partition-by-debezium-sink-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version>=11900] CREATE SOURCE sink_partition_by_debezium_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-partition-by-debezium-sink-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE sink_partition_by_debezium_source
+                  FROM SOURCE sink_partition_by_debezium_source_src (REFERENCE "testdrive-sink-partition-by-debezium-sink-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -1341,7 +1348,8 @@ class SinkPartitionByDebezium(Check):
                 y 0
                 z 100000
 
-                > DROP SOURCE sink_partition_by_debezium_source CASCADE;
+                >[version<11900] DROP SOURCE sink_partition_by_debezium_source CASCADE;
+                >[version>=11900] DROP SOURCE sink_partition_by_debezium_source_src CASCADE;
 
                 # TODO: kafka-verify-data when it can deal with being run twice, to check the actual partitioning
             """
