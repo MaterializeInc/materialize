@@ -206,7 +206,7 @@ pub fn build_compute_dataflow<A: Allocate>(
     let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
-        // TODO(ct): This should be a config of the source instead, but at least try
+        // TODO(ct3): This should be a config of the source instead, but at least try
         // to contain the hacks.
         let mut ct_ctx = ContinualTaskCtx::new(&dataflow);
 
@@ -276,8 +276,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                                 ok_stream.as_collection(),
                                 err_stream.as_collection(),
                             );
-                            // TODO(ct): Ideally this would be encapsulated by ContinualTaskCtx, but
-                            // the types are tricky.
+                            // TODO(ct3): Ideally this would be encapsulated by
+                            // ContinualTaskCtx, but the types are tricky.
                             ct_ctx.ct_times.push(ct_times.leave_region().leave_region());
                             (oks.inner, errs.inner)
                         }
