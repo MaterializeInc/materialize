@@ -130,30 +130,10 @@ class Statistics:
         elif isinstance(m, SQLiteStore):
             cursor = m.conn.cursor()
             cursor.execute(
-                "SELECT count(*) FROM measurements WHERE scenario = ? AND action = ?",
+                f"SELECT count(*), count(*) / (max(timestamp) - {start_time}), max(duration) * 1000, min(duration) * 1000, avg(duration) * 1000 FROM measurements WHERE scenario = ? AND action = ?",
                 (m.scenario, action),
             )
-            self.queries: int = cursor.fetchall()[0][0]
-            cursor.execute(
-                f"SELECT count(*) / (max(timestamp) - {start_time}) FROM measurements WHERE scenario = ? AND action = ?",
-                (m.scenario, action),
-            )
-            self.qps: float = cursor.fetchall()[0][0]
-            cursor.execute(
-                "SELECT max(duration) * 1000 FROM measurements WHERE scenario = ? AND action = ?",
-                (m.scenario, action),
-            )
-            self.max: float = cursor.fetchall()[0][0]
-            cursor.execute(
-                "SELECT min(duration) * 1000 FROM measurements WHERE scenario = ? AND action = ?",
-                (m.scenario, action),
-            )
-            self.min: float = cursor.fetchall()[0][0]
-            cursor.execute(
-                "SELECT avg(duration) * 1000 FROM measurements WHERE scenario = ? AND action = ?",
-                (m.scenario, action),
-            )
-            self.avg: float = cursor.fetchall()[0][0]
+            self.queries, self.qps, self.max, self.min, self.avg = cursor.fetchone()
             # TODO: Rest
             self.median = 0.0
             self.p50 = 0.0
