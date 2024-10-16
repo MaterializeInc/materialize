@@ -96,37 +96,19 @@ def gen(path, check):
     if not path:
         path = MZ_ROOT / "Cargo.toml"
 
-    # Note: We build cargo-gazelle with optimizations because the speedup is
-    # worth it and Bazel should cache the resulting binary.
-
-    formatter = []
-    if subprocess.run(["which", "bazel"]).returncode != 0:
-        ui.warn("couldn't find 'bazel' skipping formatting of BUILD files")
-    else:
-        # HACK(parkmycar): Run buildifier to make sure Bazel fetches the binary.
-        buildifier = "//misc/bazel/tools:buildifier"
-        cmd_args = ["bazel", "run", f"{buildifier}", "--", "--help"]
-        subprocess.check_output(cmd_args, stderr=subprocess.DEVNULL)
-
-        paths = output_path(buildifier)
-        formatter_path = MZ_ROOT / paths[-1]
-        formatter += ["--formatter", str(formatter_path)]
-
     check_arg = []
     if check:
         check_arg += ["--check"]
 
-    # TODO(parkmycar): Use Bazel to run this lint which should allow us to remove
-    # the HACK from above.
     cmd_args = [
-        "cargo",
+        "bazel",
         "run",
-        "--release",
-        "--no-default-features",
-        "--manifest-path=misc/bazel/cargo-gazelle/Cargo.toml",
+        # TODO(parkmycar): Once bin/bazel gen is more stable in CI, enable this
+        # config to make the output less noisy.
+        # "--config=script",
+        "//misc/bazel/tools:cargo-gazelle",
         "--",
         *check_arg,
-        *formatter,
         f"{str(path)}",
     ]
     subprocess.run(cmd_args, check=True)
@@ -149,6 +131,7 @@ def fmt(path):
     cmd_args = [
         "bazel",
         "run",
+        "--config=script",
         "//misc/bazel/tools:buildifier",
         "--",
         "-r",

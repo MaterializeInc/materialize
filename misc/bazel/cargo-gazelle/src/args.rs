@@ -15,7 +15,7 @@ use clap::Parser;
 #[clap(author, version, about, long_about = None)]
 pub struct Args {
     /// Path to an executable that can be used to format `BUILD.bazel` files.
-    #[clap(long, value_name = "FORMATTER")]
+    #[clap(long, value_name = "FORMATTER", env = "FORMATTER")]
     pub formatter: Option<PathBuf>,
     /// Doesn't actually update any files, just checks if they would have changed.
     #[clap(long)]
