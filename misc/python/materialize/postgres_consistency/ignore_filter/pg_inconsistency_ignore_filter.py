@@ -34,7 +34,6 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     matches_fun_by_name,
     matches_op_by_any_pattern,
     matches_op_by_pattern,
-    matches_recursively,
     matches_x_and_y,
     matches_x_or_y,
 )
@@ -527,23 +526,34 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if query_template.matches_any_expression(
             partial(
-                matches_x_and_y,
-                x=partial(
-                    is_operation_tagged,
-                    tag=TAG_JSONB_OBJECT_GENERATION,
-                ),
-                y=partial(
-                    matches_recursively,
-                    matcher=partial(
-                        matches_any_expression_arg,
-                        arg_matcher=partial(
-                            matches_fun_by_any_name,
-                            function_names_in_lower_case=MATH_FUNCTIONS_WITH_PROBLEMATIC_FLOATING_BEHAVIOR,
-                        ),
-                    ),
-                ),
+                is_operation_tagged,
+                tag=TAG_JSONB_OBJECT_GENERATION,
             ),
             True,
+        ) and (
+            len(
+                set.intersection(
+                    {
+                        ExpressionCharacteristics.MAX_VALUE,
+                        ExpressionCharacteristics.INFINITY,
+                        ExpressionCharacteristics.NAN,
+                    },
+                    query_template.get_involved_characteristics(
+                        ALL_QUERY_COLUMNS_BY_INDEX_SELECTION
+                    ),
+                )
+            )
+            > 0
+            or query_template.matches_any_expression(
+                partial(
+                    matches_any_expression_arg,
+                    arg_matcher=partial(
+                        matches_fun_by_any_name,
+                        function_names_in_lower_case=MATH_FUNCTIONS_WITH_PROBLEMATIC_FLOATING_BEHAVIOR,
+                    ),
+                ),
+                True,
+            )
         ):
             return YesIgnore(
                 "Deviations in floating point functions may cause an invalid JSONB (e.g., database-issues#8505 producing NaN in mz)"
