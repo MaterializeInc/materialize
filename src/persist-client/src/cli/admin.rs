@@ -209,7 +209,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
 
             // Open a machine so we can read the state of the Opaque, and set
             // our fake codecs.
-            let mut machine = make_machine(
+            let machine = make_machine(
                 &cfg,
                 Arc::clone(&consensus),
                 Arc::clone(&blob),
@@ -430,7 +430,7 @@ where
     let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
 
-    let mut machine = make_typed_machine::<K, V, T, D>(
+    let machine = make_typed_machine::<K, V, T, D>(
         &cfg,
         consensus,
         Arc::clone(&blob),
@@ -644,7 +644,7 @@ async fn force_gc(
     let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
     let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
-    let mut machine = make_machine(
+    let machine = make_machine(
         &cfg,
         consensus,
         blob,
@@ -658,7 +658,7 @@ async fn force_gc(
         shard_id,
         new_seqno_since: machine.applier.seqno_since(),
     };
-    let (maintenance, _stats) = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
+    let (maintenance, _stats) = GarbageCollector::gc_and_truncate(&machine, gc_req).await;
     if !maintenance.is_empty() {
         info!("ignoring non-empty requested maintenance: {maintenance:?}")
     }
@@ -708,7 +708,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
-    let mut machine = write.machine.clone();
+    let machine = write.machine.clone();
 
     let mut last_exert: Instant;
 
@@ -730,7 +730,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
             );
             let start = Instant::now();
             let res = Compactor::<K, V, T, D>::compact_and_apply(
-                &mut machine,
+                &machine,
                 req,
                 write.write_schemas.clone(),
             )

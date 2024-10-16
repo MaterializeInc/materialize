@@ -427,18 +427,14 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     }
 
     /// Enqueue the given response for delivery to the controller clients.
-    fn deliver_response(&mut self, response: ComputeControllerResponse<T>) {
+    fn deliver_response(&self, response: ComputeControllerResponse<T>) {
         // Failure to send means the `ComputeController` has been dropped and doesn't care about
         // responses anymore.
         let _ = self.response_tx.send(response);
     }
 
     /// Enqueue the given introspection updates for recording.
-    fn deliver_introspection_updates(
-        &mut self,
-        type_: IntrospectionType,
-        updates: Vec<(Row, Diff)>,
-    ) {
+    fn deliver_introspection_updates(&self, type_: IntrospectionType, updates: Vec<(Row, Diff)>) {
         // Failure to send means the `ComputeController` has been dropped and doesn't care about
         // introspection updates anymore.
         let _ = self.introspection_tx.send((type_, updates));
@@ -503,7 +499,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     ///
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
-    fn refresh_state_metrics(&mut self) {
+    fn refresh_state_metrics(&self) {
         let unscheduled_collections_count =
             self.collections.values().filter(|c| !c.scheduled).count();
 
@@ -578,7 +574,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// # Panics
     ///
     /// Panics if the identified collection does not exist.
-    fn report_dependency_updates(&mut self, id: GlobalId, diff: i64) {
+    fn report_dependency_updates(&self, id: GlobalId, diff: i64) {
         let collection = self.expect_collection(id);
         let dependencies = collection.dependency_ids();
 

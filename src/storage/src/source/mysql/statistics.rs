@@ -44,8 +44,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let op_name = format!("MySqlStatistics({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
-    let (mut stats_output, stats_stream) = builder.new_output();
-    let (mut probe_output, probe_stream) = builder.new_output();
+    let (stats_output, stats_stream) = builder.new_output();
+    let (probe_output, probe_stream) = builder.new_output();
 
     // TODO: Add additional metrics
 

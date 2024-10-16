@@ -210,7 +210,7 @@ pub(super) async fn handle_query_event(
 /// frontier with which to advance the dataflow's progress.
 pub(super) async fn handle_rows_event(
     event: RowsEventData<'_>,
-    ctx: &mut ReplContext<'_>,
+    ctx: &ReplContext<'_>,
     new_gtid: &GtidPartition,
     event_buffer: &mut Vec<(
         (usize, Result<SourceMessage, DataflowError>),

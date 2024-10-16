@@ -1074,7 +1074,7 @@ impl Coordinator {
         self.drop_sources(source_ids)
     }
 
-    fn drop_vpc_endpoints_in_background(&mut self, vpc_endpoints: Vec<GlobalId>) {
+    fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<GlobalId>) {
         let cloud_resource_controller = Arc::clone(self.cloud_resource_controller
             .as_ref()
             .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))
@@ -1137,18 +1137,18 @@ impl Coordinator {
             .expect("unable to drop temporary items for conn_id");
     }
 
-    fn update_cluster_scheduling_config(&mut self) {
+    fn update_cluster_scheduling_config(&self) {
         let config = flags::orchestrator_scheduling_config(self.catalog.system_config());
         self.controller
             .update_orchestrator_scheduling_config(config);
     }
 
-    fn update_secrets_caching_config(&mut self) {
+    fn update_secrets_caching_config(&self) {
         let config = flags::caching_config(self.catalog.system_config());
         self.caching_secrets_reader.set_policy(config);
     }
 
-    fn update_tracing_config(&mut self) {
+    fn update_tracing_config(&self) {
         let tracing = flags::tracing_config(self.catalog().system_config());
         tracing.apply(&self.tracing_handle);
     }
@@ -1163,7 +1163,7 @@ impl Coordinator {
         self.controller.storage.update_parameters(config_params);
     }
 
-    fn update_pg_timestamp_oracle_config(&mut self) {
+    fn update_pg_timestamp_oracle_config(&self) {
         let config_params = flags::pg_timstamp_oracle_config(self.catalog().system_config());
         if let Some(config) = self.pg_timestamp_oracle_config.as_ref() {
             config_params.apply(config)

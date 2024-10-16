@@ -310,7 +310,7 @@ where
         &self,
         as_of: Option<Antichain<T>>,
     ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static {
-        let mut machine = self.machine.clone();
+        let machine = self.machine.clone();
         async move {
             let batches = match as_of {
                 Some(as_of) => machine.snapshot(&as_of).await?,

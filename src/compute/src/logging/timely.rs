@@ -148,7 +148,7 @@ pub(super) fn construct<A: Allocate>(
         // Encode the contents of each logging stream into its expected `Row` format.
         // We pre-arrange the logging streams to force a consolidation and reduce the amount of
         // updates that reach `Row` encoding.
-        let mut packer = PermutedRowPacker::new(TimelyLog::Operates);
+        let packer = PermutedRowPacker::new(TimelyLog::Operates);
         let operates = operates
             .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(Pipeline, "PreArrange Timely operates")
             .as_collection(move |id, name| {
@@ -158,7 +158,7 @@ pub(super) fn construct<A: Allocate>(
                     Datum::String(name),
                 ])
             });
-        let mut packer = PermutedRowPacker::new(TimelyLog::Channels);
+        let packer = PermutedRowPacker::new(TimelyLog::Channels);
         let channels = channels
             .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(Pipeline, "PreArrange Timely operates")
             .as_collection(move |datum, ()| {
@@ -174,7 +174,7 @@ pub(super) fn construct<A: Allocate>(
                 ])
             });
 
-        let mut packer = PermutedRowPacker::new(TimelyLog::Addresses);
+        let packer = PermutedRowPacker::new(TimelyLog::Addresses);
         let addresses = addresses
             .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(Pipeline, "PreArrange Timely addresses")
             .as_collection({
@@ -188,7 +188,7 @@ pub(super) fn construct<A: Allocate>(
                     })
                 }
             });
-        let mut packer = PermutedRowPacker::new(TimelyLog::Parks);
+        let packer = PermutedRowPacker::new(TimelyLog::Parks);
         let parks = parks
             .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(Pipeline, "PreArrange Timely parks")
             .as_collection(move |datum, ()| {
@@ -201,7 +201,7 @@ pub(super) fn construct<A: Allocate>(
                         .unwrap_or(Datum::Null),
                 ])
             });
-        let mut packer = PermutedRowPacker::new(TimelyLog::BatchesSent);
+        let packer = PermutedRowPacker::new(TimelyLog::BatchesSent);
         let batches_sent = batches_sent
             .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(
                 Pipeline,
@@ -214,7 +214,7 @@ pub(super) fn construct<A: Allocate>(
                     Datum::UInt64(u64::cast_from(datum.worker)),
                 ])
             });
-        let mut packer = PermutedRowPacker::new(TimelyLog::BatchesReceived);
+        let packer = PermutedRowPacker::new(TimelyLog::BatchesReceived);
         let batches_received = batches_received
             .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(
                 Pipeline,
@@ -227,7 +227,7 @@ pub(super) fn construct<A: Allocate>(
                     Datum::UInt64(u64::cast_from(worker_id)),
                 ])
             });
-        let mut packer = PermutedRowPacker::new(TimelyLog::MessagesSent);
+        let packer = PermutedRowPacker::new(TimelyLog::MessagesSent);
         let messages_sent = messages_sent
             .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(
                 Pipeline,
@@ -240,7 +240,7 @@ pub(super) fn construct<A: Allocate>(
                     Datum::UInt64(u64::cast_from(datum.worker)),
                 ])
             });
-        let mut packer = PermutedRowPacker::new(TimelyLog::MessagesReceived);
+        let packer = PermutedRowPacker::new(TimelyLog::MessagesReceived);
         let messages_received = messages_received
             .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(
                 Pipeline,
@@ -253,7 +253,7 @@ pub(super) fn construct<A: Allocate>(
                     Datum::UInt64(u64::cast_from(worker_id)),
                 ])
             });
-        let mut packer = PermutedRowPacker::new(TimelyLog::Elapsed);
+        let packer = PermutedRowPacker::new(TimelyLog::Elapsed);
         let elapsed = schedules_duration
             .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(Pipeline, "PreArrange Timely duration")
             .as_collection(move |operator, _| {
@@ -262,7 +262,7 @@ pub(super) fn construct<A: Allocate>(
                     Datum::UInt64(u64::cast_from(worker_id)),
                 ])
             });
-        let mut packer = PermutedRowPacker::new(TimelyLog::Histogram);
+        let packer = PermutedRowPacker::new(TimelyLog::Histogram);
         let histogram = schedules_histogram
             .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(Pipeline, "PreArrange Timely histogram")
             .as_collection(move |datum, _| {

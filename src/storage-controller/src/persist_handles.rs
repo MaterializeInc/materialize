@@ -499,9 +499,9 @@ where
     }
 
     fn send(&self, cmd: PersistTableWriteCmd<T>) {
-        let mut span =
+        let span =
             info_span!(parent: None, "PersistTableWriteWorkerInner::send", otel.name = cmd.name());
-        OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
+        OpenTelemetryContext::obtain().attach_as_parent_to(&span);
         self.send_with_span(span, cmd)
     }
 

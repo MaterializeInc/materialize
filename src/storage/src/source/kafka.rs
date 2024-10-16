@@ -188,12 +188,12 @@ impl SourceRender for KafkaSourceConnection {
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-        let (mut data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
+        let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
         let (_progress_output, progress_stream) =
             builder.new_output::<CapacityContainerBuilder<_>>();
-        let (mut health_output, health_stream) = builder.new_output();
-        let (mut stats_output, stats_stream) = builder.new_output();
-        let (mut probe_output, probe_stream) = builder.new_output();
+        let (health_output, health_stream) = builder.new_output();
+        let (stats_output, stats_stream) = builder.new_output();
+        let (probe_output, probe_stream) = builder.new_output();
 
         let mut outputs = vec![];
         for (id, export) in &config.source_exports {
@@ -1356,7 +1356,7 @@ impl PartitionConsumer {
     /// be transformed into empty values.
     ///
     /// The inner `Option` represents if there is a message to process.
-    fn get_next_message(&mut self) -> Result<Option<(BorrowedMessage, PartitionId)>, KafkaError> {
+    fn get_next_message(&self) -> Result<Option<(BorrowedMessage, PartitionId)>, KafkaError> {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => Ok(Some((msg, self.pid))),
             Some(Err(err)) => Err(err),

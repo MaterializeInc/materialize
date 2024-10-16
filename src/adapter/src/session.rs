@@ -527,7 +527,7 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Returns Some if the notice should be reported, otherwise None.
-    fn notice_filter(&mut self, notice: AdapterNotice) -> Option<AdapterNotice> {
+    fn notice_filter(&self, notice: AdapterNotice) -> Option<AdapterNotice> {
         // Filter out low threshold severity.
         let minimum_client_severity = self.vars.client_min_messages();
         let sev = notice.severity();

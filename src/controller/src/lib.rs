@@ -289,7 +289,7 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn update_orchestrator_scheduling_config(
-        &mut self,
+        &self,
         config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
     ) {
         self.orchestrator.update_scheduling_config(config);

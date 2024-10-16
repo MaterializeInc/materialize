@@ -40,7 +40,7 @@ where
 {
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
-        &mut self,
+        &self,
         compute_state: &mut crate::compute_state::ComputeState,
         tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         dependency_ids: BTreeSet<GlobalId>,

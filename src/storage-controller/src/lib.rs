@@ -2888,7 +2888,7 @@ where
 
     /// Remove statistics for sources/sinks that were dropped but still have statistics rows
     /// hanging around.
-    fn reconcile_dangling_statistics(&mut self) {
+    fn reconcile_dangling_statistics(&self) {
         self.source_statistics
             .lock()
             .expect("poisoned")

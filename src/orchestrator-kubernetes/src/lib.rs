@@ -1312,7 +1312,7 @@ impl OrchestratorWorker {
     /// If handling the command fails, it is automatically retried. All command handlers return
     /// [`K8sError`], so we can reasonably assume that a failure is caused by issues communicating
     /// with the K8S server and that retrying resolves them eventually.
-    async fn handle_command(&mut self, cmd: WorkerCommand) {
+    async fn handle_command(&self, cmd: WorkerCommand) {
         async fn retry<F, U, R>(f: F, cmd_type: &str) -> R
         where
             F: Fn() -> U,

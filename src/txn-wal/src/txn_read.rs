@@ -253,7 +253,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     /// See [ReadHandle::snapshot_parts_stats].
     pub async fn snapshot_parts_stats<K, V, D>(
         &self,
-        data_read: &mut ReadHandle<K, V, T, D>,
+        data_read: &ReadHandle<K, V, T, D>,
     ) -> Result<SnapshotPartsStats, Since<T>>
     where
         K: Debug + Codec + Ord,

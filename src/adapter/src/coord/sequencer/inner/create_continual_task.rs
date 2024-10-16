@@ -156,7 +156,7 @@ impl Coordinator {
     }
 
     pub fn optimize_create_continual_task(
-        &mut self,
+        &self,
         ct: &ContinualTask,
         output_id: GlobalId,
         catalog: Arc<dyn OptimizerCatalog>,

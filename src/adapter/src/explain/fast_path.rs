@@ -37,7 +37,7 @@ impl<'a> Explain<'a> for Explainable<'a, FastPathPlan> {
 
 impl<'a> Explainable<'a, FastPathPlan> {
     fn as_explain_multi_plan(
-        &'a mut self,
+        &'a self,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainMultiPlan<'a, FastPathPlan>, ExplainError> {
         let plans = vec![(

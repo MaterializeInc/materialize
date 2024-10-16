@@ -138,7 +138,7 @@ where
     }
 
     /// Fetches the latest state from Consensus and passes its `upper` to the provided closure.
-    pub async fn fetch_upper<R, F: FnMut(&Antichain<T>) -> R>(&mut self, mut f: F) -> R {
+    pub async fn fetch_upper<R, F: FnMut(&Antichain<T>) -> R>(&self, mut f: F) -> R {
         self.metrics.cmds.fetch_upper_count.inc();
         self.fetch_and_update_state(None).await;
         self.upper(|_seqno, upper| f(upper))
@@ -338,7 +338,7 @@ where
         E,
         WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
     >(
-        &mut self,
+        &self,
         cmd: &CmdMetrics,
         mut work_fn: WorkFn,
     ) -> Result<(SeqNo, Result<R, E>, RoutineMaintenance), Indeterminate> {
@@ -553,7 +553,7 @@ where
         })
     }
 
-    pub fn update_state(&mut self, new_state: TypedState<K, V, T, D>) {
+    pub fn update_state(&self, new_state: TypedState<K, V, T, D>) {
         let (seqno_before, seqno_after) =
             self.state
                 .write_lock(&self.metrics.locks.applier_write, |state| {

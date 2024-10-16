@@ -759,7 +759,7 @@ where
 
     /// Deprovisions a replica with the service orchestrator.
     fn deprovision_replica(
-        &mut self,
+        &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         generation: u64,

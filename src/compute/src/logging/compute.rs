@@ -268,7 +268,7 @@ pub(super) fn construct<A: Allocate + 'static>(
         });
 
         // Encode the contents of each logging stream into its expected `Row` format.
-        let mut packer = PermutedRowPacker::new(ComputeLog::DataflowCurrent);
+        let packer = PermutedRowPacker::new(ComputeLog::DataflowCurrent);
         let dataflow_current = export.as_collection().map({
             let mut scratch = String::new();
             move |datum| {
@@ -279,7 +279,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                 ])
             }
         });
-        let mut packer = PermutedRowPacker::new(ComputeLog::FrontierCurrent);
+        let packer = PermutedRowPacker::new(ComputeLog::FrontierCurrent);
         let frontier_current = frontier.as_collection().map({
             let mut scratch = String::new();
             move |datum| {
@@ -290,7 +290,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                 ])
             }
         });
-        let mut packer = PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent);
+        let packer = PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent);
         let import_frontier_current = import_frontier.as_collection().map({
             let mut scratch1 = String::new();
             let mut scratch2 = String::new();
@@ -303,7 +303,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                 ])
             }
         });
-        let mut packer = PermutedRowPacker::new(ComputeLog::PeekCurrent);
+        let packer = PermutedRowPacker::new(ComputeLog::PeekCurrent);
         let peek_current = peek.as_collection().map({
             let mut scratch = String::new();
             move |PeekDatum { peek, peek_type }| {
@@ -316,7 +316,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                 ])
             }
         });
-        let mut packer = PermutedRowPacker::new(ComputeLog::PeekDuration);
+        let packer = PermutedRowPacker::new(ComputeLog::PeekDuration);
         let peek_duration =
             peek_duration
                 .as_collection()
@@ -327,7 +327,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                         Datum::UInt64(bucket.try_into().expect("bucket too big")),
                     ])
                 });
-        let mut packer = PermutedRowPacker::new(ComputeLog::ShutdownDuration);
+        let packer = PermutedRowPacker::new(ComputeLog::ShutdownDuration);
         let shutdown_duration = shutdown_duration.as_collection().map(move |bucket| {
             packer.pack_slice(&[
                 Datum::UInt64(u64::cast_from(worker_id)),
@@ -358,7 +358,7 @@ pub(super) fn construct<A: Allocate + 'static>(
             .as_collection()
             .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
 
-        let mut packer = PermutedRowPacker::new(ComputeLog::ErrorCount);
+        let packer = PermutedRowPacker::new(ComputeLog::ErrorCount);
         let error_count = error_count.as_collection().map({
             let mut scratch = String::new();
             move |datum| {
@@ -370,7 +370,7 @@ pub(super) fn construct<A: Allocate + 'static>(
             }
         });
 
-        let mut packer = PermutedRowPacker::new(ComputeLog::HydrationTime);
+        let packer = PermutedRowPacker::new(ComputeLog::HydrationTime);
         let hydration_time = hydration_time.as_collection().map({
             let mut scratch = String::new();
             move |datum| {

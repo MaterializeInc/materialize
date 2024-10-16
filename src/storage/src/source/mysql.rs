@@ -350,12 +350,12 @@ type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
 async fn return_definite_error(
     err: DefiniteError,
     outputs: &[usize],
-    data_handle: &mut StackedAsyncOutputHandle<
+    data_handle: &StackedAsyncOutputHandle<
         GtidPartition,
         (usize, Result<SourceMessage, DataflowError>),
     >,
     data_cap_set: &CapabilitySet<GtidPartition>,
-    definite_error_handle: &mut AsyncOutputHandle<
+    definite_error_handle: &AsyncOutputHandle<
         GtidPartition,
         CapacityContainerBuilder<Vec<ReplicationError>>,
         Tee<GtidPartition, Vec<ReplicationError>>,

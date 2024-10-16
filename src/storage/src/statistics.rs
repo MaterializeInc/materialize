@@ -594,7 +594,7 @@ impl SourceStatistics {
     /// Get a snapshot of the data, returning `None` if all gauges are not initialized.
     ///
     /// This also resets counters, so that we continue to move diffs around.
-    pub fn snapshot(&mut self) -> Option<SourceStatisticsRecord> {
+    pub fn snapshot(&self) -> Option<SourceStatisticsRecord> {
         let mut cur = self.stats.borrow_mut();
 
         match &cur.stats {
@@ -844,7 +844,7 @@ impl SinkStatistics {
     /// Get a snapshot of the data, returning `None` if all gauges are not initialized.
     ///
     /// This also resets counters, so that we continue to move diffs around.
-    pub fn snapshot(&mut self) -> Option<SinkStatisticsRecord> {
+    pub fn snapshot(&self) -> Option<SinkStatisticsRecord> {
         let mut cur = self.stats.borrow_mut();
 
         match &cur.stats {

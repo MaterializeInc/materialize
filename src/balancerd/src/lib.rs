@@ -189,7 +189,7 @@ impl BalancerService {
         let metrics = BalancerMetrics::new(&cfg);
         let mut configs = ConfigSet::default();
         configs = dyncfgs::all_dyncfgs(configs);
-        dyncfgs::set_defaults(&mut configs, cfg.default_configs.clone())?;
+        dyncfgs::set_defaults(&configs, cfg.default_configs.clone())?;
         let tracing_handle = cfg.tracing_handle.clone();
         if let Err(err) = mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
             configs.clone(),

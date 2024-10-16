@@ -3152,7 +3152,7 @@ impl Coordinator {
     }
 
     /// Publishes a notice message to all sessions.
-    pub(crate) fn broadcast_notice(&mut self, notice: AdapterNotice) {
+    pub(crate) fn broadcast_notice(&self, notice: AdapterNotice) {
         for meta in self.active_conns.values() {
             let _ = meta.notice_tx.send(notice.clone());
         }

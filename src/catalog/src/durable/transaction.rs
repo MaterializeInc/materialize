@@ -1600,7 +1600,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Get the value of a persisted config.
-    pub fn get_config(&mut self, key: String) -> Option<u64> {
+    pub fn get_config(&self, key: String) -> Option<u64> {
         let val = self
             .configs
             .get(&ConfigKey { key })
@@ -1804,7 +1804,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn get_introspection_source_indexes(
-        &mut self,
+        &self,
         cluster_id: ClusterId,
     ) -> BTreeMap<String, (GlobalId, u32)> {
         self.introspection_sources
