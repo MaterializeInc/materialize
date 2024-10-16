@@ -48,15 +48,17 @@ message ProtoDataflowDescription {
     sinks.ProtoComputeSinkDesc sink_desc = 2;
   }
 
+  message ProtoRefreshDepIndex {
+    uint64 start = 1;
+    uint64 end = 2;
+  }
+
+  message ProtoRefreshDep {
+    optional ProtoRefreshDepIndex refresh_dep_index = 1;
+    optional mz_repr.refresh_schedule.ProtoRefreshSchedule refresh_schedule = 2;
+  }
+
   message ProtoDataflowExpirationDesc {
-    message ProtoRefreshDepIndex {
-      uint64 start = 1;
-      uint64 end = 2;
-    }
-    message ProtoRefreshDep {
-      optional ProtoRefreshDepIndex refresh_dep_index = 1;
-      optional mz_repr.refresh_schedule.ProtoRefreshSchedule refresh_schedule = 2;
-    }
     optional mz_repr.antichain.ProtoU64Antichain transitive_upper = 1;
     bool is_timeline_epoch_ms = 3;
     repeated ProtoRefreshDep refresh_deps = 4;

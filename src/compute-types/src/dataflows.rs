@@ -26,11 +26,9 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use timely::Container;
 
-use crate::dataflows::proto_dataflow_description::proto_dataflow_expiration_desc::ProtoRefreshDep;
-use crate::dataflows::proto_dataflow_description::proto_dataflow_expiration_desc::ProtoRefreshDepIndex;
 use crate::dataflows::proto_dataflow_description::{
-    ProtoDataflowExpirationDesc, ProtoIndexExport, ProtoIndexImport, ProtoSinkExport,
-    ProtoSourceImport,
+    ProtoDataflowExpirationDesc, ProtoIndexExport, ProtoIndexImport, ProtoRefreshDep,
+    ProtoRefreshDepIndex, ProtoSinkExport, ProtoSourceImport,
 };
 use crate::plan::flat_plan::FlatPlan;
 use crate::plan::Plan;
