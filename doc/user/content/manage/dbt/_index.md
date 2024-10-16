@@ -450,7 +450,7 @@ function.
 
 {{< tip >}}
 For guidance and best practices on how to use indexes in Materialize, see
-[Indexes on materialized views](/views/#indexes-on-materialized-views).
+[Indexes on materialized views](/concepts/views/#indexes-on-materialized-views).
 {{</ tip >}}
 
 With a materialized view, your models are kept **up-to-date** in Materialize as
