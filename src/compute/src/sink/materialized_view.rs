@@ -17,7 +17,7 @@ use std::sync::Arc;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
 use futures::StreamExt;
-use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
@@ -44,7 +44,7 @@ use crate::render::StartSignal;
 use crate::sink::correction::Correction;
 use crate::sink::refresh::apply_refresh;
 
-impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
+impl<G> SinkRender<G> for MaterializedViewSinkConnection<CollectionMetadata>
 where
     G: Scope<Timestamp = Timestamp>,
 {

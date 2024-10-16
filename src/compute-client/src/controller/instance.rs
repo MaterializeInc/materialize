@@ -22,7 +22,7 @@ use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
 use mz_compute_types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection, PersistSinkConnection,
+    ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection, MaterializedViewSinkConnection,
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_compute_types::ComputeInstanceId;
@@ -1258,17 +1258,17 @@ where
         let mut sink_exports = BTreeMap::new();
         for (id, se) in dataflow.sink_exports {
             let connection = match se.connection {
-                ComputeSinkConnection::Persist(conn) => {
+                ComputeSinkConnection::MaterializedView(conn) => {
                     let metadata = self
                         .storage_collections
                         .collection_metadata(id)
                         .map_err(|_| CollectionMissing(id))?
                         .clone();
-                    let conn = PersistSinkConnection {
+                    let conn = MaterializedViewSinkConnection {
                         value_desc: conn.value_desc,
                         storage_metadata: metadata,
                     };
-                    ComputeSinkConnection::Persist(conn)
+                    ComputeSinkConnection::MaterializedView(conn)
                 }
                 ComputeSinkConnection::ContinualTask(conn) => {
                     let metadata = self

@@ -35,13 +35,13 @@ message ProtoComputeSinkDesc {
 message ProtoComputeSinkConnection {
   oneof kind {
     google.protobuf.Empty subscribe = 1;
-    ProtoPersistSinkConnection persist = 2;
+    ProtoMaterializedViewSinkConnection materialized_view = 2;
     ProtoCopyToS3OneshotSinkConnection copy_to_s3_oneshot = 3;
     ProtoContinualTaskConnection continual_task = 4;
   }
 }
 
-message ProtoPersistSinkConnection {
+message ProtoMaterializedViewSinkConnection {
   mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
   mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
 }

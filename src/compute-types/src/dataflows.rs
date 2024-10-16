@@ -369,7 +369,7 @@ impl<P, S, T> DataflowDescription<P, S, T> {
         self.sink_exports
             .iter()
             .filter_map(|(id, desc)| match desc.connection {
-                ComputeSinkConnection::Persist(_) => Some(*id),
+                ComputeSinkConnection::MaterializedView(_) => Some(*id),
                 _ => None,
             })
     }
