@@ -99,12 +99,14 @@ pub struct ServiceEvent {
 #[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
 pub enum OfflineReason {
     OomKilled,
+    Initializing,
 }
 
 impl fmt::Display for OfflineReason {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             OfflineReason::OomKilled => f.write_str("oom-killed"),
+            OfflineReason::Initializing => f.write_str("initializing"),
         }
     }
 }
