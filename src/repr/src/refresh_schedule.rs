@@ -35,13 +35,9 @@ impl RefreshSchedule {
     /// Note that this function is monotonic.
     pub fn round_up_timestamp(&self, timestamp: Timestamp) -> Option<Timestamp> {
         let everies = self.everies.iter();
-        let next_every = everies.map(|every| every.round_up_timestamp(timestamp));
-        let next_at = self.ats.iter().copied().filter(|at| *at >= timestamp);
-        // Take the min of `next_every` and `next_at`, but any Some should win over any None, i.e.,
-        // with considering any Some to be smaller than None.
-        // Note: Simply `std::cmp::min(next_every, next_at)` wouldn't do what we want, because None
-        // is smaller than any Some.
-        next_every.chain(next_at).min()
+        let next_everies = everies.map(|every| every.round_up_timestamp(timestamp));
+        let next_ats = self.ats.iter().copied().filter(|at| *at >= timestamp);
+        next_everies.chain(next_ats).min()
     }
 
     /// Rounds down `timestamp - 1` to the time of the previous refresh.
@@ -51,12 +47,11 @@ impl RefreshSchedule {
     /// Note that this fn is monotonic.
     pub fn round_down_timestamp_m1(&self, timestamp: Timestamp) -> Option<Timestamp> {
         let everies = self.everies.iter();
-        let prev_every = everies.map(|every| every.round_down_timestamp_m1(timestamp));
+        let prev_everies = everies.map(|every| every.round_down_timestamp_m1(timestamp));
         // Note that we use `<` instead of `<=`. This is because we are rounding
         // `timestamp - 1`, and not simply `timestamp`.
-        let prev_at = self.ats.iter().copied().filter(|at| *at < timestamp);
-        // Take the max of `prev_every` and `prev_at`. Note that any Some should win over None.
-        prev_every.chain(prev_at).max()
+        let prev_ats = self.ats.iter().copied().filter(|at| *at < timestamp);
+        prev_everies.chain(prev_ats).max()
     }
 
     /// Returns the time of the last refresh. Returns None if there is no last refresh (e.g., for a
