@@ -47,7 +47,7 @@ use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::render::sources::OutputIndex;
 use crate::storage_state::StorageInstanceContext;
-use crate::upsert::types::PutStats;
+use crate::upsert::types::{PutStats, ValueMetadata};
 use autospill::AutoSpillBackend;
 use memory::InMemoryHashMap;
 use types::{
@@ -408,19 +408,7 @@ where
     tracing::info!(id = %source_config.id, %use_continual_feedback_upsert, "upsert operator implementation");
 
     if use_continual_feedback_upsert {
-        crate::upsert_continual_feedback::upsert_inner(
-            &input,
-            key_indices,
-            resume_upper,
-            persist_input,
-            persist_token,
-            upsert_metrics,
-            source_config,
-            state,
-            upsert_config,
-            prevent_snapshot_buffering,
-            snapshot_buffering_max,
-        )
+        todo!("move the continual impl out into it's own file")
     } else {
         upsert_classic(
             &input,
@@ -696,28 +684,35 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
         }
     }
 
-    //match state
-    //    .multi_put(commands_state.drain(..).map(|(k, cv)| {
-    //        (
-    //            k,
-    //            types::PutValue {
-    //                value: cv.value.map(|cv| cv.into_decoded()),
-    //                previous_value_metadata: cv.metadata.map(|v| ValueMetadata {
-    //                    size: v.size.try_into().expect("less than i64 size"),
-    //                    is_tombstone: v.is_tombstone,
-    //                }),
-    //            },
-    //        )
-    //    }))
-    //    .await
-    //{
-    //    Ok(_) => {}
-    //    Err(e) => {
-    //        error_emitter
-    //            .emit("Failed to update records in state".to_string(), e)
-    //            .await;
-    //    }
-    //}
+    match &drain_style {
+        DrainStyle::AtTime(_ts) => {
+            match state
+                .multi_put(commands_state.drain(..).map(|(k, cv)| {
+                    (
+                        k,
+                        types::PutValue {
+                            value: cv.value.map(|cv| cv.into_decoded()),
+                            previous_value_metadata: cv.metadata.map(|v| ValueMetadata {
+                                size: v.size.try_into().expect("less than i64 size"),
+                                is_tombstone: v.is_tombstone,
+                            }),
+                        },
+                    )
+                }))
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    error_emitter
+                        .emit("Failed to update records in state".to_string(), e)
+                        .await;
+                }
+            }
+        }
+        style => {
+            tracing::trace!("not doing state update for drain style {:?}", style);
+        }
+    }
 }
 
 /// Helper method for `upsert_inner` used to ingest state updates from the
@@ -840,7 +835,7 @@ fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
     mut persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::RawSourceCreationConfig,
-    state: F,
+    state_fn: F,
     upsert_config: UpsertConfig,
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
@@ -891,19 +886,41 @@ where
     );
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
+
     let shutdown_button = builder.build(move |caps| async move {
         let [mut output_cap, mut snapshot_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
 
         // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
         // (as required for `consolidate_snapshot_chunk`), with slightly more efficient serialization
         // than a default `Partitioned`.
-        let mut state = UpsertState::<_, Option<FromTime>>::new(
-            state().await,
-            upsert_shared_metrics,
-            &upsert_metrics,
-            source_config.source_statistics,
-            upsert_config.shrink_upsert_unused_buffers_by_ratio,
-        );
+
+        // While we're still working through the source "snapshot" (a whole
+        // bunch of updates from the input, presumably all at the same
+        // timestamp), we keep an ephemeral state around, so that we can
+        // properly do retractions for when keys change. After we receive our
+        // first update on the persist input, we drop this state and from then
+        // on only update our "real" state based on the persist/feedback input.
+        let (mut partial_snapshot_state, mut state) = if prevent_snapshot_buffering {
+            let partial_snapshot_state = Some(UpsertState::<_, Option<FromTime>>::new(
+                state_fn().await,
+                Arc::clone(&upsert_shared_metrics),
+                &upsert_metrics,
+                source_config.source_statistics.clone(),
+                upsert_config.shrink_upsert_unused_buffers_by_ratio,
+            ));
+            let state = None;
+            (partial_snapshot_state, state)
+        } else {
+            let partial_snapshot_state = None;
+            let state = Some(UpsertState::<_, Option<FromTime>>::new(
+                state_fn().await,
+                Arc::clone(&upsert_shared_metrics),
+                &upsert_metrics,
+                source_config.source_statistics.clone(),
+                upsert_config.shrink_upsert_unused_buffers_by_ratio,
+            ));
+            (partial_snapshot_state, state)
+        };
 
         // True while we're still reading the initial "snapshot" (a whole bunch
         // of updates, all at the same initial timestamp) from our persist
@@ -973,8 +990,26 @@ where
                         }
                     }
 
+                    if PartialOrder::less_than(&resume_upper, &persist_upper) || persist_stash.len() > 0 {
+                        // We have received the first updates based on the
+                        // source snapshot (back on the feedback edge), or we
+                        // have finished ingesting an empty source snapshot.
+
+                        if state.is_none() {
+                            // Yank the ephemeral state we keep for emitting
+                            // updates while ingesting the initial source
+                            // snapshot. Initialize our "real" state.
+                            let mut partial_state = partial_snapshot_state.take().expect("missing partial snapshot state");
+                            partial_state.clear().await.expect("error cleaning out partial state");
+                            state = Some(partial_state);
+                        }
+                    }
 
                     if snapshotting_persist {
+                        if state.is_none() {
+                            tracing::info!(?persist_upper, ?resume_upper, "while snapshotting, real stash not yet available");
+                            continue;
+                        }
 
                         // Determine if this is the last time we call
                         // consolidate_snapshot_chunk, and update our
@@ -1024,6 +1059,7 @@ where
 
                         snapshotting_persist = !last_snapshot;
 
+                        let state = state.as_mut().expect("missing upsert state");
                         match state
                             .consolidate_snapshot_chunk(
                                 persist_stash
@@ -1094,11 +1130,12 @@ where
                     if !snapshotting_persist {
                         tracing::debug!(?persist_stash, ?persist_upper, "ingesting state updates from persist");
 
+                        let state = state.as_mut().expect("missing upsert state");
                         ingest_state_updates::<_, G, _, _, _>(
                             &mut persist_stash,
                             &persist_upper,
                             &mut error_emitter,
-                            &mut state,
+                            state,
                             ).await;
                     }
                 }
@@ -1138,14 +1175,28 @@ where
                                     upsert_config.shrink_upsert_unused_buffers_by_ratio,
                                 );
 
-                                // If the data is at _exactly_ the output frontier, we can preemptively drain it into the state.
-                                // Data within this set events strictly beyond this time are staged as
-                                // normal.
+                                // For the very first snapshot from the source,
+                                // we allow emitting partial updates without yet
+                                // seeing all updates for that timestamp. For
+                                // this, we use an ephemeral upsert state to run
+                                // our upserting logic that we throw away once
+                                // we receive the first updates on the persist
+                                // input.
                                 //
-                                // This is a load-bearing optimization, as it is required to avoid buffering
-                                // the entire source snapshot in the `stash`.
-                                if prevent_snapshot_buffering && output_cap.time() == &event_time {
+                                // We can only do this for the very first
+                                // snapshot, because all subsequent emitted
+                                // updates need to have a consistent view of
+                                // upsert state as ingested from the persist
+                                // input.
+                                //
+                                // This is a load-bearing optimization, as it is
+                                // required to avoid buffering the entire source
+                                // snapshot in the `stash`.
+                                if prevent_snapshot_buffering && resume_upper.less_equal(&G::Timestamp::minimum()) && event_time == G::Timestamp::minimum() {
+                                    tracing::info!(?event_time, ?resume_upper, ?output_cap, "allowing partial drain");
                                     partial_drain_time = Some(event_time.clone());
+                                } else {
+                                    tracing::info!(%prevent_snapshot_buffering, ?event_time, ?resume_upper, ?output_cap, "not allowing partial drain");
                                 }
                             }
                             AsyncEvent::Progress(upper) => {
@@ -1161,36 +1212,40 @@ where
                                 // Disable the partial drain as this progress event covers
                                 // the `output_cap` time.
                                 partial_drain_time = None;
-                                drain_staged_input::<_, G, _, _, _>(
-                                    &mut stash,
-                                    &mut commands_state,
-                                    &mut output_updates,
-                                    &mut multi_get_scratch,
-                                    DrainStyle::ToUpper{input_upper: &upper, persist_upper: &persist_upper},
-                                    &mut error_emitter,
-                                    &mut state,
-                                )
-                                .await;
+                                if state.is_some() {
+                                    let state = state.as_mut().expect("missing upsert state");
+                                    drain_staged_input::<_, G, _, _, _>(
+                                        &mut stash,
+                                        &mut commands_state,
+                                        &mut output_updates,
+                                        &mut multi_get_scratch,
+                                        DrainStyle::ToUpper{input_upper: &upper, persist_upper: &persist_upper},
+                                        &mut error_emitter,
+                                        state,
+                                    )
+                                    .await;
 
-                                tracing::trace!(?output_updates, "output updates for complete timestamp");
+                                    tracing::trace!(?output_updates, "output updates for complete timestamp");
 
-                                // TODO: Feels somewhat inefficient to be peeling
-                                // of and creating new vecs per group of
-                                // timestamp. Especially since at steady state
-                                // we're expecting to only have one group...
-                                while !output_updates.is_empty() {
-                                    let cap = output_updates[0].1.clone();
-                                    let ts = cap.time();
+                                    // TODO: Feels somewhat inefficient to be peeling
+                                    // of and creating new vecs per group of
+                                    // timestamp. Especially since at steady state
+                                    // we're expecting to only have one group...
+                                    while !output_updates.is_empty() {
+                                        let cap = output_updates[0].1.clone();
+                                        let ts = cap.time();
 
-                                    let partition_point = output_updates
-                                        .partition_point(|update| update.1.time() == ts);
+                                        let partition_point = output_updates
+                                            .partition_point(|update| update.1.time() == ts);
 
-                                    let mut ts_updates: Vec<_> = output_updates.drain(0..partition_point)
-                                        .map(|(update, cap, diff)| (update, cap.time().clone(), diff))
-                                        .collect();
+                                        let mut ts_updates: Vec<_> = output_updates.drain(0..partition_point)
+                                            .map(|(update, cap, diff)| (update, cap.time().clone(), diff))
+                                            .collect();
 
-                                    output_handle.give_container(&cap,&mut ts_updates);
-
+                                        output_handle.give_container(&cap,&mut ts_updates);
+                                    }
+                                } else {
+                                    tracing::info!(?upper, "upsert state not yet available, still snapshotting");
                                 }
 
                                 if let Some(ts) = upper.as_option() {
@@ -1216,26 +1271,51 @@ where
                     // Note also that this may result in more updates in the output collection than
                     // the minimum. However, because the frontier only advances on `Progress` updates,
                     // the collection always accumulates correctly for all keys.
-                    if let Some(_partial_drain_time) = partial_drain_time {
+                    if let Some(partial_drain_time) = partial_drain_time {
 
-                        //drain_staged_input::<_, G, _, _, _>(
-                        //    &mut stash,
-                        //    &mut commands_state,
-                        //    &mut output_updates,
-                        //    &mut multi_get_scratch,
-                        //    DrainStyle::AtTime(partial_drain_time),
-                        //    &mut error_emitter,
-                        //    &mut state,
-                        //)
-                        //.await;
-                        //
-                        //tracing::trace!(?output_updates, "partial output updates");
-                        //
-                        //for (update, cap, diff) in output_updates.drain(..) {
-                        //    let time = cap.time().clone();
-                        //    output_handle.give(&cap, (update, time, diff));
-                        //}
-                        ////output_handle.give_container(&output_cap, &mut output_updates);
+                        let state = match partial_snapshot_state.as_mut() {
+                            Some(state) => state,
+                            None => {
+                                tracing::debug!(
+                                    ?resume_upper,
+                                    ?input_upper,
+                                    ?persist_upper,
+                                    %prevent_snapshot_buffering,
+                                    "no partial snapshot state, skipping emission of partial snapshot updates");
+                                continue;
+                            }
+                        };
+
+                        drain_staged_input::<_, G, _, _, _>(
+                            &mut stash,
+                            &mut commands_state,
+                            &mut output_updates,
+                            &mut multi_get_scratch,
+                            DrainStyle::AtTime(partial_drain_time),
+                            &mut error_emitter,
+                            state,
+                        )
+                        .await;
+
+                        tracing::trace!(?output_updates, "partial output updates");
+                        // WIP: Feels somewhat inefficient to be peeling
+                        // of and creating new vecs per group of
+                        // timestamp. Especially since at steady state
+                        // we're expecting to only have one group...
+                        while !output_updates.is_empty() {
+                            let cap = output_updates[0].1.clone();
+                            let ts = cap.time();
+
+                            let partition_point = output_updates
+                                .partition_point(|update| update.1.time() == ts);
+
+                            let mut ts_updates: Vec<_> = output_updates.drain(0..partition_point)
+                                .map(|(update, cap, diff)| (update, cap.time().clone(), diff))
+                                .collect();
+
+                            output_handle.give_container(&cap,&mut ts_updates);
+
+                        }
                     }
                 }
             };

@@ -640,7 +640,7 @@ pub struct GetStats {
 /// **must** produce accurate `PutStats` and `GetStats`. The reasoning for this is two-fold:
 /// - efficiency: this avoids additional buffer allocation.
 /// - value sizes: only the backend implementation understands the size of values as recorded
-///
+//
 /// This **must** is not a correctness requirement (we won't panic when emitting statistics), but
 /// rather a requirement to ensure the upsert operator is introspectable.
 #[async_trait::async_trait(?Send)]
@@ -650,6 +650,9 @@ where
 {
     /// Whether this backend supports the `multi_merge` operation.
     fn supports_merge(&self) -> bool;
+
+    /// Clear out all key-value state.
+    async fn clear(&mut self) -> Result<(), anyhow::Error>;
 
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
@@ -1176,6 +1179,15 @@ where
             .inc_by(stats.processed_gets_size);
 
         Ok(())
+    }
+
+    /// Clear out all key-value state.
+    pub async fn clear(&mut self) -> Result<(), anyhow::Error> {
+        fail::fail_point!("fail_state_clear", |_| {
+            Err(anyhow::anyhow!("Error clearing state"))
+        });
+
+        self.inner.clear().await
     }
 }
 
