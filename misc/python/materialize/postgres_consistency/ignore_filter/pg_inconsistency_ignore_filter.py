@@ -1089,14 +1089,17 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                 "database-issues#8293: ALL and ANY with NULL or empty array"
             )
 
-        if query_template.matches_specific_select_or_filter_expression(
-            col_index,
+        # use here matches_any_expression instead of matches_specific_select_or_filter_expression on purpose because
+        # the concerned expression may affect other columns as well
+        if query_template.matches_any_expression(
             is_table_function,
             True,
         ) and (query_template.has_offset() or query_template.has_limit()):
             # When table functions are used, a row-order insensitive comparison will be conducted in the result
             # comparator. However, this is not sufficient when a LIMIT or OFFSET clause is present.
-            return YesIgnore("Different sort order")
+            return YesIgnore(
+                "Different sort order (partially a consequence of database-issues#6620 and database-issues#7812)"
+            )
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index,
