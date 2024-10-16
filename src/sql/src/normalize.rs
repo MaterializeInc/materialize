@@ -26,8 +26,8 @@ use mz_sql_parser::ast::{
     CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
     CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
     CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior,
-    MutRecBlock, Op, Query, Statement, TableFactor, UnresolvedItemName, UnresolvedSchemaName,
-    Value, ViewDefinition,
+    MutRecBlock, Op, Query, Statement, TableFactor, TableFromSourceColumns, UnresolvedItemName,
+    UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -312,8 +312,10 @@ pub fn create_statement(
         }) => {
             *name = allocate_name(name)?;
             let mut normalizer = QueryNormalizer::new();
-            for c in columns {
-                normalizer.visit_column_def_mut(c);
+            if let TableFromSourceColumns::Defined(columns) = columns {
+                for c in columns {
+                    normalizer.visit_column_def_mut(c);
+                }
             }
             if let Some(err) = normalizer.err {
                 return Err(err);

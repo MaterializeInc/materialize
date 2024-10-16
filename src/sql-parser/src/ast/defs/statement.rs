@@ -1614,12 +1614,30 @@ pub struct TableFromSourceOption<T: AstInfo> {
 }
 impl_display_for_with_option!(TableFromSourceOption);
 
+/// `CREATE TABLE .. FROM SOURCE` columns specification
+/// can have 3 states:
+/// Before purification they can be `NotSpecified` or `Named`
+/// by the user to specify the column names to use.
+/// After purification they can be in any of the 3 states.
+/// For some source types we define the columns during purification
+/// and for others the columns are defined during planning based
+/// on the encoding option of the source.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TableFromSourceColumns<T: AstInfo> {
+    /// The user did not specify which columns to use.
+    NotSpecified,
+    /// The user requested the named columns. Only compatible
+    /// with source types that allow user-specified column names.
+    Named(Vec<Ident>),
+    /// Columns defined during purification for some source types.
+    Defined(Vec<ColumnDef<T>>),
+}
+
 /// `CREATE TABLE .. FROM SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateTableFromSourceStatement<T: AstInfo> {
-    /// Table name
     pub name: UnresolvedItemName,
-    pub columns: Vec<ColumnDef<T>>,
+    pub columns: TableFromSourceColumns<T>,
     pub constraints: Vec<TableConstraint<T>>,
     pub if_not_exists: bool,
     pub source: T::ItemName,
@@ -1649,10 +1667,18 @@ impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(name);
-        if !columns.is_empty() || !constraints.is_empty() {
+        if !matches!(columns, TableFromSourceColumns::NotSpecified) || !constraints.is_empty() {
             f.write_str(" (");
 
-            f.write_node(&display::comma_separated(columns));
+            match columns {
+                TableFromSourceColumns::NotSpecified => unreachable!(),
+                TableFromSourceColumns::Named(columns) => {
+                    f.write_node(&display::comma_separated(columns))
+                }
+                TableFromSourceColumns::Defined(columns) => {
+                    f.write_node(&display::comma_separated(columns))
+                }
+            };
             if !constraints.is_empty() {
                 f.write_str(", ");
                 f.write_node(&display::comma_separated(constraints));
