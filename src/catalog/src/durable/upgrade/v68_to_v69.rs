@@ -17,9 +17,10 @@ wire_compatible!(v68::ItemKey with v69::ItemKey);
 wire_compatible!(v68::SchemaId with v69::SchemaId);
 wire_compatible!(v68::RoleId with v69::RoleId);
 wire_compatible!(v68::MzAclItem with v69::MzAclItem);
+wire_compatible!(v68::SourceReferencesValue with v69::SourceReferencesValue);
 
-/// In v69 we migrated `create_sql` to be wrapped in a `oneof` so we can
-/// associate `GlobalId`s with a Catalog item.
+/// In v69 we migrated `create_sql` to be wrapped in a `oneof` so we can associate `GlobalId`s
+/// with a Catalog item. We also migrated `SourceReferencesKey` to use `CatalogItemId`.
 pub fn upgrade(
     snapshot: Vec<v68::StateUpdateKind>,
 ) -> Vec<MigrationAction<v68::StateUpdateKind, v69::StateUpdateKind>> {
@@ -38,6 +39,24 @@ pub fn upgrade(
                 };
 
                 Some(MigrationAction::Update(old_item, new_item))
+            }
+            Some(v68::state_update_kind::Kind::SourceReferences(old_reference)) => {
+                // ** MIGRATION **
+                let new_reference =
+                    v69::state_update_kind::SourceReferences::from(old_reference.clone());
+
+                let old_reference = v68::StateUpdateKind {
+                    kind: Some(v68::state_update_kind::Kind::SourceReferences(
+                        old_reference,
+                    )),
+                };
+                let new_reference = v69::StateUpdateKind {
+                    kind: Some(v69::state_update_kind::Kind::SourceReferences(
+                        new_reference,
+                    )),
+                };
+
+                Some(MigrationAction::Update(old_reference, new_reference))
             }
             _ => None,
         })
@@ -163,5 +182,41 @@ impl From<v68::state_update_kind::Item> for v69::state_update_kind::Item {
 
         let key = item.key.map(|key| v69::ItemKey::convert(&key));
         v69::state_update_kind::Item { key, value }
+    }
+}
+
+impl From<v68::state_update_kind::SourceReferences> for v69::state_update_kind::SourceReferences {
+    fn from(old: v68::state_update_kind::SourceReferences) -> Self {
+        v69::state_update_kind::SourceReferences {
+            key: old.key.map(|old| old.into()),
+            value: old.value.map(|old| WireCompatible::convert(&old)),
+        }
+    }
+}
+
+impl From<v68::SourceReferencesKey> for v69::SourceReferencesKey {
+    fn from(value: v68::SourceReferencesKey) -> Self {
+        let source = match value.source {
+            Some(gid) => Some(gid.into()),
+            None => None,
+        };
+        v69::SourceReferencesKey { source }
+    }
+}
+
+impl From<v68::GlobalId> for v69::CatalogItemId {
+    fn from(gid: v68::GlobalId) -> Self {
+        let value = match gid.value {
+            Some(v68::global_id::Value::User(x)) => Some(v69::catalog_item_id::Value::User(x)),
+            Some(v68::global_id::Value::System(x)) => Some(v69::catalog_item_id::Value::System(x)),
+            Some(v68::global_id::Value::Transient(x)) => {
+                Some(v69::catalog_item_id::Value::Transient(x))
+            }
+            Some(v68::global_id::Value::Explain(_)) => {
+                unreachable!("found GlobalId::Explain in the Catalog")
+            }
+            None => None,
+        };
+        v69::CatalogItemId { value }
     }
 }

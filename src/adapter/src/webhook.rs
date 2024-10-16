@@ -103,7 +103,7 @@ impl AppendWebhookValidator {
         } in secrets
         {
             let secret = secrets_reader
-                .read(id.to_item_id())
+                .read(id)
                 .await
                 .map_err(|_| AppendWebhookError::MissingSecret)?;
             secret_contents.insert(column_idx, (secret, use_bytes));

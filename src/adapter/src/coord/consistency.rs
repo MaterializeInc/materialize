@@ -15,7 +15,7 @@ use mz_adapter_types::connection::ConnectionIdType;
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::instrument;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica};
 use serde::Serialize;
 
@@ -196,7 +196,7 @@ enum ReadHoldsInconsistency {
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 enum ActiveWebhookInconsistency {
-    NonExistentWebhook(GlobalId),
+    NonExistentWebhook(CatalogItemId),
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]

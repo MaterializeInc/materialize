@@ -1173,7 +1173,7 @@ pub struct AlterClusterReplicaRenamePlan {
 
 #[derive(Debug)]
 pub struct AlterItemRenamePlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub current_full_name: FullItemName,
     pub to_name: String,
     pub object_type: ObjectType,
@@ -1522,8 +1522,8 @@ impl From<WebhookBodyFormat> for ScalarType {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct WebhookValidationSecret {
-    /// Identifies the secret by [`GlobalId`].
-    pub id: GlobalId,
+    /// Identifies the secret by [`CatalogItemId`].
+    pub id: CatalogItemId,
     /// Column index for the expression context that this secret was originally evaluated in.
     pub column_idx: usize,
     /// Whether or not this secret should be provided to the expression as Bytes or a String.

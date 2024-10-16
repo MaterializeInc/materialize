@@ -946,7 +946,6 @@ impl<'a> Transaction<'a> {
         &mut self,
         source_id: CatalogItemId,
     ) -> Result<(), CatalogError> {
-        let source_id = source_id.to_global_id();
         let deleted = self
             .source_references
             .delete_by_key(SourceReferencesKey { source_id }, self.op_id)
@@ -1726,7 +1725,7 @@ impl<'a> Transaction<'a> {
 
     pub fn update_source_references(
         &mut self,
-        source_id: GlobalId,
+        source_id: CatalogItemId,
         references: Vec<SourceReference>,
         updated_at: u64,
     ) -> Result<(), CatalogError> {

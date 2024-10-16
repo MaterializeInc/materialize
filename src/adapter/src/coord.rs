@@ -103,7 +103,7 @@ use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, Cluste
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, TableDataSource,
+    DataSourceDesc, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::controller::error::InstanceMissing;
@@ -133,6 +133,7 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
+use mz_sql::names::QualifiedItemName;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, OnTimeoutAction, Params,
@@ -1637,7 +1638,7 @@ pub struct Coordinator {
     /// A map from the compute sink ID to it's state description.
     active_compute_sinks: BTreeMap<GlobalId, ActiveComputeSink>,
     /// A map from active webhooks to their invalidation handle.
-    active_webhooks: BTreeMap<GlobalId, WebhookAppenderInvalidator>,
+    active_webhooks: BTreeMap<CatalogItemId, WebhookAppenderInvalidator>,
     /// A map from connection ids to a watch channel that is set to `true` if the connection
     /// received a cancel request.
     staged_cancellation: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
@@ -2338,16 +2339,34 @@ impl Coordinator {
         entries: &[CatalogEntry],
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) {
-        // Advance all tables to the current timestamp
+        /// Smaller helper struct of metadata for bootstrapping tables.
+        struct TableMetadata<'a> {
+            id: CatalogItemId,
+            name: &'a QualifiedItemName,
+            table: &'a Table,
+        }
+
+        // Filter our entries down to just tables.
+        let table_metas: Vec<_> = entries
+            .into_iter()
+            .filter_map(|entry| {
+                entry.table().map(|table| TableMetadata {
+                    id: entry.item_id(),
+                    name: entry.name(),
+                    table,
+                })
+            })
+            .collect();
+
+        // Append empty batches to advance the timestamp of all tables.
         debug!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
             timestamp: write_ts,
             advance_to,
         } = self.get_local_write_ts().await;
-        let appends = entries
+        let appends = table_metas
             .iter()
-            .filter(|entry| entry.is_table())
-            .map(|entry| (entry.id(), Vec::new()))
+            .map(|meta| (meta.table.global_id_writes(), Vec::new()))
             .collect();
         // Append the tables in the background. We apply the write timestamp before getting a read
         // timestamp and reading a snapshot of each table, so the snapshots will block on their own
@@ -2363,38 +2382,46 @@ impl Coordinator {
         // Add builtin table updates the clear the contents of all system tables
         debug!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts().await;
+
+        // Filter out the 'mz_storage_usage_by_shard' table since we need to retain that info for
+        // billing purposes.
         let mz_storage_usage_by_shard_schema: SchemaSpecifier = self
             .catalog()
             .resolve_system_schema(MZ_STORAGE_USAGE_BY_SHARD.schema)
             .into();
-        let is_storage_usage_by_shard = |entry: &CatalogEntry| -> bool {
-            entry.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
-                && entry.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema
+        let is_storage_usage_by_shard = |meta: &TableMetadata| -> bool {
+            meta.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
+                && meta.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema
         };
+
         let mut retraction_tasks = Vec::new();
-        for system_table in entries.iter().filter(|entry| {
-            entry.is_table() && entry.item_id().is_system() && !is_storage_usage_by_shard(entry)
-        }) {
-            let id = system_table.item_id();
-            debug!(
-                "coordinator init: resetting system table {} ({})",
-                self.catalog().resolve_full_name(system_table.name(), None),
-                id,
-            );
-            let current_contents_fut = self.controller.storage.snapshot(id.to_global_id(), read_ts);
-            let task = spawn(|| format!("snapshot-{}", id), async move {
+        let system_tables = table_metas
+            .iter()
+            .filter(|meta| meta.id.is_system() && !is_storage_usage_by_shard(meta));
+
+        for system_table in system_tables {
+            let table_id = system_table.id;
+            let full_name = self.catalog().resolve_full_name(system_table.name, None);
+            debug!("coordinator init: resetting system table {full_name} ({table_id})");
+
+            // Fetch the current contents of the table for retraction.
+            let current_contents_fut = self
+                .controller
+                .storage
+                .snapshot(system_table.table.global_id_writes(), read_ts);
+            // Fetch a snapshot of the current tables concurrently.
+            let task = spawn(|| format!("snapshot-{table_id}"), async move {
                 let current_contents = current_contents_fut
                     .await
                     .unwrap_or_terminate("cannot fail to fetch snapshot");
-                debug!(
-                    "coordinator init: table ({}) size {}",
-                    id,
-                    current_contents.len()
-                );
+                let contents_len = current_contents.len();
+                debug!("coordinator init: table ({table_id}) size {contents_len}",);
+
+                // Retract the current contents.
                 current_contents
                     .into_iter()
                     .map(|(row, diff)| BuiltinTableUpdate {
-                        id,
+                        id: table_id,
                         row,
                         diff: diff.neg(),
                     })

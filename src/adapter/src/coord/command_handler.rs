@@ -1061,9 +1061,11 @@ impl Coordinator {
         {
             let catalog = self.catalog().for_session(session);
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
-            let ids = self
-                .index_oracle(cluster)
-                .sufficient_collections(resolved_ids.0.iter().map(|id| id.to_global_id()));
+            let gids = resolved_ids
+                .0
+                .iter()
+                .flat_map(|item_id| self.catalog().get_global_ids(item_id));
+            let ids = self.index_oracle(cluster).sufficient_collections(gids);
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later
@@ -1357,7 +1359,7 @@ impl Coordinator {
                 .map_err(|_| name)?;
             let invalidator = coord
                 .active_webhooks
-                .entry(entry.id())
+                .entry(entry.item_id())
                 .or_insert_with(WebhookAppenderInvalidator::new);
             let tx = WebhookAppender::new(row_tx, invalidator.guard(), stats);
 

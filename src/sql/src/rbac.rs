@@ -18,7 +18,7 @@ use mz_expr::CollectionPlan;
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::{Ident, QualifiedReplica};
 use tracing::debug;
 
@@ -528,11 +528,8 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )];
-            privileges.extend_from_slice(&generate_read_privileges(
-                catalog,
-                iter::once(sink.from),
-                role_id,
-            ));
+            let items = iter::once(sink.from).map(|gid| catalog.resolve_global_id(&gid).item_id());
+            privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
             privileges.push((
                 SystemObjectId::Object(in_cluster.into()),
                 AclMode::CREATE,
@@ -784,8 +781,11 @@ fn generate_rbac_requirements(
             finishing: _,
             copy_to: _,
         }) => {
-            let mut privileges =
-                generate_read_privileges(catalog, source.depends_on().into_iter(), role_id);
+            let items = source
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_global_id(&gid).item_id());
+            let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(privilege) = generate_cluster_usage_privileges(
                 source.as_const().is_some(),
                 target_cluster_id,
@@ -807,8 +807,11 @@ fn generate_rbac_requirements(
             emit_progress: _,
             output: _,
         }) => {
-            let mut privileges =
-                generate_read_privileges(catalog, from.depends_on().into_iter(), role_id);
+            let items = from
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_global_id(&gid).item_id());
+            let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
                     SystemObjectId::Object(cluster_id.into()),
@@ -852,11 +855,12 @@ fn generate_rbac_requirements(
             format: _,
             max_file_size: _,
         }) => {
-            let mut privileges = generate_read_privileges(
-                catalog,
-                select_plan.source.depends_on().into_iter(),
-                role_id,
-            );
+            let items = select_plan
+                .source
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_global_id(&gid).item_id());
+            let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
                     SystemObjectId::Object(cluster_id.into()),
@@ -966,11 +970,12 @@ fn generate_rbac_requirements(
                 seen.insert((id.into(), role_id));
             }
 
+            let items = values
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_global_id(&gid).item_id());
             privileges.extend_from_slice(&generate_read_privileges_inner(
-                catalog,
-                values.depends_on().into_iter(),
-                role_id,
-                &mut seen,
+                catalog, items, role_id, &mut seen,
             ));
 
             if let Some(privilege) = generate_cluster_usage_privileges(
@@ -1045,7 +1050,8 @@ fn generate_rbac_requirements(
             with_snapshot: _,
             in_cluster,
         }) => {
-            let mut privileges = generate_read_privileges(catalog, iter::once(sink.from), role_id);
+            let items = iter::once(sink.from).map(|gid| catalog.resolve_global_id(&gid).item_id());
+            let mut privileges = generate_read_privileges(catalog, items, role_id);
             privileges.push((
                 SystemObjectId::Object(in_cluster.into()),
                 AclMode::CREATE,
@@ -1267,11 +1273,12 @@ fn generate_rbac_requirements(
             //  PostgreSQL doesn't always do this.
             //  As a concrete example, we require SELECT and UPDATE privileges to execute
             //  `UPDATE t SET a = 42;`, while PostgreSQL only requires UPDATE privileges.
+            let items = selection
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_global_id(&gid).item_id());
             privileges.extend_from_slice(&generate_read_privileges_inner(
-                catalog,
-                selection.depends_on().into_iter(),
-                role_id,
-                &mut seen,
+                catalog, items, role_id, &mut seen,
             ));
 
             if let Some(privilege) = generate_cluster_usage_privileges(
@@ -1589,15 +1596,15 @@ fn generate_required_source_privileges(
 /// For more details see: <https://www.postgresql.org/docs/15/rules-privileges.html>
 fn generate_read_privileges(
     catalog: &impl SessionCatalog,
-    ids: impl Iterator<Item = GlobalId>,
+    items: impl Iterator<Item = CatalogItemId>,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
-    generate_read_privileges_inner(catalog, ids, role_id, &mut BTreeSet::new())
+    generate_read_privileges_inner(catalog, items, role_id, &mut BTreeSet::new())
 }
 
 fn generate_read_privileges_inner(
     catalog: &impl SessionCatalog,
-    ids: impl Iterator<Item = GlobalId>,
+    ids: impl Iterator<Item = CatalogItemId>,
     role_id: RoleId,
     seen: &mut BTreeSet<(ObjectId, RoleId)>,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
@@ -1606,7 +1613,7 @@ fn generate_read_privileges_inner(
 
     for id in ids {
         if seen.insert((id.into(), role_id)) {
-            let item = catalog.get_item(&id.into());
+            let item = catalog.get_item(&id);
             let schema_id: ObjectId = item.name().qualifiers.clone().into();
             if seen.insert((schema_id.clone(), role_id)) {
                 privileges.push((SystemObjectId::Object(schema_id), AclMode::USAGE, role_id))
@@ -1631,10 +1638,7 @@ fn generate_read_privileges_inner(
 
     for (view_ids, view_owner) in views {
         privileges.extend_from_slice(&generate_read_privileges_inner(
-            catalog,
-            view_ids.map(|id| id.to_global_id()),
-            view_owner,
-            seen,
+            catalog, view_ids, view_owner, seen,
         ));
     }
 

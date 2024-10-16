@@ -14,7 +14,7 @@ use mz_catalog::durable::Transaction;
 use mz_catalog::memory::objects::StateUpdate;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement};
 use semver::Version;
@@ -27,7 +27,7 @@ fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow
 where
     F: for<'a> FnMut(
         &'a mut Transaction<'_>,
-        GlobalId,
+        CatalogItemId,
         &'a mut Statement<Raw>,
     ) -> Result<(), anyhow::Error>,
 {
@@ -36,7 +36,7 @@ where
     for mut item in tx.get_items() {
         item.kind.rewrite_sql(|create_sql| {
             let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
-            f(tx, item.id.to_global_id(), &mut stmt)?;
+            f(tx, item.id, &mut stmt)?;
             Ok(stmt.to_ast_string_stable().into())
         })?;
 
@@ -55,7 +55,7 @@ where
     F: for<'a> FnMut(
         &'a mut Transaction<'_>,
         &'a &ConnCatalog<'_>,
-        GlobalId,
+        CatalogItemId,
         &'a mut Statement<Raw>,
     ) -> Result<(), anyhow::Error>,
 {
@@ -64,7 +64,7 @@ where
     for mut item in items {
         item.kind.rewrite_sql(|create_sql| {
             let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
-            f(tx, &cat, item.id.to_global_id(), &mut stmt)?;
+            f(tx, &cat, item.id, &mut stmt)?;
             Ok(stmt.to_ast_string_stable().into())
         })?;
         updated_items.insert(item.id, item);

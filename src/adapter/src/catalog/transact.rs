@@ -136,7 +136,7 @@ pub enum Op {
         to_name: String,
     },
     RenameItem {
-        id: GlobalId,
+        id: CatalogItemId,
         current_full_name: FullItemName,
         to_name: String,
     },
@@ -181,7 +181,7 @@ pub enum Op {
         to_item: CatalogItem,
     },
     UpdateSourceReferences {
-        source_id: GlobalId,
+        source_id: CatalogItemId,
         references: SourceReferences,
     },
     UpdateSystemConfiguration {
@@ -944,9 +944,29 @@ impl Catalog {
             } => {
                 state.check_unstable_dependencies(&item)?;
 
-                if item.is_storage_collection() {
-                    // TODO(alter_table): Each item should declare their storage collections.
-                    storage_collections_to_create.insert(id.to_global_id());
+                match &item {
+                    CatalogItem::Table(table) => {
+                        let gids: Vec<_> = table.global_ids().collect();
+                        assert_eq!(gids.len(), 1);
+                        storage_collections_to_create.extend(gids);
+                    }
+                    CatalogItem::Source(source) => {
+                        storage_collections_to_create.insert(source.global_id());
+                    }
+                    CatalogItem::MaterializedView(mv) => {
+                        storage_collections_to_create.insert(mv.global_id());
+                    }
+                    CatalogItem::ContinualTask(ct) => {
+                        storage_collections_to_create.insert(ct.global_id());
+                    }
+                    CatalogItem::Log(_)
+                    | CatalogItem::Sink(_)
+                    | CatalogItem::View(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Connection(_) => (),
                 }
 
                 let system_user = session.map_or(false, |s| s.user().is_system_user());
@@ -1189,8 +1209,27 @@ impl Catalog {
                 for item_id in delta.items {
                     let entry = state.get_entry(&item_id);
 
-                    if entry.item().is_storage_collection() {
-                        storage_collections_to_drop.insert(item_id.to_global_id());
+                    match entry.item() {
+                        CatalogItem::Table(table) => {
+                            storage_collections_to_drop.extend(table.global_ids());
+                        }
+                        CatalogItem::Source(source) => {
+                            storage_collections_to_drop.insert(source.global_id());
+                        }
+                        CatalogItem::MaterializedView(mv) => {
+                            storage_collections_to_drop.insert(mv.global_id());
+                        }
+                        CatalogItem::ContinualTask(ct) => {
+                            storage_collections_to_drop.insert(ct.global_id());
+                        }
+                        CatalogItem::Log(_)
+                        | CatalogItem::Sink(_)
+                        | CatalogItem::View(_)
+                        | CatalogItem::Index(_)
+                        | CatalogItem::Type(_)
+                        | CatalogItem::Func(_)
+                        | CatalogItem::Secret(_)
+                        | CatalogItem::Connection(_) => (),
                     }
 
                     if state.source_references.contains_key(&item_id) {
@@ -1720,13 +1759,13 @@ impl Catalog {
                     updates.push(*id);
                 }
                 if !new_entry.item().is_temporary() {
-                    tx.update_item(id.to_item_id(), new_entry.into())?;
+                    tx.update_item(id, new_entry.into())?;
                 } else {
                     temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
                     temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
                 }
 
-                updates.push(id.to_item_id());
+                updates.push(id);
                 for id in updates {
                     Self::log_update(state, &id);
                 }

@@ -504,7 +504,7 @@ impl DurableType for Item {
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SourceReferences {
-    pub source_id: GlobalId,
+    pub source_id: CatalogItemId,
     pub updated_at: u64,
     pub references: Vec<SourceReference>,
 }
@@ -1109,7 +1109,7 @@ pub struct DatabaseValue {
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct SourceReferencesKey {
-    pub(crate) source_id: GlobalId,
+    pub(crate) source_id: CatalogItemId,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]

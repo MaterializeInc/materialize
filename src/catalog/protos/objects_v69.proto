@@ -181,7 +181,7 @@ message CommentValue {
 }
 
 message SourceReferencesKey {
-  GlobalId source = 1;
+  CatalogItemId source = 1;
 }
 
 message SourceReferencesValue {

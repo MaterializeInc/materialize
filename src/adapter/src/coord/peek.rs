@@ -662,7 +662,7 @@ impl crate::coord::Coordinator {
         // If it was created, drop the dataflow once the peek command is sent.
         if let Some(index_id) = drop_dataflow {
             self.remove_compute_ids_from_timeline(vec![(compute_instance, index_id)]);
-            self.drop_indexes(vec![(compute_instance, index_id.to_item_id())]);
+            self.drop_indexes(vec![(compute_instance, index_id)]);
         }
 
         Ok(crate::ExecuteResponse::SendingRows {

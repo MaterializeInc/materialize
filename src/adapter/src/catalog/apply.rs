@@ -25,7 +25,7 @@ use mz_catalog::builtin::{
 use mz_catalog::durable::objects::{
     ClusterKey, DatabaseKey, DurableType, ItemKey, ItemValueKind, RoleKey, SchemaKey,
 };
-use mz_catalog::durable::{CatalogError, DurableCatalogError};
+use mz_catalog::durable::{CatalogError, DurableCatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
@@ -44,9 +44,7 @@ use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
-use mz_sql::catalog::{
-    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType, NameReference,
-};
+use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType};
 use mz_sql::names::{
     FullItemName, ItemQualifiers, QualifiedItemName, RawDatabaseSpecifier,
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier,
@@ -516,7 +514,8 @@ impl CatalogState {
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
-        let id = system_object_mapping.unique_identifier.catalog_id;
+        let item_id = system_object_mapping.unique_identifier.catalog_id;
+        let global_id = system_object_mapping.unique_identifier.collection_id;
 
         if system_object_mapping.unique_identifier.runtime_alterable() {
             // Runtime-alterable system objects have real entries in the items
@@ -526,12 +525,12 @@ impl CatalogState {
         }
 
         if let StateDiff::Retraction = diff {
-            let entry = self.drop_item(id);
-            retractions.system_object_mappings.insert(id, entry);
+            let entry = self.drop_item(item_id);
+            retractions.system_object_mappings.insert(item_id, entry);
             return;
         }
 
-        if let Some(entry) = retractions.system_object_mappings.remove(&id) {
+        if let Some(entry) = retractions.system_object_mappings.remove(&item_id) {
             // This implies that we updated the fingerprint for some builtin item. The retraction
             // was parsed, planned, and optimized using the compiled in definition, not the
             // definition from a previous version. So we can just stick the old entry back into the
@@ -564,12 +563,12 @@ impl CatalogState {
                 )];
                 acl_items.extend_from_slice(&log.access);
                 self.insert_item(
-                    id,
+                    item_id,
                     log.oid,
                     name.clone(),
                     CatalogItem::Log(Log {
                         variant: log.variant,
-                        collection_id: id.to_global_id(),
+                        collection_id: global_id,
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(acl_items),
@@ -584,16 +583,13 @@ impl CatalogState {
                 acl_items.extend_from_slice(&table.access);
 
                 self.insert_item(
-                    id,
+                    item_id,
                     table.oid,
                     name.clone(),
                     CatalogItem::Table(Table {
                         create_sql: None,
                         desc: table.desc.clone(),
-                        // TODO(alter_table): Allocate a unique GlobalId.
-                        collections: [(RelationVersion::root(), id.to_global_id())]
-                            .into_iter()
-                            .collect(),
+                        collections: [(RelationVersion::root(), global_id)].into_iter().collect(),
                         conn_id: None,
                         resolved_ids: ResolvedIds(BTreeSet::new()),
                         custom_logical_compaction_window: table.is_retained_metrics_object.then(
@@ -616,15 +612,23 @@ impl CatalogState {
             Builtin::Index(index) => {
                 let kind = ItemValueKind::Index {
                     create_sql: index.create_sql(),
-                    collection: id.to_global_id(),
+                    collection: global_id,
                 };
-                let mut item = self
+                let custom_logical_compaction_window =
+                    index.is_retained_metrics_object.then(|| {
+                        self.system_config()
+                            .metrics_retention()
+                            .try_into()
+                            .expect("invalid metrics retention")
+                    });
+
+                let item = self
                     .parse_item(
-                        id,
+                        item_id,
                         &kind,
                         None,
                         index.is_retained_metrics_object,
-                        if index.is_retained_metrics_object { Some(self.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
+                        custom_logical_compaction_window,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -636,12 +640,12 @@ impl CatalogState {
                             index.name, e
                         )
                     });
-                let CatalogItem::Index(_) = &mut item else {
+                let CatalogItem::Index(_) = item else {
                     panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
                 };
 
                 self.insert_item(
-                    id,
+                    item_id,
                     index.oid,
                     name,
                     item,
@@ -663,7 +667,7 @@ impl CatalogState {
                         CatalogItem::Type(item_type) => item_type,
                         _ => unreachable!("types can only reference other types"),
                     };
-                    item_type.details.array_id = Some(id.to_global_id());
+                    item_type.details.array_id = Some(global_id);
                 }
 
                 // Assert that no built-in types are record types so that we don't
@@ -674,7 +678,7 @@ impl CatalogState {
                 let schema_id = self.resolve_system_schema(typ.schema);
 
                 self.insert_item(
-                    id,
+                    item_id,
                     typ.oid,
                     QualifiedItemName {
                         qualifiers: ItemQualifiers {
@@ -703,7 +707,7 @@ impl CatalogState {
                 // actually used by the system.
                 let oid = INVALID_OID;
                 self.insert_item(
-                    id,
+                    item_id,
                     oid,
                     name.clone(),
                     CatalogItem::Func(Func { inner: func.inner }),
@@ -720,15 +724,14 @@ impl CatalogState {
                 acl_items.extend_from_slice(&coll.access);
 
                 self.insert_item(
-                    id,
+                    item_id,
                     coll.oid,
                     name.clone(),
                     CatalogItem::Source(Source {
                         create_sql: None,
                         data_source: DataSourceDesc::Introspection(coll.data_source),
                         desc: coll.desc.clone(),
-                        // TODO(alter_table): Allocate a unique GlobalId.
-                        collection_id: id.to_global_id(),
+                        collection_id: global_id,
                         timeline: Timeline::EpochMilliseconds,
                         resolved_ids: ResolvedIds(BTreeSet::new()),
                         custom_logical_compaction_window: coll.is_retained_metrics_object.then(
@@ -784,13 +787,12 @@ impl CatalogState {
                 );
             }
             Builtin::Connection(connection) => {
-                // TODO(alter_table)
                 let kind = ItemValueKind::Connection {
                     create_sql: connection.sql.to_string(),
                 };
                 let mut item = self
                     .parse_item(
-                        id,
+                        item_id,
                         &kind,
                         None,
                         false,
@@ -817,7 +819,7 @@ impl CatalogState {
                 acl_items.extend_from_slice(connection.access);
 
                 self.insert_item(
-                    id,
+                    item_id,
                     connection.oid,
                     name.clone(),
                     item,
@@ -1004,19 +1006,16 @@ impl CatalogState {
     ) {
         match diff {
             StateDiff::Addition => {
-                let prev = self.source_references.insert(
-                    source_references.source_id.to_item_id(),
-                    source_references.into(),
-                );
+                let prev = self
+                    .source_references
+                    .insert(source_references.source_id, source_references.into());
                 assert!(
                     prev.is_none(),
                     "values must be explicitly retracted before inserting a new value: {prev:?}"
                 );
             }
             StateDiff::Retraction => {
-                let prev = self
-                    .source_references
-                    .remove(&source_references.source_id.to_item_id());
+                let prev = self.source_references.remove(&source_references.source_id);
                 assert!(
                     prev.is_some(),
                     "retraction for a non-existent existing value: {source_references:?}"
@@ -1211,7 +1210,7 @@ impl CatalogState {
     #[instrument(name = "catalog::parse_views")]
     async fn parse_builtin_views(
         state: &mut CatalogState,
-        builtin_views: Vec<(&Builtin<NameReference>, GlobalId)>,
+        builtin_views: Vec<(&'static BuiltinView, CatalogItemId, GlobalId)>,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut handles = Vec::new();
         let mut awaiting_id_dependencies: BTreeMap<CatalogItemId, Vec<CatalogItemId>> =
@@ -1223,15 +1222,14 @@ impl CatalogState {
         // Completed views, needed to avoid race conditions.
         let mut completed_ids: BTreeSet<CatalogItemId> = BTreeSet::new();
         let mut completed_names: BTreeSet<String> = BTreeSet::new();
+
         // Avoid some reference lifetime issues by not passing `builtin` into the spawned task.
-        let mut views: BTreeMap<CatalogItemId, &BuiltinView> =
-            BTreeMap::from_iter(builtin_views.into_iter().map(|(builtin, id)| {
-                let Builtin::View(view) = builtin else {
-                    unreachable!("handled elsewhere");
-                };
-                (id.to_item_id(), *view)
-            }));
-        let ids: Vec<_> = views.keys().copied().collect();
+        let mut views: BTreeMap<_, _> = builtin_views
+            .into_iter()
+            .map(|(view, item_id, gid)| (item_id, (view, gid)))
+            .collect();
+        let item_ids: Vec<_> = views.keys().copied().collect();
+
         let mut ready: VecDeque<CatalogItemId> = views.keys().cloned().collect();
         while !handles.is_empty() || !ready.is_empty() || !awaiting_all.is_empty() {
             if handles.is_empty() && ready.is_empty() {
@@ -1243,7 +1241,9 @@ impl CatalogState {
             if !ready.is_empty() {
                 let spawn_state = Arc::new(state.clone());
                 while let Some(id) = ready.pop_front() {
-                    let view = views.get(&id).expect("must exist");
+                    let (view, global_id) = views.get(&id).expect("must exist");
+
+                    let global_id = *global_id;
                     let create_sql = view.create_sql();
                     let span = info_span!(parent: None, "parse builtin view", name = view.name);
                     OpenTelemetryContext::obtain().attach_as_parent_to(&span);
@@ -1251,10 +1251,9 @@ impl CatalogState {
                     let handle = mz_ore::task::spawn(
                         || "parse view",
                         async move {
-                            // TODO(alter_table): This should be stored durably in the Catalog.
                             let kind = ItemValueKind::View {
                                 create_sql,
-                                collection: id.to_global_id(),
+                                collection: global_id,
                             };
                             let res = task_state.parse_item(id, &kind, None, false, None);
                             (id, res)
@@ -1264,6 +1263,7 @@ impl CatalogState {
                     handles.push(handle);
                 }
             }
+
             // Wait for a view to be ready.
             let (handle, _idx, remaining) = future::select_all(handles).await;
             handles = remaining;
@@ -1271,7 +1271,7 @@ impl CatalogState {
             match res {
                 Ok(item) => {
                     // Add item to catalog.
-                    let view = views.remove(&id).expect("must exist");
+                    let (view, _gid) = views.remove(&id).expect("must exist");
                     let schema_id = state
                         .ambient_schemas_by_name
                         .get(view.schema)
@@ -1326,8 +1326,8 @@ impl CatalogState {
                 }
                 // If we were missing a dependency, wait for it to be added.
                 Err(AdapterError::PlanError(plan::PlanError::Catalog(
-                                                SqlCatalogError::UnknownItem(missing_dep),
-                                            ))) => match CatalogItemId::from_str(&missing_dep) {
+                    SqlCatalogError::UnknownItem(missing_dep),
+                ))) => match CatalogItemId::from_str(&missing_dep) {
                     Ok(missing_dep) => {
                         if completed_ids.contains(&missing_dep) {
                             ready.push_back(id);
@@ -1352,15 +1352,18 @@ impl CatalogState {
                 Err(AdapterError::PlanError(plan::PlanError::InvalidCast { .. })) => {
                     awaiting_all.push(id);
                 }
-                Err(e) => panic!(
-                    "internal error: failed to load bootstrap view:\n\
-                        {name}\n\
-                        error:\n\
-                        {e:?}\n\n\
-                        Make sure that the schema name is specified in the builtin view's create sql statement.
-                        ",
-                    name = views.get(&id).expect("must exist").name,
-                ),
+                Err(e) => {
+                    let (bad_view, _gid) = views.get(&id).expect("must exist");
+                    panic!(
+                        "internal error: failed to load bootstrap view:\n\
+                            {name}\n\
+                            error:\n\
+                            {e:?}\n\n\
+                            Make sure that the schema name is specified in the builtin view's create sql statement.
+                            ",
+                        name = bad_view.name,
+                    )
+                }
             }
         }
 
@@ -1372,7 +1375,8 @@ impl CatalogState {
         assert!(awaiting_all.is_empty());
         assert!(views.is_empty());
 
-        ids.into_iter()
+        item_ids
+            .into_iter()
             .flat_map(|id| state.pack_item_update(id, 1))
             .collect()
     }
@@ -1856,7 +1860,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
 /// order. This process is modeled as a state machine that batches then applies groups of updates.
 enum BootstrapApplyState {
     /// Additions of builtin views.
-    BuiltinViewAdditions(Vec<(&'static Builtin<NameReference>, GlobalId)>),
+    BuiltinViewAdditions(Vec<(&'static BuiltinView, CatalogItemId, GlobalId)>),
     /// Item updates that aren't builtin view additions.
     Items(Vec<StateUpdate>),
     /// All other updates.
@@ -2037,17 +2041,20 @@ fn apply_with_update<K, V, D>(
     }
 }
 
+/// Looks up a [`BuiltinView`] from a [`SystemObjectMapping`].
 fn lookup_builtin_view_addition(
-    system_object_mapping: mz_catalog::durable::SystemObjectMapping,
-) -> (&'static Builtin<NameReference>, GlobalId) {
+    mapping: SystemObjectMapping,
+) -> (&'static BuiltinView, CatalogItemId, GlobalId) {
     let (_, builtin) = BUILTIN_LOOKUP
-        .get(&system_object_mapping.description)
+        .get(&mapping.description)
         .expect("missing builtin view");
+    let Builtin::View(view) = builtin else {
+        unreachable!("programming error, expected BuiltinView found {builtin:?}");
+    };
+
     (
-        *builtin,
-        system_object_mapping
-            .unique_identifier
-            .catalog_id
-            .to_global_id(),
+        view,
+        mapping.unique_identifier.catalog_id,
+        mapping.unique_identifier.collection_id,
     )
 }

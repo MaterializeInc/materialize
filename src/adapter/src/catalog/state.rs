@@ -309,7 +309,11 @@ impl CatalogState {
             | CatalogItem::ContinualTask(_)) => {
                 // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
                 for id in &item.references().0 {
-                    self.introspection_dependencies_inner(id.to_global_id(), out);
+                    // TODO(alter_table): We probably only want to return a single GlobalId if
+                    // there is a table with multiple referenced here.
+                    for gid in self.get_entry(id).global_ids() {
+                        self.introspection_dependencies_inner(gid, out);
+                    }
                 }
             }
             CatalogItem::Sink(sink) => self.introspection_dependencies_inner(sink.from, out),
@@ -1097,8 +1101,7 @@ impl CatalogState {
         res
     }
 
-    /// Returns all indexes on the given object and cluster known in the
-    /// catalog.
+    /// Returns all indexes on the given object and cluster known in the catalog.
     pub fn get_indexes_on(
         &self,
         id: GlobalId,
@@ -1113,7 +1116,7 @@ impl CatalogState {
                     .iter()
                     .filter_map(move |uses_id| match self.get_entry(uses_id).item() {
                         CatalogItem::Index(index) if index_matches(index) => {
-                            Some((uses_id.to_global_id(), index))
+                            Some((index.global_id(), index))
                         }
                         _ => None,
                     })
@@ -2152,7 +2155,7 @@ impl CatalogState {
         cws
     }
 
-    pub fn comment_id_to_global_id(id: &CommentObjectId) -> Option<CatalogItemId> {
+    pub fn comment_id_to_item_id(id: &CommentObjectId) -> Option<CatalogItemId> {
         match id {
             CommentObjectId::Table(id)
             | CommentObjectId::View(id)
@@ -2174,7 +2177,7 @@ impl CatalogState {
     }
 
     pub fn get_comment_id_entry(&self, id: &CommentObjectId) -> Option<&CatalogEntry> {
-        Self::comment_id_to_global_id(id).map(|id| self.get_entry(&id))
+        Self::comment_id_to_item_id(id).map(|id| self.get_entry(&id))
     }
 
     pub fn comment_id_to_audit_log_name(

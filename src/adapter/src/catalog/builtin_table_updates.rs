@@ -598,7 +598,7 @@ impl CatalogState {
                                 self.pack_postgres_source_update(id, postgres, diff)
                             }
                             GenericSourceConnection::Kafka(kafka) => {
-                                self.pack_kafka_source_update(id, kafka, diff)
+                                self.pack_kafka_source_update(id, source.global_id(), kafka, diff)
                             }
                             _ => vec![],
                         }
@@ -929,15 +929,16 @@ impl CatalogState {
 
     fn pack_kafka_source_update(
         &self,
-        id: CatalogItemId,
+        item_id: CatalogItemId,
+        collection_id: GlobalId,
         kafka: &KafkaSourceConnection<ReferencedConnection>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         vec![BuiltinTableUpdate {
             id: &*MZ_KAFKA_SOURCES,
             row: Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(&kafka.group_id(&self.config.connection_context, id.to_global_id())),
+                Datum::String(&item_id.to_string()),
+                Datum::String(&kafka.group_id(&self.config.connection_context, collection_id)),
                 Datum::String(&kafka.topic),
             ]),
             diff,

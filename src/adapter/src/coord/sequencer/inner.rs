@@ -337,7 +337,7 @@ impl Coordinator {
             let mut reference_ops = vec![];
             if let Some(references) = &available_source_references {
                 reference_ops.push(catalog::Op::UpdateSourceReferences {
-                    source_id: item_id.to_global_id(),
+                    source_id: item_id,
                     references: references.clone().into(),
                 });
             }
@@ -411,7 +411,7 @@ impl Coordinator {
         let pcx = plan::PlanContext::zero();
         let scx = StatementContext::new(Some(&pcx), &conn_catalog);
 
-        let source_id = *source_name.item_id();
+        let source = self.catalog().get_entry(source_name.item_id());
         let subsource_stmts = generate_subsource_statements(&scx, source_name, subsources)?;
 
         for subsource_stmt in subsource_stmts {

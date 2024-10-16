@@ -513,7 +513,7 @@ impl From<SourceReference> for durable::SourceReference {
 }
 
 impl SourceReferences {
-    pub fn to_durable(self, source_id: GlobalId) -> durable::SourceReferences {
+    pub fn to_durable(self, source_id: CatalogItemId) -> durable::SourceReferences {
         durable::SourceReferences {
             source_id,
             updated_at: self.updated_at,
@@ -816,6 +816,15 @@ impl Table {
     pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
         self.collections.values().copied()
     }
+
+    /// Returns the latest [`GlobalId`] for this [`Table`] which should be used for writes.
+    pub fn global_id_writes(&self) -> GlobalId {
+        self.collections
+            .last_key_value()
+            .expect("at least one version of a table")
+            .1
+            .clone()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -944,12 +953,12 @@ impl DataSourceDesc {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: Option<String>,
+    /// [`GlobalId`] used to reference this source from outside the catalog.
+    pub collection_id: GlobalId,
     // TODO: Unskip: currently blocked on some inner BTreeMap<X, _> problems.
     #[serde(skip)]
     pub data_source: DataSourceDesc,
     pub desc: RelationDesc,
-    /// Durable pTVC backing this Source.
-    pub collection_id: GlobalId,
     pub timeline: Timeline,
     pub resolved_ids: ResolvedIds,
     /// This value is ignored for subsources, i.e. for
@@ -2028,6 +2037,14 @@ impl CatalogEntry {
     pub fn materialized_view(&self) -> Option<&MaterializedView> {
         match self.item() {
             CatalogItem::MaterializedView(mv) => Some(mv),
+            _ => None,
+        }
+    }
+
+    /// Returns the inner [`Table`] if this entry is a table, else `None`.
+    pub fn table(&self) -> Option<&Table> {
+        match self.item() {
+            CatalogItem::Table(tbl) => Some(tbl),
             _ => None,
         }
     }

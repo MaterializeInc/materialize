@@ -85,7 +85,7 @@ pub struct BuiltinMigrationMetadata {
 
 #[derive(Debug)]
 pub struct CreateOp {
-    id: GlobalId,
+    id: CatalogItemId,
     oid: u32,
     schema_id: SchemaId,
     name: String,
@@ -146,7 +146,7 @@ impl CatalogItemRebuilder {
         }
     }
 
-    fn build(self, id: GlobalId, state: &CatalogState) -> CatalogItem {
+    fn build(self, id: CatalogItemId, state: &CatalogState) -> CatalogItem {
         match self {
             Self::SystemSource(item) => item,
             Self::Object {
@@ -155,7 +155,7 @@ impl CatalogItemRebuilder {
                 custom_logical_compaction_window,
             } => state
                 .parse_item(
-                    id.to_item_id(),
+                    id,
                     &kind,
                     None,
                     is_retained_metrics_object,
@@ -639,14 +639,16 @@ impl Catalog {
         for entry in sorted_entries {
             let id = entry.item_id();
 
-            let new_id = match id {
+            let new_item_id = match id {
                 CatalogItemId::System(_) => txn.allocate_system_item_ids(1)?.into_element(),
                 CatalogItemId::User(_) => txn.allocate_user_item_ids(1)?.into_element(),
                 _ => unreachable!("can't migrate id: {id}"),
             };
+            // TODO(alter_table): Allocate a unique GlobalId.
+            let new_collection_id = new_item_id.to_global_id();
 
             let name = state.resolve_full_name(entry.name(), None);
-            info!("migrating {name} from {id} to {new_id}");
+            info!("migrating {name} from {id} to {new_item_id}");
 
             // Generate value to update fingerprint and global ID persisted mapping for system objects.
             // Not every system object has a fingerprint, like introspection source indexes.
@@ -673,15 +675,15 @@ impl Catalog {
                             object_name: entry.name().item.clone(),
                         },
                         unique_identifier: SystemObjectUniqueIdentifier {
-                            catalog_id: new_id,
-                            collection_id: new_id.to_global_id(),
+                            catalog_id: new_item_id,
+                            collection_id: new_collection_id,
                             fingerprint: fingerprint.clone(),
                         },
                     },
                 );
             }
 
-            ancestor_ids.insert(id, new_id);
+            ancestor_ids.insert(id, new_item_id);
 
             if entry.item().is_storage_collection() {
                 migration_metadata
@@ -707,7 +709,7 @@ impl Catalog {
                                         .get(variant)
                                         .expect("all variants have a name")
                                         .to_string(),
-                                    new_id.to_global_id(),
+                                    new_collection_id,
                                     entry.oid(),
                                 ));
                         }
@@ -743,9 +745,9 @@ impl Catalog {
             let name = entry.name().clone();
             if id.is_user() {
                 let schema_id = name.qualifiers.schema_spec.clone().into();
-                let item_rebuilder = CatalogItemRebuilder::new(entry, new_id, &ancestor_ids);
+                let item_rebuilder = CatalogItemRebuilder::new(entry, new_item_id, &ancestor_ids);
                 migration_metadata.user_item_create_ops.push(CreateOp {
-                    id: new_id.to_global_id(),
+                    id: new_item_id,
                     oid: entry.oid(),
                     schema_id,
                     name: name.item.clone(),
@@ -832,7 +834,7 @@ impl Catalog {
         {
             let item = item_rebuilder.build(id, state);
             txn.insert_item(
-                id.to_item_id(),
+                id,
                 oid,
                 schema_id,
                 &name,
@@ -949,7 +951,9 @@ fn add_new_remove_old_builtin_items_migration(
                 }
             }
             None => {
-                let id = new_ids.next().expect("not enough global IDs");
+                let item_id = new_ids.next().expect("not enough global IDs");
+                // TODO(alter_table): Allocate a unique GlobalId.
+                let collection_id = item_id.to_global_id();
                 new_builtins.push(SystemObjectMapping {
                     description: SystemObjectDescription {
                         schema_name: builtin.schema().to_string(),
@@ -957,12 +961,12 @@ fn add_new_remove_old_builtin_items_migration(
                         object_name: builtin.name().to_string(),
                     },
                     unique_identifier: SystemObjectUniqueIdentifier {
-                        catalog_id: id,
-                        collection_id: id.to_global_id(),
+                        catalog_id: item_id,
+                        collection_id,
                         fingerprint,
                     },
                 });
-                new_builtin_ids.push(id);
+                new_builtin_ids.push(item_id);
 
                 // Runtime-alterable system objects are durably recorded to the
                 // usual items collection, so that they can be later altered at
@@ -980,7 +984,7 @@ fn add_new_remove_old_builtin_items_migration(
                             create_sql: c.sql.into(),
                         };
                         txn.insert_item(
-                            id,
+                            item_id,
                             c.oid,
                             mz_catalog::durable::initialize::resolve_system_schema(c.schema).id,
                             c.name,

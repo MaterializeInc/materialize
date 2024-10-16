@@ -5954,7 +5954,7 @@ pub fn plan_alter_item_rename(
             }
 
             Ok(Plan::AlterItemRename(AlterItemRenamePlan {
-                id: entry.item_id().to_global_id(),
+                id: entry.item_id(),
                 current_full_name: full_name,
                 to_name: normalize::ident(to_item_name),
                 object_type,

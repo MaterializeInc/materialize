@@ -1153,7 +1153,7 @@ pub fn plan_webhook_validate_using(
         );
 
         validation_secrets.push(WebhookValidationSecret {
-            id: id.to_global_id(),
+            id,
             column_idx,
             use_bytes,
         });
