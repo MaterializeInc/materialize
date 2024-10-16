@@ -269,11 +269,11 @@ debug = 2
 # version of Materialize.
 [patch.crates-io]
 # Projects that do not reliably release to crates.io.
-timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely = { git = "https://github.com/antiguru/timely-dataflow.git", branch = "no_more_set_external_summary" }
+timely_bytes = { git = "https://github.com/antiguru/timely-dataflow.git", branch = "no_more_set_external_summary" }
+timely_communication = { git = "https://github.com/antiguru/timely-dataflow.git", branch = "no_more_set_external_summary" }
+timely_container = { git = "https://github.com/antiguru/timely-dataflow.git", branch = "no_more_set_external_summary" }
+timely_logging = { git = "https://github.com/antiguru/timely-dataflow.git", branch = "no_more_set_external_summary" }
 differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
 
