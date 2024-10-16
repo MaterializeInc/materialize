@@ -30,6 +30,7 @@ from materialize.output_consistency.expression.expression import (
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
+from materialize.output_consistency.generators.arg_context import ArgContext
 from materialize.output_consistency.expression.row_indices_expression import (
     RowIndicesExpression,
 )
@@ -57,24 +58,6 @@ from materialize.output_consistency.selection.randomized_picker import Randomize
 NESTING_LEVEL_ROOT = 0
 NESTING_LEVEL_OUTERMOST_ARG = 1
 FIRST_ARG_INDEX = 0
-
-
-class ArgContext:
-    def __init__(self) -> None:
-        self.args: list[Expression] = []
-        self.contains_aggregation = False
-
-    def append(self, arg: Expression) -> None:
-        self.args.append(arg)
-
-        if arg.is_aggregate:
-            self.contains_aggregation = True
-
-    def has_no_args(self) -> bool:
-        return len(self.args) == 0
-
-    def requires_aggregation(self) -> bool:
-        return self.contains_aggregation
 
 
 class ExpressionGenerator:
