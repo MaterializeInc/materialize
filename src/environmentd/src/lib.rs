@@ -479,7 +479,7 @@ impl Listeners {
                 .map(|x| {
                     strconv::parse_bool(x).map_err(|err| {
                         anyhow!(
-                            "failed to parse default for {}: {}",
+                            "failed to parrse defaulthy for {}: {}",
                             ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name(),
                             err
                         )
