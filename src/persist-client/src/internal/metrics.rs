@@ -1887,10 +1887,6 @@ impl UpdateDelta {
 /// abstraction boundary of the client, it's convenient to manage them together.
 #[derive(Debug, Clone)]
 pub struct SinkMetrics {
-    /// Number of small batches that were forwarded to the central append operator
-    pub forwarded_batches: Counter,
-    /// Number of updates that were forwarded to the centralized append operator
-    pub forwarded_updates: Counter,
     /// Cumulative record insertions made to the correction buffer across workers
     correction_insertions_total: IntCounter,
     /// Cumulative record deletions made to the correction buffer across workers
@@ -1908,14 +1904,6 @@ pub struct SinkMetrics {
 impl SinkMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         SinkMetrics {
-            forwarded_batches: registry.register(metric!(
-                name: "mz_persist_sink_forwarded_batches",
-                help: "number of batches forwarded to the central append operator",
-            )),
-            forwarded_updates: registry.register(metric!(
-                name: "mz_persist_sink_forwarded_updates",
-                help: "number of updates forwarded to the central append operator",
-            )),
             correction_insertions_total: registry.register(metric!(
                 name: "mz_persist_sink_correction_insertions_total",
                 help: "The cumulative insertions observed on the correction buffer across workers and persist sinks.",

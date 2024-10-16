@@ -18,9 +18,8 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
 use futures::StreamExt;
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
-use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
-use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
+use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_persist_client::Diagnostics;
@@ -995,12 +994,6 @@ where
             (Antichain<Timestamp>, Antichain<Timestamp>)
         >::new();
 
-        #[derive(Debug, Default)]
-        struct BatchSet {
-            finished: Vec<Batch<SourceData, (), Timestamp, Diff>>,
-            incomplete: Option<BatchBuilder<SourceData, (), Timestamp, Diff>>,
-        }
-
         // We use iteration only for weeding out batches that no longer have a
         // chance of being applied. Otherwise we only use insertion and
         // deletion. We don't use iteration order for determining what batches
@@ -1008,7 +1001,7 @@ where
         #[allow(clippy::disallowed_types)]
         let mut in_flight_batches = std::collections::HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
-            BatchSet,
+            Vec<Batch<SourceData, (), Timestamp, Diff>>,
         >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
@@ -1082,7 +1075,7 @@ where
                                     .entry(batch_description)
                                     .or_default();
 
-                                batches.finished.push(batch);
+                                batches.push(batch);
                             }
 
                             continue;
@@ -1109,35 +1102,28 @@ where
                 PartialOrder::less_equal(&persist_upper, lower)
             });
 
-            for ((lower, upper), batch_set) in in_flight_batches.iter_mut() {
+            for ((lower, _upper), batches) in in_flight_batches.iter_mut() {
                 if PartialOrder::less_equal(&persist_upper, lower) {
                     continue;
                 }
 
                 // We're not keeping this batch. Be nice and delete any data
                 // that has been written.
-                for batch in batch_set.finished.drain(..) {
+                for batch in batches.drain(..) {
                     batch.delete().await;
-                }
-                if let Some(batch) = batch_set.incomplete.take() {
-                    batch
-                        .finish(upper.clone()).await
-                        .expect("invalid usage")
-                        .delete().await;
                 }
             }
             // It's annoying that we're first iterating and doing the retain,
             // but we can't do the batch deletion inside retain because we need
             // async.
-            in_flight_batches.retain(|(lower, _upper), batch_set| {
+            in_flight_batches.retain(|(lower, _upper), batches| {
                 if PartialOrder::less_equal(&persist_upper, lower) {
                     return true;
                 }
 
                 // We're not keeping this batch, make sure that the above loop
                 // cleared and deleted all the batches.
-                assert!(batch_set.finished.is_empty());
-                assert_none!(batch_set.incomplete);
+                assert!(batches.is_empty());
 
                 false
             });
@@ -1194,17 +1180,9 @@ where
             for done_batch_metadata in done_batches.into_iter() {
                 in_flight_descriptions.remove(&done_batch_metadata);
 
-                let batch_set = in_flight_batches
+                let mut batches = in_flight_batches
                     .remove(&done_batch_metadata)
                     .unwrap_or_default();
-
-                let mut batches = batch_set.finished;
-                if let Some(builder) = batch_set.incomplete {
-                    let (_lower, upper) = &done_batch_metadata;
-                    let batch = builder.finish(upper.clone()).await.expect("invalid usage");
-                    batches.push(batch);
-                    persist_client.metrics().sink.forwarded_batches.inc();
-                }
 
                 trace!(
                     "persist_sink {sink_id}/{shard_id}: \
