@@ -53,7 +53,6 @@ steps:
         depends_on: [build-x86_64]
         timeout_in_minutes: 10
         priority: 50
-        if: build.tag != "" && build.branch =~ /^v.*\..*\$/
         agents:
           queue: builder-linux-x86_64
 
@@ -80,7 +79,6 @@ steps:
         depends_on: [build-aarch64]
         priority: 50
         timeout_in_minutes: 10
-        if: build.tag != "" && build.branch =~ /^v.*\..*\$/
         agents:
           queue: builder-linux-aarch64-mem
 
