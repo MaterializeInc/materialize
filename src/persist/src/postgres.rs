@@ -481,12 +481,9 @@ mod tests {
 
         assert_eq!(consensus.head(&key).await, Ok(None));
 
-        Ok(())
-    }
-
-    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-    async fn postgres_consensus_blocking() -> Result<(), ExternalError> {
+        // This should be a separate postgres_consensus_blocking test, but nextest makes it
+        // difficult since we can't specify that both tests touch the consensus table and thus
+        // interfere with each other.
         let config = match PostgresConsensusConfig::new_for_test()? {
             Some(config) => config,
             None => {
