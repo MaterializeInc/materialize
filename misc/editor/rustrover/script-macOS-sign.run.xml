@@ -1,8 +1,18 @@
+<!--
+Copyright Materialize, Inc. and contributors. All rights reserved.
+
+Use of this software is governed by the Business Source License
+included in the LICENSE file at the root of this repository.
+
+As of the Change Date specified in that file, in accordance with
+the Business Source License, use of this software will be governed
+by the Apache License, Version 2.0.
+-->
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Script macOS sign" type="ShConfigurationType">
+  <configuration default="false" name="script-macOS-sign" type="ShConfigurationType" activateToolWindowBeforeRun="false">
     <option name="SCRIPT_TEXT" value="true" />
     <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
-    <option name="SCRIPT_PATH" value="$PROJECT_DIR$/.run/script-macos-sign.sh" />
+    <option name="SCRIPT_PATH" value="$PROJECT_DIR$/misc/editor/rustrover/script-macos-sign.sh" />
     <option name="SCRIPT_OPTIONS" value="" />
     <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
     <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
