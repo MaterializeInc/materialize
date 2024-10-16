@@ -19,7 +19,7 @@ use crate::Timestamp;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.refresh_schedule.rs"));
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RefreshSchedule {
     // `REFRESH EVERY`s
     pub everies: Vec<RefreshEvery>,
@@ -28,35 +28,16 @@ pub struct RefreshSchedule {
 }
 
 impl RefreshSchedule {
-    pub fn empty() -> RefreshSchedule {
-        RefreshSchedule {
-            everies: Vec::new(),
-            ats: Vec::new(),
-        }
-    }
-
     /// Rounds up the timestamp to the time of the next refresh.
     /// Returns None if there is no next refresh.
     /// It saturates, i.e., if the next refresh would be larger than the maximum timestamp, then it
     /// returns the maximum timestamp.
-    /// Note that this fn is monotonic.
+    /// Note that this function is monotonic.
     pub fn round_up_timestamp(&self, timestamp: Timestamp) -> Option<Timestamp> {
-        let next_every = self
-            .everies
-            .iter()
-            .map(|refresh_every| refresh_every.round_up_timestamp(timestamp))
-            .min();
-        let next_at = self
-            .ats
-            .iter()
-            .filter(|at| **at >= timestamp)
-            .min()
-            .cloned();
-        // Take the min of `next_every` and `next_at`, but any Some should win over any None, i.e.,
-        // with considering any Some to be smaller than None.
-        // Note: Simply `std::cmp::min(next_every, next_at)` wouldn't do what we want, because None
-        // is smaller than any Some.
-        next_every.into_iter().chain(next_at).min()
+        let everies = self.everies.iter();
+        let next_everies = everies.map(|every| every.round_up_timestamp(timestamp));
+        let next_ats = self.ats.iter().copied().filter(|at| *at >= timestamp);
+        next_everies.chain(next_ats).min()
     }
 
     /// Rounds down `timestamp - 1` to the time of the previous refresh.
@@ -65,21 +46,12 @@ impl RefreshSchedule {
     /// then it returns the minimum timestamp.
     /// Note that this fn is monotonic.
     pub fn round_down_timestamp_m1(&self, timestamp: Timestamp) -> Option<Timestamp> {
-        let prev_every = self
-            .everies
-            .iter()
-            .map(|refresh_every| refresh_every.round_down_timestamp_m1(timestamp))
-            .max();
-        let prev_at = self
-            .ats
-            .iter()
-            // Note that we use `<` instead of `<=`. This is because we are rounding
-            // `timestamp - 1`, and not simply `timestamp`.
-            .filter(|at| **at < timestamp)
-            .max()
-            .cloned();
-        // Take the max of `prev_every` and `prev_at`. Note that any Some should win over None.
-        prev_every.into_iter().chain(prev_at).max()
+        let everies = self.everies.iter();
+        let prev_everies = everies.map(|every| every.round_down_timestamp_m1(timestamp));
+        // Note that we use `<` instead of `<=`. This is because we are rounding
+        // `timestamp - 1`, and not simply `timestamp`.
+        let prev_ats = self.ats.iter().copied().filter(|at| *at < timestamp);
+        prev_everies.chain(prev_ats).max()
     }
 
     /// Returns the time of the last refresh. Returns None if there is no last refresh (e.g., for a
@@ -114,37 +86,25 @@ impl RefreshEvery {
     /// - if the interval is 0.
     /// (These should be checked in HIR planning.)
     pub fn round_up_timestamp(&self, timestamp: Timestamp) -> Timestamp {
-        let RefreshEvery {
-            interval,
-            aligned_to,
-        } = self;
-        let interval = u64::try_from(interval.as_millis()).unwrap();
+        let interval = u64::try_from(self.interval.as_millis()).unwrap();
+        let aligned_to = u64::from(self.aligned_to);
+        let timestamp = u64::from(timestamp);
 
-        let result = if timestamp > *aligned_to {
-            Timestamp::new(u64::from(aligned_to).saturating_add(
-                Self::round_up_to_multiple_of_interval(
-                    interval,
-                    u64::from(timestamp) - u64::from(aligned_to),
-                ),
-            ))
+        let result = if timestamp > aligned_to {
+            let rounded = Self::round_up_to_multiple_of_interval(interval, timestamp - aligned_to);
+            aligned_to.saturating_add(rounded)
         } else {
             // Note: `timestamp == aligned_to` has to be handled here, because in the other branch
             // `x - 1` in `round_up_to_multiple_of_interval` would underflow.
             //
             // Also, no need to check for overflows here, since all the numbers are either between
             // `timestamp` and `aligned_to`, or not greater than `aligned_to - timestamp`.
-            Timestamp::new(
-                u64::from(aligned_to)
-                    - Self::round_down_to_multiple_of_interval(
-                        interval,
-                        u64::from(aligned_to) - u64::from(timestamp),
-                    ),
-            )
+            aligned_to - Self::round_down_to_multiple_of_interval(interval, aligned_to - timestamp)
         };
         // TODO: Downgrade these to non-logging soft asserts when we have built more confidence in the code.
-        assert!(u64::from(result) >= u64::from(timestamp));
-        assert!(u64::from(result) - u64::from(timestamp) < interval);
-        result
+        assert!(result >= timestamp);
+        assert!(result - timestamp < interval);
+        Timestamp::new(result)
     }
 
     /// Rounds down `timestamp - 1` to the time of the previous refresh, according to the given
@@ -156,39 +116,25 @@ impl RefreshEvery {
     /// - if the interval is 0.
     /// (These should be checked in HIR planning.)
     pub fn round_down_timestamp_m1(&self, timestamp: Timestamp) -> Timestamp {
-        let timestamp = timestamp.saturating_sub(1);
+        let interval = u64::try_from(self.interval.as_millis()).unwrap();
+        let aligned_to = u64::from(self.aligned_to);
+        let timestamp = u64::from(timestamp.saturating_sub(1));
 
-        let RefreshEvery {
-            interval,
-            aligned_to,
-        } = self;
-        let interval = u64::try_from(interval.as_millis()).unwrap();
-
-        let result = if timestamp >= *aligned_to {
+        let result = if timestamp >= aligned_to {
             // Note: `timestamp == aligned_to` has to be handled here, because in the other branch
             // `x - 1` in `round_up_to_multiple_of_interval` would underflow.
             //
             // Also, No need to check for overflows here, since all the numbers are either between
             // `aligned_to` and `timestamp`, or not greater than `timestamp - aligned_to`.
-            Timestamp::new(
-                u64::from(aligned_to)
-                    + Self::round_down_to_multiple_of_interval(
-                        interval,
-                        u64::from(timestamp) - u64::from(aligned_to),
-                    ),
-            )
+            aligned_to + Self::round_down_to_multiple_of_interval(interval, timestamp - aligned_to)
         } else {
-            Timestamp::new(u64::from(aligned_to).saturating_sub(
-                Self::round_up_to_multiple_of_interval(
-                    interval,
-                    u64::from(aligned_to) - u64::from(timestamp),
-                ),
-            ))
+            let rounded = Self::round_up_to_multiple_of_interval(interval, aligned_to - timestamp);
+            aligned_to.saturating_sub(rounded)
         };
         // TODO: Downgrade these to non-logging soft asserts when we have built more confidence in the code.
-        assert!(u64::from(result) <= u64::from(timestamp));
-        assert!(u64::from(timestamp) - u64::from(result) < interval);
-        result
+        assert!(result <= timestamp);
+        assert!(timestamp - result < interval);
+        Timestamp::new(result)
     }
 
     /// Rounds up `x` to the nearest multiple of `interval`.
