@@ -99,10 +99,14 @@ class PostgresResultComparator(ResultComparator):
         if isinstance(value1, str) and isinstance(value2, str):
             return self.is_str_equal(value1, value2, is_tolerant)
 
-        if is_tolerant and isinstance(value1, int) and isinstance(value2, int):
-            # This is needed for imprecise results of floating type operations that are returned as int values in dicts
-            # of JSONB data.
-            return self.is_float_equal(float(value1), float(value2))
+        if is_tolerant:
+            type1 = type(value1)
+            type2 = type(value2)
+
+            if type1 in {int, float, Decimal} and type2 in {int, float, Decimal}:
+                # This is needed for imprecise results of floating type operations that are returned as int or float
+                # values in dicts of JSONB data.
+                return self.is_decimal_equal(Decimal(value1), Decimal(value2))
 
         return False
 
@@ -130,7 +134,7 @@ class PostgresResultComparator(ResultComparator):
             or JSON_OBJECT_PATTERN.search(value2)
         ):
             # This is a rather eager pattern to also match concatenated strings.
-            # tracked with materialize#23571
+            # tracked with database-issues#7085
             value1 = value1.replace(", ", ",").replace(": ", ":")
             value2 = value2.replace(", ", ",").replace(": ", ":")
 
@@ -177,7 +181,7 @@ class PostgresResultComparator(ResultComparator):
         return value1 == value2
 
     def _normalize_jsonb_timestamp(self, value: str) -> str:
-        # this is due to materialize#28137
+        # this is due to database-issues#8247
 
         pattern_for_date = r"\d+-\d+-\d+"
         pattern_for_time = r"\d+:\d+:\d+[+-]\d+"
@@ -206,7 +210,7 @@ class PostgresResultComparator(ResultComparator):
             partial(is_operation_tagged, tag=TAG_JSONB_OBJECT_GENERATION),
             True,
         ):
-            # this is because of materialize#28192
+            # this is because of database-issues#8266
             return True
 
         return False

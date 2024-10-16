@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![allow(missing_docs)]
-
 //! Types for commands to clusters.
 
 use std::num::NonZeroI64;
@@ -32,7 +30,9 @@ include!(concat!(env!("OUT_DIR"), "/mz_cluster_client.client.rs"));
 /// another in-memory and local to the current incarnation of environmentd)
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct ClusterStartupEpoch {
+    /// The environment incarnation.
     envd: NonZeroI64,
+    /// The replica incarnation.
     replica: u64,
 }
 
@@ -76,6 +76,7 @@ impl Arbitrary for ClusterStartupEpoch {
 }
 
 impl ClusterStartupEpoch {
+    /// Construct a new cluster startup epoch, from the environment epoch and replica incarnation.
     pub fn new(envd: NonZeroI64, replica: u64) -> Self {
         Self { envd, replica }
     }
@@ -100,10 +101,12 @@ impl ClusterStartupEpoch {
         }
     }
 
+    /// The environment epoch.
     pub fn envd(&self) -> NonZeroI64 {
         self.envd
     }
 
+    /// The replica incarnation.
     pub fn replica(&self) -> u64 {
         self.replica
     }
@@ -174,6 +177,7 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
 }
 
 impl TimelyConfig {
+    /// Split the timely configuration into `parts` pieces, each with a different `process` number.
     pub fn split_command(&self, parts: usize) -> Vec<Self> {
         (0..parts)
             .map(|part| TimelyConfig {

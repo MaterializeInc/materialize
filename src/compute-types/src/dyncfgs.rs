@@ -122,14 +122,14 @@ pub const COPY_TO_S3_MULTIPART_PART_SIZE_BYTES: Config<usize> = Config::new(
     "The size of each part in a multipart upload to S3.",
 );
 
-/// Whether the compute `persist_sink` obeys read-only mode. When false, it
-/// writes regardless of that mode.
+/// The maximum lifetime of a replica configured as an offset to the replica start time.
+/// Used in temporal filters to drop diffs generated at timestamps beyond the expiration time.
 ///
-/// As an escape hatch for de-risking rollout of read-only computation mode.
-pub const PERSIST_SINK_OBEY_READ_ONLY: Config<bool> = Config::new(
-    "compute_persist_sink_obey_read_only",
-    true,
-    "Whether the compute persist_sink obeys read-only mode.",
+/// Disabled by default. Once set, cannot be disabled again during the lifetime of a replica.
+pub const COMPUTE_REPLICA_EXPIRATION_OFFSET: Config<Duration> = Config::new(
+    "compute_replica_expiration_offset",
+    Duration::ZERO,
+    "The expiration time offset for replicas. Zero disables expiration.",
 );
 
 /// Adds the full set of all compute `Config`s.
@@ -149,5 +149,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO)
         .add(&COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO)
         .add(&COPY_TO_S3_MULTIPART_PART_SIZE_BYTES)
-        .add(&PERSIST_SINK_OBEY_READ_ONLY)
+        .add(&COMPUTE_REPLICA_EXPIRATION_OFFSET)
 }

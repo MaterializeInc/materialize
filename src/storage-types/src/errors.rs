@@ -90,8 +90,8 @@ impl Display for DecodeError {
 
 #[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum DecodeErrorKind {
-    Text(String),
-    Bytes(String),
+    Text(Box<str>),
+    Bytes(Box<str>),
 }
 
 impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
@@ -99,8 +99,8 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
         use proto_decode_error_kind::Kind::*;
         ProtoDecodeErrorKind {
             kind: Some(match self {
-                DecodeErrorKind::Text(v) => Text(v.clone()),
-                DecodeErrorKind::Bytes(v) => Bytes(v.clone()),
+                DecodeErrorKind::Text(v) => Text(v.into_proto()),
+                DecodeErrorKind::Bytes(v) => Bytes(v.into_proto()),
             }),
         }
     }
@@ -108,8 +108,8 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
     fn from_proto(proto: ProtoDecodeErrorKind) -> Result<Self, TryFromProtoError> {
         use proto_decode_error_kind::Kind::*;
         match proto.kind {
-            Some(Text(v)) => Ok(DecodeErrorKind::Text(v)),
-            Some(Bytes(v)) => Ok(DecodeErrorKind::Bytes(v)),
+            Some(Text(v)) => Ok(DecodeErrorKind::Text(v.into())),
+            Some(Bytes(v)) => Ok(DecodeErrorKind::Bytes(v.into())),
             None => Err(TryFromProtoError::missing_field("ProtoDecodeError::kind")),
         }
     }
@@ -131,7 +131,7 @@ pub enum EnvelopeError {
     Upsert(UpsertError),
     /// Errors corresponding to `ENVELOPE NONE`. Naming this
     /// `None`, though, would have been too confusing.
-    Flat(String),
+    Flat(Box<str>),
 }
 
 impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
@@ -140,7 +140,7 @@ impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
         ProtoEnvelopeErrorV1 {
             kind: Some(match self {
                 EnvelopeError::Upsert(rust) => Kind::Upsert(rust.into_proto()),
-                EnvelopeError::Flat(text) => Kind::Flat(text.clone()),
+                EnvelopeError::Flat(text) => Kind::Flat(text.into_proto()),
             }),
         }
     }
@@ -152,7 +152,7 @@ impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
                 let rust = RustType::from_proto(proto)?;
                 Ok(Self::Upsert(rust))
             }
-            Some(Kind::Flat(text)) => Ok(Self::Flat(text)),
+            Some(Kind::Flat(text)) => Ok(Self::Flat(text.into())),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoEnvelopeErrorV1::kind",
             )),
@@ -374,8 +374,8 @@ impl Display for SourceError {
 
 #[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum SourceErrorDetails {
-    Initialization(String),
-    Other(String),
+    Initialization(Box<str>),
+    Other(Box<str>),
 }
 
 impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
@@ -383,8 +383,8 @@ impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
         use proto_source_error_details::Kind;
         ProtoSourceErrorDetails {
             kind: Some(match self {
-                SourceErrorDetails::Initialization(s) => Kind::Initialization(s.clone()),
-                SourceErrorDetails::Other(s) => Kind::Other(s.clone()),
+                SourceErrorDetails::Initialization(s) => Kind::Initialization(s.into_proto()),
+                SourceErrorDetails::Other(s) => Kind::Other(s.into_proto()),
             }),
         }
     }
@@ -393,12 +393,12 @@ impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
         use proto_source_error_details::Kind;
         match proto.kind {
             Some(kind) => match kind {
-                Kind::Initialization(s) => Ok(SourceErrorDetails::Initialization(s)),
+                Kind::Initialization(s) => Ok(SourceErrorDetails::Initialization(s.into())),
                 Kind::DeprecatedFileIo(s) | Kind::DeprecatedPersistence(s) => {
                     warn!("Deprecated source error kind: {s}");
-                    Ok(SourceErrorDetails::Other(s))
+                    Ok(SourceErrorDetails::Other(s.into()))
                 }
-                Kind::Other(s) => Ok(SourceErrorDetails::Other(s)),
+                Kind::Other(s) => Ok(SourceErrorDetails::Other(s.into())),
             },
             None => Err(TryFromProtoError::missing_field(
                 "ProtoSourceErrorDetails::kind",
@@ -444,6 +444,56 @@ pub enum DataflowError {
 
 impl Error for DataflowError {}
 
+mod boxed_str {
+
+    use timely::container::columnation::Region;
+    use timely::container::columnation::StableRegion;
+
+    /// Region allocation for `String` data.
+    ///
+    /// Content bytes are stored in stable contiguous memory locations,
+    /// and then a `String` referencing them is falsified.
+    #[derive(Default)]
+    pub struct BoxStrStack {
+        region: StableRegion<u8>,
+    }
+
+    impl Region for BoxStrStack {
+        type Item = Box<str>;
+        #[inline]
+        fn clear(&mut self) {
+            self.region.clear();
+        }
+        // Removing `(always)` is a 20% performance regression in
+        // the `string10_copy` benchmark.
+        #[inline(always)]
+        unsafe fn copy(&mut self, item: &Box<str>) -> Box<str> {
+            let bytes = self.region.copy_slice(item.as_bytes());
+            Box::from(std::str::from_utf8_unchecked(bytes))
+        }
+        #[inline(always)]
+        fn reserve_items<'a, I>(&mut self, items: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            self.region.reserve(items.map(|x| x.len()).sum());
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            self.region.reserve(regions.map(|r| r.region.len()).sum());
+        }
+        #[inline]
+        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            self.region.heap_size(callback)
+        }
+    }
+}
+
 mod columnation {
     use std::iter::once;
 
@@ -453,6 +503,7 @@ mod columnation {
     use mz_repr::Row;
     use timely::container::columnation::{Columnation, Region, StableRegion};
 
+    use crate::errors::boxed_str::BoxStrStack;
     use crate::errors::{
         DataflowError, DecodeError, DecodeErrorKind, EnvelopeError, SourceError,
         SourceErrorDetails, UpsertError, UpsertValueError,
@@ -476,7 +527,7 @@ mod columnation {
         /// Stable location for [`SourceError`] for inserting into a box.
         source_error_region: StableRegion<SourceError>,
         /// Region for storing strings.
-        string_region: <String as Columnation>::InnerRegion,
+        string_region: BoxStrStack,
         /// Region for storing u8 vectors.
         u8_region: <Vec<u8> as Columnation>::InnerRegion,
     }
@@ -1107,7 +1158,7 @@ mod tests {
     #[mz_ore::test]
     fn test_decode_error_codec_roundtrip() -> Result<(), String> {
         let original = DecodeError {
-            kind: DecodeErrorKind::Text("ciao".to_string()),
+            kind: DecodeErrorKind::Text("ciao".into()),
             raw: b"oaic".to_vec(),
         };
         let mut encoded = Vec::new();

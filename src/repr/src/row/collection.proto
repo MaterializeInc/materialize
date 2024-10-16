@@ -12,11 +12,11 @@ syntax = "proto3";
 package mz_repr.row.collection;
 
 message ProtoRowCollection {
-    bytes encoded = 1;
-    repeated ProtoEncodedRowMetadata metadata = 2;
+  bytes encoded = 1;
+  repeated ProtoEncodedRowMetadata metadata = 2;
 }
 
 message ProtoEncodedRowMetadata {
-    uint64 offset = 1;
-    uint64 diff = 2;
+  uint64 offset = 1;
+  uint64 diff = 2;
 }

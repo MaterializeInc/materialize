@@ -12,11 +12,11 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Instant;
 
+use ipnet::IpNet;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
@@ -30,7 +30,7 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
     Database, DefaultPrivileges, Index, MaterializedView, Role, Schema, Secret, Sink, Source,
-    Table, TableDataSource, Type, View,
+    SourceReferences, Table, TableDataSource, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -38,7 +38,6 @@ use mz_controller::clusters::{
     UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -55,7 +54,7 @@ use mz_repr::{GlobalId, RelationDesc};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
+    BuiltinsConfig, CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
     CatalogRecordField, CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId,
     IdReference, NameReference, SessionCatalog, SystemObjectType, TypeReference,
@@ -66,9 +65,9 @@ use mz_sql::names::{
     ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    CreateConnectionPlan, CreateContinualTaskPlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext,
+    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
+    Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -86,9 +85,9 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::catalog::ConnCatalog;
+use crate::catalog::{Catalog, ConnCatalog};
 use crate::coord::ConnMeta;
-use crate::optimize::{self, Optimize};
+use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
 use crate::AdapterError;
 
@@ -124,6 +123,8 @@ pub struct CatalogState {
     pub(super) default_privileges: DefaultPrivileges,
     pub(super) system_privileges: PrivilegeMap,
     pub(super) comments: CommentsMap,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) source_references: BTreeMap<GlobalId, SourceReferences>,
     pub(super) storage_metadata: StorageMetadata,
 
     // Mutable state not derived from the durable catalog.
@@ -136,7 +137,10 @@ pub struct CatalogState {
     pub(super) cluster_replica_sizes: ClusterReplicaSizeMap,
     #[serde(skip)]
     pub(crate) availability_zones: Vec<String>,
-    pub(super) egress_ips: Vec<Ipv4Addr>,
+
+    // Read-only not derived from the durable catalog.
+    #[serde(skip)]
+    pub(super) egress_addresses: Vec<IpNet>,
     pub(super) aws_principal_context: Option<AwsPrincipalContext>,
     pub(super) aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     pub(super) http_host_name: Option<String>,
@@ -181,17 +185,21 @@ impl CatalogState {
                 connection_context: ConnectionContext::for_tests(Arc::new(
                     InMemorySecretsController::new(),
                 )),
+                builtins_cfg: BuiltinsConfig {
+                    include_continual_tasks: true,
+                },
             },
             cluster_replica_sizes: Default::default(),
             availability_zones: Default::default(),
             system_configuration: Default::default(),
-            egress_ips: Default::default(),
+            egress_addresses: Default::default(),
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),
             http_host_name: Default::default(),
             default_privileges: Default::default(),
             system_privileges: Default::default(),
             comments: Default::default(),
+            source_references: Default::default(),
             storage_metadata: Default::default(),
         }
     }
@@ -312,7 +320,8 @@ impl CatalogState {
             CatalogItem::Log(_) => out.push(id),
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
-            | CatalogItem::Connection(_)) => {
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_)) => {
                 // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
                 for id in &item.references().0 {
                     self.introspection_dependencies_inner(*id, out);
@@ -788,14 +797,19 @@ impl CatalogState {
     }
 
     /// Parses the given SQL string into a pair of [`CatalogItem`].
-    pub(crate) fn deserialize_item(&self, create_sql: &str) -> Result<CatalogItem, AdapterError> {
-        self.parse_item(create_sql, None, false, None)
+    pub(crate) fn deserialize_item(
+        &self,
+        id: GlobalId,
+        create_sql: &str,
+    ) -> Result<CatalogItem, AdapterError> {
+        self.parse_item(id, create_sql, None, false, None)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
     #[mz_ore::instrument]
     pub(crate) fn parse_item(
         &self,
+        id: GlobalId,
         create_sql: &str,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
@@ -947,31 +961,9 @@ impl CatalogState {
                     initial_as_of,
                 })
             }
-            Plan::CreateContinualTask(CreateContinualTaskPlan {
-                desc,
-                continual_task,
-                ..
-            }) => {
-                // TODO(ct): Figure out how to make this survive restarts. The
-                // expr we saved still had the LocalId placeholders for the
-                // output, but we don't have access to the real Id here.
-                let optimized_expr = OptimizedMirRelationExpr::declare_optimized(
-                    mz_expr::MirRelationExpr::constant(Vec::new(), desc.typ().clone()),
-                );
-                // TODO(ct): CatalogItem::ContinualTask
-                CatalogItem::MaterializedView(MaterializedView {
-                    create_sql: continual_task.create_sql,
-                    raw_expr: Arc::new(continual_task.expr.clone()),
-                    optimized_expr: Arc::new(optimized_expr),
-                    desc,
-                    resolved_ids,
-                    cluster_id: continual_task.cluster_id,
-                    non_null_assertions: continual_task.non_null_assertions,
-                    custom_logical_compaction_window: continual_task.compaction_window,
-                    refresh_schedule: continual_task.refresh_schedule,
-                    initial_as_of: continual_task.as_of.map(Antichain::from_elem),
-                })
-            }
+            Plan::CreateContinualTask(plan) => CatalogItem::ContinualTask(
+                crate::continual_task::ct_item_from_plan(plan, id, resolved_ids)?,
+            ),
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
                 on: index.on,
@@ -1107,6 +1099,19 @@ impl CatalogState {
     ) -> &ClusterReplica {
         self.try_get_cluster_replica(cluster_id, replica_id)
             .unwrap_or_else(|| panic!("unknown cluster replica: {cluster_id}.{replica_id}"))
+    }
+
+    pub(super) fn resolve_replica_in_cluster(
+        &self,
+        cluster_id: &ClusterId,
+        replica_name: &str,
+    ) -> Result<&ClusterReplica, SqlCatalogError> {
+        let cluster = self.get_cluster(*cluster_id);
+        let replica_id = cluster
+            .replica_id_by_name_
+            .get(replica_name)
+            .ok_or_else(|| SqlCatalogError::UnknownClusterReplica(replica_name.to_string()))?;
+        Ok(&cluster.replicas_by_id_[replica_id])
     }
 
     /// Get system configuration `name`.
@@ -1335,7 +1340,8 @@ impl CatalogState {
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
             | CatalogItemType::Secret
-            | CatalogItemType::Connection => schema.items[builtin.name()].clone(),
+            | CatalogItemType::Connection
+            | CatalogItemType::ContinualTask => schema.items[builtin.name()].clone(),
         }
     }
 
@@ -1621,7 +1627,7 @@ impl CatalogState {
         // Some relations that have previously lived in the `mz_internal` schema have been moved to
         // `mz_catalog_unstable` or `mz_introspection`. To simplify the transition for users, we
         // automatically let uses of the old schema resolve to the new ones as well.
-        // TODO(materialize#27831) remove this after sufficient time has passed
+        // TODO(database-issues#8173) remove this after sufficient time has passed
         let mz_internal_schema = SchemaSpecifier::Id(self.get_mz_internal_schema_id());
         if schemas.iter().any(|(_, spec)| *spec == mz_internal_schema) {
             for schema_id in [
@@ -1745,6 +1751,7 @@ impl CatalogState {
                     CatalogItemType::Connection => CommentObjectId::Connection(global_id),
                     CatalogItemType::Type => CommentObjectId::Type(global_id),
                     CatalogItemType::Secret => CommentObjectId::Secret(global_id),
+                    CatalogItemType::ContinualTask => CommentObjectId::ContinualTask(global_id),
                 }
             }
             ObjectId::Role(role_id) => CommentObjectId::Role(role_id),
@@ -2102,7 +2109,8 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id) => Some(*id),
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::ContinualTask(id) => Some(*id),
             CommentObjectId::Role(_)
             | CommentObjectId::Database(_)
             | CommentObjectId::Schema(_)
@@ -2130,7 +2138,8 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id) => {
+            | CommentObjectId::Secret(id)
+            | CommentObjectId::ContinualTask(id) => {
                 let item = self.get_entry(&id);
                 let name = self.resolve_full_name(item.name(), Some(conn_id));
                 name.to_string()
@@ -2176,5 +2185,53 @@ impl ConnectionResolver for CatalogState {
             AwsPrivatelink(conn) => AwsPrivatelink(conn),
             MySql(conn) => MySql(conn.into_inline_connection(self)),
         }
+    }
+}
+
+impl OptimizerCatalog for CatalogState {
+    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+        CatalogState::get_entry(self, id)
+    }
+    fn resolve_full_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: Option<&ConnectionId>,
+    ) -> FullItemName {
+        CatalogState::resolve_full_name(self, name, conn_id)
+    }
+    fn get_indexes_on(
+        &self,
+        id: GlobalId,
+        cluster: ClusterId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &Index)> + '_> {
+        Box::new(CatalogState::get_indexes_on(self, id, cluster))
+    }
+}
+
+impl OptimizerCatalog for Catalog {
+    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+        self.state.get_entry(id)
+    }
+
+    fn resolve_full_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: Option<&ConnectionId>,
+    ) -> FullItemName {
+        self.state.resolve_full_name(name, conn_id)
+    }
+
+    fn get_indexes_on(
+        &self,
+        id: GlobalId,
+        cluster: ClusterId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &Index)> + '_> {
+        Box::new(self.state.get_indexes_on(id, cluster))
+    }
+}
+
+impl Catalog {
+    pub fn as_optimizer_catalog(self: Arc<Self>) -> Arc<dyn OptimizerCatalog> {
+        self
     }
 }

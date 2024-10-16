@@ -22,7 +22,7 @@ INSERT INTO t1 VALUES (3);
 3
 
 
-# TODO: materialize#29373 (introspection tables)
+# TODO: database-issues#8511 (introspection tables)
 # > SELECT name, type, error
 #   FROM mz_internal.mz_source_statuses
 #   WHERE

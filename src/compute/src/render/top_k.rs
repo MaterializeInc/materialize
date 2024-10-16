@@ -68,7 +68,7 @@ where
             // is an opportunity to do so for every group key instead if the error handling is
             // integrated with: 1. The intra-timestamp thinning step in monotonic top-k, e.g., by
             // adding an error output there; 2. The validating reduction on basic top-k
-            // (materialize#23687).
+            // (database-issues#7108).
             let limit_err = match &top_k_plan {
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan { .. }) => None,
                 TopKPlan::MonotonicTopK(MonotonicTopKPlan { limit, .. }) => Some(limit),
@@ -151,7 +151,7 @@ where
                             "Non-monotonic input to MonotonicTopK",
                             &format!("data={data:?}, diff={diff}"),
                         );
-                        let m = "tried to build monotonic top-k on non-monotonic input".to_string();
+                        let m = "tried to build monotonic top-k on non-monotonic input".into();
                         (DataflowError::from(EvalError::Internal(m)), 1)
                     });
                     err_collection = err_collection.concat(&errs);
@@ -418,7 +418,7 @@ where
                         let k = SharedRow::pack(hk_iter);
                         let message = "Negative multiplicities in TopK";
                         error_logger.log(message, &format!("k={k:?}, h={h}, v={v:?}"));
-                        Err(EvalError::Internal(message.to_string()).into())
+                        Err(EvalError::Internal(message.into()).into())
                     }
                     Ok(t) => Ok((hk, t)),
                 },
@@ -476,7 +476,7 @@ where
                 "Non-monotonic input to MonotonicTop1",
                 &format!("data={data:?}, diff={diff}"),
             );
-            let m = "tried to build monotonic top-1 on non-monotonic input".to_string();
+            let m = "tried to build monotonic top-1 on non-monotonic input".into();
             (EvalError::Internal(m).into(), 1)
         });
         let partial: KeyCollection<_, _, _> = partial
@@ -499,7 +499,7 @@ where
                     output.push((accum.row.clone(), 1));
                 },
             );
-        // TODO(materialize#7331): Here we discard the arranged output.
+        // TODO(database-issues#2288): Here we discard the arranged output.
         (result.as_collection(|_k, v| v.into_owned()), errs)
     }
 }

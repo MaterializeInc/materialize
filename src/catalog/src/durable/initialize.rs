@@ -46,8 +46,6 @@ use crate::durable::{
     USER_ROLE_ID_ALLOC_KEY,
 };
 
-/// The key used within the "config" collection stores the deploy generation.
-pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
 /// The key within the "config" Collection that stores the version of the catalog.
 pub const USER_VERSION_KEY: &str = "user_version";
 /// The key within the "config" collection that stores whether the remote configuration was
@@ -362,6 +360,7 @@ pub(crate) async fn initialize(
             ObjectType::Database => mz_audit_log::ObjectType::Database,
             ObjectType::Schema => mz_audit_log::ObjectType::Schema,
             ObjectType::Func => mz_audit_log::ObjectType::Func,
+            ObjectType::ContinualTask => mz_audit_log::ObjectType::ContinualTask,
         };
         audit_events.push((
             mz_audit_log::EventType::Grant,
@@ -592,7 +591,7 @@ pub(crate) async fn initialize(
         ));
     }
 
-    tx.insert_cluster_replica(
+    tx.insert_cluster_replica_with_id(
         DEFAULT_USER_CLUSTER_ID,
         DEFAULT_USER_REPLICA_ID,
         DEFAULT_USER_REPLICA_NAME,

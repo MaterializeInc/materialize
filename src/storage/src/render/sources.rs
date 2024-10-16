@@ -61,7 +61,6 @@ pub(crate) type OutputIndex = usize;
 pub fn render_source<'g, G, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     dataflow_debug_name: &String,
-    id: GlobalId,
     connection: C,
     description: IngestionDescription<CollectionMetadata>,
     resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
@@ -112,7 +111,7 @@ where
     needed_tokens.extend(source_tokens);
 
     let mut outputs = vec![];
-    for (ok_source, err_source, data_config) in streams {
+    for (export_id, ok_source, err_source, data_config) in streams {
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
@@ -121,7 +120,7 @@ where
         let (ok, err, extra_tokens, health_stream) = render_source_stream(
             scope,
             dataflow_debug_name,
-            id,
+            export_id,
             ok_source,
             data_config,
             description.clone(),
@@ -143,7 +142,7 @@ where
 fn render_source_stream<G, FromTime>(
     scope: &mut G,
     dataflow_debug_name: &String,
-    id: GlobalId,
+    export_id: GlobalId,
     ok_source: Collection<G, SourceOutput<FromTime>, Diff>,
     data_config: SourceExportDataConfig,
     description: IngestionDescription<CollectionMetadata>,
@@ -206,14 +205,14 @@ where
 
             let persist_clients = Arc::clone(&storage_state.persist_clients);
             // TODO: Get this to work with the as_of.
-            let resume_upper = base_source_config.resume_uppers[&id].clone();
+            let resume_upper = base_source_config.resume_uppers[&export_id].clone();
 
             let upper_ts = resume_upper
                 .as_option()
                 .expect("resuming an already finished ingestion")
                 .clone();
             let (upsert, health_update) = scope.scoped(
-                &format!("upsert_rehydration_backpressure({})", id),
+                &format!("upsert_rehydration_backpressure({})", export_id),
                 |scope| {
                     let (previous, previous_token, feedback_handle, backpressure_metrics) =
                         if mz_repr::Timestamp::minimum() < upper_ts {
@@ -236,7 +235,7 @@ where
                                         ?backpressure_max_inflight_bytes,
                                         "timely-{} using backpressure in upsert for source {}",
                                         base_source_config.worker_id,
-                                        id
+                                        export_id
                                     );
                                     if !storage_state
                                         .storage_configuration
@@ -255,7 +254,7 @@ where
                                         let backpressure_metrics = Some(
                                             base_source_config
                                                 .metrics
-                                                .get_backpressure_metrics(id, scope.index()),
+                                                .get_backpressure_metrics(export_id, scope.index()),
                                         );
 
                                         (
@@ -281,11 +280,15 @@ where
 
                             let grace_period = dyncfgs::CLUSTER_SHUTDOWN_GRACE_PERIOD
                                 .get(storage_state.storage_configuration.config_set());
+                            let storage_metadata = description.source_exports[&export_id]
+                                .storage_metadata
+                                .clone();
+
                             let (stream, tok) = persist_source::persist_source_core(
                                 scope,
-                                id,
+                                export_id,
                                 persist_clients,
-                                description.ingestion_metadata,
+                                storage_metadata,
                                 Some(as_of),
                                 SnapshotMode::Include,
                                 Antichain::new(),
@@ -309,33 +312,25 @@ where
                         } else {
                             (Collection::new(empty(scope)), None, None, None)
                         };
-                    let (upsert, health_update, upsert_token) = crate::upsert::upsert(
-                        &upsert_input.enter(scope),
-                        upsert_envelope.clone(),
-                        refine_antichain(&resume_upper),
-                        previous,
-                        previous_token,
-                        base_source_config.clone(),
-                        &storage_state.instance_context,
-                        &storage_state.storage_configuration,
-                        &storage_state.dataflow_parameters,
-                        backpressure_metrics,
-                    );
+                    let (upsert, health_update, snapshot_progress, upsert_token) =
+                        crate::upsert::upsert(
+                            &upsert_input.enter(scope),
+                            upsert_envelope.clone(),
+                            refine_antichain(&resume_upper),
+                            previous,
+                            previous_token,
+                            base_source_config.clone(),
+                            &storage_state.instance_context,
+                            &storage_state.storage_configuration,
+                            &storage_state.dataflow_parameters,
+                            backpressure_metrics,
+                        );
 
                     // Even though we register the `persist_sink` token at a top-level,
                     // which will stop any data from being committed, we also register
                     // a token for the `upsert` operator which may be in the middle of
                     // rehydration processing the `persist_source` input above.
                     needed_tokens.push(upsert_token);
-
-                    use mz_timely_util::probe::ProbeNotify;
-                    let handle = mz_timely_util::probe::Handle::default();
-                    let upsert = upsert.inner.probe_notify_with(vec![handle.clone()]);
-                    let probe = mz_timely_util::probe::source(
-                        scope.clone(),
-                        format!("upsert_probe({id})"),
-                        handle,
-                    );
 
                     // If configured, delay raw sources until we rehydrate the upsert
                     // source. Otherwise, drop the token, unblocking the sources at the
@@ -348,20 +343,20 @@ where
                             &base_source_config,
                             rehydrated_token,
                             refine_antichain(&resume_upper),
-                            &probe,
+                            &snapshot_progress,
                         );
                     } else {
                         drop(rehydrated_token)
                     };
 
-                    // If backpressure is enabled, we probe the upsert operator's
-                    // output, which is the easiest way to extract frontier information.
+                    // If backpressure from persist is enabled, we connect the upsert operator's
+                    // snapshot progress to the persist source feedback handle.
                     let upsert = match feedback_handle {
                         Some(feedback_handle) => {
-                            probe.connect_loop(feedback_handle);
-                            upsert.as_collection()
+                            snapshot_progress.connect_loop(feedback_handle);
+                            upsert
                         }
-                        None => upsert.as_collection(),
+                        None => upsert,
                     };
 
                     (
@@ -672,7 +667,7 @@ fn raise_key_value_errors(
         (None, None) => None,
         // TODO(petrosagg): these errors would be better grouped under an EnvelopeError enum
         _ => Some(Err(DataflowError::from(EnvelopeError::Flat(
-            "Value not present for message".to_string(),
+            "Value not present for message".into(),
         )))),
     }
 }

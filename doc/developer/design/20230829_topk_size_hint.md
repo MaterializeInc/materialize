@@ -1,6 +1,6 @@
 # Top-K Group Size Query Hints
 
-- Associated: MaterializeInc/materialize#18883
+- Associated: MaterializeInc/database-issues#5578
 
 ## The Problem
 
@@ -19,7 +19,7 @@ arrangements.
 
 Currently, the `EXPECTED GROUP SIZE` controls the tuning of both min/max reductions and top-k computations.
 However, when the two patterns co-occur in the same query block, it is currently impossible to tune them
-independently. This problem is reported in issue MaterializeInc/materialize#18883. We expand the first
+independently. This problem is reported in issue MaterializeInc/database-issues#5578. We expand the first
 example query provided in the issue to illustrate the problem in more detail:
 
 ```sql
@@ -480,8 +480,8 @@ not even mentioning the old `EXPECTED GROUP SIZE` at all would allow us to creat
 in the future (even though that process is not in scope for this design).
 
 2. Two follow-up items that are related improvements to usability of the hints include: (a) Producing errors
-when the hints do not apply (MaterializeInc/materialize#21528); (b) Moving the `OPTIONS` clause to a different
-position in the `SELECT` syntax and potentially renaming it (MaterializeInc/materialize#21531).
+when the hints do not apply (MaterializeInc/database-issues#6472); (b) Moving the `OPTIONS` clause to a different
+position in the `SELECT` syntax and potentially renaming it (MaterializeInc/database-issues#6473).
 These two additional improvements are considered out-of-scope for this design, but during implementation
 we will evaluate if opportunity arises to address them expediently (leaving them to future work otherwise).
 
@@ -508,7 +508,7 @@ We find this approach more workable that hints about low-level operators, since 
 query block can include different syntactic constructs that refer to different instances of the
 same type of low-level operator.
 
-The suggestion in MaterializeInc/materialize#18883 to add an `EXPECTED GROUP COUNT` hint is a
+The suggestion in MaterializeInc/database-issues#5578 to add an `EXPECTED GROUP COUNT` hint is a
 proposal that follows a semantic hinting philosophy, but is higher-level in than the proposal
 in this design in that it does not refer to a specific SQL clause. Given the many variations
 that SQL syntax includes, we found it tricky to define an extensive hint set about semantic

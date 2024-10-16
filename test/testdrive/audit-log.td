@@ -36,7 +36,7 @@ create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_kafka_src\"}" materialize
 
 > CREATE SOURCE counter_src
   IN CLUSTER audit_log_counter_src
-  FROM LOAD GENERATOR COUNTER;
+  FROM LOAD GENERATOR COUNTER (UP TO 100);
 
 > SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 4
 create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\",\"type\":\"load-generator\"}" materialize

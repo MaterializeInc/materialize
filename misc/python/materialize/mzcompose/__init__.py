@@ -29,7 +29,7 @@ T = TypeVar("T")
 say = ui.speaker("C> ")
 
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.6.0"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.7.0"
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
@@ -72,12 +72,14 @@ def get_default_system_parameters(
         # Persist internals changes: advance coverage
         "persist_enable_arrow_lgalloc_noncc_sizes": "true",
         "persist_enable_s3_lgalloc_noncc_sizes": "true",
+        "persist_enable_one_alloc_per_request": "true",
         # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
         "cluster_always_use_disk": "true",
         "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
         "compute_hydration_concurrency": "2",
+        "compute_replica_expiration_offset": "3d",
         "disk_cluster_replicas_default": "true",
         "enable_0dt_deployment": "true" if zero_downtime else "false",
         "enable_0dt_deployment_panic_after_timeout": "true",
@@ -87,13 +89,16 @@ def get_default_system_parameters(
         "enable_comment": "true",
         "enable_compute_chunked_stack": "true",
         "enable_connection_validation_syntax": "true",
+        "enable_continual_task_builtins": "true",
         "enable_copy_to_expr": "true",
+        "enable_create_continual_task": "true",
         "enable_create_table_from_source": "true",
         "enable_disk_cluster_replicas": "true",
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",
         "enable_expressions_in_limit_syntax": "true",
         "enable_introspection_subscribes": "true",
+        "enable_kafka_sink_partition_by": "true",
         "enable_logical_compaction_window": "true",
         "enable_multi_worker_storage_persist_sink": "true",
         "enable_mysql_source": "true",
@@ -109,11 +114,16 @@ def get_default_system_parameters(
         "persist_batch_columnar_format": (
             "both_v2" if version >= MzVersion.parse_mz("v0.112.0-dev") else "row"
         ),
-        "persist_batch_columnar_format_percent": "10",
+        "persist_batch_columnar_format_percent": "100",
         "persist_batch_delete_enabled": "true",
-        "persist_batch_record_part_format": "true",
         "persist_batch_record_run_meta": (
             "true" if version >= MzVersion.parse_mz("v0.115.0-dev") else "false"
+        ),
+        "persist_batch_structured_order": (
+            "true" if version >= MzVersion.parse_mz("v0.119.0-dev") else "false"
+        ),
+        "persist_batch_structured_key_lower_len": (
+            "256" if version >= MzVersion.parse_mz("v0.117.0-dev") else "0"
         ),
         "persist_catalog_force_compaction_fuel": "1024",
         "persist_catalog_force_compaction_wait": "1s",
@@ -128,7 +138,6 @@ def get_default_system_parameters(
             "false" if version < MzVersion.parse_mz("v0.111.0-dev") else "true"
         ),
         "persist_schema_require": "true",
-        "persist_sink_minimum_batch_updates": "128",
         "persist_stats_audit_percent": "100",
         "persist_txn_tables": "lazy",  # removed, but keep value for older versions
         "persist_use_critical_since_catalog": "true",
@@ -137,7 +146,6 @@ def get_default_system_parameters(
         "persist_part_decode_format": "row_with_validate",
         "statement_logging_default_sample_rate": "0.01",
         "statement_logging_max_sample_rate": "0.01",
-        "storage_persist_sink_minimum_batch_updates": "100",
         "storage_source_decode_fuel": "100000",
         "storage_use_reclock_v2": "true",
         "timestamp_oracle": "postgres",

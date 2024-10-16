@@ -14,7 +14,7 @@
 # IDENTITY DEFAULT is the same as USING INDEX (t1_pkey)
 #
 
-# TODO: Reenable when materialize#14802 is fixed
+# TODO: Reenable when database-issues#4231 is fixed
 $ skip-if
 SELECT true
 

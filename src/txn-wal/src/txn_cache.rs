@@ -1264,7 +1264,7 @@ mod tests {
 
         // ts 11 (forget)
         // Revisit when
-        // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
+        // https://github.com/MaterializeInc/database-issues/issues/7746 is fixed,
         // it's unclear how to encode the register timestamp in a forget.
         c.push_register(d0, 11, -1, 11);
         testcase(&mut c, 11, d0, ds(None, 11, 12), ReadDataTo(12));
@@ -1286,7 +1286,7 @@ mod tests {
 
         // ts 16 (forgotten, registered at preceding ts)
         // Revisit when
-        // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
+        // https://github.com/MaterializeInc/database-issues/issues/7746 is fixed,
         // it's unclear how to encode the register timestamp in a forget.
         c.push_register(d0, 16, -1, 16);
         testcase(&mut c, 16, d0, ds(None, 16, 17), ReadDataTo(17));

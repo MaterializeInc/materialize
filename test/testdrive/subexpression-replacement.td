@@ -190,7 +190,7 @@ Used Indexes:
 
 Target cluster: quickstart
 
-# TODO (https://github.com/MaterializeInc/materialize/issues/6262):  Avoid simplifying mz_sleep.
+# TODO (https://github.com/MaterializeInc/database-issues/issues/1929):  Avoid simplifying mz_sleep.
 
 ? EXPLAIN WITH(no notices) SELECT * FROM t1
   WHERE mz_unsafe.mz_sleep(col_not_null) > mz_unsafe.mz_sleep(col_not_null)

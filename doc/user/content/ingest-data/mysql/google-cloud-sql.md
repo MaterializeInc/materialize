@@ -1,5 +1,5 @@
 ---
-title: "Ingest data from Google Cloud SQL for MySQL"
+title: "Ingest data from Google Cloud SQL"
 description: "How to stream data from Google Cloud SQL for MySQL to Materialize"
 menu:
   main:
@@ -8,7 +8,7 @@ menu:
     identifier: "mysql-google-cloudsql"
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 This page shows you how to stream data from [Google Cloud SQL for MySQL](https://cloud.google.com/sql/MySQL)
 to Materialize using the[MySQL source](/sql/create-source/mysql/).
@@ -21,7 +21,9 @@ to Materialize using the[MySQL source](/sql/create-source/mysql/).
 
 {{% mysql-direct/before-you-begin %}}
 
-## Step 1. Enable GTID-based binlog replication
+## A. Configure Google Cloud SQL
+
+### 1. Enable GTID-based binlog replication
 
 Before creating a source in Materialize, you **must** configure Google Cloud SQL
 for MySQL for GTID-based binlog replication. This requires the following
@@ -38,11 +40,17 @@ Configuration parameter          | Value  | Details
 
 For guidance on enabling GTID-based binlog replication in Cloud SQL, see the [Cloud SQL documentation](https://cloud.google.com/sql/docs/mysql/replication).
 
-## Step 2. Create a user for replication
+### 2. Create a user for replication
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-## Step 3. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your Google Cloud SQL instance is publicly
+accessible, **you can skip this step**. For production scenarios, we recommend
+configuring one of the network security options below.
+{{< /note >}}
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -110,7 +118,9 @@ bastion host.
 
 {{< /tabs >}}
 
-## Step 4. (Optional) Create a cluster
+## C. Ingest data in Materialize
+
+### 1. (Optional) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your MySQL
@@ -121,7 +131,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% mysql-direct/create-a-cluster %}}
 
-## Step 5. Start ingesting data
+### 2. Start ingesting data
 
 [//]: # "TODO(morsapaes) MySQL connections support multiple SSL modes. We should
 adapt to that, rather than just state SSL MODE REQUIRED."
@@ -142,11 +152,11 @@ networking configuration, so start by selecting the relevant option.
 
 {{< /tabs >}}
 
-## Step 6. Check the ingestion status
+### 3. Monitor the ingestion status
 
 {{% mysql-direct/check-the-ingestion-status %}}
 
-## Step 7. Right-size the cluster
+### 4. Right-size the cluster
 
 {{% mysql-direct/right-size-the-cluster %}}
 

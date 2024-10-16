@@ -21,7 +21,7 @@ use timely::PartialOrder;
 use crate::metrics::HistoryMetrics;
 use crate::protocol::command::{ComputeCommand, ComputeParameters};
 
-/// TODO(materialize#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 #[derive(Debug)]
 pub struct ComputeCommandHistory<M, T = mz_repr::Timestamp> {
     /// The number of commands at the last time we compacted the history.
@@ -41,7 +41,7 @@ where
     M: Borrow<UIntGauge>,
     T: timely::progress::Timestamp,
 {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn new(metrics: HistoryMetrics<M>) -> Self {
         metrics.reset();
 
@@ -100,7 +100,7 @@ where
         let mut final_configuration = ComputeParameters::default();
 
         let mut initialization_complete = false;
-        let mut read_only = true;
+        let mut allow_writes = false;
 
         for command in self.commands.drain(..) {
             match command {
@@ -135,7 +135,7 @@ where
                     live_peeks.remove(&uuid);
                 }
                 ComputeCommand::AllowWrites => {
-                    read_only = false;
+                    allow_writes = true;
                 }
             }
         }
@@ -243,7 +243,7 @@ where
             self.commands.push(ComputeCommand::InitializationComplete);
         }
 
-        if !read_only {
+        if allow_writes {
             self.commands.push(ComputeCommand::AllowWrites);
         }
 

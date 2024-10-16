@@ -22,7 +22,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventType, FullNameV1, ObjectType, VersionedStorageUsage};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
-    BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTINS, BUILTIN_PREFIXES,
+    BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTIN_PREFIXES,
     MZ_CATALOG_SERVER_CLUSTER,
 };
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig};
@@ -95,6 +95,7 @@ pub(crate) mod consistency;
 mod migrate;
 
 mod apply;
+mod dataflow_expiration;
 mod open;
 mod state;
 mod transact;
@@ -360,16 +361,6 @@ impl Catalog {
         }
         policies
     }
-
-    /// TODO(ct): This exists for continual tasks because they are the first
-    /// self-referential thing in mz. We use this to inject something for the
-    /// optimizer to resolve the CT's own id to before we've saved it to the
-    /// catalog. The one usage of this is careful to destroy this copy of
-    /// catalog immediately after. There are better ways to do this, but it was
-    /// the easiest path to get the skeleton of the feature merged.
-    pub fn hack_add_ct(&mut self, id: GlobalId, entry: CatalogEntry) {
-        self.state.entry_by_id.insert(id, entry);
-    }
 }
 
 #[derive(Debug)]
@@ -586,7 +577,7 @@ impl Catalog {
                 system_parameter_defaults,
                 remote_system_parameters: None,
                 availability_zones: vec![],
-                egress_ips: vec![],
+                egress_addresses: vec![],
                 aws_principal_context: None,
                 aws_privatelink_availability_zones: None,
                 http_host_name: None,
@@ -665,15 +656,6 @@ impl Catalog {
             .err_into()
     }
 
-    pub async fn allocate_replica_id(&self, cluster_id: &ClusterId) -> Result<ReplicaId, Error> {
-        let mut storage = self.storage().await;
-        let id = match cluster_id {
-            ClusterId::User(_) => storage.allocate_user_replica_id().await,
-            ClusterId::System(_) => storage.allocate_system_replica_id().await,
-        };
-        id.maybe_terminate("allocating replica ids").err_into()
-    }
-
     /// Get the next system replica id without allocating it.
     pub async fn get_next_system_replica_id(&self) -> Result<u64, Error> {
         self.storage()
@@ -689,15 +671,6 @@ impl Catalog {
             .await
             .get_next_user_replica_id()
             .await
-            .err_into()
-    }
-
-    pub async fn allocate_storage_usage_ids(&self, amount: u64) -> Result<Vec<u64>, Error> {
-        self.storage()
-            .await
-            .allocate_storage_usage_ids(amount)
-            .await
-            .maybe_terminate("allocating storage usage id")
             .err_into()
     }
 
@@ -724,6 +697,15 @@ impl Catalog {
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema_in_database(database_spec, schema_name, conn_id)
+    }
+
+    pub fn resolve_replica_in_cluster(
+        &self,
+        cluster_id: &ClusterId,
+        replica_name: &str,
+    ) -> Result<&ClusterReplica, SqlCatalogError> {
+        self.state
+            .resolve_replica_in_cluster(cluster_id, replica_name)
     }
 
     pub fn resolve_system_schema(&self, name: &'static str) -> SchemaId {
@@ -1136,6 +1118,11 @@ impl Catalog {
             .filter(|role| role.is_user())
     }
 
+    pub fn user_continual_tasks(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_continual_task() && entry.id().is_user())
+    }
+
     pub fn system_privileges(&self) -> &PrivilegeMap {
         &self.state.system_privileges
     }
@@ -1149,22 +1136,6 @@ impl Catalog {
         ),
     > {
         self.state.default_privileges.iter()
-    }
-
-    /// Allocate ids for introspection sources. Called once per cluster creation.
-    pub async fn allocate_introspection_sources(&self) -> Vec<(&'static BuiltinLog, GlobalId)> {
-        let log_amount = BUILTINS::logs().count();
-        let system_ids = self
-            .storage()
-            .await
-            .allocate_system_ids(
-                log_amount
-                    .try_into()
-                    .expect("builtin logs should fit into u64"),
-            )
-            .await
-            .unwrap_or_terminate("cannot fail to allocate system ids");
-        BUILTINS::logs().zip(system_ids.into_iter()).collect()
     }
 
     pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
@@ -1318,6 +1289,7 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::Schema(_) => ObjectType::Schema,
         CommentObjectId::Cluster(_) => ObjectType::Cluster,
         CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
+        CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
     }
 }
 
@@ -1347,6 +1319,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Database => ObjectType::Database,
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
+            mz_sql::catalog::ObjectType::ContinualTask => ObjectType::ContinualTask,
         },
         SystemObjectType::System => ObjectType::System,
     }
@@ -2021,7 +1994,9 @@ mod tests {
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
     use mz_repr::{Datum, GlobalId, RelationType, RowArena, ScalarType, Timestamp};
-    use mz_sql::catalog::{CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog};
+    use mz_sql::catalog::{
+        BuiltinsConfig, CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog,
+    };
     use mz_sql::func::{Func, FuncImpl, Operation, OP_IMPLS};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
@@ -2352,7 +2327,7 @@ mod tests {
                     .expect("unable to open debug catalog");
             let item = catalog
                 .state()
-                .deserialize_item(&create_sql)
+                .deserialize_item(id, &create_sql)
                 .expect("unable to parse view");
             catalog
                 .transact(
@@ -2588,7 +2563,10 @@ mod tests {
                 a == b
             };
 
-            for builtin in BUILTINS::iter() {
+            let builtins_cfg = BuiltinsConfig {
+                include_continual_tasks: true,
+            };
+            for builtin in BUILTINS::iter(&builtins_cfg) {
                 match builtin {
                     Builtin::Type(ty) => {
                         assert!(all_oids.insert(ty.oid), "{} reused oid {}", ty.name, ty.oid);
@@ -2644,7 +2622,7 @@ mod tests {
                         // Ensure the type matches.
                         match &ty.details.typ {
                             CatalogType::Array { element_reference } => {
-                                let elem_ty = BUILTINS::iter()
+                                let elem_ty = BUILTINS::iter(&builtins_cfg)
                                     .filter_map(|builtin| match builtin {
                                         Builtin::Type(ty @ BuiltinType { name, .. })
                                             if element_reference == name =>
@@ -3237,16 +3215,16 @@ mod tests {
             let schema_spec = schema.id().clone();
             let schema_name = &schema.name().schema;
             let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
-            let mv = catalog
-                .state()
-                .deserialize_item(&format!(
-                    "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
-                ))
-                .expect("unable to deserialize item");
             let mv_id = catalog
                 .allocate_user_id()
                 .await
                 .expect("unable to allocate id");
+            let mv = catalog
+                .state()
+                .deserialize_item(mv_id, &format!(
+                    "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
+                ))
+                .expect("unable to deserialize item");
             catalog
                 .transact(
                     None,

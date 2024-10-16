@@ -9,6 +9,7 @@
 
 import queue
 import random
+import sqlite3
 import threading
 import time
 from collections import defaultdict
@@ -20,6 +21,11 @@ import psycopg
 
 from materialize.mzcompose.composition import Composition
 from materialize.util import PgConnInfo
+
+DB_FILE = "parallel-benchmark.db"
+assert (
+    sqlite3.threadsafety == 3
+), f"Thread safety level 3 (serialized) required, but is: {sqlite3.threadsafety}"
 
 
 class Measurement:
@@ -34,9 +40,89 @@ class Measurement:
         return f"{self.timestamp} {self.duration}"
 
 
+class MeasurementsStore:
+    def add(self, action: str, measurement: Measurement) -> None:
+        raise NotImplementedError
+
+    def actions(self) -> list[str]:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        raise NotImplementedError
+
+
+class MemoryStore(MeasurementsStore):
+    def __init__(self):
+        self.data: defaultdict[str, list[Measurement]] = defaultdict(list)
+
+    def add(self, action: str, measurement: Measurement) -> None:
+        self.data[action].append(measurement)
+
+    def actions(self) -> list[str]:
+        return list(self.data.keys())
+
+    def close(self) -> None:
+        pass
+
+
+class SQLiteStore(MeasurementsStore):
+    def __init__(self, scenario: str):
+        self.scenario = scenario
+        self.lock = threading.Lock()
+        self.conn = sqlite3.connect(
+            DB_FILE, check_same_thread=False, isolation_level=None
+        )
+        cursor = self.conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=OFF;")
+        cursor.execute("PRAGMA cache_size=-64000;")  # 64 MB
+        cursor.execute("PRAGMA locking_mode=EXCLUSIVE;")
+        self.conn.commit()
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS measurements (scenario TEXT NOT NULL, action TEXT NOT NULL, duration FLOAT NOT NULL, timestamp FLOAT NOT NULL);"
+        )
+        cursor.execute("DELETE FROM measurements WHERE scenario = ?", (self.scenario,))
+        cursor.close()
+
+    def add(self, action: str, measurement: Measurement) -> None:
+        with self.lock:
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute(
+                    "INSERT INTO measurements VALUES (?, ?, ?, ?)",
+                    (
+                        self.scenario,
+                        action,
+                        measurement.duration,
+                        measurement.timestamp,
+                    ),
+                )
+            except Exception as e:
+                print(
+                    f"Caught exception {str(e)} with values: {self.scenario}, {action}, {measurement.duration}, {measurement.timestamp}"
+                )
+                raise
+            cursor.close()
+
+    def actions(self) -> list[str]:
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT DISTINCT action FROM measurements WHERE scenario = ?",
+                (self.scenario,),
+            )
+            result = [row[0] for row in cursor.fetchall()]
+            cursor.close()
+        return result
+
+    def close(self) -> None:
+        with self.lock:
+            self.conn.close()
+
+
 @dataclass
 class State:
-    measurements: defaultdict[str, list[Measurement]]
+    measurements: MeasurementsStore
     load_phase_duration: int | None
     periodic_dists: dict[str, int]
 
@@ -68,7 +154,7 @@ class Action:
     ):
         self._run(conns)
         duration = time.time() - start_time
-        state.measurements[str(self)].append(Measurement(duration, start_time))
+        state.measurements.add(str(self), Measurement(duration, start_time))
 
     def _run(self, conns: queue.Queue):
         raise NotImplementedError
@@ -145,7 +231,13 @@ class PooledQuery(Action):
     def _run(self, conns: queue.Queue):
         conn = conns.get()
         with conn.cursor() as cur:
-            execute_query(cur, self.query)
+            try:
+                execute_query(cur, self.query)
+            except psycopg.OperationalError as e:
+                print(f"Connection failed on query '{self.query}', reconnecting: {e}")
+                conn.close()
+                conn = self.conn_info.connect()
+                conn.autocommit = True
         conns.task_done()
         conns.put(conn)
 
@@ -364,7 +456,9 @@ class Scenario:
             thread.start()
         # Start threads and have them wait for work from a queue
         for i in range(self.conn_pool_size):
-            self.conns.put(conn_info.connect())
+            conn = conn_info.connect()
+            conn.autocommit = True
+            self.conns.put(conn)
 
     def run(
         self,

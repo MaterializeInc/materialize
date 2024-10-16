@@ -544,7 +544,7 @@ impl<'a> Parser<'a> {
         // "date".
         //
         // Note: the maybe! block here does swallow valid parsing errors
-        // See <https://github.com/MaterializeInc/materialize/issues/22397> for more details
+        // See <https://github.com/MaterializeInc/incidents-and-escalations/issues/90> for more details
         maybe!(self.maybe_parse(|parser| {
             let data_type = parser.parse_data_type()?;
             if data_type.to_string().as_str() == "interval" {
@@ -763,7 +763,7 @@ impl<'a> Parser<'a> {
         let over =
             if self.peek_keyword(OVER) || self.peek_keyword(IGNORE) || self.peek_keyword(RESPECT) {
                 // TBD: support window names (`OVER mywin`) in place of inline specification
-                // https://github.com/MaterializeInc/materialize/issues/19755
+                // https://github.com/MaterializeInc/database-issues/issues/5882
 
                 let ignore_nulls = self.parse_keywords(&[IGNORE, NULLS]);
                 let respect_nulls = self.parse_keywords(&[RESPECT, NULLS]);
@@ -3580,14 +3580,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_continual_task(&mut self) -> Result<Statement<Raw>, ParserError> {
-        // TODO(ct): If exists.
+        // TODO(ct3): OR REPLACE/IF NOT EXISTS.
         self.expect_keywords(&[CONTINUAL, TASK])?;
 
-        // TODO(ct): Multiple outputs.
-        let name = self.parse_item_name()?;
+        // TODO(ct3): Multiple outputs.
+        let name = RawItemName::Name(self.parse_item_name()?);
         self.expect_token(&Token::LParen)?;
         let columns = self.parse_comma_separated(|parser| {
-            // TODO(ct): NOT NULL, etc.
             Ok(CteMutRecColumnDef {
                 name: parser.parse_identifier()?,
                 data_type: parser.parse_data_type()?,
@@ -3596,10 +3595,10 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::RParen)?;
         let in_cluster = self.parse_optional_in_cluster()?;
 
-        // TODO(ct): Multiple inputs.
+        // TODO(ct3): Multiple inputs.
         self.expect_keywords(&[ON, INPUT])?;
         let input_table = self.parse_raw_name()?;
-        // TODO(ct): Allow renaming the inserts/deletes so that we can use
+        // TODO(ct3): Allow renaming the inserts/deletes so that we can use
         // something as both an "input" and a "reference".
 
         self.expect_keyword(AS)?;
@@ -3607,7 +3606,7 @@ impl<'a> Parser<'a> {
         let mut stmts = Vec::new();
         let mut expecting_statement_delimiter = false;
         self.expect_token(&Token::LParen)?;
-        // TODO(ct): Dedup this with parse_statements?
+        // TODO(ct2): Dedup this with parse_statements?
         loop {
             // ignore empty statements (between successive statement delimiters)
             while self.consume_token(&Token::Semicolon) {
@@ -3635,6 +3634,8 @@ impl<'a> Parser<'a> {
             expecting_statement_delimiter = true;
         }
 
+        let as_of = self.parse_optional_internal_as_of()?;
+
         Ok(Statement::CreateContinualTask(
             CreateContinualTaskStatement {
                 name,
@@ -3642,6 +3643,7 @@ impl<'a> Parser<'a> {
                 in_cluster,
                 input: input_table,
                 stmts,
+                as_of,
             },
         ))
     }
@@ -4359,7 +4361,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
-            | ObjectType::Connection => {
+            | ObjectType::Connection
+            | ObjectType::ContinualTask => {
                 let names = self.parse_comma_separated(|parser| {
                     Ok(UnresolvedObjectName::Item(parser.parse_item_name()?))
                 })?;
@@ -4473,9 +4476,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(TABLE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_item_name()?;
-        // Columns are not specified by users, but are populated in this
-        // statement after purification, so Optional is used.
-        let (columns, constraints) = self.parse_columns(Optional)?;
+        let (columns, constraints) = self.parse_table_from_source_columns()?;
 
         self.expect_keywords(&[FROM, SOURCE])?;
 
@@ -4570,6 +4571,91 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
         Ok(option)
+    }
+
+    fn parse_table_from_source_columns(
+        &mut self,
+    ) -> Result<(TableFromSourceColumns<Raw>, Vec<TableConstraint<Raw>>), ParserError> {
+        let mut constraints = vec![];
+
+        if !self.consume_token(&Token::LParen) {
+            return Ok((TableFromSourceColumns::NotSpecified, constraints));
+        }
+        if self.consume_token(&Token::RParen) {
+            // Tables with zero columns are a PostgreSQL extension.
+            return Ok((TableFromSourceColumns::NotSpecified, constraints));
+        }
+
+        let mut column_names = vec![];
+        let mut column_defs = vec![];
+        loop {
+            if let Some(constraint) = self.parse_optional_table_constraint()? {
+                constraints.push(constraint);
+            } else if let Some(column_name) = self.consume_identifier()? {
+                let next_token = self.peek_token();
+                match next_token {
+                    Some(Token::Comma) | Some(Token::RParen) => {
+                        column_names.push(column_name);
+                    }
+                    _ => {
+                        let data_type = self.parse_data_type()?;
+                        let collation = if self.parse_keyword(COLLATE) {
+                            Some(self.parse_item_name()?)
+                        } else {
+                            None
+                        };
+                        let mut options = vec![];
+                        loop {
+                            match self.peek_token() {
+                                None | Some(Token::Comma) | Some(Token::RParen) => break,
+                                _ => options.push(self.parse_column_option_def()?),
+                            }
+                        }
+
+                        column_defs.push(ColumnDef {
+                            name: column_name,
+                            data_type,
+                            collation,
+                            options,
+                        });
+                    }
+                }
+            } else {
+                return self.expected(
+                    self.peek_pos(),
+                    "column name or constraint definition",
+                    self.peek_token(),
+                );
+            }
+            if self.consume_token(&Token::Comma) {
+                // Continue.
+            } else if self.consume_token(&Token::RParen) {
+                break;
+            } else {
+                return self.expected(
+                    self.peek_pos(),
+                    "',' or ')' after column definition",
+                    self.peek_token(),
+                );
+            }
+        }
+        if !column_defs.is_empty() && !column_names.is_empty() {
+            return parser_err!(
+                self,
+                self.peek_prev_pos(),
+                "cannot mix column definitions and column names"
+            );
+        }
+
+        let columns = match column_defs.is_empty() {
+            true => match column_names.is_empty() {
+                true => TableFromSourceColumns::NotSpecified,
+                false => TableFromSourceColumns::Named(column_names),
+            },
+            false => TableFromSourceColumns::Defined(column_defs),
+        };
+
+        Ok((columns, constraints))
     }
 
     fn parse_columns(
@@ -4880,9 +4966,10 @@ impl<'a> Parser<'a> {
             ObjectType::Index => self.parse_alter_index(),
             ObjectType::Secret => self.parse_alter_secret(),
             ObjectType::Connection => self.parse_alter_connection(),
-            ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
-                self.parse_alter_views(object_type)
-            }
+            ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Table
+            | ObjectType::ContinualTask => self.parse_alter_views(object_type),
             ObjectType::Type => {
                 let if_exists = self
                     .parse_if_exists()
@@ -6482,7 +6569,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
-            | ObjectType::Func => UnresolvedObjectName::Item(self.parse_item_name()?),
+            | ObjectType::Func
+            | ObjectType::ContinualTask => UnresolvedObjectName::Item(self.parse_item_name()?),
             ObjectType::Role => UnresolvedObjectName::Role(self.parse_identifier()?),
             ObjectType::Cluster => UnresolvedObjectName::Cluster(self.parse_identifier()?),
             ObjectType::ClusterReplica => {
@@ -7254,6 +7342,10 @@ impl<'a> Parser<'a> {
                 ObjectType::MaterializedView => {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::MaterializedView { in_cluster }
+                }
+                ObjectType::ContinualTask => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::ContinualTask { in_cluster }
                 }
                 ObjectType::Index => {
                     let on_object = if self.parse_one_of_keywords(&[ON]).is_some() {
@@ -8583,7 +8675,10 @@ impl<'a> Parser<'a> {
         object_type: ObjectType,
     ) -> Result<ObjectType, ParserError> {
         match object_type {
-            ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
+            ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source
+            | ObjectType::ContinualTask => {
                 parser_err!(
                             self,
                             self.peek_prev_pos(),
@@ -8631,6 +8726,7 @@ impl<'a> Parser<'a> {
                 DATABASE,
                 SCHEMA,
                 FUNCTION,
+                CONTINUAL,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -8658,6 +8754,13 @@ impl<'a> Parser<'a> {
                 DATABASE => ObjectType::Database,
                 SCHEMA => ObjectType::Schema,
                 FUNCTION => ObjectType::Func,
+                CONTINUAL => {
+                    if let Err(e) = self.expect_keyword(TASK) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::ContinualTask
+                }
                 _ => unreachable!(),
             },
         )
@@ -8786,6 +8889,7 @@ impl<'a> Parser<'a> {
                 DATABASES,
                 SCHEMAS,
                 SUBSOURCES,
+                CONTINUAL,
             ])? {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
@@ -8816,6 +8920,14 @@ impl<'a> Parser<'a> {
                 DATABASES => ObjectType::Database,
                 SCHEMAS => ObjectType::Schema,
                 SUBSOURCES => ObjectType::Subsource,
+                CONTINUAL => {
+                    if self.parse_keyword(TASKS) {
+                        ObjectType::ContinualTask
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 _ => unreachable!(),
             },
         )
@@ -8995,6 +9107,7 @@ impl<'a> Parser<'a> {
             DATABASE,
             SCHEMA,
             CLUSTER,
+            CONTINUAL,
         ])? {
             TABLE => {
                 let name = self.parse_raw_name()?;
@@ -9061,6 +9174,11 @@ impl<'a> Parser<'a> {
             COLUMN => {
                 let name = self.parse_column_name()?;
                 CommentObjectType::Column { name }
+            }
+            CONTINUAL => {
+                self.expect_keyword(TASK)?;
+                let name = self.parse_raw_name()?;
+                CommentObjectType::ContinualTask { name }
             }
             _ => unreachable!(),
         };

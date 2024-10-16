@@ -36,12 +36,11 @@ from psycopg.errors import (
 from materialize import buildkite, ui
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -54,7 +53,6 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Localstack(),
-    Cockroach(setup_materialize=True),
     Clusterd(name="clusterd1"),
     Clusterd(name="clusterd2"),
     Clusterd(name="clusterd3"),
@@ -64,6 +62,7 @@ SERVICES = [
         propagate_crashes=False,
         external_cockroach=True,
     ),
+    PostgresAsCockroach(),
     Postgres(),
     Redpanda(),
     Toxiproxy(),
@@ -255,7 +254,7 @@ def workflow_test_github_15531(c: Composition) -> None:
     """
     Test that compute command history does not leak peek commands.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/15531.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/4443.
     """
 
     c.down(destroy_volumes=True)
@@ -429,7 +428,7 @@ def workflow_test_github_15535(c: Composition) -> None:
     """
     Test that compute reconciliation does not produce empty frontiers.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/15535.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/4444.
     """
 
     c.down(destroy_volumes=True)
@@ -490,7 +489,7 @@ def workflow_test_github_15799(c: Composition) -> None:
     Test that querying introspection sources on a replica does not
     crash other replicas in the same cluster that have introspection disabled.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/15799.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/4545.
     """
 
     c.down(destroy_volumes=True)
@@ -541,7 +540,7 @@ def workflow_test_github_15930(c: Composition) -> None:
     Test that triggering reconciliation does not wedge the
     mz_compute_frontiers_per_worker introspection source.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/15930.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/4587.
     """
 
     c.down(destroy_volumes=True)
@@ -639,7 +638,7 @@ def workflow_test_github_15496(c: Composition) -> None:
     Test that a reduce collation over a source with an invalid accumulation does not
     panic, but rather logs errors, when soft assertions are turned off.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/15496.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/4433.
     """
 
     c.down(destroy_volumes=True)
@@ -690,7 +689,7 @@ def workflow_test_github_15496(c: Composition) -> None:
             -- Create a materialized view to ensure non-monotonic rendering.
             -- Note that we employ below a query hint to hit the case of not yet
             -- generating a SQL-level error, given the partial fix to bucketed
-            -- aggregates introduced in PR #17918.
+            -- aggregates introduced in PR materialize#17918.
             CREATE MATERIALIZED VIEW sum_and_max AS
             SELECT SUM(data), MAX(data) FROM data OPTIONS (AGGREGATE INPUT GROUP SIZE = 1);
             """
@@ -718,7 +717,7 @@ def workflow_test_github_17177(c: Composition) -> None:
     emits errors to the logs when soft assertions are turned off, but also produces a clean
     query-level error.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/17177.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/4966.
     """
 
     c.down(destroy_volumes=True)
@@ -797,7 +796,7 @@ def workflow_test_github_17510(c: Composition) -> None:
     with invalid accumulations due to too many retractions in a source. Additionally,
     we verify that in these cases, an adequate error message is written to the logs.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/17510.
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/5087.
     """
 
     c.down(destroy_volumes=True)
@@ -881,7 +880,7 @@ def workflow_test_github_17510(c: Composition) -> None:
             ! SELECT * FROM constant_sums;
             contains:constant folding encountered reduce on collection with non-positive multiplicities
 
-            # The following statement verifies that the behavior introduced in PR #16852
+            # The following statement verifies that the behavior introduced in PR materialize#6122
             # is now rectified, i.e., instead of wrapping to a negative number, we produce
             # an error upon seeing invalid multiplicities.
             ! SELECT SUM(data8) FROM data;
@@ -935,7 +934,7 @@ def workflow_test_github_17510(c: Composition) -> None:
             > INSERT INTO base VALUES (1, 1, 1, 1), (1, 1, 1, 1), (1, 1, 1, 1);
 
             # Constant-folding behavior matches for now the rendered behavior
-            # wrt. wraparound; this can be revisited as part of #17758.
+            # wrt. wraparound; this can be revisited as part of database-issues#5172.
             > SELECT * FROM constant_wrapped_sums;
             1 1 18446744073709551617
 
@@ -962,7 +961,7 @@ def workflow_test_github_17509(c: Composition) -> None:
     a clean error when an arrangement hierarchy is built, in addition to logging an error, when soft
     assertions are turned off.
 
-    This is a partial regression test for https://github.com/MaterializeInc/materialize/issues/17509.
+    This is a partial regression test for https://github.com/MaterializeInc/database-issues/issues/5086.
     The checks here are extended by opting into a smaller group size with a query hint (e.g.,
     OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)) in workflow test-github-15496. This scenario was
     initially not covered, but eventually got supported as well.
@@ -1057,7 +1056,7 @@ def workflow_test_github_19610(c: Composition) -> None:
     We introduce data that results in a multiset and compute min/max. In a monotonic one-shot
     evaluation strategy, we must consolidate and subsequently assert monotonicity.
 
-    This is a regression test for https://github.com/MaterializeInc/materialize/issues/19610, where
+    This is a regression test for https://github.com/MaterializeInc/database-issues/issues/5831, where
     we observed a performance regression caused by a correctness issue. Here, we validate that the
     underlying correctness issue has been fixed.
     """
@@ -1411,7 +1410,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
         c.run_testdrive_files("pg-snapshot-resumption/03-ensure-source-down.td")
 
         # Temporarily disabled because it is timing out.
-        # https://github.com/MaterializeInc/materialize/issues/14533
+        # https://github.com/MaterializeInc/database-issues/issues/4145
         # # clusterd should crash
         # c.run_testdrive_files("pg-snapshot-resumption/04-while-clusterd-down.td")
 
@@ -1871,7 +1870,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     )
 
     # Give the dataflows some time to make progress and get compacted.
-    # This is done to trigger the bug described in #17594.
+    # This is done to trigger the bug described in database-issues#5113.
     time.sleep(10)
 
     # Restart environmentd to trigger a reconciliation.
@@ -1903,7 +1902,7 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
     Test that compute reconciliation replaces changed dataflows, as well as
     dataflows transitively depending on them.
 
-    Regression test for #28961.
+    Regression test for database-issues#8444.
     """
 
     c.down(destroy_volumes=True)
@@ -2073,14 +2072,14 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     for service in ("materialized", "clusterd1"):
         p = c.invoke("logs", service, capture=True)
         for line in p.stdout.splitlines():
-            assert "ERROR" not in line, f"found ERROR in service {service}: {line}"
+            assert " ERROR " not in line, f"found ERROR in service {service}: {line}"
 
 
 def workflow_test_drop_during_reconciliation(c: Composition) -> None:
     """
     Test that dropping storage and compute objects during reconciliation works.
 
-    Regression test for #28784.
+    Regression test for database-issues#8399.
     """
 
     c.down(destroy_volumes=True)
@@ -2090,6 +2089,15 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
             additional_system_parameter_defaults={
                 "enable_unorchestrated_cluster_replicas": "true",
             },
+        ),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=[
+                # Disable GRPC host checking. We are connecting through a
+                # proxy, so the host in the request URI doesn't match
+                # clusterd's fqdn.
+                "CLUSTERD_GRPC_HOST=",
+            ],
         ),
         Testdrive(
             no_reset=True,
@@ -2277,7 +2285,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     """
     Test that compute materialized view's "since" timestamp is at least as large as source table's "since" timestamp.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/19151
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/5676
     """
 
     c.down(destroy_volumes=True)
@@ -2344,98 +2352,110 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
     """
     Test that environmentd notices when a clusterd becomes disconnected.
 
-    Regression test for https://github.com/MaterializeInc/materialize/issues/20299
+    Regression test for https://github.com/MaterializeInc/database-issues/issues/6095
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized", "clusterd1", "toxiproxy")
-    c.up("testdrive", persistent=True)
 
-    c.testdrive(
-        input=dedent(
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            environment_extra=[
+                # Disable GRPC host checking. We are connecting through a
+                # proxy, so the host in the request URI doesn't match
+                # clusterd's fqdn.
+                "CLUSTERD_GRPC_HOST=",
+            ],
+        ),
+    ):
+        c.up("materialized", "clusterd1", "toxiproxy")
+        c.up("testdrive", persistent=True)
+
+        c.testdrive(
+            input=dedent(
+                """
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+                {
+                  "name": "clusterd1",
+                  "listen": "0.0.0.0:2100",
+                  "upstream": "clusterd1:2100",
+                  "enabled": true
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+                {
+                  "name": "clusterd2",
+                  "listen": "0.0.0.0:2101",
+                  "upstream": "clusterd1:2101",
+                  "enabled": true
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+                {
+                  "name": "clusterd3",
+                  "listen": "0.0.0.0:2102",
+                  "upstream": "clusterd1:2102",
+                  "enabled": true
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+                {
+                  "name": "clusterd4",
+                  "listen": "0.0.0.0:2103",
+                  "upstream": "clusterd1:2103",
+                  "enabled": true
+                }
+
+                > CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                    STORAGECTL ADDRESSES ['toxiproxy:2100'],
+                    STORAGE ADDRESSES ['toxiproxy:2103'],
+                    COMPUTECTL ADDRESSES ['toxiproxy:2101'],
+                    COMPUTE ADDRESSES ['toxiproxy:2102'],
+                    WORKERS 2));
+
+                > SELECT mz_unsafe.mz_sleep(1);
+                <null>
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd1/toxics content-type=application/json
+                {
+                  "name": "clusterd1",
+                  "type": "timeout",
+                  "attributes": {"timeout": 0}
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd2/toxics content-type=application/json
+                {
+                  "name": "clusterd2",
+                  "type": "timeout",
+                  "attributes": {"timeout": 0}
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd3/toxics content-type=application/json
+                {
+                  "name": "clusterd3",
+                  "type": "timeout",
+                  "attributes": {"timeout": 0}
+                }
+
+                $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd4/toxics content-type=application/json
+                {
+                  "name": "clusterd4",
+                  "type": "timeout",
+                  "attributes": {"timeout": 0}
+                }
             """
-            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
-            {
-              "name": "clusterd1",
-              "listen": "0.0.0.0:2100",
-              "upstream": "clusterd1:2100",
-              "enabled": true
-            }
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
-            {
-              "name": "clusterd2",
-              "listen": "0.0.0.0:2101",
-              "upstream": "clusterd1:2101",
-              "enabled": true
-            }
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
-            {
-              "name": "clusterd3",
-              "listen": "0.0.0.0:2102",
-              "upstream": "clusterd1:2102",
-              "enabled": true
-            }
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
-            {
-              "name": "clusterd4",
-              "listen": "0.0.0.0:2103",
-              "upstream": "clusterd1:2103",
-              "enabled": true
-            }
-
-            > CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['toxiproxy:2100'],
-                STORAGE ADDRESSES ['toxiproxy:2103'],
-                COMPUTECTL ADDRESSES ['toxiproxy:2101'],
-                COMPUTE ADDRESSES ['toxiproxy:2102'],
-                WORKERS 2));
-
-            > SELECT mz_unsafe.mz_sleep(1);
-            <null>
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd1/toxics content-type=application/json
-            {
-              "name": "clusterd1",
-              "type": "timeout",
-              "attributes": {"timeout": 0}
-            }
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd2/toxics content-type=application/json
-            {
-              "name": "clusterd2",
-              "type": "timeout",
-              "attributes": {"timeout": 0}
-            }
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd3/toxics content-type=application/json
-            {
-              "name": "clusterd3",
-              "type": "timeout",
-              "attributes": {"timeout": 0}
-            }
-
-            $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd4/toxics content-type=application/json
-            {
-              "name": "clusterd4",
-              "type": "timeout",
-              "attributes": {"timeout": 0}
-            }
-        """
+            )
         )
-    )
-    # Should detect broken connection after a few seconds, works with c.kill("clusterd1")
-    time.sleep(10)
-    envd = c.invoke("logs", "materialized", capture=True)
-    assert (
-        "error reading a body from connection: stream closed because of a broken pipe"
-        in envd.stdout
-    )
+        # Should detect broken connection after a few seconds, works with c.kill("clusterd1")
+        time.sleep(10)
+        envd = c.invoke("logs", "materialized", capture=True)
+        assert (
+            "error reading a body from connection: stream closed because of a broken pipe"
+            in envd.stdout
+        )
 
 
 class Metrics:
@@ -2587,6 +2607,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         """
     )
 
+    # Can take a few seconds, don't request the metrics too quickly
+    time.sleep(2)
     # Check that expected metrics exist and have sensible values.
     metrics = fetch_metrics()
 
@@ -2638,6 +2660,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         mv_correction_max_cap_per_worker > 0
     ), f"unexpected persist sink max correction capacity per worker: {mv_correction_max_cap_per_worker}"
 
+    # Can take a few seconds, don't request the metrics too quickly
+    time.sleep(2)
     assert metrics.get_last_command_received("compute") >= before_connection_time
 
 
@@ -2744,8 +2768,11 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count > 0, f"got {count}"
     count = metrics.get_value("mz_compute_controller_command_queue_size")
     assert count < 10, f"got {count}"
-    count = metrics.get_value("mz_compute_controller_response_queue_size")
-    assert count < 10, f"got {count}"
+    send_count = metrics.get_value("mz_compute_controller_response_send_count")
+    assert send_count > 10, f"got {send_count}"
+    recv_count = metrics.get_value("mz_compute_controller_response_recv_count")
+    assert recv_count > 10, f"got {recv_count}"
+    assert send_count - recv_count < 10, f"got {send_count}, {recv_count}"
     count = metrics.get_value("mz_compute_controller_hydration_queue_size")
     assert count == 0, f"got {count}"
 
@@ -3026,7 +3053,7 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
 def workflow_test_concurrent_connections(c: Composition) -> None:
     """
     Run many concurrent connections, measure their p50 and p99 latency, make
-    sure #21782 does not regress.
+    sure database-issues#6537 does not regress.
     """
     num_conns = 2000
     p50_limit = 10.0
@@ -3263,7 +3290,7 @@ def workflow_test_incident_70(c: Composition) -> None:
 
         for thread in threads:
             thread.start()
-            # this is because of #22038
+            # this is because of database-issues#6639
             time.sleep(0.2)
 
         for thread in threads:
@@ -3303,7 +3330,7 @@ def workflow_test_github_cloud_7998(
 
 
 def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Regression test for #23246."""
+    """Regression test for database-issues#7000."""
 
     c.down(destroy_volumes=True)
 
@@ -3559,9 +3586,10 @@ def workflow_cluster_drop_concurrent(
                 try:
                     thread.join(timeout=10)
                 except InternalError_ as e:
-                    assert (
-                        'query could not complete because relation "materialize.public.counter" was dropped'
-                        in str(e)
+                    assert 'query could not complete because relation "materialize.public.counter" was dropped' in str(
+                        e
+                    ) or 'subscribe has been terminated because underlying relation "materialize.public.counter" was dropped' in str(
+                        e
                     )
             for thread in threads:
                 assert not thread.is_alive(), f"Thread {thread.name} is still running"
@@ -3572,9 +3600,9 @@ def workflow_test_refresh_mv_warmup(
 ) -> None:
     """
     Test REFRESH materialized view warmup behavior after envd restarts:
-    1. Regression test for https://github.com/MaterializeInc/materialize/issues/25380
+    1. Regression test for https://github.com/MaterializeInc/database-issues/issues/7574
        If an MV is past its last refresh, it shouldn't get rehydrated after a restart.
-    2. Regression test for https://github.com/MaterializeInc/materialize/issues/25279
+    2. Regression test for https://github.com/MaterializeInc/database-issues/issues/7543
        Bootstrapping should select an `as_of` for an MV dataflow in a way that allows it to warm up before its next
        refresh.
     """
@@ -4128,7 +4156,7 @@ def workflow_test_refresh_mv_restart(
 
 
 def workflow_test_github_26215(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Regression test for #26215."""
+    """Regression test for database-issues#7798."""
 
     c.down(destroy_volumes=True)
 
@@ -4805,4 +4833,220 @@ def workflow_test_graceful_reconfigure(
             """,
             port=6877,
             user="mz_system",
+        )
+
+
+def workflow_crash_on_replica_expiration_mv(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests that clusterd crashes when a replica is set to expire
+    """
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(name="clusterd1", restart="on-failure"),
+    ):
+        offset = 20
+
+        c.up("materialized")
+        c.up("clusterd1")
+        c.sql(
+            f"""
+            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
+            ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
+
+            DROP CLUSTER IF EXISTS test CASCADE;
+            DROP TABLE IF EXISTS t CASCADE;
+
+            CREATE CLUSTER test REPLICAS (
+                test (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            );
+            SET CLUSTER TO test;
+
+            CREATE TABLE t (x int);
+            INSERT INTO t VALUES (42);
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t WHERE x < 84;
+            SELECT mz_unsafe.mz_sleep({offset + 10});
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        results = c.sql_query(
+            """
+            SELECT * from mv;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        assert results == [(42,)], f"Results mismatch: expected [42], found {results}"
+
+        c1 = c.invoke("logs", "clusterd1", capture=True)
+        assert (
+            "has exceeded expiration" in c1.stdout
+        ), "unexpected success in crash-on-replica-expiration"
+
+
+def workflow_crash_on_replica_expiration_index(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp)
+
+    """
+    Tests that clusterd crashes when a replica is set to expire
+    """
+    c.down(destroy_volumes=True)
+    with c.override(
+        Clusterd(name="clusterd1", restart="on-failure"),
+    ):
+        offset = 20
+
+        c.up("materialized")
+        c.up("clusterd1")
+        c.sql(
+            f"""
+            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
+            ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
+
+            DROP CLUSTER IF EXISTS test CASCADE;
+            DROP TABLE IF EXISTS t CASCADE;
+
+            CREATE CLUSTER test REPLICAS (
+                test (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+            );
+            SET CLUSTER TO test;
+
+            CREATE TABLE t (x int);
+            INSERT INTO t VALUES (42);
+            CREATE VIEW mv AS SELECT * FROM t WHERE x < 84;
+            CREATE DEFAULT INDEX ON mv;
+            SELECT mz_unsafe.mz_sleep({offset + 10});
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        results = c.sql_query(
+            """
+            SELECT * from mv;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        assert results == [(42,)], f"Results mismatch: expected [42], found {results}"
+
+        c1 = c.invoke("logs", "clusterd1", capture=True)
+        assert (
+            "has exceeded expiration" in c1.stdout
+        ), "unexpected success in crash-on-replica-expiration"
+
+        # Wait a bit to let the controller refresh its metrics.
+        time.sleep(2)
+
+        # Check that expected metrics exist and have sensible values.
+        metrics = fetch_metrics()
+
+        expected_expiration_timestamp_sec = int(time.time())
+
+        expiration_timestamp_sec = (
+            metrics.get_value("mz_dataflow_replica_expiration_timestamp_seconds") / 1000
+        )
+        # Just ensure the expiration_timestamp is within a reasonable range of now().
+        assert (
+            (expected_expiration_timestamp_sec - offset)
+            < expiration_timestamp_sec
+            < (expected_expiration_timestamp_sec + offset)
+        ), f"expiration_timestamp: expected={expected_expiration_timestamp_sec}[{datetime.fromtimestamp(expected_expiration_timestamp_sec)}], got={expiration_timestamp_sec}[{[{datetime.fromtimestamp(expiration_timestamp_sec)}]}]"
+
+        expiration_remaining = metrics.get_value(
+            "mz_dataflow_replica_expiration_remaining_seconds"
+        )
+        # Ensure the expiration_remaining is within the configured offset.
+        assert (
+            1.0 < expiration_remaining < float(offset)
+        ), f"expiration_remaining: expected < 10s, got={expiration_remaining}"
+
+
+def workflow_replica_expiration_creates_retraction_diffs_after_panic(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Test that retraction diffs within the expiration time are generated after the replica expires and panics
+    """
+    c.down(destroy_volumes=True)
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(name="clusterd1", restart="on-failure"),
+    ):
+
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+        c.up("clusterd1")
+        c.testdrive(
+            dedent(
+                """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = 'true';
+            ALTER SYSTEM SET compute_replica_expiration_offset = '50s';
+
+            > DROP CLUSTER IF EXISTS test CASCADE;
+            > DROP TABLE IF EXISTS events CASCADE;
+
+            > CREATE CLUSTER test REPLICAS (
+                test (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 1
+                )
+              );
+            > SET CLUSTER TO test;
+
+            > CREATE TABLE events (
+              content TEXT,
+              event_ts TIMESTAMP
+              );
+
+            > CREATE VIEW events_view AS
+              SELECT event_ts, content
+              FROM events
+              WHERE mz_now() <= event_ts + INTERVAL '80s';
+
+            > CREATE DEFAULT INDEX ON events_view;
+
+            > INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
+
+            # Retraction diffs are not generated
+            > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
+              WHERE name LIKE '%events_view_primary_idx';
+            1000
+            # Sleep until the replica expires
+            > SELECT mz_unsafe.mz_sleep(60);
+            <null>
+            # Retraction diffs are now within the expiration time and should be generated
+            > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
+              WHERE name LIKE '%events_view_primary_idx';
+            2000
+            > DROP TABLE events CASCADE;
+            > DROP CLUSTER test CASCADE;
+            """
+            )
         )

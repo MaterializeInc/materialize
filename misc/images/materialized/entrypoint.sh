@@ -18,7 +18,7 @@ have, which may be able to improve both our software and your queries!
 Please reach out at:
 
   Web: https://materialize.com
-  GitHub issues: https://github.com/MaterializeInc/materialize/issues
+  GitHub discussions: https://github.com/MaterializeInc/materialize/discussions
   Slack: https://www.materialize.com/s/chat
   Email: support@materialize.com
   Twitter: @MaterializeInc
@@ -39,25 +39,12 @@ hosted offering we run these services scaled across many machines.
 ********************************* WARNING ********************************
 EOF
 
-if [ -z "${MZ_NO_BUILTIN_COCKROACH:-}" ]; then
-  COCKROACH_SKIP_ENABLING_DIAGNOSTIC_REPORTING=true cockroach start-single-node \
-      --insecure \
-      --background \
-      --store=/mzdata/cockroach
-
-  # See: https://github.com/cockroachdb/cockroach/issues/130011
-  while ! cockroach sql --insecure -e "SELECT 1"; do
-      echo "Reaching CRDB failed, retrying..."
-  done
-
-  # See: https://github.com/cockroachdb/cockroach/issues/93892
-  # See: https://github.com/MaterializeInc/materialize/issues/16726
-  cockroach sql --insecure -e "SET CLUSTER SETTING sql.stats.forecasts.enabled = false"
-
-  cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS consensus"
-  cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS storage"
-  cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS adapter"
-  cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS tsoracle"
+if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
+  pg_ctlcluster 16 main start
+  psql -U root -c "CREATE SCHEMA IF NOT EXISTS consensus"
+  psql -U root -c "CREATE SCHEMA IF NOT EXISTS storage"
+  psql -U root -c "CREATE SCHEMA IF NOT EXISTS adapter"
+  psql -U root -c "CREATE SCHEMA IF NOT EXISTS tsoracle"
 fi
 
 if [[ ! -f /mzdata/environment-id ]]; then
@@ -75,10 +62,12 @@ export MZ_INTERNAL_SQL_LISTEN_ADDR=${MZ_INTERNAL_SQL_LISTEN_ADDR:-0.0.0.0:6877}
 export MZ_INTERNAL_HTTP_LISTEN_ADDR=${MZ_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878}
 export MZ_BALANCER_SQL_LISTEN_ADDR=${MZ_BALANCER_SQL_LISTEN_ADDR:-0.0.0.0:6880}
 export MZ_BALANCER_HTTP_LISTEN_ADDR=${MZ_BALANCER_HTTP_LISTEN_ADDR:-0.0.0.0:6881}
-export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@$(hostname):26257?options=--search_path=consensus}
+# Ideally we'd want to use the local path, but this parameter is passed through to clusterd
+#export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=consensus}
+export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@$(hostname):26257/?options=--search_path=consensus}
 export MZ_PERSIST_BLOB_URL=${MZ_PERSIST_BLOB_URL:-file:///mzdata/persist/blob}
-export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://root@$(hostname):26257?options=--search_path=adapter}
-export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://root@$(hostname):26257?options=--search_path=tsoracle}
+export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=adapter}
+export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=tsoracle}
 export MZ_ORCHESTRATOR=${MZ_ORCHESTRATOR:-process}
 export MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY:-/mzdata/secrets}
 export MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY:-/scratch}

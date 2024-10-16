@@ -53,7 +53,7 @@ use crate::normalize;
 use crate::plan::query::{plan_expr, plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
-use crate::plan::with_options::{self, TryFromValue};
+use crate::plan::with_options;
 use crate::plan::{
     self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan,
     ExplainSinkSchemaPlan, ExplainTimestampPlan,
@@ -247,7 +247,7 @@ fn plan_select_inner(
             order_by: finishing.order_by,
         },
         copy_to,
-        select: Some(select),
+        select: Some(Box::new(select)),
     };
 
     Ok((plan, desc))
@@ -601,7 +601,11 @@ pub fn plan_explain_schema(
         ident!("mz_explain_schema"),
     ]));
 
-    crate::pure::add_materialize_comments(scx.catalog, &mut statement)?;
+    crate::pure::purify_create_sink_avro_doc_on_options(
+        scx.catalog,
+        *statement.from.item_id(),
+        &mut statement.format,
+    )?;
     let default_strategy = DEFAULT_SINK_PARTITION_STRATEGY.get(scx.catalog.system_vars().dyncfgs());
     statement.with_options.push(CreateSinkOption {
         name: CreateSinkOptionName::PartitionStrategy,

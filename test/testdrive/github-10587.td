@@ -12,7 +12,7 @@ $ set-arg-default default-storage-size=1
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET max_clusters = 20
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/10587
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/3135
 #
 # This file uses the old create source syntax.
 

@@ -216,7 +216,16 @@ def main() -> int:
             mzdata = MZ_ROOT / "mzdata"
             scratch = MZ_ROOT / "scratch"
             db = urlparse(args.postgres).path.removeprefix("/")
-            _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
+            if db:
+                url_without_db = "/".join(args.postgres.split("/")[:-1])
+                if (
+                    _capture_sql(
+                        url_without_db,
+                        f"SELECT 1 FROM pg_database WHERE datname='{db}'",
+                    )
+                    != "1"
+                ):
+                    _run_sql(url_without_db, f"CREATE DATABASE {db}")
             for schema in ["consensus", "tsoracle", "storage"]:
                 if args.reset:
                     _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
@@ -278,7 +287,16 @@ def main() -> int:
             ]
             env["MZ_SYSTEM_PARAMETER_DEFAULT"] = ";".join(formatted_params)
             db = urlparse(args.postgres).path.removeprefix("/")
-            _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
+            if db:
+                url_without_db = "/".join(args.postgres.split("/")[:-1])
+                if (
+                    _capture_sql(
+                        url_without_db,
+                        f"SELECT 1 FROM pg_database WHERE datname='{db}'",
+                    )
+                    != "1"
+                ):
+                    _run_sql(url_without_db, f"CREATE DATABASE {db}")
             command += [f"--postgres-url={args.postgres}", *args.args]
     elif args.program == "test":
         if args.bazel:
@@ -505,7 +523,17 @@ def _run_sql(url: str, sql: str) -> None:
     except Exception as e:
         raise UIError(
             f"unable to execute postgres statement: {e}",
-            hint="Have you installed and started CockroachDB?",
+            hint="Have you installed and started Postgres or CockroachDB? Try setting MZDEV_POSTGRES",
+        )
+
+
+def _capture_sql(url: str, sql: str) -> str:
+    try:
+        return spawn.capture(["psql", "-AtX", url, "-c", sql])[:-1]
+    except Exception as e:
+        raise UIError(
+            f"unable to execute postgres statement: {e}",
+            hint="Have you installed and started Postgres or CockroachDB? Try setting MZDEV_POSTGRES",
         )
 
 

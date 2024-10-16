@@ -53,7 +53,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::TimestamplessUpdate;
+use crate::client::{AppendOnlyUpdate, StatusUpdate, TimestamplessUpdate};
 use crate::statistics::WebhookStatistics;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -117,19 +117,11 @@ pub enum DataSource {
     Progress,
     /// Data comes from external HTTP requests pushed to Materialize.
     Webhook,
+    /// The adapter layer appends timestamped data, i.e. it is a `TABLE`.
+    Table,
     /// This source's data is does not need to be managed by the storage
-    /// controller, e.g. it's a materialized view, table, or subsource.
-    Other(DataSourceOther),
-}
-
-/// Describes how data is written to a collection maintained outside of the
-/// storage controller.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DataSourceOther {
-    /// `environmentd` appends timestamped data, i.e. it is a `TABLE`.
-    TableWrites,
-    /// Compute maintains, i.e. it is a `MATERIALIZED VIEW`.
-    Compute,
+    /// controller, e.g. it's a materialized view or the catalog collection.
+    Other,
 }
 
 /// Describes a request to create a source.
@@ -147,10 +139,10 @@ pub struct CollectionDescription<T> {
 }
 
 impl<T> CollectionDescription<T> {
-    pub fn from_desc(desc: RelationDesc, source: DataSourceOther) -> Self {
+    pub fn for_table(desc: RelationDesc) -> Self {
         Self {
             desc,
-            data_source: DataSource::Other(source),
+            data_source: DataSource::Table,
             since: None,
             status_collection_id: None,
         }
@@ -298,20 +290,6 @@ pub trait StorageController: Debug {
     /// This method can be invoked immediately, at the potential expense of performance.
     fn initialization_complete(&mut self);
 
-    /// Allow this controller and instances controlled by it to write to
-    /// external systems.
-    ///
-    /// If the controller has previously been told about tables (via
-    /// [StorageController::create_collections]), the caller must provide a
-    /// `register_ts`, the timestamp at which any tables that are known to the
-    /// controller should be registered in the txn system.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the controller knows about tables but no `register_ts` is
-    /// provided.
-    async fn allow_writes(&mut self, register_ts: Option<Self::Timestamp>);
-
     /// Update storage configuration with new parameters.
     fn update_parameters(&mut self, config_params: StorageParameters);
 
@@ -359,6 +337,9 @@ pub trait StorageController: Debug {
     /// A collection is "active" when it has a non empty frontier of read
     /// capabilties.
     fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)>;
+
+    /// Returns the IDs of all active ingestions for the given storage instance.
+    fn active_ingestions(&self, instance_id: StorageInstanceId) -> &BTreeSet<GlobalId>;
 
     /// Checks whether a collection exists under the given `GlobalId`. Returns
     /// an error if the collection does not exist.
@@ -466,6 +447,12 @@ pub trait StorageController: Debug {
     async fn alter_ingestion_connections(
         &mut self,
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    /// Alters the data config for the specified source exports of the specified ingestions.
+    async fn alter_ingestion_export_data_configs(
+        &mut self,
+        source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     async fn alter_table_desc(
@@ -654,7 +641,7 @@ pub trait StorageController: Debug {
     /// Acquires and returns the desired read holds, advancing them to the since
     /// frontier when necessary.
     fn acquire_read_holds(
-        &mut self,
+        &self,
         desired_holds: Vec<GlobalId>,
     ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
 
@@ -704,6 +691,13 @@ pub trait StorageController: Debug {
     /// introspection type, as readers rely on this and might panic otherwise.
     fn append_introspection_updates(&mut self, type_: IntrospectionType, updates: Vec<(Row, Diff)>);
 
+    /// Records append-only status updates for the given introspection type.
+    fn append_status_introspection_updates(
+        &mut self,
+        type_: IntrospectionType,
+        updates: Vec<StatusUpdate>,
+    );
+
     /// Updates the desired state of the given introspection type.
     ///
     /// Rows passed in `op` MUST have the correct schema for the given
@@ -731,7 +725,7 @@ pub trait StorageController: Debug {
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     async fn real_time_recent_timestamp(
-        &mut self,
+        &self,
         source_ids: BTreeSet<GlobalId>,
         timeout: Duration,
     ) -> Result<
@@ -745,8 +739,8 @@ impl DataSource {
     /// source using txn-wal.
     pub fn in_txns(&self) -> bool {
         match self {
-            DataSource::Other(DataSourceOther::TableWrites) => true,
-            DataSource::Other(DataSourceOther::Compute)
+            DataSource::Table => true,
+            DataSource::Other
             | DataSource::Ingestion(_)
             | DataSource::IngestionExport { .. }
             | DataSource::Introspection(_)
@@ -841,7 +835,7 @@ impl<T: Timestamp> ExportState<T> {
 pub struct MonotonicAppender<T> {
     /// Channel that sends to a [`tokio::task`] which pushes updates to Persist.
     tx: mpsc::UnboundedSender<(
-        Vec<(Row, Diff)>,
+        Vec<AppendOnlyUpdate>,
         oneshot::Sender<Result<(), StorageError<T>>>,
     )>,
 }
@@ -849,14 +843,14 @@ pub struct MonotonicAppender<T> {
 impl<T> MonotonicAppender<T> {
     pub fn new(
         tx: mpsc::UnboundedSender<(
-            Vec<(Row, Diff)>,
+            Vec<AppendOnlyUpdate>,
             oneshot::Sender<Result<(), StorageError<T>>>,
         )>,
     ) -> Self {
         MonotonicAppender { tx }
     }
 
-    pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError<T>> {
+    pub async fn append(&self, updates: Vec<AppendOnlyUpdate>) -> Result<(), StorageError<T>> {
         let (tx, rx) = oneshot::channel();
 
         // Send our update to the CollectionManager.

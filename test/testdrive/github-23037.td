@@ -13,7 +13,7 @@
 > CREATE SOURCE auction_house
   IN CLUSTER gh_23037_cluster
   FROM LOAD GENERATOR AUCTION
-  (TICK INTERVAL '0.01s')
+  (TICK INTERVAL '0.01s', UP TO 1000)
 
 > CREATE TABLE accounts FROM SOURCE auction_house (REFERENCE accounts);
 > CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);

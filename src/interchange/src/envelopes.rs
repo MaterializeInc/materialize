@@ -152,7 +152,7 @@ pub(crate) fn dbz_envelope(
     let row = ColumnType {
         nullable: true,
         scalar_type: ScalarType::Record {
-            fields: names_and_types,
+            fields: names_and_types.into(),
             custom_id: Some(DBZ_ROW_TYPE_ID),
         },
     };

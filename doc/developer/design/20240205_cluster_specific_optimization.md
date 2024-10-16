@@ -310,7 +310,7 @@ From @benesch:
 
 ---
 
-[Automatically duplicate dataflow-backed catalog items for experimentation](https://github.com/MaterializeInc/materialize/issues/25166)
+[Automatically duplicate dataflow-backed catalog items for experimentation](https://github.com/MaterializeInc/database-issues/issues/7515)
 
 ---
 

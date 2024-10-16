@@ -133,7 +133,7 @@ encoding we are using corresponds to the hardcoded on setting.
 If the commit message closes an issue, you can tell GitHub to automatically
 close the issue when the PR lands by including the magic phrase
 
-    Fixes #1234.
+    Fixes database-issues#1234.
 
 in a commit or PR description. There are several other [supported
 phrasings][pr-phrasings], if you prefer.
@@ -487,16 +487,7 @@ In very rare cases, it may be necessary to merge a PR whose tests are failing.
 This situation typically only occurs with chicken-and-egg CI configuration
 issues, where PR builds are broken until a fix can be merged to `main`.
 
-To perform a "god mode" merge, you can temporarily lift the branch restrictions
-on the `main` branch. Navigate to the [branch protection rules for the `main`
-branch][branch-protection] and uncheck the "Include administrators" box. Do
-*not* delete the rules or uncheck any other boxes, as it is much harder to
-reverse those changes.
-
-Your PR will be mergeable after you uncheck the "Include administrators" box,
-though you will have to click through several warning screens. Once the PR is
-merged, be sure to re-enable the "Include administrators" setting to prevent
-accidents.
+Only a few people have sufficient access, inquire in Slack if this situation arises.
 
 ## Reviewing changes
 
@@ -935,19 +926,6 @@ submit a PR to fix it!
 
 * Accept PRs that improve the overall health of the codebase, even if they
   are not perfect.
-
-## Common Issues
-
-### Stuck CLA check
-
-Taken from the [cla-assistant `README.md`](https://github.com/cla-assistant/cla-assistant/blob/main/COMMON_ISSUES.md#cla-assistant-status-or-comment-not-updated-1).
-
-Sometimes it happens that while you signed the CLA the status doesn't get updated.
-Might be a technical issue or some other problem. Most temporary issues can be solved by manually triggering a new check with navigating to
-```
-https://cla-assistant.io/check/<orgname>/<reponame>?pullRequest=<pr_number>
-```
-replacing `<orgname>`, `<reponame>` and `<pr_number>` with your respective values.
 
 [`29f8f46b9`]: https://github.com/MaterializeInc/materialize/commit/29f8f46b92280071c96b294d414675aa626f9403
 [#3808]: https://github.com/MaterializeInc/materialize/pull/3808

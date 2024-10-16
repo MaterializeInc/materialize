@@ -1,6 +1,6 @@
 ---
 title: "CREATE SOURCE: MySQL"
-description: "Connecting Materialize to a MySQL database"
+description: "Connecting Materialize to a MySQL database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
   main:
@@ -10,7 +10,7 @@ menu:
     weight: 20
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{% create-source/intro %}}
 Materialize supports MySQL (5.7+) as a real-time data source. To connect to a
@@ -48,10 +48,10 @@ _src_name_  | The name for the source.
 
 ### `CONNECTION` options
 
-Field                                | Value                           | Description
--------------------------------------|---------------------------------|-------------------------------------
-{{< if-unreleased "v0.117" >}}`IGNORE COLUMNS`{{< /if-unreleased >}} {{< if-released "v0.117" >}}`EXCLUDE COLUMNS`{{< /if-released >}} | A list of fully-qualified names | Exclude specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
-`TEXT COLUMNS`                       | A list of fully-qualified names | Decode data as `text` for specific columns that contain MySQL types that are [unsupported in Materialize](#supported-types).
+Field             | Value                           | Description
+------------------|---------------------------------|-------------------------------------
+`EXCLUDE COLUMNS` | A list of fully-qualified names | Exclude specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
+`TEXT COLUMNS`    | A list of fully-qualified names | Decode data as `text` for specific columns that contain MySQL types that are [unsupported in Materialize](#supported-types).
 
 ## Features
 
@@ -256,17 +256,9 @@ following types:
 <li><code>year</code></li>
 </ul>
 
-{{< if-unreleased "v0.117" >}}
-The specified columns will be treated as `text`, and will thus not offer the
-expected MySQL type features. For any unsupported data types not listed above,
-use the [`IGNORE COLUMNS`](#ignoring-columns) option.
-{{< /if-unreleased >}}
-
-{{< if-released "v0.117" >}}
 The specified columns will be treated as `text`, and will thus not offer the
 expected MySQL type features. For any unsupported data types not listed above,
 use the [`EXCLUDE COLUMNS`](#excluding-columns) option.
-{{< /if-released >}}
 
 ##### Truncation
 
@@ -313,9 +305,31 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 
 If your MySQL server is not exposed to the public internet, you can
 [tunnel the connection](/sql/create-connection/#network-security-connections)
-through an SSH bastion host.
+through an AWS PrivateLink service or an SSH bastion host SSH bastion host.
 
 {{< tabs tabID="1" >}}
+{{< tab "AWS PrivateLink">}}
+
+```mzsql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+   SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+   AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+);
+
+CREATE CONNECTION mysql_connection TO MYSQL (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 3306,
+    USER 'root',
+    PASSWORD SECRET mysqlpass,
+    AWS PRIVATELINK privatelink_svc
+);
+```
+
+For step-by-step instructions on creating AWS PrivateLink connections and
+configuring an AWS PrivateLink service to accept connections from Materialize,
+check [this guide](/ops/network-security/privatelink/).
+
+{{< /tab >}}
 {{< tab "SSH tunnel">}}
 ```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
@@ -380,23 +394,6 @@ CREATE SOURCE mz_source
   FOR ALL TABLES;
 ```
 
-{{< if-unreleased "v0.117" >}}
-#### Ignoring columns
-
-MySQL doesn't provide a way to filter out columns from the replication stream.
-To exclude specific upstream columns from being ingested, use the `IGNORE
-COLUMNS` option.
-
-```mzsql
-CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_connection (
-    IGNORE COLUMNS (mydb.table_1.column_to_ignore)
-  )
-  FOR ALL TABLES;
-```
-{{< /if-unreleased >}}
-
-{{< if-released "v0.117" >}}
 #### Excluding columns
 
 MySQL doesn't provide a way to filter out columns from the replication stream.
@@ -410,7 +407,6 @@ CREATE SOURCE mz_source
   )
   FOR ALL TABLES;
 ```
-{{< /if-released >}}
 
 ### Handling errors and schema changes
 

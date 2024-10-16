@@ -24,8 +24,8 @@ $ schema-registry-wait topic=sql-server.test.dbo.types_table
   ENVELOPE DEBEZIUM;
 
 #
-# DATETIMEOFFSET is replicated as TEXT, see https://github.com/MaterializeInc/materialize/issues/8017
-# DATETIME2 is replicated as BIGINT, see https://github.com/MaterializeInc/materialize/issues/8041
+# DATETIMEOFFSET is replicated as TEXT, see https://github.com/MaterializeInc/database-issues/issues/2453
+# DATETIME2 is replicated as BIGINT, see https://github.com/MaterializeInc/database-issues/issues/2458
 # SMALLDATETIME does not store seconds or fractional seconds
 
 > SELECT * FROM types_table

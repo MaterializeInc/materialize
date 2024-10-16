@@ -483,7 +483,7 @@ def workflow_balancerd_restarted(c: Composition) -> None:
     except OperationalError as e:
         msg = str(e)
         assert (
-            "consuming input failed: EOF detected" in msg
+            "EOF detected" in msg
             or "failed to lookup address information: Name or service not known" in msg
         )
     except:

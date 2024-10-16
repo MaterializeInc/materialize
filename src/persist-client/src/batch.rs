@@ -62,7 +62,6 @@ use crate::internal::state::{
 use crate::stats::{
     encode_updates, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
 };
-use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.batch.rs"));
@@ -310,7 +309,7 @@ where
     /// to be _not possible_ for partially ordered times. It is believed that we
     /// could fix this by collecting different metadata in batch creation (e.g.
     /// the join of or an antichain of the original contained timestamps), but
-    /// the experience of #26384 has shaken our confidence in our own abilities
+    /// the experience of database-issues#7825 has shaken our confidence in our own abilities
     /// to reason about partially ordered times and anyway all the initial uses
     /// have totally ordered times.
     pub fn rewrite_ts(
@@ -344,7 +343,6 @@ pub struct BatchBuilderConfig {
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) batch_columnar_format: BatchColumnarFormat,
     pub(crate) batch_columnar_format_percent: usize,
-    pub(crate) batch_record_part_format: bool,
     pub(crate) inline_writes_single_max_bytes: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
@@ -375,12 +373,6 @@ pub(crate) const BATCH_COLUMNAR_FORMAT_PERCENT: Config<usize> = Config::new(
     "Percent of parts to write using 'persist_batch_columnar_format', falling back to 'row'.",
 );
 
-pub(crate) const BATCH_RECORD_PART_FORMAT: Config<bool> = Config::new(
-    "persist_batch_record_part_format",
-    false,
-    "Wether we record the format of the Part in state (Materialize).",
-);
-
 pub(crate) const ENCODING_ENABLE_DICTIONARY: Config<bool> = Config::new(
     "persist_encoding_enable_dictionary",
     false,
@@ -403,6 +395,15 @@ pub(crate) const STRUCTURED_ORDER: Config<bool> = Config::new(
     "persist_batch_structured_order",
     false,
     "If enabled, output compaction batches in structured-data order.",
+);
+
+pub(crate) const STRUCTURED_ORDER_UNTIL_SHARD: Config<&'static str> = Config::new(
+    "persist_batch_structured_order_from_shard",
+    "sz",
+    "Restrict shards using structured ordering to those shards with formatted ids less than \
+    the given string. (For example, `s0` will disable it for all shards, `s8` will enable it for \
+    half of all shards, `s8888` will enable it for slightly more shards, and `sz` will enable it \
+    for everyone.)",
 );
 
 pub(crate) const STRUCTURED_KEY_LOWER_LEN: Config<usize> = Config::new(
@@ -440,7 +441,7 @@ pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
 
 impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.
-    pub fn new(value: &PersistConfig, _writer_id: &WriterId, expect_consolidated: bool) -> Self {
+    pub fn new(value: &PersistConfig, shard_id: ShardId, expect_consolidated: bool) -> Self {
         let writer_key = WriterKey::for_version(&value.build_version);
 
         let batch_columnar_format =
@@ -448,10 +449,13 @@ impl BatchBuilderConfig {
         let batch_columnar_format_percent = BATCH_COLUMNAR_FORMAT_PERCENT.get(value);
 
         let record_run_meta = RECORD_RUN_META.get(value);
+        let structured_order = STRUCTURED_ORDER.get(value) && {
+            shard_id.to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(value)
+        };
         let expected_order = if expect_consolidated {
             // We never generate structured-order runs when we're not also generating metadata,
             // or the reader couldn't recognize them.
-            if record_run_meta && STRUCTURED_ORDER.get(value) {
+            if record_run_meta && structured_order {
                 RunOrder::Structured
             } else {
                 RunOrder::Codec
@@ -469,7 +473,6 @@ impl BatchBuilderConfig {
                 .batch_builder_max_outstanding_parts(),
             batch_columnar_format,
             batch_columnar_format_percent,
-            batch_record_part_format: BATCH_RECORD_PART_FORMAT.get(value),
             inline_writes_single_max_bytes: INLINE_WRITES_SINGLE_MAX_BYTES.get(value),
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
             stats_budget: STATS_BUDGET_BYTES.get(value),
@@ -518,7 +521,7 @@ pub(crate) struct UntrimmableColumns {
 impl UntrimmableColumns {
     pub(crate) fn should_retain(&self, name: &str) -> bool {
         // TODO: see if there's a better way to match different formats than lowercasing
-        // https://github.com/MaterializeInc/materialize/issues/21353#issue-1863623805
+        // https://github.com/MaterializeInc/database-issues/issues/6421#issue-1863623805
         let name_lower = name.to_lowercase();
         for s in &self.equals {
             if *s == name_lower {
@@ -1300,6 +1303,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
         batch_metrics.bytes.inc_by(u64::cast_from(payload_len));
         batch_metrics.goodbytes.inc_by(u64::cast_from(goodbytes));
+        match cfg.expected_order {
+            RunOrder::Unordered => batch_metrics.unordered.inc(),
+            RunOrder::Codec => batch_metrics.codec_order.inc(),
+            RunOrder::Structured => batch_metrics.structured_order.inc(),
+        }
         let stats = stats.map(|(stats, stats_step_timing, trimmed_bytes)| {
             batch_metrics
                 .step_stats
@@ -1313,11 +1321,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             }
             stats
         });
-        let format = if cfg.batch_record_part_format {
-            Some(cfg.batch_columnar_format)
-        } else {
-            None
-        };
 
         BatchPart::Hollow(HollowBatchPart {
             key: partial_key,
@@ -1327,7 +1330,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             stats,
             ts_rewrite,
             diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
-            format,
+            format: Some(cfg.batch_columnar_format),
             schema_id,
         })
     }
@@ -1670,5 +1673,42 @@ mod tests {
         let (actual, _) = read.expect_listen(0).await.read_until(&3).await;
         let expected = vec![(((Ok("foo".to_owned())), Ok(())), 2, 1)];
         assert_eq!(actual, expected);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn structured_lowers() {
+        let cache = PersistClientCache::new_no_metrics();
+        // Ensure structured data is calculated, and that we give some budget for a key lower.
+        cache.cfg().set_config(&BATCH_COLUMNAR_FORMAT, "both_v2");
+        cache.cfg().set_config(&BATCH_COLUMNAR_FORMAT_PERCENT, 100);
+        cache.cfg().set_config(&STRUCTURED_KEY_LOWER_LEN, 1024);
+        let client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed");
+        let shard_id = ShardId::new();
+        let (mut write, _) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        let batch = write
+            .expect_batch(
+                &[
+                    (("1".into(), "one".into()), 1, 1),
+                    (("2".into(), "two".into()), 2, 1),
+                    (("3".into(), "three".into()), 3, 1),
+                ],
+                0,
+                4,
+            )
+            .await;
+
+        assert_eq!(batch.batch.part_count(), 1);
+        let [part] = batch.batch.parts.as_slice() else {
+            panic!("expected single part")
+        };
+        // Verifies that the structured key lower is stored and decoded.
+        assert!(part.structured_key_lower().is_some());
     }
 }

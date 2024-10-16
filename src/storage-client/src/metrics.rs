@@ -127,6 +127,7 @@ impl InstanceMetrics {
             run_sinks_count: command_gauge("run_sinks"),
             allow_compaction_count: command_gauge("allow_compaction"),
             initialization_complete_count: command_gauge("initialization_complete"),
+            allow_writes_count: command_gauge("allow_writes"),
             update_configuration_count: command_gauge("update_configuration"),
         }
     }
@@ -180,6 +181,8 @@ pub struct HistoryMetrics {
     pub allow_compaction_count: UIntGauge,
     /// Number of `InitializationComplete` commands.
     pub initialization_complete_count: UIntGauge,
+    /// Number of `AllowWrites` commands.
+    pub allow_writes_count: UIntGauge,
     /// Number of `UpdateConfiguration` commands.
     pub update_configuration_count: UIntGauge,
 }
@@ -191,6 +194,7 @@ impl HistoryMetrics {
         self.run_sinks_count.set(0);
         self.allow_compaction_count.set(0);
         self.initialization_complete_count.set(0);
+        self.allow_writes_count.set(0);
         self.update_configuration_count.set(0);
     }
 }

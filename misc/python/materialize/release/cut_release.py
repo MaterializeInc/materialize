@@ -10,12 +10,17 @@
 """Cut a new release and push the tag to the upstream Materialize repository."""
 
 import argparse
+import re
 import sys
 
 from semver.version import Version
 
 from materialize import MZ_ROOT, spawn
 from materialize.git import checkout, get_branch_name, tag_annotated
+
+
+def parse_version(version: str) -> Version:
+    return Version.parse(re.sub(r"^v", "", version))
 
 
 def main():
@@ -32,7 +37,7 @@ def main():
     parser.add_argument(
         "--version",
         help="Version of release",
-        type=Version.parse,
+        type=parse_version,
         required=True,
     )
     parser.add_argument(

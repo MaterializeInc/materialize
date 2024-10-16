@@ -224,7 +224,6 @@ case "$cmd" in
             --env POLAR_SIGNALS_API_TOKEN
             --env PRODUCTION_ANALYTICS_USERNAME
             --env PRODUCTION_ANALYTICS_APP_PASSWORD
-            --env PRODUCTION_ANALYTICS_MZ_CLI_APP_PASSWORD
             --env PYPI_TOKEN
             --env MZ_DEV_BUILD_SHA
             # For Miri with nightly Rust
@@ -244,6 +243,7 @@ case "$cmd" in
             # For cloud canary
             --env REDPANDA_CLOUD_CLIENT_ID
             --env REDPANDA_CLOUD_CLIENT_SECRET
+            --env QA_BENCHMARKING_APP_PASSWORD
         )
 
         if [[ $detach_container == "true" ]]; then
@@ -333,6 +333,11 @@ case "$cmd" in
             args+=(
                 --env "RUSTC_WRAPPER=sccache"
                 --env SCCACHE_BUCKET
+            )
+        fi
+        if [[ "${CI_BAZEL_BUILD:-}" ]]; then
+            args+=(
+                --tmpfs "/dev/shm:exec,dev,suid,size=128g"
             )
         fi
         # For git-worktrees add the original repository at its original path

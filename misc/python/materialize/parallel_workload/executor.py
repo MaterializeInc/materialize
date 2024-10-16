@@ -81,16 +81,7 @@ class Executor:
 
     def commit(self, http: Http = Http.RANDOM) -> None:
         self.insert_table = None
-        try:
-            if self.use_ws and http != Http.NO:
-                self.execute("commit")
-            else:
-                self.log("commit")
-                self.cur.connection.commit()
-        except QueryError:
-            raise
-        except Exception as e:
-            raise QueryError(str(e), "commit")
+        self.execute("commit")
         # TODO(def-): Enable when things are stable
         # self.use_ws = self.rng.choice([True, False]) if self.ws else False
 
@@ -151,7 +142,11 @@ class Executor:
                         raise QueryError(str(e), query)
                 else:
                     try:
-                        self.cur.execute(query.encode())
+                        if query == "commit":
+                            self.log("commit")
+                            self.cur.connection.commit()
+                        else:
+                            self.cur.execute(query.encode())
                     except Exception as e:
                         raise QueryError(str(e), query)
 

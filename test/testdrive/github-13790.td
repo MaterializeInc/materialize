@@ -9,7 +9,7 @@
 
 $ set-arg-default default-replica-size=1
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/13790
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/3955
 
 # The contents of the introspection tables depend on the replica size
 $ skip-if

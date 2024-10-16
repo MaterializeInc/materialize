@@ -796,7 +796,7 @@ mod non_negative {
     /// These rules are .. somewhat arbitrary, and likely reflect observed opportunities. For example,
     /// while we do relate `distinct(filter(A)) <= distinct(A)`, we do not relate `distinct(A) <= A`.
     /// Further thoughts about the class of optimizations, and whether there should be more or fewer,
-    /// can be found here: <https://github.com/MaterializeInc/materialize/issues/14142>.
+    /// can be found here: <https://github.com/MaterializeInc/database-issues/issues/4044>.
     fn is_superset_of(mut lhs: &MirRelationExpr, mut rhs: &MirRelationExpr) -> bool {
         // This implementation is iterative.
         // Before converting this implementation to recursive (e.g. to improve its accuracy)

@@ -48,6 +48,14 @@ class QueryExecution:
     def get_outcome_by_strategy_key(self) -> dict[EvaluationStrategyKey, QueryOutcome]:
         return {outcome.strategy.identifier: outcome for outcome in self.outcomes}
 
+    def get_first_failing_outcome(self) -> QueryFailure:
+        for outcome in self.outcomes:
+            if not outcome.successful:
+                assert isinstance(outcome, QueryFailure)
+                return outcome
+
+        raise RuntimeError("No failing outcome found")
+
     def __str__(self) -> str:
         return f"QueryExecution with {len(self.outcomes)} outcomes for template query: {self.generic_sql})"
 

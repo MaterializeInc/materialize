@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# fmt — formats Rust and Python code.
+# fmt — formats Rust and Python code as well as Protobuf files.
 
 set -euo pipefail
 
@@ -19,6 +19,7 @@ cd "$(dirname "$0")/.."
 
 try cargo fmt
 try bin/bazel fmt
+try buf format src -w
 
 if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
   bin/pyfmt

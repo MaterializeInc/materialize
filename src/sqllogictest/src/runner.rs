@@ -1084,7 +1084,7 @@ impl<'a> RunnerInner<'a> {
             storage_usage_retention_period: None,
             segment_api_key: None,
             segment_client_side: false,
-            egress_ips: vec![],
+            egress_addresses: vec![],
             aws_account_id: None,
             aws_privatelink_availability_zones: None,
             launchdarkly_sdk_key: None,
@@ -1356,7 +1356,7 @@ impl<'a> RunnerInner<'a> {
         match output {
             Ok(_) => {
                 if self.auto_transactions && !*in_transaction {
-                    // No ISOLATION LEVEL SERIALIZABLE because of #18136
+                    // No ISOLATION LEVEL SERIALIZABLE because of database-issues#5323
                     self.client.execute("BEGIN", &[]).await?;
                     *in_transaction = true;
                 }

@@ -19,20 +19,22 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
-    ObjectType, SchedulingDecisionsWithReasonsV1, VersionedEvent,
+    ObjectType, SchedulingDecisionsWithReasonsV1, VersionedEvent, VersionedStorageUsage,
 };
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::Transaction;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterConfig, DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind,
-    TemporaryItem,
+    CatalogItem, ClusterConfig, DataSourceDesc, SourceReferences, StateDiff, StateUpdate,
+    StateUpdateKind, TemporaryItem,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
+use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, GlobalId};
@@ -93,13 +95,12 @@ pub enum Op {
     CreateCluster {
         id: ClusterId,
         name: String,
-        introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_sources: Vec<&'static BuiltinLog>,
         owner_id: RoleId,
         config: ClusterConfig,
     },
     CreateClusterReplica {
         cluster_id: ClusterId,
-        id: ReplicaId,
         name: String,
         config: ReplicaConfig,
         owner_id: RoleId,
@@ -179,6 +180,10 @@ pub enum Op {
         name: QualifiedItemName,
         to_item: CatalogItem,
     },
+    UpdateSourceReferences {
+        source_id: GlobalId,
+        references: SourceReferences,
+    },
     UpdateSystemConfiguration {
         name: String,
         value: OwnedVarInput,
@@ -187,17 +192,16 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
-    /// Performs updates to weird builtin tables, such as
-    /// `mz_cluster_replica_statuses`, which is ephemeral state and should be a
-    /// builtin source.
+    /// Performs updates to the storage usage table, which probably should be a builtin source.
     ///
     /// TODO(jkosh44) In a multi-writer or high availability catalog world, this
-    /// will not work. If a process crashes after updating the durable catalog
+    /// might not work. If a process crashes after collecting storage usage events
     /// but before updating the builtin table, then another listening catalog
     /// will never know to update the builtin table.
-    WeirdBuiltinTableUpdates {
-        builtin_table_update: BuiltinTableUpdate,
-        audit_log: Vec<(EventType, ObjectType, EventDetails)>,
+    WeirdStorageUsageUpdates {
+        object_id: Option<String>,
+        size_bytes: u64,
+        collection_timestamp: EpochMillis,
     },
     /// Performs a dry run of the commit, but errors with
     /// [`AdapterError::TransactionDryRun`].
@@ -843,6 +847,12 @@ impl Catalog {
                 let privileges: Vec<_> =
                     merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                         .collect();
+                let introspection_source_ids =
+                    tx.allocate_system_item_ids(usize_to_u64(introspection_sources.len()))?;
+                let introspection_sources = introspection_sources
+                    .into_iter()
+                    .zip(introspection_source_ids.into_iter())
+                    .collect();
 
                 tx.insert_user_cluster(
                     id,
@@ -870,7 +880,6 @@ impl Catalog {
             }
             Op::CreateClusterReplica {
                 cluster_id,
-                id,
                 name,
                 config,
                 owner_id,
@@ -882,7 +891,8 @@ impl Catalog {
                     )));
                 }
                 let cluster = state.get_cluster(cluster_id);
-                tx.insert_cluster_replica(cluster_id, id, &name, config.clone().into(), owner_id)?;
+                let id =
+                    tx.insert_cluster_replica(cluster_id, &name, config.clone().into(), owner_id)?;
                 if let ReplicaLocation::Managed(ManagedReplicaLocation {
                     size,
                     disk,
@@ -1131,6 +1141,20 @@ impl Catalog {
                     )?;
                 }
             }
+            Op::UpdateSourceReferences {
+                source_id,
+                references,
+            } => {
+                tx.update_source_references(
+                    source_id,
+                    references
+                        .references
+                        .into_iter()
+                        .map(|reference| reference.into())
+                        .collect(),
+                    references.updated_at,
+                )?;
+            }
             Op::DropObjects(drop_object_infos) => {
                 // Generate all of the objects that need to get dropped.
                 let delta = ObjectsToDrop::generate(drop_object_infos, state, session)?;
@@ -1156,6 +1180,10 @@ impl Catalog {
 
                     if entry.item().is_storage_collection() {
                         storage_collections_to_drop.insert(item_id);
+                    }
+
+                    if state.source_references.contains_key(&item_id) {
+                        tx.remove_source_references(item_id)?;
                     }
 
                     if Self::should_audit_log_item(entry.item()) {
@@ -2064,23 +2092,17 @@ impl Catalog {
                     EventDetails::ResetAllV1,
                 )?;
             }
-            Op::WeirdBuiltinTableUpdates {
-                builtin_table_update,
-                audit_log,
+            Op::WeirdStorageUsageUpdates {
+                object_id,
+                size_bytes,
+                collection_timestamp,
             } => {
+                let id = tx.allocate_storage_usage_ids()?;
+                let metric =
+                    VersionedStorageUsage::new(id, object_id, size_bytes, collection_timestamp);
+                let builtin_table_update = state.pack_storage_usage_update(metric, 1);
+                let builtin_table_update = state.resolve_builtin_table_update(builtin_table_update);
                 weird_builtin_table_update = Some(builtin_table_update);
-                for (ev_type, ob_type, ev_details) in audit_log {
-                    CatalogState::add_to_audit_log(
-                        &state.system_configuration,
-                        oracle_write_ts,
-                        session,
-                        tx,
-                        audit_events,
-                        ev_type,
-                        ob_type,
-                        ev_details,
-                    )?;
-                }
             }
         };
         Ok((weird_builtin_table_update, temporary_item_updates))

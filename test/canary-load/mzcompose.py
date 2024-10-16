@@ -123,7 +123,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             except FailedTestExecutionError as e:
                 assert len(e.errors) > 0, "Exception contains no errors"
                 for error in e.errors:
-                    # TODO(def-): Remove when materialize#22576 is fixed
+                    # TODO(def-): Remove when database-issues#6825 is fixed
                     if "Non-positive multiplicity in DistinctBy" in error.message:
                         continue
                     print(
@@ -133,7 +133,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     failures.append(error)
             except CommandFailureCausedUIError as e:
                 msg = (e.stdout or "") + (e.stderr or "")
-                # TODO(def-): Remove when materialize#22576 is fixed
+                # TODO(def-): Remove when database-issues#6825 is fixed
                 if "Non-positive multiplicity in DistinctBy" in msg:
                     continue
                 print(f"Test failure occurred ({msg}), collecting it, and continuing.")
@@ -261,14 +261,14 @@ def validate_updated_data(c: Composition, i: int) -> None:
     c.testdrive(
         dedent(
             f"""
-                # TODO: Reenable when materialize#18645 is fixed
+                # TODO: Reenable when database-issues#5511 is fixed
                 # > SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0
                 # 0
 
                 # > SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'
                 # 0
 
-                > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 10
+                > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.pg_wmr WHERE degree > 10
                 0
 
                 > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_mysql_cdc.mysql_wmr WHERE degree > 10
@@ -333,7 +333,7 @@ def validate_data_through_http_connection(
     result = http_sql_query(host, "SELECT 1", token)
     assert result == [["1"]]
 
-    # TODO: Reenable when materialize#18645 is fixed
+    # TODO: Reenable when database-issues#5511 is fixed
     # result = http_sql_query(
     #    host,
     #    "SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0",
@@ -350,7 +350,7 @@ def validate_data_through_http_connection(
 
     result = http_sql_query(
         host,
-        "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 10",
+        "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.pg_wmr WHERE degree > 10",
         token,
     )
     assert result == [["0"]]

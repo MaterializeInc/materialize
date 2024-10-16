@@ -7,11 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-fn main() {
-    std::env::set_var("PROTOC", mz_build_tools::protoc());
-    std::env::set_var("PROTOC_INCLUDE", mz_build_tools::protoc_include());
+use std::path::PathBuf;
 
+fn main() {
     prost_build::Config::new()
+        .protoc_executable(mz_build_tools::protoc())
         .btree_map(["."])
         .type_attribute(
             ".mz_proto.ProtoDuration",
@@ -23,7 +23,7 @@ fn main() {
                 "proto/src/proto.proto",
                 "proto/src/tokio_postgres.proto",
             ],
-            &[".."],
+            &[PathBuf::from(".."), mz_build_tools::protoc_include()],
         )
         .unwrap_or_else(|e| panic!("{e}"))
 }

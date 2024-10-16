@@ -152,7 +152,7 @@ CREATE PUBLICATION another_publication FOR TABLE another_schema.another_table;
 
 #
 # Test that slots created for replication sources are deleted on DROP
-# TODO: enable once we land materialize#24586
+# TODO: enable once we land database-issues#7327
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
 # Sneak in a test for pg_source_snapshot_statement_timeout, pg_source_wal_sender_timeout
@@ -167,7 +167,7 @@ ALTER SYSTEM SET pg_source_wal_sender_timeout = 0;
 
 > CREATE TABLE pk_table FROM SOURCE "test_slot_source" (REFERENCE pk_table);
 
-# TODO: enable once we land materialize#24586
+# TODO: enable once we land database-issues#7327
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
 
 > SHOW SUBSOURCES ON test_slot_source
@@ -175,7 +175,7 @@ test_slot_source_progress progress
 
 > DROP SOURCE test_slot_source CASCADE
 
-# TODO: enable once we land materialize#24586
+# TODO: enable once we land database-issues#7327
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
 $ postgres-execute connection=mz_system
@@ -337,7 +337,7 @@ public          trailing_space_nopk
 public          "\"\"\"literal_quotes\"\"\""
 conflict_schema conflict_table
 
-# TODO: materialize#29373 (introspection tables)
+# TODO: database-issues#8511 (introspection tables)
 # Ensure all ingestion export subsources have an ID greater than the primary source ID
 > SELECT bool_and(primary_source_id < subsource_id)
   FROM
@@ -593,7 +593,7 @@ true
 2 two_two
 5 five
 
-# TODO: materialize#29373 (introspection tables)
+# TODO: database-issues#8511 (introspection tables)
 # > SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table' AND type = 'table';
 # true
 

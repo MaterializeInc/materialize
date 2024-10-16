@@ -2,7 +2,7 @@
 # transaction. This is a Materialize-specific deviation from PostgreSQL to allow
 # optimizations for single-statement implicit transactions in the extended
 # query protocol.
-# See #15255 and #24093.
+# See materialize#15255 and materialize#24093.
 send
 Parse {"query": "VALUES (1), (2)"}
 Bind {"portal": "c"}

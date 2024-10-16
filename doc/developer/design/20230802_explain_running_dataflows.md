@@ -1,5 +1,5 @@
 - Feature name: `EXPLAIN <catalog item>`
-- Associated: MaterializeInc/materialize#20652 (tracked in MaterializeInc/console#549)
+- Associated: MaterializeInc/database-issues#6222 (tracked in MaterializeInc/console#549)
 
 # Summary
 [summary]: #summary
@@ -60,7 +60,7 @@ Depending on the agreed solution, we might want to punt on
 EXPLAIN PHYSICAL PLAN FOR [INDEX $name | MATERIALIZED VIEW $name]
 ```
 
-queries for the MVP delivered by MaterializeInc/materialize#20652.
+queries for the MVP delivered by MaterializeInc/database-issues#6222.
 
 # Explanation
 [explanation]: #explanation
@@ -125,7 +125,7 @@ There are two competing approaches that both follow the same high-level structur
 The [alternatives](#considered-alternatives) presents a design that overall seems to be the obvious solution.
 However, due to some inerent issues that arise when trying to implement it, my proposal is slightly different.
 It will allow us to ship the feature and buy us some time to figure out how to properly refactor the code in order to ultimately move to the (conceptually better) alternative solution.
-Most likely, steps in this direction can be made with MaterializeInc/materialize#20569, but I don't think we should take this as a hard prerequisite for shipping MaterializeInc/materialize#20652.
+Most likely, steps in this direction can be made with MaterializeInc/materialize#20569, but I don't think we should take this as a hard prerequisite for shipping MaterializeInc/database-issues#6222.
 
 ## Provision plan memoization infrastructure in the `Catalog`
 
@@ -179,7 +179,7 @@ Instead, we can just use the new `Catalog` API to manage the lifecycle of plans 
     1. Towards the end of the `Catalog::transact` body (`transact` calls `transact_inner` which has `drop_item` calls, but lacks a `self` parameter).
     2. After `Catalog::apply_in_memory_builtin_migration` calls.
 
-With this solution, we are not forced to commit to the refactoring refort as part of delivering MaterializeInc/materialize#20652.
+With this solution, we are not forced to commit to the refactoring refort as part of delivering MaterializeInc/database-issues#6222.
 
 ## Refactor `EXPLAIN` handling
 
@@ -225,7 +225,7 @@ List all feature flags, their behavior and when it is safe to change their value
 
 A somewhat hot take is that people should not rely on `EXPLAIN` to get runtime information.
 Instead, we can try to make our dataflow graph visualization better and remove the `EXPLAIN <catalog item>` variants altogether.
-The `EXPLAIN CREATE ...` syntax proposed in MaterializeInc/materialize#18089 should be sufficient for people actively developing SQL queries that are meant to be installed as new dataflows.
+The `EXPLAIN CREATE ...` syntax proposed in MaterializeInc/database-issues#5301 should be sufficient for people actively developing SQL queries that are meant to be installed as new dataflows.
 
 # Considered alternatives
 [considreed-alternatives]: #considreed-alternatives
@@ -284,7 +284,7 @@ However, the draft PR implementation revealed some issues with that (see [this P
 [future-work]: #future-work
 
 Note that `UsedIndexes` is currently computed inside `optimize_dataflow_index_imports`, which is  called towards the end of the “global” MIR optimization phase in `optimize_dataflow`.
-This will change with MaterializeInc/materialize#16598 and will most certainly cause conflicts if we don't coordinate the work between MaterializeInc/materialize#20652 (this doc) and MaterializeInc/materialize#16598.
+This will change with MaterializeInc/database-issues#4806 and will most certainly cause conflicts if we don't coordinate the work between MaterializeInc/database-issues#6222 (this doc) and MaterializeInc/database-issues#4806.
 
 ---
 

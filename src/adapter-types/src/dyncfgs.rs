@@ -38,10 +38,11 @@ pub const ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT: Config<bool> = Config::new(
     "Whether to panic if the maximum wait time is reached but preflight checks have not succeeded.",
 );
 
-pub const WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL: Config<Duration> = Config::new(
+pub const WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL: Config<Duration> = Config::new(
+    // The feature flag name is historical.
     "0dt_deployment_hydration_check_interval",
     Duration::from_secs(10),
-    "Interval at which to check cluster hydration status, when doing zero-downtime deployment.",
+    "Interval at which to check whether clusters are caught up, when doing zero-downtime deployment.",
 );
 
 pub const ENABLE_0DT_CAUGHT_UP_CHECK: Config<bool> = Config::new(
@@ -96,6 +97,13 @@ pub const DEFAULT_SINK_PARTITION_STRATEGY: Config<&str> = Config::new(
     "The default sink partitioning strategy for an environment. It defaults to 'v0'.",
 );
 
+/// Whether to create system builtin continual tasks on boot.
+pub const ENABLE_CONTINUAL_TASK_BUILTINS: Config<bool> = Config::new(
+    "enable_continual_task_builtins",
+    false,
+    "Create system builtin continual tasks on boot.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -103,7 +111,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_0DT_DEPLOYMENT)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)
-        .add(&WITH_0DT_DEPLOYMENT_HYDRATION_CHECK_INTERVAL)
+        .add(&WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL)
         .add(&ENABLE_0DT_CAUGHT_UP_CHECK)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_CUTOFF)
@@ -111,4 +119,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&DEFAULT_SINK_PARTITION_STRATEGY)
+        .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
 }

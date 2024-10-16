@@ -27,7 +27,7 @@ use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::columnation::Columnation;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -87,6 +87,9 @@ where
     pub(super) hydration_logger: Option<HydrationLogger>,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
+    /// The expiration time for dataflows in this context. The output's frontier should never advance
+    /// past this frontier, except the empty frontier.
+    pub dataflow_expiration: Antichain<T>,
 }
 
 impl<S: Scope> Context<S>
@@ -98,6 +101,8 @@ where
         dataflow: &DataflowDescription<Plan, CollectionMetadata>,
         scope: S,
         compute_state: &ComputeState,
+        until: Antichain<mz_repr::Timestamp>,
+        dataflow_expiration: Antichain<mz_repr::Timestamp>,
     ) -> Self {
         use mz_ore::collections::CollectionExt as IteratorExt;
         let dataflow_id = *scope.addr().into_first();
@@ -123,11 +128,12 @@ where
             debug_name: dataflow.debug_name.clone(),
             dataflow_id,
             as_of_frontier,
-            until: dataflow.until.clone(),
+            until,
             bindings: BTreeMap::new(),
             shutdown_token: Default::default(),
             hydration_logger,
             linear_join_spec: compute_state.linear_join_spec,
+            dataflow_expiration,
         }
     }
 }
@@ -209,6 +215,7 @@ where
             hydration_logger: self.hydration_logger.clone(),
             linear_join_spec: self.linear_join_spec.clone(),
             bindings,
+            dataflow_expiration: self.dataflow_expiration.clone(),
         }
     }
 }
@@ -296,6 +303,15 @@ where
     pub fn scope(&self) -> S {
         match self {
             MzArrangement::RowRow(inner) => inner.stream.scope(),
+        }
+    }
+
+    /// Panic if the frontier of the underlying arrangement's stream exceeds `expiration` time.
+    pub fn expire_arrangement_at(&mut self, expiration: S::Timestamp) {
+        match self {
+            MzArrangement::RowRow(inner) => {
+                inner.stream = inner.stream.expire_stream_at(expiration);
+            }
         }
     }
 
@@ -920,7 +936,7 @@ where
         // In the case that we weren't going to apply the `key_val` optimization,
         // this path results in a slightly smaller and faster
         // dataflow graph, and is intended to fix
-        // https://github.com/MaterializeInc/materialize/issues/10507
+        // https://github.com/MaterializeInc/database-issues/issues/3111
         let has_key_val = if let Some((_key, Some(_val))) = &key_val {
             true
         } else {

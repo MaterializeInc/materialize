@@ -132,11 +132,11 @@ struct CteDesc {
 
 #[derive(Debug)]
 pub struct Config {
-    /// Enable outer join lowering implemented in #22343.
+    /// Enable outer join lowering implemented in database-issues#6747.
     pub enable_new_outer_join_lowering: bool,
-    /// Enable outer join lowering implemented in #25340.
+    /// Enable outer join lowering implemented in database-issues#7561.
     pub enable_variadic_left_join_lowering: bool,
-    /// Enable the extra null filter implemented in #28018.
+    /// Enable the extra null filter implemented in materialize#28018.
     pub enable_outer_join_null_filter: bool,
     pub enable_value_window_function_fusion: bool,
 }
@@ -1172,7 +1172,7 @@ impl HirScalarExpr {
                                     .map(|t| {
                                         (ColumnName::from("?column?"), t.clone().nullable(false))
                                     })
-                                    .collect_vec(),
+                                    .collect(),
                                 custom_id: None,
                             }
                             .nullable(false);
@@ -1209,13 +1209,13 @@ impl HirScalarExpr {
                             // 1. the original row in a record
                             // 2. the encoded args (which can be either a single value, or a record
                             //    if the window function has multiple arguments, such as `lag`)
-                            let fn_input_record_fields =
+                            let fn_input_record_fields: Box<[_]> =
                                 [original_row_record_type, mir_encoded_args_type]
                                     .iter()
                                     .map(|t| {
                                         (ColumnName::from("?column?"), t.clone().nullable(false))
                                     })
-                                    .collect_vec();
+                                    .collect();
                             let fn_input_record = MirScalarExpr::CallVariadic {
                                 func: mz_expr::VariadicFunc::RecordCreate {
                                     field_names: fn_input_record_fields
@@ -1245,10 +1245,11 @@ impl HirScalarExpr {
                             };
 
                             let agg_input_type = ScalarType::Record {
-                                fields: vec![(
+                                fields: [(
                                     ColumnName::from("?column?"),
                                     fn_input_record_type.nullable(false),
-                                )],
+                                )]
+                                .into(),
                                 custom_id: None,
                             }
                             .nullable(false);
@@ -1375,7 +1376,7 @@ impl HirScalarExpr {
         //     ORDER BY columns.
         //   - The <original row> currently always captures the entire original row. This should
         //     improve when we make `ProjectionPushdown` smarter, see
-        //     https://github.com/MaterializeInc/materialize/issues/17522
+        //     https://github.com/MaterializeInc/database-issues/issues/5090
         //
         // TODO:
         // We should probably introduce some dedicated Datum constructor functions instead of `row`
@@ -1434,12 +1435,12 @@ impl HirScalarExpr {
                     let input_type = get_inner.typ();
 
                     // Original columns of the relation
-                    let fields = input_type
+                    let fields: Box<_> = input_type
                         .column_types
                         .iter()
                         .take(input_arity)
                         .map(|t| (ColumnName::from("?column?"), t.clone()))
-                        .collect_vec();
+                        .collect();
 
                     // Original row made into a record
                     let original_row_record = MirScalarExpr::CallVariadic {
@@ -1994,11 +1995,11 @@ fn attempt_outer_equijoin(
     id_gen: &mut mz_ore::id_gen::IdGen,
     context: &Context,
 ) -> Result<Option<MirRelationExpr>, PlanError> {
-    // TODO(materialize#22581): In theory, we can be smarter and also handle `on`
+    // TODO(database-issues#6827): In theory, we can be smarter and also handle `on`
     // predicates that reference subqueries as long as these subqueries don't
     // reference `left` and `right` at the same time.
     //
-    // TODO(materialize#22582): This code can be improved as follows:
+    // TODO(database-issues#6828): This code can be improved as follows:
     //
     // 1. Move the `canonicalize_predicates(...)` call to `applied_to`.
     // 2. Use the canonicalized `on` predicate in the non-equijoin based

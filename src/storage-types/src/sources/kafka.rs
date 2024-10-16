@@ -224,6 +224,10 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
             metadata_columns: self.metadata_columns.clone(),
         })
     }
+
+    fn supports_read_only(&self) -> bool {
+        true
+    }
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
@@ -345,7 +349,7 @@ pub fn kafka_metadata_columns_desc(
                 } => ScalarType::String.nullable(true),
                 KafkaMetadataKind::Headers => ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
-                        fields: vec![
+                        fields: [
                             (
                                 "key".into(),
                                 ColumnType {
@@ -360,7 +364,8 @@ pub fn kafka_metadata_columns_desc(
                                     scalar_type: ScalarType::Bytes,
                                 },
                             ),
-                        ],
+                        ]
+                        .into(),
                         custom_id: None,
                     }),
                     custom_id: None,

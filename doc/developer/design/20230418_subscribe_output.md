@@ -1,5 +1,5 @@
 - Feature name: Subscribe outputs
-- Associated: [#10593](https://github.com/MaterializeInc/materialize/issues/10593)
+- Associated: [#10593](https://github.com/MaterializeInc/database-issues/issues/3136)
 
 # Summary
 [summary]: #summary

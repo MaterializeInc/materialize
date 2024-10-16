@@ -46,7 +46,7 @@ mod tests {
 
     use crate::regexp_split_to_array;
 
-    fn build_regex(needle: String, flags: &str) -> Result<Regex, anyhow::Error> {
+    fn build_regex(needle: &str, flags: &str) -> Result<Regex, anyhow::Error> {
         let mut case_insensitive = false;
         // Note: Postgres accepts it when both flags are present, taking the last one. We do the same.
         for f in flags.chars() {
@@ -76,7 +76,7 @@ mod tests {
         let regexps = vec!["", "\\s", "\\s+", "\\s*"];
         for input in inputs {
             for re in &regexps {
-                let regex = build_regex(re.to_string(), "").unwrap();
+                let regex = build_regex(re, "").unwrap();
                 let pg: Vec<String> = client
                     .query_one("select regexp_split_to_array($1, $2)", &[&input, re])
                     .unwrap()
@@ -227,7 +227,7 @@ mod tests {
             },
         ];
         for tc in tests {
-            let regex = build_regex(tc.regexp.to_string(), "").unwrap();
+            let regex = build_regex(tc.regexp, "").unwrap();
             let result = regexp_split_to_array(tc.text, &regex);
             if tc.expect != result {
                 println!(

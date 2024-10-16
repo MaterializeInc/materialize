@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# A regression test for a 100% CPU loop that was found when testing #7171
+# A regression test for a 100% CPU loop that was found when testing materialize#7171
 #
 
 > CREATE TABLE customer (

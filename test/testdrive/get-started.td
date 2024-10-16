@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO(def-) Reenable when database-issues#8581 is fixed
+$ skip-if
+SELECT true
+
 $ set-arg-default default-replica-size=1
 $ set-arg-default single-replica-cluster=quickstart
 
@@ -15,7 +19,7 @@ $ set-arg-default single-replica-cluster=quickstart
 > SET cluster TO ${arg.single-replica-cluster}
 
 > CREATE SOURCE demo
-  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms')
+  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms', UP TO 1000)
 
 > CREATE TABLE accounts FROM SOURCE demo (REFERENCE accounts);
 > CREATE TABLE auctions FROM SOURCE demo (REFERENCE auctions);

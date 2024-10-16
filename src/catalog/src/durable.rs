@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use mz_audit_log::VersionedEvent;
 use uuid::Uuid;
 
-use mz_controller_types::{ClusterId, ReplicaId};
+use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
@@ -33,8 +33,8 @@ use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
     Database, DefaultPrivilege, IntrospectionSourceIndex, Item, ReplicaConfig, ReplicaLocation,
-    Role, Schema, SourceReferences, StorageCollectionMetadata, SystemConfiguration,
-    SystemObjectDescription, SystemObjectMapping, UnfinalizedShard,
+    Role, Schema, SourceReference, SourceReferences, StorageCollectionMetadata,
+    SystemConfiguration, SystemObjectDescription, SystemObjectMapping, UnfinalizedShard,
 };
 pub use crate::durable::persist::builtin_migration_shard_id;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
@@ -309,25 +309,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         let id = self.allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(ClusterId::User(id))
-    }
-
-    /// Allocates and returns a user [`ReplicaId`].
-    async fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
-        let id = self.allocate_id(USER_REPLICA_ID_ALLOC_KEY, 1).await?;
-        let id = id.into_element();
-        Ok(ReplicaId::User(id))
-    }
-
-    /// Allocates and returns a system [`ReplicaId`].
-    async fn allocate_system_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
-        let id = self.allocate_id(SYSTEM_REPLICA_ID_ALLOC_KEY, 1).await?;
-        let id = id.into_element();
-        Ok(ReplicaId::System(id))
-    }
-
-    /// Allocates and returns storage usage IDs.
-    async fn allocate_storage_usage_ids(&mut self, amount: u64) -> Result<Vec<u64>, CatalogError> {
-        self.allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, amount).await
     }
 }
 

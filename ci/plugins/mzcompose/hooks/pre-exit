@@ -13,6 +13,130 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+run() {
+    bin/ci-builder run stable bin/mzcompose --mz-quiet --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+}
+
+echo "Collecting logs"
+# Run before potential "run down" in coverage
+docker ps --all --quiet | xargs --no-run-if-empty docker inspect > docker-inspect.log
+# services.log might already exist and contain logs from before composition was downed
+time=0
+if [ -f services.log ]; then
+    # Don't capture log lines we received already
+    time=$(date +%s -r services.log)
+fi
+run logs --no-color --timestamps --since "$time" >> services.log
+# Sort services.log and remove the timestamps we added to prevent having duplicate timestamps in output. For reference:
+# https://github.com/moby/moby/issues/33673
+# https://github.com/moby/moby/issues/31706
+sort -t"|" -k2 < services.log | sed -E "s/ \| [0-9]{4}-[01][0-9]-[0-3][0-9]T[0-2][0-9]\:[0-5][0-9]:[0-6][0-9]\.[0-9]{9}Z / \| /" > services-sorted.log
+mv services-sorted.log services.log
+# shellcheck disable=SC2024
+sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log
+netstat -ant > netstat-ant.log
+netstat -panelot > netstat-panelot.log
+ps aux > ps-aux.log
+docker ps -a --no-trunc > docker-ps-a.log
+docker stats --all --no-stream > docker-stats.log
+
+echo "Downing docker containers"
+run down --volumes
+
+mv "$HOME"/cores .
+
+if find cores -name 'core.*' | grep -q .; then
+    # Best effort attempt to fetch interesting executables to get backtrace of core files
+    bin/ci-builder run stable cp /mnt/build/debug/clusterd cores/ || true
+    bin/ci-builder run stable cp /mnt/build/debug/environmentd cores/ || true
+    bin/ci-builder run stable cp /mnt/build/debug/mz-balancerd cores/balancerd || true
+    bin/ci-builder run stable cp /mnt/build/debug/sqllogictest cores/ || true
+    run cp sqllogictest:/usr/local/bin/sqllogictest cores/ || true
+    run cp sqllogictest:/usr/local/bin/clusterd cores/ || true
+    run cp materialized:/usr/local/bin/environmentd cores/ || true
+    run cp materialized:/usr/local/bin/clusterd cores/ || true
+    run cp balancerd:/usr/local/bin/balancerd cores/ || true
+    run cp testdrive:/usr/local/bin/testdrive cores/ || true
+fi
+
+echo "Finding core files"
+find cores -name 'core.*' | while read -r core; do
+    exe=$(echo "$core" | sed -e "s/core\.\(.*\)\.[0-9]*/\1/" -e "s/.*\!//")
+    # Core dumps can take a while to be written, so if extracting the info fails, try again later
+    bin/ci-builder run stable gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || (sleep 2m; bin/ci-builder run stable gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || true)
+    buildkite-agent artifact upload "$core".txt
+done
+# can be huge, clean up
+rm -rf cores
+
+echo "Compressing parallel-workload-queries.log"
+bin/ci-builder run stable zstd --rm parallel-workload-queries.log || true
+
+echo "Uploading log artifacts"
+mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-ps-a.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml')
+artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
+unset CI_EXTRA_ARGS # We don't want extra args for the annotation
+# Continue even if ci-annotate-errors fails
+CI_ANNOTATE_ERRORS_RESULT=0
+# We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
+# Uploading large files currently sometimes hangs, as a temporary workaround
+# timeout and don't fail, TODO(def-) Remove timeout again
+timeout 300 buildkite-agent artifact upload "$artifacts_str" || true
+bin/ci-builder run stable bin/ci-annotate-errors --test-cmd="$(cat test_cmd)" --test-desc="$(cat test_desc)" "${artifacts[@]}" > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
+buildkite-agent artifact upload "ci-annotate-errors.log"
+
+if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for DFR)" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for CTF)" ] && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ]; then
+    echo "+++ services.log is empty, failing"
+    exit 1
+fi
+
+export_cov() {
+    bin/ci-builder run stable rust-cov export \
+      --ignore-filename-regex=.cargo/ \
+      --ignore-filename-regex=target/release/ \
+      --ignore-filename-regex=/cargo/ \
+      --ignore-filename-regex=/mnt/build/ \
+      --ignore-filename-regex=/rustc/ \
+      --format=lcov "$1" --instr-profile=coverage/"$BUILDKITE_JOB_ID".profdata src/ \
+      > coverage/"$BUILDKITE_JOB_ID"-"$(basename "$1")".lcov
+}
+
+if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE:-}" ];  then
+    echo "Generating coverage information"
+    if [ -n "$(find . -name '*.profraw')" ]; then
+        # Workaround for "invalid instrumentation profile data (file header is corrupt)"
+        rm -rf profraws
+        mkdir profraws
+        find . -name '*.profraw' | while read -r i; do
+            cp "$i" profraws
+            rm "$i"
+            bin/ci-builder run stable rust-profdata show profraws/"$(basename "$i")" > /dev/null || rm profraws/"$(basename "$i")"
+        done
+        find profraws -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
+        find . -name '*.profraw' -delete
+
+        ARGS=()
+        for program in clusterd environmentd balancerd sqllogictest testdrive; do
+            if [ -f coverage/"$program" ]; then
+                export_cov coverage/"$program"
+                ARGS+=("-a" coverage/"$BUILDKITE_JOB_ID"-"$program".lcov)
+            fi
+        done
+        rm coverage/"$BUILDKITE_JOB_ID".profdata
+        if [ "${#ARGS[@]}" != 0 ]; then
+            bin/ci-builder run stable lcov "${ARGS[@]}" -o coverage/"$BUILDKITE_JOB_ID".lcov
+            rm coverage/"$BUILDKITE_JOB_ID"-*.lcov
+            bin/ci-builder run stable zstd coverage/"$BUILDKITE_JOB_ID".lcov
+            buildkite-agent artifact upload coverage/"$BUILDKITE_JOB_ID".lcov.zst
+        fi
+    fi
+fi
+
+if [ "$CI_ANNOTATE_ERRORS_RESULT" -ne 0 ]; then
+  echo "+++ ci-annotate-errors failed, which indicates that an unknown error was found"
+  exit "$CI_ANNOTATE_ERRORS_RESULT"
+fi
+
 ci_unimportant_heading ":docker: Cleaning up after mzcompose"
 
 run() {

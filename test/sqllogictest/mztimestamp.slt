@@ -76,22 +76,14 @@ SELECT 1::mz_catalog.mz_timestamp
 1
 
 query T
-SELECT '1 hour'::interval::mz_timestamp
-----
-3600000
-
-
-query T
 SELECT '1970-01-02'::date::mz_timestamp
 ----
  86400000
 
 # Casts to timestamp[tz]. 8210266815600000 is roughly `HIGH_DATE` for `CheckedTimestamp`.
-query TTT
-SELECT '1 hour'::interval::mz_timestamp::timestamp, '1 hour'::interval::mz_timestamp::timestamptz, 8210266815600000::mz_timestamp::timestamptz
+query T
+SELECT 8210266815600000::mz_timestamp::timestamptz
 ----
-1970-01-01 01:00:00
-1970-01-01 01:00:00+00
 262142-12-31 07:00:00+00
 
 # Roughly `HIGH_DATE` + 1 day.

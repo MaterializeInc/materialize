@@ -38,7 +38,10 @@ pub fn main() -> Result<(), anyhow::Error> {
     let library = RustLibrary::generate(&config, &package, &crate_config, Some(&build_script))?;
 
     #[allow(clippy::as_conversions)]
-    let targets = vec![&library as &dyn RustTarget, &build_script];
+    let targets = vec![
+        Box::new(library) as Box<dyn RustTarget>,
+        Box::new(build_script),
+    ];
     let bazel_file = BazelBuildFile {
         header: BazelHeader::generate(&targets[..]),
         targets,

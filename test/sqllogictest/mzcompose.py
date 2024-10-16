@@ -21,10 +21,10 @@ from pathlib import Path
 
 from materialize import MZ_ROOT, buildkite, ci_util, file_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.postgres import PostgresAsCockroach
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
 
-SERVICES = [Cockroach(in_memory=True), SqlLogicTest()]
+SERVICES = [PostgresAsCockroach(), SqlLogicTest()]
 
 COCKROACH_DEFAULT_PORT = 26257
 
@@ -208,6 +208,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/cockroach/distinct_on.slt",
         "test/sqllogictest/cockroach/subquery_correlated.slt",
         "test/sqllogictest/transform/notice/*.slt",
+        "test/sqllogictest/advent-of-code/2023/*.slt",
     }
 
     tests_without_views = {
@@ -581,7 +582,7 @@ def compileSlowSltConfig() -> SltRunConfig:
     }
     tests_without_views_and_replica = {
         # errors:
-        # https://github.com/MaterializeInc/materialize/issues/20534
+        # https://github.com/MaterializeInc/database-issues/issues/6181
         "test/sqllogictest/list.slt",
         # transactions:
         "test/sqllogictest/github-11568.slt",
@@ -599,9 +600,9 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/cluster.slt",
         # different indexes auto-created
         "test/sqllogictest/object_ownership.slt",
-        # https://github.com/MaterializeInc/materialize/issues/20110
+        # https://github.com/MaterializeInc/database-issues/issues/6011
         "test/sqllogictest/interval.slt",
-        # https://github.com/MaterializeInc/materialize/issues/20110
+        # https://github.com/MaterializeInc/database-issues/issues/6011
         "test/sqllogictest/operator.slt",
         # specific replica size tested:
         "test/sqllogictest/managed_cluster.slt",

@@ -11,7 +11,7 @@ $ set-arg-default default-replica-size=1
 
 # When updating this file, make sure that the number of arrangements doesn't
 # increase unexpectedly. This is to prevent issues like this:
-# https://github.com/MaterializeInc/materialize/issues/20179
+# https://github.com/MaterializeInc/database-issues/issues/6038
 
 # Introspection subscribes add noise to the introspection sources, so disable them.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -114,7 +114,7 @@ DistinctByErrorCheck
 > DROP TABLE t3 CASCADE
 
 # from materialized_views.slt
-# Disabled because of https://github.com/MaterializeInc/materialize/issues/20188
+# Disabled because of https://github.com/MaterializeInc/database-issues/issues/6044
 #> CREATE MATERIALIZED VIEW mat_clusters AS SELECT name FROM (SHOW CLUSTERS);
 #> CREATE MATERIALIZED VIEW mat_connections AS SELECT name, type FROM (SHOW CONNECTIONS);
 #> CREATE MATERIALIZED VIEW mat_databases AS SELECT name FROM (SHOW DATABASES);

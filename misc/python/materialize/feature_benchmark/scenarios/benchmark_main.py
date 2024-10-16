@@ -9,10 +9,12 @@
 import random
 import re
 from math import ceil, floor
+from pathlib import Path
 from textwrap import dedent
 
 from parameterized import parameterized_class  # type: ignore
 
+import materialize.optbench.sql
 from materialize.feature_benchmark.action import Action, Kgen, TdAction
 from materialize.feature_benchmark.measurement_source import (
     Lambda,
@@ -176,7 +178,7 @@ true
 
 
 class FastPathLimit(FastPath):
-    """Benchmark the case SELECT * FROM source LIMIT <i> , optimized by #21615"""
+    """Benchmark the case SELECT * FROM source LIMIT <i> , optimized by materialize#21615"""
 
     def init(self) -> list[Action]:
         return [
@@ -342,10 +344,10 @@ class Update(DML):
 class ManySmallUpdates(DML):
     """Measure the time it takes for several small UPDATE statements to return to client"""
 
-    SCALE = 3  # runs > 4 hours with SCALE = 4
+    SCALE = 2  # runs ~2.5 hours with SCALE = 3
 
     def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
+        return ScenarioVersion.create(1, 2, 0)
 
     def init(self) -> list[Action]:
         return [
@@ -385,7 +387,7 @@ class ManySmallUpdates(DML):
 
 
 class UpdateMultiNoIndex(DML):
-    """Measure the time it takes to perform multiple updates over the same records in a non-indexed table. GitHub Issue #11071"""
+    """Measure the time it takes to perform multiple updates over the same records in a non-indexed table. GitHub Issue database-issues#3233"""
 
     def before(self) -> Action:
         # Due to exterme variability in the results, we have no option but to drop and re-create
@@ -1385,10 +1387,14 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
 class ManyKafkaSourcesOnSameCluster(Scenario):
     """Measure the time it takes to ingest data from many Kafka sources"""
 
-    SCALE = 2.5  # 316 sources
+    # Runs ~2 hours with 300 sources
+    SCALE = 2  # 100 sources
     FIXED_SCALE = True
 
     COUNT_SOURCE_ENTRIES = 100000
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
 
     def shared(self) -> Action:
         create_topics = "\n".join(
@@ -1610,7 +1616,7 @@ class MySqlInitialLoad(MySqlCdc):
     """Measure the time it takes to read 1M existing records from MySQL
     when creating a materialized source"""
 
-    FIXED_SCALE = True  # TODO: Remove when materialize#25323 is fixed
+    FIXED_SCALE = True  # TODO: Remove when database-issues#7556 is fixed
 
     def shared(self) -> Action:
         return TdAction(
@@ -1944,6 +1950,108 @@ ALTER SYSTEM SET max_clusters = {self.n() * 6};
         ]
 
 
+class StartupTpch(Scenario):
+    """Measure the time it takes to restart a Mz instance populated with TPC-H and have all the dataflows be ready to return something"""
+
+    # Runs ~3 hours with SCALE = 1.2
+    SCALE = 0.1  # 1 object of each kind
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
+
+    def init(self) -> Action:
+        # We need to massage the SQL statements so that Testdrive doesn't get confused.
+        comment = re.compile(r"--.*?\n", re.IGNORECASE)
+        newline = re.compile(r"\n", re.IGNORECASE)
+
+        create_tables = "\n".join(
+            f"""
+> {newline.sub(" ", comment.sub("", ddl))}
+"""
+            for ddl in materialize.optbench.sql.parse_from_file(
+                Path("misc/python/materialize/optbench/schema/tpch.sql")
+            )
+        )
+
+        queries = [
+            newline.sub(" ", comment.sub("", query))
+            for query in materialize.optbench.sql.parse_from_file(
+                Path("misc/python/materialize/optbench/workload/tpch.sql")
+            )
+        ]
+
+        create_views = "\n".join(
+            f"""
+> CREATE VIEW v_{q}_{i} AS {query}
+"""
+            for q, query in enumerate(queries)
+            for i in range(0, self.n())
+        )
+
+        create_indexes = "\n".join(
+            f"""
+> CREATE DEFAULT INDEX ON v_{q}_{i};
+"""
+            for q in range(0, len(queries))
+            for i in range(0, self.n())
+        )
+
+        create_materialized_views = "\n".join(
+            f"""
+> CREATE MATERIALIZED VIEW mv_{q}_{i} AS {query}
+"""
+            for q, query in enumerate(queries)
+            for i in range(0, self.n())
+        )
+
+        return TdAction(
+            f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_objects_per_schema = {self.n() * 100};
+ALTER SYSTEM SET max_materialized_views = {self.n() * 100};
+ALTER SYSTEM SET max_tables = {self.n() * 100};
+
+> DROP OWNED BY materialize CASCADE;
+
+{create_tables}
+{create_views}
+{create_indexes}
+{create_materialized_views}
+"""
+        )
+
+    def benchmark(self) -> BenchmarkingSequence:
+        num_queries = len(
+            materialize.optbench.sql.parse_from_file(
+                Path("misc/python/materialize/optbench/workload/tpch.sql")
+            )
+        )
+        check_views = "\n".join(
+            f"> SELECT COUNT(*) >= 0 FROM v_{q}_{i}\ntrue"
+            for q in range(0, num_queries)
+            for i in range(0, self.n())
+        )
+        check_materialized_views = "\n".join(
+            f"> SELECT COUNT(*) >= 0 FROM mv_{q}_{i}\ntrue"
+            for q in range(0, num_queries)
+            for i in range(0, self.n())
+        )
+
+        return [
+            Lambda(lambda e: e.RestartMzClusterd()),
+            Td(
+                f"""
+{check_materialized_views}
+{check_views}
+> SELECT 1;
+  /* B */
+1
+"""
+            ),
+        ]
+
+
 class HydrateIndex(Scenario):
     """Measure the time it takes for an index to hydrate when a cluster comes online."""
 
@@ -2072,6 +2180,57 @@ class SwapSchema(Scenario):
                 1
 
                 > ALTER SCHEMA blue SWAP WITH green;
+
+                > SELECT 1;
+                  /* B */
+                1
+                """
+            )
+        )
+
+
+class ReplicaExpiration(Scenario):
+    # Too slow with larger scale
+    FIXED_SCALE = True
+
+    def init(self) -> list[Action]:
+        return [
+            TdAction(
+                """
+> CREATE TABLE events_scale (
+    scale INT NOT NULL,
+    event_ts TIMESTAMP NOT NULL
+  );
+> CREATE VIEW events AS
+    SELECT concat('somelongstringthatdoesntmattermuchatallbutrequiresmemorytostoreXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX', x::text) AS content, (SELECT event_ts FROM events_scale LIMIT 1) AS event_ts FROM generate_series(1, (SELECT scale FROM events_scale LIMIT 1)) x;
+
+> CREATE MATERIALIZED VIEW last_30_days AS
+  SELECT event_ts, content
+  FROM events
+  WHERE mz_now() <= event_ts + INTERVAL '30 days';
+
+> CREATE DEFAULT INDEX ON last_30_days
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            dedent(
+                f"""
+                > DELETE FROM events_scale;
+
+                > SELECT COUNT(*) FROM last_30_days
+                0
+
+                > SELECT 1;
+                  /* A */
+                1
+
+                > INSERT INTO events_scale VALUES ({self.n()}, now());
+
+                > SELECT COUNT(*) FROM last_30_days
+                {self.n()}
 
                 > SELECT 1;
                   /* B */

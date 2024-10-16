@@ -1,7 +1,7 @@
 # Catalog Backend Migration
 
-- Associated: https://github.com/MaterializeInc/materialize/issues/20953
-- Associated: https://github.com/MaterializeInc/materialize/issues/22392
+- Associated: https://github.com/MaterializeInc/database-issues/issues/6310
+- Associated: https://github.com/MaterializeInc/database-issues/issues/6762
 
 ## The Problem
 

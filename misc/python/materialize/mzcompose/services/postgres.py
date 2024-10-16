@@ -7,7 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 
+from materialize import MZ_ROOT
+from materialize.mzcompose import loader
 from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
@@ -26,6 +29,7 @@ class Postgres(Service):
         volumes: list[str] = [],
         max_wal_senders: int = 100,
         max_replication_slots: int = 100,
+        setup_materialize: bool = False,
     ) -> None:
         command: list[str] = [
             "postgres",
@@ -38,6 +42,18 @@ class Postgres(Service):
             "-c",
             "max_connections=5000",
         ] + extra_command
+
+        if setup_materialize:
+            path = os.path.relpath(
+                MZ_ROOT / "misc" / "postgres" / "setup_materialize.sql",
+                loader.composition_path,
+            )
+            volumes = volumes + [
+                f"{path}:/docker-entrypoint-initdb.d/z_setup_materialize.sql"
+            ]
+
+            environment = environment + ["PGPORT=26257"]
+
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
 
         config.update(
@@ -55,3 +71,10 @@ class Postgres(Service):
             }
         )
         super().__init__(name=name, config=config)
+
+
+class PostgresAsCockroach(Postgres):
+    def __init__(
+        self,
+    ) -> None:
+        super().__init__(name="cockroach", setup_materialize=True, ports=["26257"])

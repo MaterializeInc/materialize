@@ -9,9 +9,8 @@
 
 mod notice;
 
-use std::net::Ipv4Addr;
-
 use bytesize::ByteSize;
+use ipnet::IpNet;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_catalog::builtin::{
@@ -19,7 +18,7 @@ use mz_catalog::builtin::{
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
     MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES,
     MZ_CLUSTER_SCHEDULES, MZ_CLUSTER_WORKLOAD_CLASSES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS,
-    MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS,
+    MZ_CONTINUAL_TASKS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS,
     MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_KAFKA_SOURCE_TABLES, MZ_LIST_TYPES,
     MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
@@ -33,8 +32,8 @@ use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterReplicaProcessStatus, ClusterVariant, Connection, DataSourceDesc, Func,
-    Index, MaterializedView, Sink, Table, TableDataSource, Type, View,
+    CatalogItem, ClusterReplicaProcessStatus, ClusterVariant, Connection, ContinualTask,
+    DataSourceDesc, Func, Index, MaterializedView, Sink, Table, TableDataSource, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -53,7 +52,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, ScalarType, Timestamp};
-use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};
+use mz_sql::ast::{ContinualTaskStmt, CreateIndexStatement, Statement, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
     TypeCategory,
@@ -672,6 +671,9 @@ impl CatalogState {
             CatalogItem::Connection(connection) => self.pack_connection_update(
                 id, oid, schema_id, name, owner_id, privileges, connection, diff,
             ),
+            CatalogItem::ContinualTask(ct) => self.pack_continual_task_update(
+                id, oid, schema_id, name, owner_id, privileges, ct, diff,
+            ),
         };
 
         if !entry.item().is_temporary() {
@@ -1269,8 +1271,6 @@ impl CatalogState {
                 query_string.push(';');
                 query_string
             }
-            // TODO(ct): Remove.
-            Statement::CreateContinualTask(_) => "TODO(ct)".into(),
             _ => unreachable!(),
         };
 
@@ -1352,6 +1352,64 @@ impl CatalogState {
         }
 
         updates
+    }
+
+    fn pack_continual_task_update(
+        &self,
+        id: GlobalId,
+        oid: u32,
+        schema_id: &SchemaSpecifier,
+        name: &str,
+        owner_id: &RoleId,
+        privileges: Datum,
+        ct: &ContinualTask,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let create_stmt = mz_sql::parse::parse(&ct.create_sql)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "create_sql cannot be invalid: `{}` --- error: `{}`",
+                    ct.create_sql, e
+                )
+            })
+            .into_element()
+            .ast;
+        let query_string = match &create_stmt {
+            Statement::CreateContinualTask(stmt) => {
+                let mut query_string = String::new();
+                for stmt in &stmt.stmts {
+                    let s = match stmt {
+                        ContinualTaskStmt::Insert(stmt) => stmt.to_ast_string_stable(),
+                        ContinualTaskStmt::Delete(stmt) => stmt.to_ast_string_stable(),
+                    };
+                    if query_string.is_empty() {
+                        query_string = s;
+                    } else {
+                        query_string.push_str("; ");
+                        query_string.push_str(&s);
+                    }
+                }
+                query_string
+            }
+            _ => unreachable!(),
+        };
+
+        vec![BuiltinTableUpdate {
+            id: &*MZ_CONTINUAL_TASKS,
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::UInt32(oid),
+                Datum::String(&schema_id.to_string()),
+                Datum::String(name),
+                Datum::String(&ct.cluster_id.to_string()),
+                Datum::String(&query_string),
+                Datum::String(&owner_id.to_string()),
+                privileges,
+                Datum::String(&ct.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
+            ]),
+            diff,
+        }]
     }
 
     fn pack_sink_update(
@@ -1676,7 +1734,7 @@ impl CatalogState {
                     id: &*MZ_AGGREGATES,
                     row: Row::pack_slice(&[
                         Datum::UInt32(func_impl_details.oid),
-                        // TODO(materialize#3326): Support ordered-set aggregate functions.
+                        // TODO(database-issues#1064): Support ordered-set aggregate functions.
                         Datum::String("n"),
                         Datum::Int16(0),
                     ]),
@@ -1824,10 +1882,15 @@ impl CatalogState {
 
     pub fn pack_egress_ip_update(
         &self,
-        ip: &Ipv4Addr,
+        ip: &IpNet,
     ) -> Result<BuiltinTableUpdate<&'static BuiltinTable>, Error> {
         let id = &MZ_EGRESS_IPS;
-        let row = Row::pack_slice(&[Datum::String(&ip.to_string())]);
+        let addr = ip.addr();
+        let row = Row::pack_slice(&[
+            Datum::String(&addr.to_string()),
+            Datum::Int32(ip.prefix_len().into()),
+            Datum::String(&format!("{}/{}", addr, ip.prefix_len())),
+        ]);
         Ok(BuiltinTableUpdate { id, row, diff: 1 })
     }
 
@@ -2041,7 +2104,8 @@ impl CatalogState {
             | CommentObjectId::Func(global_id)
             | CommentObjectId::Connection(global_id)
             | CommentObjectId::Secret(global_id)
-            | CommentObjectId::Type(global_id) => global_id.to_string(),
+            | CommentObjectId::Type(global_id)
+            | CommentObjectId::ContinualTask(global_id) => global_id.to_string(),
             CommentObjectId::Role(role_id) => role_id.to_string(),
             CommentObjectId::Database(database_id) => database_id.to_string(),
             CommentObjectId::Schema((_, schema_id)) => schema_id.to_string(),
@@ -2050,7 +2114,7 @@ impl CatalogState {
         };
         let column_pos_datum = match column_pos {
             Some(pos) => {
-                // TODO(parkmycar): https://github.com/MaterializeInc/materialize/issues/22246.
+                // TODO(parkmycar): https://github.com/MaterializeInc/database-issues/issues/6711.
                 let pos =
                     i32::try_from(pos).expect("we constrain this value in the planning layer");
                 Datum::Int32(pos)
@@ -2121,7 +2185,17 @@ impl CatalogState {
                     ),
                 ]);
                 if reference.columns.len() > 0 {
-                    packer.push_list(reference.columns.iter().map(|col| Datum::String(col)));
+                    packer
+                        .push_array(
+                            &[ArrayDimension {
+                                lower_bound: 1,
+                                length: reference.columns.len(),
+                            }],
+                            reference.columns.iter().map(|col| Datum::String(col)),
+                        )
+                        .expect(
+                            "columns is 1 dimensional, and its length is used for the array length",
+                        );
                 } else {
                     packer.push(Datum::Null);
                 }

@@ -23,9 +23,10 @@ use crate::coord::{
     SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
+use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
-use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
+use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext, TimestampProvider};
 
 impl Staged for SubscribeStage {
     type Ctx = ExecuteContext;
@@ -283,7 +284,12 @@ impl Coordinator {
 
         self.store_transaction_read_holds(ctx.session(), read_holds);
 
-        let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
+        let is_timeline_epoch_ms = self
+            .validate_timeline_context(plan.from.depends_on().iter().cloned())?
+            .is_timeline_epoch_ms();
+
+        let global_mir_plan =
+            global_mir_plan.resolve(Antichain::from_elem(as_of), is_timeline_epoch_ms);
 
         // Optimize LIR
         let span = Span::current();
@@ -318,6 +324,7 @@ impl Coordinator {
             cluster_id,
             plan:
                 plan::SubscribePlan {
+                    from,
                     copy_to,
                     emit_progress,
                     output,
@@ -328,6 +335,15 @@ impl Coordinator {
             replica_id,
         }: SubscribeFinish,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
+        let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+
+        // Collect properties for `DataflowExpirationDesc`.
+        let transitive_upper = self.least_valid_write(&id_bundle);
+        let has_transitive_refresh_schedule = from
+            .depends_on()
+            .into_iter()
+            .any(|id| self.catalog.item_has_transitive_refresh_schedule(id));
+
         let sink_id = global_lir_plan.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -347,7 +363,13 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
-        let (df_desc, df_meta) = global_lir_plan.unapply();
+        let (mut df_desc, df_meta) = global_lir_plan.unapply();
+
+        df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
+        df_desc
+            .dataflow_expiration_desc
+            .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
+
         // Emit notices.
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
 

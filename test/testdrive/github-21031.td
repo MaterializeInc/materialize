@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/21031.
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/6335.
 #
 # This test confirms that subscribes that advance to the empty frontier are
 # fully cleaned up.

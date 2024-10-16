@@ -248,7 +248,7 @@ mod tests {
 
     // Regression test for a bug found by a customer: trim_to_budget method only
     // operates on the top level struct columns. This (sorta) worked before
-    // #19309, but now there are always two columns at the top level, "ok" and
+    // materialize#19309, but now there are always two columns at the top level, "ok" and
     // "err", and the real columns are all nested under "ok".
     #[mz_ore::test]
     fn stats_trim_to_budget_regression_recursion() {

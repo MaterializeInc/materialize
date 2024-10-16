@@ -41,7 +41,7 @@ use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::str::StrExt;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use num_traits::Float as NumFloat;
 use proptest_derive::Arbitrary;
 use regex::bytes::Regex;
@@ -1934,9 +1934,9 @@ where
 )]
 pub struct ParseError {
     pub kind: ParseErrorKind,
-    pub type_name: String,
-    pub input: String,
-    pub details: Option<String>,
+    pub type_name: Box<str>,
+    pub input: Box<str>,
+    pub details: Option<Box<str>>,
 }
 
 #[derive(
@@ -1964,7 +1964,7 @@ impl ParseError {
     // itself stores the type name as a `String`.
     fn new<S>(kind: ParseErrorKind, type_name: &'static str, input: S) -> ParseError
     where
-        S: Into<String>,
+        S: Into<Box<str>>,
     {
         ParseError {
             kind,
@@ -1976,14 +1976,14 @@ impl ParseError {
 
     fn out_of_range<S>(type_name: &'static str, input: S) -> ParseError
     where
-        S: Into<String>,
+        S: Into<Box<str>>,
     {
         ParseError::new(ParseErrorKind::OutOfRange, type_name, input)
     }
 
     fn invalid_input_syntax<S>(type_name: &'static str, input: S) -> ParseError
     where
-        S: Into<String>,
+        S: Into<Box<str>>,
     {
         ParseError::new(ParseErrorKind::InvalidInputSyntax, type_name, input)
     }
@@ -1992,7 +1992,7 @@ impl ParseError {
     where
         D: fmt::Display,
     {
-        self.details = Some(details.to_string());
+        self.details = Some(details.to_string().into());
         self
     }
 }
@@ -2035,9 +2035,9 @@ impl RustType<ProtoParseError> for ParseError {
         };
         ProtoParseError {
             kind: Some(kind),
-            type_name: self.type_name.clone(),
-            input: self.input.clone(),
-            details: self.details.clone(),
+            type_name: self.type_name.into_proto(),
+            input: self.input.into_proto(),
+            details: self.details.into_proto(),
         }
     }
 
@@ -2050,9 +2050,9 @@ impl RustType<ProtoParseError> for ParseError {
                     OutOfRange(()) => ParseErrorKind::OutOfRange,
                     InvalidInputSyntax(()) => ParseErrorKind::InvalidInputSyntax,
                 },
-                type_name: proto.type_name,
-                input: proto.input,
-                details: proto.details,
+                type_name: proto.type_name.into(),
+                input: proto.input.into(),
+                details: proto.details.into_rust()?,
             })
         } else {
             Err(TryFromProtoError::missing_field("ProtoParseError::kind"))

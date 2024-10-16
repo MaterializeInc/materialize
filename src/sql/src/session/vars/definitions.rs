@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use ipnet::IpNet;
 use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
@@ -26,6 +27,7 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ident;
+use mz_storage_types::parameters::REPLICA_STATUS_HISTORY_RETENTION_WINDOW_DEFAULT;
 use mz_storage_types::parameters::{
     DEFAULT_PG_SOURCE_CONNECT_TIMEOUT, DEFAULT_PG_SOURCE_TCP_CONFIGURE_SERVER,
     DEFAULT_PG_SOURCE_TCP_KEEPALIVES_IDLE, DEFAULT_PG_SOURCE_TCP_KEEPALIVES_INTERVAL,
@@ -538,6 +540,13 @@ pub static MAX_ROLES: VarDefinition = VarDefinition::new(
     "max_roles",
     value!(u32; 1000),
     "The maximum number of roles in the region (Materialize).",
+    true,
+);
+
+pub static MAX_CONTINUAL_TASKS: VarDefinition = VarDefinition::new(
+    "max_continual_tasks",
+    value!(u32; 100),
+    "The maximum number of continual tasks in the region, across all schemas (Materialize).",
     true,
 );
 
@@ -1429,11 +1438,11 @@ pub static KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES: VarDefinition = VarDefinit
     false,
 );
 
-/// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_replica_status_history_entries`].
-pub static KEEP_N_REPLICA_STATUS_HISTORY_ENTRIES: VarDefinition = VarDefinition::new(
-    "keep_n_replica_status_history_entries",
-    value!(usize; 5),
-    "On reboot, truncate all but the last n entries per ID in the mz_cluster_replica_status_history \
+/// Controls [`mz_storage_types::parameters::StorageParameters::replica_status_history_retention_window`].
+pub static REPLICA_STATUS_HISTORY_RETENTION_WINDOW: VarDefinition = VarDefinition::new(
+    "replica_status_history_retention_window",
+    value!(Duration; REPLICA_STATUS_HISTORY_RETENTION_WINDOW_DEFAULT),
+    "On reboot, truncate up all entries past the retention window in the mz_cluster_replica_status_history \
         collection (Materialize).",
     false,
 );
@@ -1478,6 +1487,13 @@ pub static USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION: VarDefinition = VarD
     value!(Duration; STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT),
     "Duration which we'll wait to collect a batch of events for a webhook source.",
     false,
+);
+
+pub static DEFAULT_NETWORK_POLICY_ALLOW_LIST: VarDefinition = VarDefinition::new_lazy(
+    "default_network_policy_allow_list",
+    lazy_value!(Vec<IpNet>; || vec![IpNet::from_str("0.0.0.0/0").expect("this is a valid IpNet")]),
+    "Network policy allow list that external user connections will be validated against.",
+    true,
 );
 
 /// Configuration for gRPC client connections.
@@ -2047,7 +2063,7 @@ feature_flags!(
     {
         name: enable_letrec_fixpoint_analysis,
         desc: "Enable Lattice-based fixpoint iteration on LetRec nodes in the Analysis framework",
-        default: true, // This is just a failsafe switch for the deployment of #25591.
+        default: true, // This is just a failsafe switch for the deployment of materialize#25591.
         enable_for_item_parsing: false,
     },
     {

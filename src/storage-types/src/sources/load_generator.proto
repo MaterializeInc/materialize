@@ -9,50 +9,49 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
-import "proto/src/proto.proto";
-
 package mz_storage_types.sources.load_generator;
 
+import "google/protobuf/empty.proto";
+import "proto/src/proto.proto";
+
 message ProtoLoadGeneratorSourceConnection {
-    reserved 1;
-    oneof kind {
-        ProtoCounterLoadGenerator counter = 6;
-        google.protobuf.Empty clock = 11;
-        google.protobuf.Empty auction = 3;
-        ProtoTpchLoadGenerator tpch = 4;
-        google.protobuf.Empty datums = 5;
-        google.protobuf.Empty marketing = 7;
-        ProtoKeyValueLoadGenerator key_value = 8;
-    }
-    optional uint64 tick_micros = 2;
-    uint64 as_of = 9;
-    uint64 up_to = 10;
+  reserved 1;
+  oneof kind {
+    ProtoCounterLoadGenerator counter = 6;
+    google.protobuf.Empty clock = 11;
+    google.protobuf.Empty auction = 3;
+    ProtoTpchLoadGenerator tpch = 4;
+    google.protobuf.Empty datums = 5;
+    google.protobuf.Empty marketing = 7;
+    ProtoKeyValueLoadGenerator key_value = 8;
+  }
+  optional uint64 tick_micros = 2;
+  uint64 as_of = 9;
+  uint64 up_to = 10;
 }
 
 message ProtoCounterLoadGenerator {
-    optional uint64 max_cardinality = 1;
+  optional uint64 max_cardinality = 1;
 }
 
 message ProtoTpchLoadGenerator {
-    int64 count_supplier = 1;
-    int64 count_part = 2;
-    int64 count_customer = 3;
-    int64 count_orders = 4;
-    int64 count_clerk = 5;
+  int64 count_supplier = 1;
+  int64 count_part = 2;
+  int64 count_customer = 3;
+  int64 count_orders = 4;
+  int64 count_clerk = 5;
 }
 
 message ProtoKeyValueLoadGenerator {
-    uint64 keys = 1;
-    uint64 snapshot_rounds = 2;
-    bool transactional_snapshot = 3;
-    uint64 value_size = 4;
-    uint64 partitions = 5;
-    optional mz_proto.ProtoDuration tick_interval = 6;
-    uint64 batch_size = 7;
-    uint64 seed = 8;
-    optional string include_offset = 9;
+  uint64 keys = 1;
+  uint64 snapshot_rounds = 2;
+  bool transactional_snapshot = 3;
+  uint64 value_size = 4;
+  uint64 partitions = 5;
+  optional mz_proto.ProtoDuration tick_interval = 6;
+  uint64 batch_size = 7;
+  uint64 seed = 8;
+  optional string include_offset = 9;
 }
 
 // NOTE: this message is encoded and stored as part of source export
@@ -60,46 +59,46 @@ message ProtoKeyValueLoadGenerator {
 // Be extra careful about changes, ensuring that all changes are backwards
 // compatible
 message ProtoLoadGeneratorSourceExportStatementDetails {
-    ProtoLoadGeneratorOutput output = 1;
+  ProtoLoadGeneratorOutput output = 1;
 }
 
 message ProtoLoadGeneratorSourceExportDetails {
-    ProtoLoadGeneratorOutput output = 1;
+  ProtoLoadGeneratorOutput output = 1;
 }
 
 message ProtoLoadGeneratorOutput {
-    oneof kind {
-        google.protobuf.Empty default = 1;
-        ProtoLoadGeneratorAuctionOutput auction = 2;
-        ProtoLoadGeneratorMarketingOutput marketing = 3;
-        ProtoLoadGeneratorTpchOutput tpch = 4;
-    }
+  oneof kind {
+    google.protobuf.Empty default = 1;
+    ProtoLoadGeneratorAuctionOutput auction = 2;
+    ProtoLoadGeneratorMarketingOutput marketing = 3;
+    ProtoLoadGeneratorTpchOutput tpch = 4;
+  }
 }
 
 enum ProtoLoadGeneratorAuctionOutput {
-    Organizations = 0;
-    Users = 1;
-    Accounts = 2;
-    Auctions = 3;
-    Bids = 4;
+  Organizations = 0;
+  Users = 1;
+  Accounts = 2;
+  Auctions = 3;
+  Bids = 4;
 }
 
 enum ProtoLoadGeneratorMarketingOutput {
-    Customers = 0;
-    Impressions = 1;
-    Clicks = 2;
-    Leads = 3;
-    Coupons = 4;
-    ConversionPredictions = 5;
+  Customers = 0;
+  Impressions = 1;
+  Clicks = 2;
+  Leads = 3;
+  Coupons = 4;
+  ConversionPredictions = 5;
 }
 
 enum ProtoLoadGeneratorTpchOutput {
-    Supplier = 0;
-    Part = 1;
-    Partsupp = 2;
-    Customer = 3;
-    Orders = 4;
-    Lineitem = 5;
-    Nation = 6;
-    Region = 7;
+  Supplier = 0;
+  Part = 1;
+  Partsupp = 2;
+  Customer = 3;
+  Orders = 4;
+  Lineitem = 5;
+  Nation = 6;
+  Region = 7;
 }

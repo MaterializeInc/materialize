@@ -274,7 +274,7 @@ mv  hydrated_test_3 true
 
 > CREATE SOURCE src
   IN CLUSTER test
-  FROM LOAD GENERATOR auction;
+  FROM LOAD GENERATOR auction (UP TO 100);
 
 > CREATE TABLE accounts FROM SOURCE src (REFERENCE accounts);
 > CREATE TABLE auctions FROM SOURCE src (REFERENCE auctions);

@@ -26,6 +26,7 @@ globset = "0.4.14"
 hex = "0.4.3"
 http = "1.1.0"
 im = "15.1.0"
+ipnet = "2.5.0"
 itertools = "0.10.5"
 maplit = "1.0.2"
 mysql_async = { version = "0.34.1", default-features = false, features = [
@@ -64,10 +65,10 @@ mz-txn-wal = { path = "../txn-wal" }
 num_enum = "0.5.7"
 paste = "1.0"
 prometheus = { version = "0.13.3", default-features = false }
-protobuf-native = "0.3.1"
+protobuf-native = "0.3.2"
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
-prost = { version = "0.13.1", features = ["no-recursion-limit"] }
+prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = [
     "cmake-build",
     "ssl-vendored",

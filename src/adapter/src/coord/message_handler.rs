@@ -15,11 +15,9 @@ use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 use maplit::btreemap;
-use mz_audit_log::VersionedStorageUsage;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_controller::ControllerResponse;
-use mz_ore::cast::usize_to_u64;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
@@ -106,11 +104,6 @@ impl Coordinator {
                     .instrument(span)
                     .boxed_local()
                     .await
-            }
-            Message::GroupCommitApply(timestamp, responses, write_lock_guard, permit) => {
-                self.group_commit_apply(timestamp, responses, write_lock_guard, permit)
-                    .boxed_local()
-                    .await;
             }
             Message::AdvanceTimelines => {
                 self.advance_timelines().boxed_local().await;
@@ -276,37 +269,15 @@ impl Coordinator {
             self.get_local_write_ts().await.timestamp.into()
         };
 
-        let mut ops = Vec::with_capacity(shards_usage.by_shard.len());
-        let mut storage_usage_ids: Vec<_> = match self
-            .catalog()
-            .allocate_storage_usage_ids(usize_to_u64(shards_usage.by_shard.len()))
-            .await
-        {
-            Ok(storage_usage_ids) => storage_usage_ids,
-            Err(err) => {
-                tracing::warn!("Failed to allocate IDs for storage metrics: {:?}", err);
-                return;
-            }
-        };
-        // Reverse so we can pop IDs from the back in order.
-        storage_usage_ids.reverse();
-
-        for (shard_id, shard_usage) in shards_usage.by_shard {
-            let id = storage_usage_ids
-                .pop()
-                .expect("allocated the correct amount above");
-            let metric = VersionedStorageUsage::new(
-                id,
-                Some(shard_id.to_string()),
-                shard_usage.size_bytes(),
+        let ops = shards_usage
+            .by_shard
+            .into_iter()
+            .map(|(shard_id, shard_usage)| Op::WeirdStorageUsageUpdates {
+                object_id: Some(shard_id.to_string()),
+                size_bytes: shard_usage.size_bytes(),
                 collection_timestamp,
-            );
-            let builtin_table_update = self.catalog().pack_storage_usage_update(metric, 1);
-            ops.push(Op::WeirdBuiltinTableUpdates {
-                builtin_table_update,
-                audit_log: Vec::new(),
-            });
-        }
+            })
+            .collect();
 
         match self.catalog_transact_inner(None, ops).await {
             Ok(table_updates) => {
@@ -328,7 +299,7 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn storage_usage_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
-        let fut = self.builtin_table_update().execute(expired).await;
+        let (fut, _) = self.builtin_table_update().execute(expired).await;
         task::spawn(|| "storage_usage_pruning_apply", async move {
             fut.await;
         });
@@ -393,8 +364,8 @@ impl Coordinator {
     async fn message_controller(&mut self, message: ControllerResponse) {
         event!(Level::TRACE, message = format!("{:?}", message));
         match message {
-            ControllerResponse::PeekResponse(uuid, response, otel_ctx) => {
-                self.send_peek_response(uuid, response, otel_ctx);
+            ControllerResponse::PeekNotification(uuid, response, otel_ctx) => {
+                self.handle_peek_notification(uuid, response, otel_ctx);
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
                 if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =
@@ -417,7 +388,8 @@ impl Coordinator {
                     self.handle_introspection_subscribe_batch(sink_id, response)
                         .await;
                 } else {
-                    tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
+                    // Cancellation may cause us to receive responses for subscribes no longer
+                    // tracked, so we quietly ignore them.
                 }
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {
@@ -426,7 +398,8 @@ impl Coordinator {
                         active_copy_to.retire_with_response(response);
                     }
                     _ => {
-                        tracing::error!(%sink_id, "received CopyToResponse for nonexistent copy to");
+                        // Cancellation may cause us to receive responses for subscribes no longer
+                        // tracked, so we quietly ignore them.
                     }
                 }
             }
@@ -532,6 +505,7 @@ impl Coordinator {
                 create_progress_subsource_stmt,
                 create_source_stmt,
                 subsources,
+                available_source_references,
             } => {
                 self.plan_purified_create_source(
                     &ctx,
@@ -539,6 +513,7 @@ impl Coordinator {
                     create_progress_subsource_stmt,
                     create_source_stmt,
                     subsources,
+                    available_source_references,
                 )
                 .await
             }
@@ -689,8 +664,7 @@ impl Coordinator {
                     }
                 }
                 Deferred::GroupCommit => {
-                    self.group_commit_initiate(Some(write_lock_guard), None)
-                        .await
+                    self.group_commit(Some(write_lock_guard), None).await;
                 }
             }
         }
@@ -806,6 +780,7 @@ impl Coordinator {
             self.builtin_table_update()
                 .execute(builtin_table_updates)
                 .await
+                .0
                 .instrument(info_span!("coord::message_cluster_event::table_updates"))
                 .await;
 

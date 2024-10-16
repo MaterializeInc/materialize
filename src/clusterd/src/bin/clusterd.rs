@@ -76,6 +76,12 @@ struct Args {
         default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
+    /// The FQDN of this process, for GRPC request validation.
+    ///
+    /// Not providing this value or setting it to the empty string disables host validation for
+    /// GRPC requests.
+    #[clap(long, env = "GRPC_HOST", value_name = "NAME")]
+    grpc_host: Option<String>,
 
     // === Storage options. ===
     /// The URL for the Persist PubSub service.
@@ -288,6 +294,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         None,
     );
 
+    let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
     let grpc_server_metrics = GrpcServerMetrics::register_with(&metrics_registry);
 
     // Start storage server.
@@ -312,6 +319,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             &grpc_server_metrics,
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
+            grpc_host.clone(),
             storage_client,
             |svc| ProtoStorageServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
@@ -341,6 +349,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             &grpc_server_metrics,
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
+            grpc_host,
             compute_client,
             |svc| ProtoComputeServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),

@@ -485,12 +485,114 @@ pub struct ClusterReplicaProcessStatus {
     pub time: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct SourceReferences {
+    pub updated_at: u64,
+    pub references: Vec<SourceReference>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct SourceReference {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub columns: Vec<String>,
+}
+
+impl From<SourceReference> for durable::SourceReference {
+    fn from(source_reference: SourceReference) -> durable::SourceReference {
+        durable::SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
+impl SourceReferences {
+    pub fn to_durable(self, source_id: GlobalId) -> durable::SourceReferences {
+        durable::SourceReferences {
+            source_id,
+            updated_at: self.updated_at,
+            references: self.references.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<durable::SourceReference> for SourceReference {
+    fn from(source_reference: durable::SourceReference) -> SourceReference {
+        SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
+impl From<durable::SourceReferences> for SourceReferences {
+    fn from(source_references: durable::SourceReferences) -> SourceReferences {
+        SourceReferences {
+            updated_at: source_references.updated_at,
+            references: source_references
+                .references
+                .into_iter()
+                .map(|source_reference| source_reference.into())
+                .collect(),
+        }
+    }
+}
+
+impl From<mz_sql::plan::SourceReference> for SourceReference {
+    fn from(source_reference: mz_sql::plan::SourceReference) -> SourceReference {
+        SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
+impl From<mz_sql::plan::SourceReferences> for SourceReferences {
+    fn from(source_references: mz_sql::plan::SourceReferences) -> SourceReferences {
+        SourceReferences {
+            updated_at: source_references.updated_at,
+            references: source_references
+                .references
+                .into_iter()
+                .map(|source_reference| source_reference.into())
+                .collect(),
+        }
+    }
+}
+
+impl From<SourceReferences> for mz_sql::plan::SourceReferences {
+    fn from(source_references: SourceReferences) -> mz_sql::plan::SourceReferences {
+        mz_sql::plan::SourceReferences {
+            updated_at: source_references.updated_at,
+            references: source_references
+                .references
+                .into_iter()
+                .map(|source_reference| source_reference.into())
+                .collect(),
+        }
+    }
+}
+
+impl From<SourceReference> for mz_sql::plan::SourceReference {
+    fn from(source_reference: SourceReference) -> mz_sql::plan::SourceReference {
+        mz_sql::plan::SourceReference {
+            name: source_reference.name,
+            namespace: source_reference.namespace,
+            columns: source_reference.columns,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct CatalogEntry {
     pub item: CatalogItem,
     #[serde(skip)]
     pub referenced_by: Vec<GlobalId>,
-    // TODO(materialize#26794)––this should have an invariant tied to it that all
+    // TODO(database-issues#7922)––this should have an invariant tied to it that all
     // dependents (i.e. entries in this field) have IDs greater than this
     // entry's ID.
     #[serde(skip)]
@@ -515,6 +617,7 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
+    ContinualTask(ContinualTask),
 }
 
 impl From<CatalogEntry> for durable::Item {
@@ -954,6 +1057,22 @@ pub struct Connection {
     pub resolved_ids: ResolvedIds,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ContinualTask {
+    pub create_sql: String,
+    pub input_id: GlobalId,
+    /// ContinualTasks are self-referential. We make this work by using a
+    /// placeholder `LocalId` for the CT itself through name resolution and
+    /// planning. Then we fill in the real `GlobalId` before constructing this
+    /// catalog item.
+    pub raw_expr: Arc<HirRelationExpr>,
+    pub desc: RelationDesc,
+    pub resolved_ids: ResolvedIds,
+    pub cluster_id: ClusterId,
+    /// See the comment on [MaterializedView::initial_as_of].
+    pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
+}
+
 impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
     pub fn typ(&self) -> mz_sql::catalog::CatalogItemType {
@@ -969,15 +1088,17 @@ impl CatalogItem {
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
             CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
+            CatalogItem::ContinualTask(_) => mz_sql::catalog::CatalogItemType::ContinualTask,
         }
     }
 
     /// Whether this item represents a storage collection.
     pub fn is_storage_collection(&self) -> bool {
         match self {
-            CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::MaterializedView(_) => {
-                true
-            }
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::ContinualTask(_) => true,
             CatalogItem::Log(_)
             | CatalogItem::Sink(_)
             | CatalogItem::View(_)
@@ -1004,6 +1125,7 @@ impl CatalogItem {
             CatalogItem::View(view) => Some(Cow::Borrowed(&view.desc)),
             CatalogItem::MaterializedView(mview) => Some(Cow::Borrowed(&mview.desc)),
             CatalogItem::Type(typ) => typ.desc.as_ref().map(Cow::Borrowed),
+            CatalogItem::ContinualTask(ct) => Some(Cow::Borrowed(&ct.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
@@ -1073,6 +1195,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
+            CatalogItem::ContinualTask(ct) => &ct.resolved_ids,
         }
     }
 
@@ -1095,6 +1218,7 @@ impl CatalogItem {
             CatalogItem::Type(_) => {}
             CatalogItem::View(view) => uses.extend(view.raw_expr.depends_on()),
             CatalogItem::MaterializedView(mview) => uses.extend(mview.raw_expr.depends_on()),
+            CatalogItem::ContinualTask(ct) => uses.extend(ct.raw_expr.depends_on()),
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
         }
@@ -1115,7 +1239,8 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => None,
         }
     }
 
@@ -1195,6 +1320,11 @@ impl CatalogItem {
                 Ok(CatalogItem::Type(i))
             }
             CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
+            CatalogItem::ContinualTask(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::ContinualTask(i))
+            }
         }
     }
 
@@ -1264,6 +1394,11 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
+            }
+            CatalogItem::ContinualTask(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::ContinualTask(i))
             }
         }
     }
@@ -1350,7 +1485,8 @@ impl CatalogItem {
             | CatalogItem::MaterializedView(MaterializedView { create_sql, .. })
             | CatalogItem::Index(Index { create_sql, .. })
             | CatalogItem::Secret(Secret { create_sql, .. })
-            | CatalogItem::Connection(Connection { create_sql, .. }) => Some(create_sql),
+            | CatalogItem::Connection(Connection { create_sql, .. })
+            | CatalogItem::ContinualTask(ContinualTask { create_sql, .. }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
         };
         let Some(create_sql) = create_sql else {
@@ -1385,7 +1521,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => None,
         }
     }
 
@@ -1403,6 +1540,7 @@ impl CatalogItem {
                 DataSourceDesc::Introspection(_) | DataSourceDesc::Progress => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
+            CatalogItem::ContinualTask(ct) => Some(ct.cluster_id),
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -1427,7 +1565,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => None,
         }
     }
 
@@ -1448,7 +1587,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => return None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => return None,
         };
         Some(cw)
     }
@@ -1465,7 +1605,8 @@ impl CatalogItem {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Index(_)
-            | CatalogItem::MaterializedView(_) => self.custom_logical_compaction_window(),
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::ContinualTask(_) => self.custom_logical_compaction_window(),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -1492,7 +1633,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => false,
         }
     }
 
@@ -1527,6 +1669,7 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => secret.create_sql.clone(),
             CatalogItem::Connection(connection) => connection.create_sql.clone(),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::ContinualTask(ct) => ct.create_sql.clone(),
         }
     }
 
@@ -1553,6 +1696,7 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => secret.create_sql,
             CatalogItem::Connection(connection) => connection.create_sql,
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::ContinualTask(ct) => ct.create_sql,
         }
     }
 }
@@ -1584,6 +1728,14 @@ impl CatalogEntry {
     pub fn index(&self) -> Option<&Index> {
         match self.item() {
             CatalogItem::Index(idx) => Some(idx),
+            _ => None,
+        }
+    }
+
+    /// Returns the inner [`MaterializedView`] if this entry is a materialized view, else `None`.
+    pub fn materialized_view(&self) -> Option<&MaterializedView> {
+        match self.item() {
+            CatalogItem::MaterializedView(mv) => Some(mv),
             _ => None,
         }
     }
@@ -1677,15 +1829,20 @@ impl CatalogEntry {
     /// ingestion it is an export of, as well as the item it exports.
     pub fn source_export_details(
         &self,
-    ) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
+    ) -> Option<(
+        GlobalId,
+        &UnresolvedItemName,
+        &SourceExportDetails,
+        &SourceExportDataConfig<ReferencedConnection>,
+    )> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::IngestionExport {
                     ingestion_id,
                     external_reference,
                     details,
-                    data_config: _,
-                } => Some((*ingestion_id, external_reference, details)),
+                    data_config,
+                } => Some((*ingestion_id, external_reference, details, data_config)),
                 _ => None,
             },
             CatalogItem::Table(table) => match &table.data_source {
@@ -1693,8 +1850,8 @@ impl CatalogEntry {
                     ingestion_id,
                     external_reference,
                     details,
-                    data_config: _,
-                }) => Some((*ingestion_id, external_reference, details)),
+                    data_config,
+                }) => Some((*ingestion_id, external_reference, details, data_config)),
                 _ => None,
             },
             _ => None,
@@ -1727,7 +1884,8 @@ impl CatalogEntry {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => None,
         }
     }
 
@@ -1759,6 +1917,11 @@ impl CatalogEntry {
     /// Reports whether this catalog entry is an index.
     pub fn is_index(&self) -> bool {
         matches!(self.item(), CatalogItem::Index(_))
+    }
+
+    /// Reports whether this catalog entry is a continual task.
+    pub fn is_continual_task(&self) -> bool {
+        matches!(self.item(), CatalogItem::ContinualTask(_))
     }
 
     /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
@@ -2421,6 +2584,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
+            CatalogItem::ContinualTask(ContinualTask { create_sql, .. }) => create_sql,
         }
     }
 
@@ -2436,7 +2600,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn table_details(&self) -> Option<&[Expr<Aug>]> {
+    fn writable_table_details(&self) -> Option<&[Expr<Aug>]> {
         if let CatalogItem::Table(Table {
             data_source: TableDataSource::TableWrites { defaults },
             ..
@@ -2478,7 +2642,12 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn source_export_details(
         &self,
-    ) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
+    ) -> Option<(
+        GlobalId,
+        &UnresolvedItemName,
+        &SourceExportDetails,
+        &SourceExportDataConfig<ReferencedConnection>,
+    )> {
         self.source_export_details()
     }
 

@@ -687,6 +687,9 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     /// details of that export, else is set to `SourceExportDetails::None` to indicate that
     /// this source should not export to the primary collection.
     fn primary_export_details(&self) -> SourceExportDetails;
+
+    /// Whether the source type supports read only mode.
+    fn supports_read_only(&self) -> bool;
 }
 
 #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1042,6 +1045,15 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Postgres(conn) => conn.primary_export_details(),
             Self::MySql(conn) => conn.primary_export_details(),
             Self::LoadGenerator(conn) => conn.primary_export_details(),
+        }
+    }
+
+    fn supports_read_only(&self) -> bool {
+        match self {
+            GenericSourceConnection::Kafka(conn) => conn.supports_read_only(),
+            GenericSourceConnection::Postgres(conn) => conn.supports_read_only(),
+            GenericSourceConnection::MySql(conn) => conn.supports_read_only(),
+            GenericSourceConnection::LoadGenerator(conn) => conn.supports_read_only(),
         }
     }
 }
@@ -1408,7 +1420,7 @@ pub trait ExternalCatalogReference {
     fn item_name(&self) -> &str;
 }
 
-impl ExternalCatalogReference for mz_mysql_util::MySqlTableDesc {
+impl ExternalCatalogReference for &mz_mysql_util::MySqlTableDesc {
     fn schema_name(&self) -> &str {
         &self.schema_name
     }
@@ -1457,7 +1469,7 @@ pub enum ExternalReferenceResolutionError {
     #[error("reference to {name} not found in source")]
     DoesNotExist { name: String },
     #[error(
-        "reference to {name} is ambiguous, consider specifying an additional \
+        "reference {name} is ambiguous, consider specifying an additional \
     layer of qualification"
     )]
     Ambiguous { name: String },

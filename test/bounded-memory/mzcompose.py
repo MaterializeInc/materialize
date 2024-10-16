@@ -20,7 +20,6 @@ from textwrap import dedent
 from materialize.buildkite import shard_list
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
@@ -28,7 +27,7 @@ from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 
 # Those defaults have been carefully chosen to avoid known OOMs
-# such as #15093 and #15044 while hopefully catching any further
+# such as materialize#15093 and database-issues#4297 while hopefully catching any further
 # regressions in memory usage
 PAD_LEN = 1024
 STRING_PAD = "x" * PAD_LEN
@@ -36,8 +35,7 @@ REPEAT = 16 * 1024
 ITERATIONS = 128
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
-    Materialized(external_cockroach=True),
+    Materialized(),  # overridden below
     Testdrive(
         no_reset=True,
         seed=1,

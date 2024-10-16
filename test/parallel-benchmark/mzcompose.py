@@ -15,7 +15,6 @@ actions concurrently, measures various kinds of statistics.
 import gc
 import os
 import time
-from collections import defaultdict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -23,6 +22,7 @@ import numpy
 from matplotlib.markers import MarkerStyle
 
 from materialize import MZ_ROOT, buildkite
+from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
@@ -43,9 +43,12 @@ from materialize.mzcompose.test_result import (
     TestFailureDetails,
 )
 from materialize.parallel_benchmark.framework import (
+    DB_FILE,
     LoadPhase,
-    Measurement,
+    MeasurementsStore,
+    MemoryStore,
     Scenario,
+    SQLiteStore,
     State,
 )
 from materialize.parallel_benchmark.scenarios import *  # noqa: F401 F403
@@ -104,24 +107,50 @@ SERVICES = [
 
 
 class Statistics:
-    def __init__(self, times: list[float], durations: list[float]):
-        assert len(times) == len(durations)
-        self.queries: int = len(times)
-        self.qps: float = len(times) / max(times)
-        self.max: float = max(durations)
-        self.min: float = min(durations)
-        self.avg: float = float(numpy.mean(durations))
-        self.p50: float = float(numpy.median(durations))
-        self.p95: float = float(numpy.percentile(durations, 95))
-        self.p99: float = float(numpy.percentile(durations, 99))
-        self.p99_9: float = float(numpy.percentile(durations, 99.9))
-        self.p99_99: float = float(numpy.percentile(durations, 99.99))
-        self.p99_999: float = float(numpy.percentile(durations, 99.999))
-        self.p99_9999: float = float(numpy.percentile(durations, 99.9999))
-        self.p99_99999: float = float(numpy.percentile(durations, 99.99999))
-        self.p99_999999: float = float(numpy.percentile(durations, 99.999999))
-        self.std: float = float(numpy.std(durations, ddof=1))
-        self.slope: float = float(numpy.polyfit(times, durations, 1)[0])
+    def __init__(self, action: str, m: MeasurementsStore, start_time: float):
+        if isinstance(m, MemoryStore):
+            times: list[float] = [x.timestamp - start_time for x in m.data[action]]
+            durations: list[float] = [x.duration * 1000 for x in m.data[action]]
+            self.queries: int = len(times)
+            self.qps: float = len(times) / max(times)
+            self.max: float = max(durations)
+            self.min: float = min(durations)
+            self.avg: float = float(numpy.mean(durations))
+            self.p50: float = float(numpy.median(durations))
+            self.p95: float = float(numpy.percentile(durations, 95))
+            self.p99: float = float(numpy.percentile(durations, 99))
+            self.p99_9: float = float(numpy.percentile(durations, 99.9))
+            self.p99_99: float = float(numpy.percentile(durations, 99.99))
+            self.p99_999: float = float(numpy.percentile(durations, 99.999))
+            self.p99_9999: float = float(numpy.percentile(durations, 99.9999))
+            self.p99_99999: float = float(numpy.percentile(durations, 99.99999))
+            self.p99_999999: float = float(numpy.percentile(durations, 99.999999))
+            self.std: float = float(numpy.std(durations, ddof=1))
+            self.slope: float = float(numpy.polyfit(times, durations, 1)[0])
+        elif isinstance(m, SQLiteStore):
+            cursor = m.conn.cursor()
+            cursor.execute(
+                f"SELECT count(*), count(*) / (max(timestamp) - {start_time}), max(duration) * 1000, min(duration) * 1000, avg(duration) * 1000 FROM measurements WHERE scenario = ? AND action = ?",
+                (m.scenario, action),
+            )
+            self.queries, self.qps, self.max, self.min, self.avg = cursor.fetchone()
+            # TODO: Rest
+            self.median = 0.0
+            self.p50 = 0.0
+            self.p95 = 0.0
+            self.p99 = 0.0
+            self.p99_9 = 0.0
+            self.p99_99 = 0.0
+            self.p99_999 = 0.0
+            self.p99_9999 = 0.0
+            self.p99_99999 = 0.0
+            self.p99_999999 = 0.0
+            self.std = 0.0
+            self.slope = 0.0
+        else:
+            raise ValueError(
+                f"Unknown measurements store (for action {action}): {type(m)}"
+            )
 
     def __str__(self) -> str:
         return f"""  queries: {self.queries:>5}
@@ -170,7 +199,7 @@ def upload_plot(
 def report(
     mz_string: str,
     scenario: Scenario,
-    measurements: dict[str, list[Measurement]],
+    measurements: MeasurementsStore,
     start_time: float,
     guarantees: bool,
     suffix: str,
@@ -178,62 +207,73 @@ def report(
     scenario_name = type(scenario).name()
     stats: dict[str, Statistics] = {}
     failures: list[TestFailureDetails] = []
-    plt.figure(figsize=(10, 6))
-    for key, m in measurements.items():
-        times: list[float] = [x.timestamp - start_time for x in m]
-        durations: list[float] = [x.duration * 1000 for x in m]
-        stats[key] = Statistics(times, durations)
-        plt.scatter(times, durations, label=key, marker=MarkerStyle("+"))
-        print(f"Statistics for {key}:\n{stats[key]}")
-        if key in scenario.guarantees and guarantees:
-            for stat, guarantee in scenario.guarantees[key].items():
-                duration = getattr(stats[key], stat)
+
+    plot = isinstance(measurements, MemoryStore)
+
+    if plot:
+        plt.figure(figsize=(10, 6))
+    for action in measurements.actions():
+        stats[action] = Statistics(action, measurements, start_time)
+        if plot:
+            times: list[float] = [
+                x.timestamp - start_time for x in measurements.data[action]
+            ]
+            durations: list[float] = [
+                x.duration * 1000 for x in measurements.data[action]
+            ]
+            plt.scatter(times, durations, label=action[:60], marker=MarkerStyle("+"))
+        print(f"Statistics for {action}:\n{stats[action]}")
+        if action in scenario.guarantees and guarantees:
+            for stat, guarantee in scenario.guarantees[action].items():
+                duration = getattr(stats[action], stat)
                 less_than = less_than_is_regression(stat)
                 if duration < guarantee if less_than else duration > guarantee:
-                    failure = f"Scenario {scenario_name} failed: {key}: {stat}: {duration:.2f} {'<' if less_than else '>'} {guarantee:.2f}"
+                    failure = f"Scenario {scenario_name} failed: {action}: {stat}: {duration:.2f} {'<' if less_than else '>'} {guarantee:.2f}"
                     print(failure)
                     failures.append(
                         TestFailureDetails(
                             message=failure,
-                            details=str(stats[key]),
+                            details=str(stats[action]),
                             test_class_name_override=scenario_name,
                         )
                     )
                 else:
                     print(
-                        f"Scenario {scenario_name} succeeded: {key}: {stat}: {duration:.2f} {'>=' if less_than else '<='} {guarantee:.2f}"
+                        f"Scenario {scenario_name} succeeded: {action}: {stat}: {duration:.2f} {'>=' if less_than else '<='} {guarantee:.2f}"
                     )
 
-    plt.xlabel("time [s]")
-    plt.ylabel("latency [ms]")
-    plt.title(f"{scenario_name} against {mz_string}")
-    plt.legend(loc="best")
-    plt.grid(True)
-    plt.ylim(bottom=0)
-    plot_path = f"plots/{scenario_name}_{suffix}_timeline.png"
-    plt.savefig(MZ_ROOT / plot_path, dpi=300)
-    upload_plot(plot_path, scenario_name, "timeline")
+    if plot:
+        plt.xlabel("time [s]")
+        plt.ylabel("latency [ms]")
+        plt.yscale("log")
+        plt.title(f"{scenario_name} against {mz_string}")
+        plt.legend(loc="best")
+        plt.grid(True)
+        plt.ylim(bottom=0)
+        plot_path = f"plots/{scenario_name}_{suffix}_timeline.png"
+        plt.savefig(MZ_ROOT / plot_path, dpi=300)
+        upload_plot(plot_path, scenario_name, "timeline")
 
-    plt.clf()
+        plt.clf()
 
-    # Plot CCDF
-    plt.grid(True, which="both")
-    plt.xscale("log")
-    plt.yscale("log")
-    plt.ylabel("CCDF")
-    plt.xlabel("latency [ms]")
-    plt.title(f"{scenario_name} against {mz_string}")
-    for key, m in measurements.items():
-        durations = [x.duration * 1000.0 for x in m]
-        durations.sort()
-        (uniqu_durations, counts) = numpy.unique(durations, return_counts=True)
-        counts = numpy.cumsum(counts)
-        plt.plot(uniqu_durations, 1 - counts / counts.max(), label=key)
-    plt.legend(loc="best")
+        # Plot CCDF
+        plt.grid(True, which="both")
+        plt.xscale("log")
+        plt.yscale("log")
+        plt.ylabel("CCDF")
+        plt.xlabel("latency [ms]")
+        plt.title(f"{scenario_name} against {mz_string}")
+        for key, m in measurements.data.items():
+            durations = [x.duration * 1000.0 for x in m]
+            durations.sort()
+            (uniqu_durations, counts) = numpy.unique(durations, return_counts=True)
+            counts = numpy.cumsum(counts)
+            plt.plot(uniqu_durations, 1 - counts / counts.max(), label=key)
+        plt.legend(loc="best")
 
-    plot_path = f"plots/{scenario_name}_{suffix}_ccdf.png"
-    plt.savefig(MZ_ROOT / plot_path, dpi=300)
-    upload_plot(plot_path, scenario_name, "ccdf")
+        plot_path = f"plots/{scenario_name}_{suffix}_ccdf.png"
+        plt.savefig(MZ_ROOT / plot_path, dpi=300)
+        upload_plot(plot_path, scenario_name, "ccdf")
 
     return stats, failures
 
@@ -246,13 +286,52 @@ def run_once(
     params: str | None,
     args,
     suffix: str,
+    sqlite_store: bool,
 ) -> tuple[dict[Scenario, dict[str, Statistics]], list[TestFailureDetails]]:
     stats: dict[Scenario, dict[str, Statistics]] = {}
     failures: list[TestFailureDetails] = []
 
     overrides = []
 
-    if args.mz_url:
+    if args.benchmarking_env:
+        assert not args.mz_url
+        assert not args.canary_env
+        region = "aws/us-east-1"
+        environment = os.getenv("ENVIRONMENT", "staging")
+        app_password = os.environ["QA_BENCHMARKING_APP_PASSWORD"]
+
+        target = PgConnInfo(
+            user="qabenchmarking",
+            password=app_password,
+            database="materialize",
+            # Service accounts can't use mz
+            host="4pe2w4etmpsnwx1iizersezg7.lb.us-east-1.aws.staging.materialize.cloud",
+            # host=get_cloud_hostname(
+            #     c, region=region, environment=environment, app_password=app_password
+            # ),
+            port=6875,
+            ssl=True,
+        )
+    elif args.canary_env:
+        assert not args.mz_url
+        assert not args.benchmarking_env
+        region = "aws/us-east-1"
+        environment = os.getenv("ENVIRONMENT", "production")
+        app_password = os.environ["CANARY_LOADTEST_APP_PASSWORD"]
+
+        target = PgConnInfo(
+            user=os.getenv(
+                "CANARY_LOADTEST_USERNAME", "infra+qacanaryload@materialize.io"
+            ),
+            password=app_password,
+            database="materialize",
+            host=get_cloud_hostname(
+                c, region=region, environment=environment, app_password=app_password
+            ),
+            port=6875,
+            ssl=True,
+        )
+    elif args.mz_url:
         overrides = [
             Testdrive(
                 no_reset=True,
@@ -260,11 +339,11 @@ def run_once(
                 no_consistency_checks=True,
             )
         ]
+        target = parse_pg_conn_string(args.mz_url)
     else:
-        mz_image = f"materialize/materialized:{tag}" if tag else None
         overrides = [
             Materialized(
-                image=mz_image,
+                image=f"materialize/materialized:{tag}" if tag else None,
                 default_size=args.size,
                 soft_assertions=False,
                 external_cockroach=True,
@@ -274,25 +353,27 @@ def run_once(
                 | {"max_connections": "100000"},
             )
         ]
+        target = None
 
     c.silent = True
 
     with c.override(*overrides):
         for scenario_class in scenarios:
-            scenario_name = scenario_class.name()
-            print(f"--- Running scenario {scenario_name}")
-
-            if args.mz_url:
-                target = parse_pg_conn_string(args.mz_url)
+            if target:
                 c.up("testdrive", persistent=True)
                 conn_infos = {"materialized": target}
                 conn = target.connect()
                 with conn.cursor() as cur:
-                    cur.execute("SELECT mz_version()")
+                    cur.execute(
+                        "SELECT version()"
+                        if args.pure_postgres
+                        else "SELECT mz_version()"
+                    )
                     mz_version = cur.fetchall()[0][0]
                 conn.close()
                 mz_string = f"{mz_version} ({target.host})"
             else:
+                print("~~~ Starting up services")
                 c.up(*service_names)
                 c.up("testdrive", persistent=True)
 
@@ -320,8 +401,12 @@ def run_once(
                     ),
                 }
 
+            scenario_name = scenario_class.name()
+            print(f"--- Running scenario {scenario_name}")
             state = State(
-                measurements=defaultdict(list),
+                measurements=(
+                    SQLiteStore(scenario_name) if sqlite_store else MemoryStore()
+                ),
                 load_phase_duration=args.load_phase_duration,
                 periodic_dists={pd[0]: int(pd[1]) for pd in args.periodic_dist or []},
             )
@@ -330,8 +415,9 @@ def run_once(
             start_time = time.time()
             Path(MZ_ROOT / "plots").mkdir(parents=True, exist_ok=True)
             try:
-                # Don't let the garbage collector interfere with our measurements
-                gc.disable()
+                if not args.benchmarking_env:
+                    # Don't let the garbage collector interfere with our measurements
+                    gc.disable()
                 scenario.run(c, state)
                 scenario.teardown()
                 gc.collect()
@@ -347,8 +433,12 @@ def run_once(
                 )
                 failures.extend(new_failures)
                 stats[scenario] = new_stats
+                state.measurements.close()
 
-            if not args.mz_url:
+            if not target:
+                print(
+                    "~~~ Resetting materialized to prevent interference between scenarios"
+                )
                 c.kill("cockroach", "materialized", "testdrive")
                 c.rm("cockroach", "materialized", "testdrive")
                 c.rm_volumes("mzdata")
@@ -393,7 +483,10 @@ def check_regressions(
                 this_value = getattr(this_stats[scenario][query], stat)
                 other_value = getattr(other_stats[other_scenario][query], stat)
                 less_than = less_than_is_regression(stat)
-                percentage = f"{(this_value / other_value - 1) * 100:.2f}%"
+                try:
+                    percentage = f"{(this_value / other_value - 1) * 100:.2f}%"
+                except ZeroDivisionError:
+                    percentage = ""
                 threshold = (
                     None
                     if query in ignored_queries
@@ -570,6 +663,30 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     parser.add_argument("--mz-url", type=str, help="Remote Mz instance to run against")
 
+    parser.add_argument(
+        "--pure-postgres",
+        action="store_true",
+        help="Don't run any Materialize-specific preparation commands",
+    )
+
+    parser.add_argument(
+        "--canary-env",
+        action="store_true",
+        help="Run against QA Canary production environment",
+    )
+
+    parser.add_argument(
+        "--benchmarking-env",
+        action="store_true",
+        help="Run against QA Benchmarking staging environment",
+    )
+
+    parser.add_argument(
+        "--sqlite-store",
+        action="store_true",
+        help="Store results in SQLite instead of in memory",
+    )
+
     args = parser.parse_args()
 
     if args.scenario:
@@ -585,6 +702,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     sharded_scenarios = buildkite.shard_list(scenarios, lambda s: s.name())
 
+    if not sharded_scenarios:
+        return
+
+    if args.sqlite_store and os.path.exists(DB_FILE):
+        os.remove(DB_FILE)
+
     service_names = ["materialized", "postgres", "mysql"] + (
         ["redpanda"] if args.redpanda else ["zookeeper", "kafka", "schema-registry"]
     )
@@ -597,6 +720,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         params=args.this_params,
         args=args,
         suffix="this",
+        sqlite_store=args.sqlite_store,
     )
     if args.other_tag:
         assert not args.mz_url, "Can't set both --mz-url and --other-tag"
@@ -611,6 +735,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             params=args.other_params,
             args=args,
             suffix="other",
+            sqlite_store=args.sqlite_store,
         )
         failures.extend(other_failures)
         failures.extend(check_regressions(this_stats, other_stats, tag))
@@ -623,8 +748,5 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         raise FailedTestExecutionError(errors=failures)
 
 
-# TODO: 24 hour runs (also against real staging with sources, similar to QA canary)
-#       Set up remote sources, share with QA canary pipeline, use concurrency group, start first 24 hour runs
-#       Maybe also set up the real rr-bench there as a separate step
 # TODO: Choose an existing cluster name (for remote mz)
 # TODO: Measure Memory?

@@ -7,11 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-fn main() {
-    std::env::set_var("PROTOC", mz_build_tools::protoc());
-    std::env::set_var("PROTOC_INCLUDE", mz_build_tools::protoc_include());
+use std::path::PathBuf;
 
+fn main() {
     prost_build::Config::new()
+        .protoc_executable(mz_build_tools::protoc())
         .type_attribute(".", "#[derive(serde::Serialize)]")
         .type_attribute(".mz_persist_types.arrow", "#[derive(serde::Deserialize)]")
         .btree_map(["."])
@@ -21,7 +21,7 @@ fn main() {
                 "persist-types/src/arrow.proto",
                 "persist-types/src/stats.proto",
             ],
-            &[".."],
+            &[PathBuf::from(".."), mz_build_tools::protoc_include()],
         )
         .unwrap_or_else(|e| panic!("{e}"))
 }

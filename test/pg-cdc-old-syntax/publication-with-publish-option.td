@@ -52,7 +52,7 @@ CREATE PUBLICATION mz_source_delete FOR TABLE t1 WITH ( publish = 'delete') ;
 # events post-snapshot.
 #
 # Currently there is no good way to do this other than sleeping.
-# <https://github.com/MaterializeInc/materialize/issues/14914> tracks
+# <https://github.com/MaterializeInc/database-issues/issues/4266> tracks
 # making this better
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
 > SELECT COUNT(*) FROM mz_source_insert;

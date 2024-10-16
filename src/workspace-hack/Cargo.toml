@@ -91,9 +91,9 @@ postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-fe
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.4" }
 proc-macro2 = { version = "1.0.82", features = ["span-locations"] }
-prost = { version = "0.13.1", features = ["no-recursion-limit", "prost-derive"] }
+prost = { version = "0.13.2", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.2", default-features = false, features = ["serde"] }
-prost-types = { version = "0.13.1" }
+prost-types = { version = "0.13.2" }
 quote = { version = "1.0.36" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
@@ -118,10 +118,10 @@ textwrap = { version = "0.16.0", default-features = false, features = ["terminal
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 tokio = { version = "1.38.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
-tokio-stream = { version = "0.1.14", features = ["net", "sync"] }
+tokio-stream = { version = "0.1.16", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.3", default-features = false, features = ["serde"] }
-tonic = { version = "0.12.1", features = ["gzip"] }
+tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.5.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.37", features = ["log"] }
@@ -159,7 +159,7 @@ bstr-6f8ce4dd05d13bba = { package = "bstr", version = "0.2.14" }
 bstr-dff4ba8e3ae991db = { package = "bstr", version = "1.10.0" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.4.0", features = ["serde"] }
-cc = { version = "1.0.83", default-features = false, features = ["parallel"] }
+cc = { version = "1.1.28", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.35", default-features = false, features = ["clock", "serde"] }
 clap = { version = "3.2.24", features = ["derive", "env", "wrap_help"] }
 console = { version = "0.15.5", default-features = false, features = ["ansi-parsing", "unicode-width"] }
@@ -219,9 +219,9 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", defa
 predicates = { version = "2.1.4" }
 proc-macro2 = { version = "1.0.82", features = ["span-locations"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["boxed_union"] }
-prost = { version = "0.13.1", features = ["no-recursion-limit", "prost-derive"] }
+prost = { version = "0.13.2", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.2", default-features = false, features = ["serde"] }
-prost-types = { version = "0.13.1" }
+prost-types = { version = "0.13.2" }
 quote = { version = "1.0.36" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
@@ -247,10 +247,10 @@ time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-kno
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1.38.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
-tokio-stream = { version = "0.1.14", features = ["net", "sync"] }
+tokio-stream = { version = "0.1.16", features = ["net", "sync"] }
 tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.3", default-features = false, features = ["serde"] }
-tonic = { version = "0.12.1", features = ["gzip"] }
+tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.5.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.37", features = ["log"] }

@@ -59,7 +59,7 @@
     const headings = $(".content h2, .content h3");
     let offsets = headings.toArray().map((h) => ({
       id: h.id,
-      offset: h.offsetTop - 75,
+      offset: h.offsetTop - 65,  // change to 75 if banner is displayed
     }));
     const cutoff = $(document).height() - $(window).height() - SLOP;
     const firstBad = offsets.findIndex((o) => o.offset > cutoff);
@@ -75,7 +75,11 @@
   $(window).scroll(() => {
     const scroll = $(window).scrollTop();
     const offsets = headingOffsets();
-    let activeId = scroll == 0 ? null : offsets[offsets.length - 1].id;
+    let activeId = null;
+    if (offsets.length > 0 ) {
+      activeId = scroll == 0 ? null : offsets[offsets.length - 1].id;
+    }
+
     for (let i = 0; i < offsets.length && scroll > 0 ; i++) {
       if (offsets[i].offset > scroll) {
         activeId = offsets[i].id;

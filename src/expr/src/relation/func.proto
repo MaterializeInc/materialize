@@ -11,17 +11,17 @@
 
 syntax = "proto3";
 
-import "repr/src/adt/regex.proto";
-
 package mz_expr.relation.func;
 
+import "repr/src/adt/regex.proto";
+
 message ProtoCaptureGroupDesc {
-    uint32 index = 1;
-    optional string name = 2;
-    bool nullable = 3;
+  uint32 index = 1;
+  optional string name = 2;
+  bool nullable = 3;
 }
 
 message ProtoAnalyzedRegex {
-    mz_repr.adt.regex.ProtoRegex regex = 1;
-    repeated ProtoCaptureGroupDesc groups = 2;
+  mz_repr.adt.regex.ProtoRegex regex = 1;
+  repeated ProtoCaptureGroupDesc groups = 2;
 }

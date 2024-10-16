@@ -189,7 +189,7 @@ curl 'https://console.neon.tech/api/v2/projects/<project_id>/branches/<branch_id
 If you are prototyping and your Neon instance is publicly accessible, **you can
 skip this step**. For production scenarios, we recommend using [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
 to limit the IP addresses that can connect to your Neon instance.
-{{< /note >}}
+{{</ note >}}
 
 ### Allow Materialize IPs
 

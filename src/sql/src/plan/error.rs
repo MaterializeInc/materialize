@@ -164,6 +164,7 @@ pub enum PlanError {
         name: UnresolvedItemName,
         target_names: Vec<UnresolvedItemName>,
     },
+    NoTablesFoundForSchemas(Vec<String>),
     InvalidProtobufSchema {
         cause: protobuf_native::OperationFailedError,
     },
@@ -211,6 +212,9 @@ pub enum PlanError {
     },
     InvalidKeysInSubscribeEnvelopeUpsert,
     InvalidKeysInSubscribeEnvelopeDebezium,
+    InvalidPartitionByEnvelopeDebezium {
+        column_name: String,
+    },
     InvalidOrderByInSubscribeWithinTimestampOrderBy,
     FromValueRequiresParen,
     VarError(VarError),
@@ -343,6 +347,13 @@ impl PlanError {
             } => Some(format!(
                 "subsources referencing table: {}",
                 itertools::join(target_names, ", ")
+            )),
+            Self::InvalidPartitionByEnvelopeDebezium { .. } => Some(
+                "When using ENVELOPE DEBEZIUM, only columns in the key can be referenced in the PARTITION BY expression.".to_string()
+            ),
+            Self::NoTablesFoundForSchemas(schemas) => Some(format!(
+                "missing schemas: {}",
+                separated(", ", schemas.iter().map(|c| c.quoted()))
             )),
             _ => None,
         }
@@ -600,6 +611,11 @@ impl fmt::Display for PlanError {
             } => {
                 write!(f, "multiple subsources refer to table {}", name)
             },
+            Self::NoTablesFoundForSchemas(schemas) => {
+                write!(f, "no tables found in referenced schemas: {}",
+                    separated(", ", schemas.iter().map(|c| c.quoted()))
+                )
+            },
             Self::InvalidProtobufSchema { .. } => {
                 write!(f, "invalid protobuf schema")
             }
@@ -656,6 +672,13 @@ impl fmt::Display for PlanError {
             }
             Self::InvalidKeysInSubscribeEnvelopeDebezium => {
                 write!(f, "invalid keys in SUBSCRIBE ENVELOPE DEBEZIUM (KEY (..))")
+            }
+            Self::InvalidPartitionByEnvelopeDebezium { column_name } => {
+                write!(
+                    f,
+                    "PARTITION BY expression cannot refer to non-key column {}",
+                    column_name.quoted(),
+                )
             }
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 write!(f, "invalid ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY")

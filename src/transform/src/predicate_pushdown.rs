@@ -24,7 +24,7 @@
 //! or if we are not certain that the input is non-empty (e.g. join).
 //! Note that this is not addressing the problem in its full generality, because this problem can
 //! occur with any function call that might error (although much more rarely than with literal
-//! errors). See <https://github.com/MaterializeInc/materialize/issues/17189#issuecomment-1547391011>
+//! errors). See <https://github.com/MaterializeInc/database-issues/issues/4972#issuecomment-1547391011>
 //!
 //! ```rust
 //! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
@@ -462,7 +462,7 @@ impl PredicatePushdown {
                             // hard to appropriately reflect the negation in the error stream:
                             // - If we don't negate, then errors that should cancel out will not
                             //   cancel out. For example, see
-                            //   https://github.com/MaterializeInc/materialize/issues/19179
+                            //   https://github.com/MaterializeInc/database-issues/issues/5691
                             // - If we negate, then unrelated errors might cancel out. E.g., there
                             //   might be a division-by-0 in both inputs to an EXCEPT ALL, but
                             //   on different input data. These shouldn't cancel out.
@@ -523,7 +523,7 @@ impl PredicatePushdown {
                     body,
                 } => {
                     // Note: This could be extended to be able to do a little more pushdowns, see
-                    // https://github.com/MaterializeInc/materialize/issues/18167#issuecomment-1477588262
+                    // https://github.com/MaterializeInc/database-issues/issues/5336#issuecomment-1477588262
 
                     // Pre-compute which Ids are used across iterations
                     let ids_used_across_iterations = MirRelationExpr::recursive_ids(ids, values);
@@ -868,7 +868,7 @@ impl PredicatePushdown {
                     // this problem in general (as we can't just not push anything that might
                     // error), but we decided to fix the specific problem instance involving
                     // `error_if_null`, because it was very painful:
-                    // <https://github.com/MaterializeInc/materialize/issues/20769>
+                    // <https://github.com/MaterializeInc/database-issues/issues/6258>
                 } else {
                     let mut localized = predicate.clone();
                     if input_mapper.try_localize_to_input_with_bound_expr(

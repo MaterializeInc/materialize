@@ -25,6 +25,7 @@ CREATE SCHEMA public;
 
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
+DROP PUBLICATION IF EXISTS mz_source;
 CREATE SCHEMA public;
 
 DROP PUBLICATION IF EXISTS mz_source;
@@ -289,7 +290,7 @@ INSERT INTO table_a VALUES (3);
 ! SELECT * FROM table_a;
 contains:incompatible schema change
 
-# TODO: materialize#29373 (introspection tables)
+# TODO: database-issues#8511 (introspection tables)
 # > SELECT error ~~ '%incompatible schema change%' FROM mz_internal.mz_source_statuses WHERE name = 'table_a' and type = 'table';
 # true
 

@@ -1,6 +1,6 @@
 ---
 title: "CREATE SOURCE: PostgreSQL"
-description: "Connecting Materialize to a PostgreSQL database"
+description: "Connecting Materialize to a PostgreSQL database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
   main:

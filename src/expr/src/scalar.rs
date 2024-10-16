@@ -714,6 +714,10 @@ impl MirScalarExpr {
     /// long as this information continues to hold (nullability may not hold
     /// as expressions migrate around).
     ///
+    /// (If you'd like to not use nullability information here, then you can
+    /// tweak the nullabilities in `column_types` before passing it to this
+    /// function, see e.g. in `EquivalenceClasses::minimize`.)
+    ///
     /// Also performs partial canonicalization on the expression.
     ///
     /// ```rust
@@ -841,7 +845,7 @@ impl MirScalarExpr {
                         } else if let BinaryFunc::IsRegexpMatch { case_insensitive } = func {
                             if let MirScalarExpr::Literal(Ok(row), _) = &**expr2 {
                                 *e = match Regex::new(
-                                    row.unpack_first().unwrap_str().to_string(),
+                                    row.unpack_first().unwrap_str(),
                                     *case_insensitive,
                                 ) {
                                     Ok(regex) => expr1.take().call_unary(UnaryFunc::IsRegexpMatch(
@@ -861,7 +865,7 @@ impl MirScalarExpr {
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    Err(EvalError::UnknownUnits(units.into())),
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
@@ -873,7 +877,7 @@ impl MirScalarExpr {
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    Err(EvalError::UnknownUnits(units.into())),
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
@@ -887,7 +891,7 @@ impl MirScalarExpr {
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    Err(EvalError::UnknownUnits(units.into())),
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
@@ -901,7 +905,7 @@ impl MirScalarExpr {
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    Err(EvalError::UnknownUnits(units.into())),
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
@@ -913,7 +917,7 @@ impl MirScalarExpr {
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    Err(EvalError::UnknownUnits(units.into())),
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
@@ -927,7 +931,7 @@ impl MirScalarExpr {
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    Err(EvalError::UnknownUnits(units.into())),
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
@@ -939,7 +943,7 @@ impl MirScalarExpr {
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    Err(EvalError::UnknownUnits(units.into())),
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
@@ -953,7 +957,7 @@ impl MirScalarExpr {
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    Err(EvalError::UnknownUnits(units.into())),
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
@@ -967,7 +971,7 @@ impl MirScalarExpr {
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    Err(EvalError::UnknownUnits(units.into())),
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
@@ -981,7 +985,7 @@ impl MirScalarExpr {
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    Err(EvalError::UnknownUnits(units.into())),
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
@@ -995,7 +999,7 @@ impl MirScalarExpr {
                                     expr: Box::new(expr2.take()),
                                 },
                                 Err(_) => MirScalarExpr::literal(
-                                    Err(EvalError::UnknownUnits(units.to_owned())),
+                                    Err(EvalError::UnknownUnits(units.into())),
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
@@ -1220,7 +1224,7 @@ impl MirScalarExpr {
                             let (limit, flags) = regexp_replace_parse_flags(flags);
 
                             // Defer errors until evaluation instead of eagerly returning them here
-                            // to match the error behavior of the dynamic function (part of #17189).
+                            // to match the error behavior of the dynamic function (part of database-issues#4972).
                             let regex = match func::build_regex(pattern, &flags) {
                                 Ok(regex) => Ok((regex, limit)),
                                 Err(err) => Err(err),
@@ -1472,19 +1476,6 @@ impl MirScalarExpr {
         }
 
         /* #endregion */
-    }
-
-    /// Reduces a complex expression where possible.
-    ///
-    /// This function is like `reduce` except that it does not rely on nullability
-    /// information present in `column_types`, and it should only apply reductions
-    /// that are safe in all contexts.
-    pub fn reduce_safely(&mut self, column_types: &[ColumnType]) {
-        let mut column_types = column_types.to_vec();
-        for column in column_types.iter_mut() {
-            column.nullable = true;
-        }
-        self.reduce(&column_types[..])
     }
 
     /// Decompose an IsNull expression into a disjunction of
@@ -1893,10 +1884,9 @@ impl MirScalarExpr {
             // Unmaterializable functions must be transformed away before
             // evaluation. Their purpose is as a placeholder for data that is
             // not known at plan time but can be inlined before runtime.
-            MirScalarExpr::CallUnmaterializable(x) => Err(EvalError::Internal(format!(
-                "cannot evaluate unmaterializable function: {:?}",
-                x
-            ))),
+            MirScalarExpr::CallUnmaterializable(x) => Err(EvalError::Internal(
+                format!("cannot evaluate unmaterializable function: {:?}", x).into(),
+            )),
             MirScalarExpr::CallUnary { func, expr } => func.eval(datums, temp_storage, expr),
             MirScalarExpr::CallBinary { func, expr1, expr2 } => {
                 func.eval(datums, temp_storage, expr1, expr2)
@@ -1905,10 +1895,9 @@ impl MirScalarExpr {
             MirScalarExpr::If { cond, then, els } => match cond.eval(datums, temp_storage)? {
                 Datum::True => then.eval(datums, temp_storage),
                 Datum::False | Datum::Null => els.eval(datums, temp_storage),
-                d => Err(EvalError::Internal(format!(
-                    "if condition evaluated to non-boolean datum: {:?}",
-                    d
-                ))),
+                d => Err(EvalError::Internal(
+                    format!("if condition evaluated to non-boolean datum: {:?}", d).into(),
+                )),
             },
         }
     }
@@ -2420,27 +2409,27 @@ impl RustType<ProtoDomainLimit> for DomainLimit {
 pub enum EvalError {
     CharacterNotValidForEncoding(i32),
     CharacterTooLargeForEncoding(i32),
-    DateBinOutOfRange(String),
+    DateBinOutOfRange(Box<str>),
     DivisionByZero,
     Unsupported {
-        feature: String,
+        feature: Box<str>,
         discussion_no: Option<usize>,
     },
     FloatOverflow,
     FloatUnderflow,
     NumericFieldOverflow,
-    Float32OutOfRange(String),
-    Float64OutOfRange(String),
-    Int16OutOfRange(String),
-    Int32OutOfRange(String),
-    Int64OutOfRange(String),
-    UInt16OutOfRange(String),
-    UInt32OutOfRange(String),
-    UInt64OutOfRange(String),
-    MzTimestampOutOfRange(String),
+    Float32OutOfRange(Box<str>),
+    Float64OutOfRange(Box<str>),
+    Int16OutOfRange(Box<str>),
+    Int32OutOfRange(Box<str>),
+    Int64OutOfRange(Box<str>),
+    UInt16OutOfRange(Box<str>),
+    UInt32OutOfRange(Box<str>),
+    UInt64OutOfRange(Box<str>),
+    MzTimestampOutOfRange(Box<str>),
     MzTimestampStepOverflow,
-    OidOutOfRange(String),
-    IntervalOutOfRange(String),
+    OidOutOfRange(Box<str>),
+    IntervalOutOfRange(Box<str>),
     TimestampCannotBeNan,
     TimestampOutOfRange,
     DateOutOfRange,
@@ -2453,82 +2442,82 @@ pub enum EvalError {
     InvalidBase64Equals,
     InvalidBase64Symbol(char),
     InvalidBase64EndSequence,
-    InvalidTimezone(String),
+    InvalidTimezone(Box<str>),
     InvalidTimezoneInterval,
     InvalidTimezoneConversion,
-    InvalidIanaTimezoneId(String),
+    InvalidIanaTimezoneId(Box<str>),
     InvalidLayer {
         max_layer: usize,
         val: i64,
     },
     InvalidArray(InvalidArrayError),
-    InvalidEncodingName(String),
-    InvalidHashAlgorithm(String),
+    InvalidEncodingName(Box<str>),
+    InvalidHashAlgorithm(Box<str>),
     InvalidByteSequence {
-        byte_sequence: String,
-        encoding_name: String,
+        byte_sequence: Box<str>,
+        encoding_name: Box<str>,
     },
     InvalidJsonbCast {
-        from: String,
-        to: String,
+        from: Box<str>,
+        to: Box<str>,
     },
-    InvalidRegex(String),
+    InvalidRegex(Box<str>),
     InvalidRegexFlag(char),
-    InvalidParameterValue(String),
-    InvalidDatePart(String),
+    InvalidParameterValue(Box<str>),
+    InvalidDatePart(Box<str>),
     KeyCannotBeNull,
     NegSqrt,
     NegLimit,
     NullCharacterNotPermitted,
-    UnknownUnits(String),
-    UnsupportedUnits(String, String),
+    UnknownUnits(Box<str>),
+    UnsupportedUnits(Box<str>, Box<str>),
     UnterminatedLikeEscapeSequence,
     Parse(ParseError),
     ParseHex(ParseHexError),
-    Internal(String),
-    InfinityOutOfDomain(String),
-    NegativeOutOfDomain(String),
-    ZeroOutOfDomain(String),
-    OutOfDomain(DomainLimit, DomainLimit, String),
-    ComplexOutOfRange(String),
+    Internal(Box<str>),
+    InfinityOutOfDomain(Box<str>),
+    NegativeOutOfDomain(Box<str>),
+    ZeroOutOfDomain(Box<str>),
+    OutOfDomain(DomainLimit, DomainLimit, Box<str>),
+    ComplexOutOfRange(Box<str>),
     MultipleRowsFromSubquery,
-    Undefined(String),
+    Undefined(Box<str>),
     LikePatternTooLong,
     LikeEscapeTooLong,
     StringValueTooLong {
-        target_type: String,
+        target_type: Box<str>,
         length: usize,
     },
     MultidimensionalArrayRemovalNotSupported,
     IncompatibleArrayDimensions {
         dims: Option<(usize, usize)>,
     },
-    TypeFromOid(String),
+    TypeFromOid(Box<str>),
     InvalidRange(InvalidRangeError),
-    InvalidRoleId(String),
-    InvalidPrivileges(String),
-    LetRecLimitExceeded(String),
+    InvalidRoleId(Box<str>),
+    InvalidPrivileges(Box<str>),
+    LetRecLimitExceeded(Box<str>),
     MultiDimensionalArraySearch,
-    MustNotBeNull(String),
+    MustNotBeNull(Box<str>),
     InvalidIdentifier {
-        ident: String,
-        detail: Option<String>,
+        ident: Box<str>,
+        detail: Option<Box<str>>,
     },
     ArrayFillWrongArraySubscripts,
     // TODO: propagate this check more widely throughout the expr crate
     MaxArraySizeExceeded(usize),
     DateDiffOverflow {
-        unit: String,
-        a: String,
-        b: String,
+        unit: Box<str>,
+        a: Box<str>,
+        b: Box<str>,
     },
     // The error for ErrorIfNull; this should not be used in other contexts as a generic error
     // printer.
-    IfNullError(String),
+    IfNullError(Box<str>),
     LengthTooLarge,
     AclArrayNullElement,
     MzAclArrayNullElement,
-    PrettyError(String),
+    PrettyError(Box<str>),
 }
 
 impl fmt::Display for EvalError {
@@ -2738,8 +2727,7 @@ impl EvalError {
     pub fn detail(&self) -> Option<String> {
         match self {
             EvalError::IncompatibleArrayDimensions { dims: None } => Some(
-                "Arrays with differing dimensions are not compatible for concatenation."
-                    .to_string(),
+                "Arrays with differing dimensions are not compatible for concatenation.".into(),
             ),
             EvalError::IncompatibleArrayDimensions {
                 dims: Some((a_dims, b_dims)),
@@ -2747,9 +2735,9 @@ impl EvalError {
                 "Arrays of {} and {} dimensions are not compatible for concatenation.",
                 a_dims, b_dims
             )),
-            EvalError::InvalidIdentifier { detail, .. } => detail.clone(),
+            EvalError::InvalidIdentifier { detail, .. } => detail.as_deref().map(Into::into),
             EvalError::ArrayFillWrongArraySubscripts => {
-                Some("Low bound array has different size than dimensions array.".to_string())
+                Some("Low bound array has different size than dimensions array.".into())
             }
             _ => None,
         }
@@ -2796,13 +2784,13 @@ impl From<InvalidArrayError> for EvalError {
 
 impl From<regex::Error> for EvalError {
     fn from(e: regex::Error) -> EvalError {
-        EvalError::InvalidRegex(e.to_string())
+        EvalError::InvalidRegex(e.to_string().into())
     }
 }
 
 impl From<TypeFromOidError> for EvalError {
     fn from(e: TypeFromOidError) -> EvalError {
-        EvalError::TypeFromOid(e.to_string())
+        EvalError::TypeFromOid(e.to_string().into())
     }
 }
 
@@ -2835,13 +2823,13 @@ impl RustType<ProtoEvalError> for EvalError {
         let kind = match self {
             EvalError::CharacterNotValidForEncoding(v) => CharacterNotValidForEncoding(*v),
             EvalError::CharacterTooLargeForEncoding(v) => CharacterTooLargeForEncoding(*v),
-            EvalError::DateBinOutOfRange(v) => DateBinOutOfRange(v.clone()),
+            EvalError::DateBinOutOfRange(v) => DateBinOutOfRange(v.into_proto()),
             EvalError::DivisionByZero => DivisionByZero(()),
             EvalError::Unsupported {
                 feature,
                 discussion_no,
             } => Unsupported(ProtoUnsupported {
-                feature: feature.clone(),
+                feature: feature.into_proto(),
                 discussion_no: discussion_no.into_proto(),
             }),
             EvalError::FloatOverflow => FloatOverflow(()),
@@ -2895,7 +2883,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidBase64Equals => InvalidBase64Equals(()),
             EvalError::InvalidBase64Symbol(sym) => InvalidBase64Symbol(sym.into_proto()),
             EvalError::InvalidBase64EndSequence => InvalidBase64EndSequence(()),
-            EvalError::InvalidTimezone(tz) => InvalidTimezone(tz.clone()),
+            EvalError::InvalidTimezone(tz) => InvalidTimezone(tz.into_proto()),
             EvalError::InvalidTimezoneInterval => InvalidTimezoneInterval(()),
             EvalError::InvalidTimezoneConversion => InvalidTimezoneConversion(()),
             EvalError::InvalidLayer { max_layer, val } => InvalidLayer(ProtoInvalidLayer {
@@ -2903,55 +2891,55 @@ impl RustType<ProtoEvalError> for EvalError {
                 val: *val,
             }),
             EvalError::InvalidArray(error) => InvalidArray(error.into_proto()),
-            EvalError::InvalidEncodingName(v) => InvalidEncodingName(v.clone()),
-            EvalError::InvalidHashAlgorithm(v) => InvalidHashAlgorithm(v.clone()),
+            EvalError::InvalidEncodingName(v) => InvalidEncodingName(v.into_proto()),
+            EvalError::InvalidHashAlgorithm(v) => InvalidHashAlgorithm(v.into_proto()),
             EvalError::InvalidByteSequence {
                 byte_sequence,
                 encoding_name,
             } => InvalidByteSequence(ProtoInvalidByteSequence {
-                byte_sequence: byte_sequence.clone(),
-                encoding_name: encoding_name.clone(),
+                byte_sequence: byte_sequence.into_proto(),
+                encoding_name: encoding_name.into_proto(),
             }),
             EvalError::InvalidJsonbCast { from, to } => InvalidJsonbCast(ProtoInvalidJsonbCast {
-                from: from.clone(),
-                to: to.clone(),
+                from: from.into_proto(),
+                to: to.into_proto(),
             }),
-            EvalError::InvalidRegex(v) => InvalidRegex(v.clone()),
+            EvalError::InvalidRegex(v) => InvalidRegex(v.into_proto()),
             EvalError::InvalidRegexFlag(v) => InvalidRegexFlag(v.into_proto()),
-            EvalError::InvalidParameterValue(v) => InvalidParameterValue(v.clone()),
-            EvalError::InvalidDatePart(part) => InvalidDatePart(part.to_string()),
+            EvalError::InvalidParameterValue(v) => InvalidParameterValue(v.into_proto()),
+            EvalError::InvalidDatePart(part) => InvalidDatePart(part.into_proto()),
             EvalError::KeyCannotBeNull => KeyCannotBeNull(()),
             EvalError::NegSqrt => NegSqrt(()),
             EvalError::NegLimit => NegLimit(()),
             EvalError::NullCharacterNotPermitted => NullCharacterNotPermitted(()),
-            EvalError::UnknownUnits(v) => UnknownUnits(v.clone()),
+            EvalError::UnknownUnits(v) => UnknownUnits(v.into_proto()),
             EvalError::UnsupportedUnits(units, typ) => UnsupportedUnits(ProtoUnsupportedUnits {
-                units: units.clone(),
-                typ: typ.clone(),
+                units: units.into_proto(),
+                typ: typ.into_proto(),
             }),
             EvalError::UnterminatedLikeEscapeSequence => UnterminatedLikeEscapeSequence(()),
             EvalError::Parse(error) => Parse(error.into_proto()),
             EvalError::PrettyError(error) => PrettyError(error.into_proto()),
             EvalError::ParseHex(error) => ParseHex(error.into_proto()),
-            EvalError::Internal(v) => Internal(v.clone()),
-            EvalError::InfinityOutOfDomain(v) => InfinityOutOfDomain(v.clone()),
-            EvalError::NegativeOutOfDomain(v) => NegativeOutOfDomain(v.clone()),
-            EvalError::ZeroOutOfDomain(v) => ZeroOutOfDomain(v.clone()),
+            EvalError::Internal(v) => Internal(v.into_proto()),
+            EvalError::InfinityOutOfDomain(v) => InfinityOutOfDomain(v.into_proto()),
+            EvalError::NegativeOutOfDomain(v) => NegativeOutOfDomain(v.into_proto()),
+            EvalError::ZeroOutOfDomain(v) => ZeroOutOfDomain(v.into_proto()),
             EvalError::OutOfDomain(lower, upper, id) => OutOfDomain(ProtoOutOfDomain {
                 lower: Some(lower.into_proto()),
                 upper: Some(upper.into_proto()),
-                id: id.clone(),
+                id: id.into_proto(),
             }),
-            EvalError::ComplexOutOfRange(v) => ComplexOutOfRange(v.clone()),
+            EvalError::ComplexOutOfRange(v) => ComplexOutOfRange(v.into_proto()),
             EvalError::MultipleRowsFromSubquery => MultipleRowsFromSubquery(()),
-            EvalError::Undefined(v) => Undefined(v.clone()),
+            EvalError::Undefined(v) => Undefined(v.into_proto()),
             EvalError::LikePatternTooLong => LikePatternTooLong(()),
             EvalError::LikeEscapeTooLong => LikeEscapeTooLong(()),
             EvalError::StringValueTooLong {
                 target_type,
                 length,
             } => StringValueTooLong(ProtoStringValueTooLong {
-                target_type: target_type.clone(),
+                target_type: target_type.into_proto(),
                 length: length.into_proto(),
             }),
             EvalError::MultidimensionalArrayRemovalNotSupported => {
@@ -2962,16 +2950,16 @@ impl RustType<ProtoEvalError> for EvalError {
                     dims: dims.into_proto(),
                 })
             }
-            EvalError::TypeFromOid(v) => TypeFromOid(v.clone()),
+            EvalError::TypeFromOid(v) => TypeFromOid(v.into_proto()),
             EvalError::InvalidRange(error) => InvalidRange(error.into_proto()),
-            EvalError::InvalidRoleId(v) => InvalidRoleId(v.clone()),
-            EvalError::InvalidPrivileges(v) => InvalidPrivileges(v.clone()),
-            EvalError::LetRecLimitExceeded(v) => WmrRecursionLimitExceeded(v.clone()),
+            EvalError::InvalidRoleId(v) => InvalidRoleId(v.into_proto()),
+            EvalError::InvalidPrivileges(v) => InvalidPrivileges(v.into_proto()),
+            EvalError::LetRecLimitExceeded(v) => WmrRecursionLimitExceeded(v.into_proto()),
             EvalError::MultiDimensionalArraySearch => MultiDimensionalArraySearch(()),
-            EvalError::MustNotBeNull(v) => MustNotBeNull(v.clone()),
+            EvalError::MustNotBeNull(v) => MustNotBeNull(v.into_proto()),
             EvalError::InvalidIdentifier { ident, detail } => {
                 InvalidIdentifier(ProtoInvalidIdentifier {
-                    ident: ident.clone(),
+                    ident: ident.into_proto(),
                     detail: detail.into_proto(),
                 })
             }
@@ -2980,15 +2968,15 @@ impl RustType<ProtoEvalError> for EvalError {
                 MaxArraySizeExceeded(u64::cast_from(*max_size))
             }
             EvalError::DateDiffOverflow { unit, a, b } => DateDiffOverflow(ProtoDateDiffOverflow {
-                unit: unit.to_owned(),
-                a: a.to_owned(),
-                b: b.to_owned(),
+                unit: unit.into_proto(),
+                a: a.into_proto(),
+                b: b.into_proto(),
             }),
-            EvalError::IfNullError(s) => IfNullError(s.clone()),
+            EvalError::IfNullError(s) => IfNullError(s.into_proto()),
             EvalError::LengthTooLarge => LengthTooLarge(()),
             EvalError::AclArrayNullElement => AclArrayNullElement(()),
             EvalError::MzAclArrayNullElement => MzAclArrayNullElement(()),
-            EvalError::InvalidIanaTimezoneId(s) => InvalidIanaTimezoneId(s.clone()),
+            EvalError::InvalidIanaTimezoneId(s) => InvalidIanaTimezoneId(s.into_proto()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2999,27 +2987,29 @@ impl RustType<ProtoEvalError> for EvalError {
             Some(kind) => match kind {
                 CharacterNotValidForEncoding(v) => Ok(EvalError::CharacterNotValidForEncoding(v)),
                 CharacterTooLargeForEncoding(v) => Ok(EvalError::CharacterTooLargeForEncoding(v)),
-                DateBinOutOfRange(v) => Ok(EvalError::DateBinOutOfRange(v)),
+                DateBinOutOfRange(v) => Ok(EvalError::DateBinOutOfRange(v.into())),
                 DivisionByZero(()) => Ok(EvalError::DivisionByZero),
                 Unsupported(v) => Ok(EvalError::Unsupported {
-                    feature: v.feature,
+                    feature: v.feature.into(),
                     discussion_no: v.discussion_no.into_rust()?,
                 }),
                 FloatOverflow(()) => Ok(EvalError::FloatOverflow),
                 FloatUnderflow(()) => Ok(EvalError::FloatUnderflow),
                 NumericFieldOverflow(()) => Ok(EvalError::NumericFieldOverflow),
-                Float32OutOfRange(val) => Ok(EvalError::Float32OutOfRange(val.value)),
-                Float64OutOfRange(val) => Ok(EvalError::Float64OutOfRange(val.value)),
-                Int16OutOfRange(val) => Ok(EvalError::Int16OutOfRange(val.value)),
-                Int32OutOfRange(val) => Ok(EvalError::Int32OutOfRange(val.value)),
-                Int64OutOfRange(val) => Ok(EvalError::Int64OutOfRange(val.value)),
-                Uint16OutOfRange(val) => Ok(EvalError::UInt16OutOfRange(val.value)),
-                Uint32OutOfRange(val) => Ok(EvalError::UInt32OutOfRange(val.value)),
-                Uint64OutOfRange(val) => Ok(EvalError::UInt64OutOfRange(val.value)),
-                MzTimestampOutOfRange(val) => Ok(EvalError::MzTimestampOutOfRange(val.value)),
+                Float32OutOfRange(val) => Ok(EvalError::Float32OutOfRange(val.value.into())),
+                Float64OutOfRange(val) => Ok(EvalError::Float64OutOfRange(val.value.into())),
+                Int16OutOfRange(val) => Ok(EvalError::Int16OutOfRange(val.value.into())),
+                Int32OutOfRange(val) => Ok(EvalError::Int32OutOfRange(val.value.into())),
+                Int64OutOfRange(val) => Ok(EvalError::Int64OutOfRange(val.value.into())),
+                Uint16OutOfRange(val) => Ok(EvalError::UInt16OutOfRange(val.value.into())),
+                Uint32OutOfRange(val) => Ok(EvalError::UInt32OutOfRange(val.value.into())),
+                Uint64OutOfRange(val) => Ok(EvalError::UInt64OutOfRange(val.value.into())),
+                MzTimestampOutOfRange(val) => {
+                    Ok(EvalError::MzTimestampOutOfRange(val.value.into()))
+                }
                 MzTimestampStepOverflow(()) => Ok(EvalError::MzTimestampStepOverflow),
-                OidOutOfRange(val) => Ok(EvalError::OidOutOfRange(val.value)),
-                IntervalOutOfRange(val) => Ok(EvalError::IntervalOutOfRange(val.value)),
+                OidOutOfRange(val) => Ok(EvalError::OidOutOfRange(val.value.into())),
+                IntervalOutOfRange(val) => Ok(EvalError::IntervalOutOfRange(val.value.into())),
                 TimestampCannotBeNan(()) => Ok(EvalError::TimestampCannotBeNan),
                 TimestampOutOfRange(()) => Ok(EvalError::TimestampOutOfRange),
                 DateOutOfRange(()) => Ok(EvalError::DateOutOfRange),
@@ -3031,7 +3021,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidBase64Equals(()) => Ok(EvalError::InvalidBase64Equals),
                 InvalidBase64Symbol(v) => char::from_proto(v).map(EvalError::InvalidBase64Symbol),
                 InvalidBase64EndSequence(()) => Ok(EvalError::InvalidBase64EndSequence),
-                InvalidTimezone(v) => Ok(EvalError::InvalidTimezone(v)),
+                InvalidTimezone(v) => Ok(EvalError::InvalidTimezone(v.into())),
                 InvalidTimezoneInterval(()) => Ok(EvalError::InvalidTimezoneInterval),
                 InvalidTimezoneConversion(()) => Ok(EvalError::InvalidTimezoneConversion),
                 InvalidLayer(v) => Ok(EvalError::InvalidLayer {
@@ -3039,45 +3029,47 @@ impl RustType<ProtoEvalError> for EvalError {
                     val: v.val,
                 }),
                 InvalidArray(error) => Ok(EvalError::InvalidArray(error.into_rust()?)),
-                InvalidEncodingName(v) => Ok(EvalError::InvalidEncodingName(v)),
-                InvalidHashAlgorithm(v) => Ok(EvalError::InvalidHashAlgorithm(v)),
+                InvalidEncodingName(v) => Ok(EvalError::InvalidEncodingName(v.into())),
+                InvalidHashAlgorithm(v) => Ok(EvalError::InvalidHashAlgorithm(v.into())),
                 InvalidByteSequence(v) => Ok(EvalError::InvalidByteSequence {
-                    byte_sequence: v.byte_sequence,
-                    encoding_name: v.encoding_name,
+                    byte_sequence: v.byte_sequence.into(),
+                    encoding_name: v.encoding_name.into(),
                 }),
                 InvalidJsonbCast(v) => Ok(EvalError::InvalidJsonbCast {
-                    from: v.from,
-                    to: v.to,
+                    from: v.from.into(),
+                    to: v.to.into(),
                 }),
-                InvalidRegex(v) => Ok(EvalError::InvalidRegex(v)),
+                InvalidRegex(v) => Ok(EvalError::InvalidRegex(v.into())),
                 InvalidRegexFlag(v) => Ok(EvalError::InvalidRegexFlag(char::from_proto(v)?)),
-                InvalidParameterValue(v) => Ok(EvalError::InvalidParameterValue(v)),
-                InvalidDatePart(part) => Ok(EvalError::InvalidDatePart(part)),
+                InvalidParameterValue(v) => Ok(EvalError::InvalidParameterValue(v.into())),
+                InvalidDatePart(part) => Ok(EvalError::InvalidDatePart(part.into())),
                 KeyCannotBeNull(()) => Ok(EvalError::KeyCannotBeNull),
                 NegSqrt(()) => Ok(EvalError::NegSqrt),
                 NegLimit(()) => Ok(EvalError::NegLimit),
                 NullCharacterNotPermitted(()) => Ok(EvalError::NullCharacterNotPermitted),
-                UnknownUnits(v) => Ok(EvalError::UnknownUnits(v)),
-                UnsupportedUnits(v) => Ok(EvalError::UnsupportedUnits(v.units, v.typ)),
+                UnknownUnits(v) => Ok(EvalError::UnknownUnits(v.into())),
+                UnsupportedUnits(v) => {
+                    Ok(EvalError::UnsupportedUnits(v.units.into(), v.typ.into()))
+                }
                 UnterminatedLikeEscapeSequence(()) => Ok(EvalError::UnterminatedLikeEscapeSequence),
                 Parse(error) => Ok(EvalError::Parse(error.into_rust()?)),
                 ParseHex(error) => Ok(EvalError::ParseHex(error.into_rust()?)),
-                Internal(v) => Ok(EvalError::Internal(v)),
-                InfinityOutOfDomain(v) => Ok(EvalError::InfinityOutOfDomain(v)),
-                NegativeOutOfDomain(v) => Ok(EvalError::NegativeOutOfDomain(v)),
-                ZeroOutOfDomain(v) => Ok(EvalError::ZeroOutOfDomain(v)),
+                Internal(v) => Ok(EvalError::Internal(v.into())),
+                InfinityOutOfDomain(v) => Ok(EvalError::InfinityOutOfDomain(v.into())),
+                NegativeOutOfDomain(v) => Ok(EvalError::NegativeOutOfDomain(v.into())),
+                ZeroOutOfDomain(v) => Ok(EvalError::ZeroOutOfDomain(v.into())),
                 OutOfDomain(v) => Ok(EvalError::OutOfDomain(
                     v.lower.into_rust_if_some("ProtoDomainLimit::lower")?,
                     v.upper.into_rust_if_some("ProtoDomainLimit::upper")?,
-                    v.id,
+                    v.id.into(),
                 )),
-                ComplexOutOfRange(v) => Ok(EvalError::ComplexOutOfRange(v)),
+                ComplexOutOfRange(v) => Ok(EvalError::ComplexOutOfRange(v.into())),
                 MultipleRowsFromSubquery(()) => Ok(EvalError::MultipleRowsFromSubquery),
-                Undefined(v) => Ok(EvalError::Undefined(v)),
+                Undefined(v) => Ok(EvalError::Undefined(v.into())),
                 LikePatternTooLong(()) => Ok(EvalError::LikePatternTooLong),
                 LikeEscapeTooLong(()) => Ok(EvalError::LikeEscapeTooLong),
                 StringValueTooLong(v) => Ok(EvalError::StringValueTooLong {
-                    target_type: v.target_type,
+                    target_type: v.target_type.into(),
                     length: usize::from_proto(v.length)?,
                 }),
                 MultidimensionalArrayRemovalNotSupported(()) => {
@@ -3086,32 +3078,32 @@ impl RustType<ProtoEvalError> for EvalError {
                 IncompatibleArrayDimensions(v) => Ok(EvalError::IncompatibleArrayDimensions {
                     dims: v.dims.into_rust()?,
                 }),
-                TypeFromOid(v) => Ok(EvalError::TypeFromOid(v)),
+                TypeFromOid(v) => Ok(EvalError::TypeFromOid(v.into())),
                 InvalidRange(e) => Ok(EvalError::InvalidRange(e.into_rust()?)),
-                InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v)),
-                InvalidPrivileges(v) => Ok(EvalError::InvalidPrivileges(v)),
-                WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v)),
+                InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v.into())),
+                InvalidPrivileges(v) => Ok(EvalError::InvalidPrivileges(v.into())),
+                WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v.into())),
                 MultiDimensionalArraySearch(()) => Ok(EvalError::MultiDimensionalArraySearch),
-                MustNotBeNull(v) => Ok(EvalError::MustNotBeNull(v)),
+                MustNotBeNull(v) => Ok(EvalError::MustNotBeNull(v.into())),
                 InvalidIdentifier(v) => Ok(EvalError::InvalidIdentifier {
-                    ident: v.ident,
-                    detail: v.detail,
+                    ident: v.ident.into(),
+                    detail: v.detail.into_rust()?,
                 }),
                 ArrayFillWrongArraySubscripts(()) => Ok(EvalError::ArrayFillWrongArraySubscripts),
                 MaxArraySizeExceeded(max_size) => {
                     Ok(EvalError::MaxArraySizeExceeded(usize::cast_from(max_size)))
                 }
                 DateDiffOverflow(v) => Ok(EvalError::DateDiffOverflow {
-                    unit: v.unit,
-                    a: v.a,
-                    b: v.b,
+                    unit: v.unit.into(),
+                    a: v.a.into(),
+                    b: v.b.into(),
                 }),
-                IfNullError(v) => Ok(EvalError::IfNullError(v)),
+                IfNullError(v) => Ok(EvalError::IfNullError(v.into())),
                 LengthTooLarge(()) => Ok(EvalError::LengthTooLarge),
                 AclArrayNullElement(()) => Ok(EvalError::AclArrayNullElement),
                 MzAclArrayNullElement(()) => Ok(EvalError::MzAclArrayNullElement),
-                InvalidIanaTimezoneId(s) => Ok(EvalError::InvalidIanaTimezoneId(s)),
-                PrettyError(s) => Ok(EvalError::PrettyError(s)),
+                InvalidIanaTimezoneId(s) => Ok(EvalError::InvalidIanaTimezoneId(s.into())),
+                PrettyError(s) => Ok(EvalError::PrettyError(s.into())),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

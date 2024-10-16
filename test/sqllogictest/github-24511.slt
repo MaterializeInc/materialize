@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/24511
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/7318
 
 # This query involves a 1-input join. `JoinImplementation` or other join code shouldn't choke on this.
 

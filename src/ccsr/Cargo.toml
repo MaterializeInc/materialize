@@ -36,7 +36,7 @@ tracing = "0.1.37"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.1"
+prost-build = "0.13.2"
 
 [features]
 default = ["mz-build-tools/default"]

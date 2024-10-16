@@ -1589,13 +1589,13 @@ where
             | (Rows, OffsetPreceding(..), UnboundedFollowing)
             | (Rows, OffsetFollowing(..), UnboundedFollowing) => {
                 // Unsupported. Bail in the planner.
-                // https://github.com/MaterializeInc/materialize/issues/22268
+                // https://github.com/MaterializeInc/database-issues/issues/6720
                 unreachable!()
             }
             (Range, _, _) => {
                 // Unsupported.
                 // The planner doesn't allow Range frame mode for now (except for the default
-                // frame), see https://github.com/MaterializeInc/materialize/issues/21934
+                // frame), see https://github.com/MaterializeInc/database-issues/issues/6585
                 // Note that it would be easy to handle (Range, CurrentRow, UnboundedFollowing):
                 // it would be similar to (Rows, CurrentRow, UnboundedFollowing), but would call
                 // groups_between_unbounded_preceding_current_row.
@@ -1604,7 +1604,7 @@ where
             (Groups, _, _) => {
                 // Unsupported.
                 // The planner doesn't allow Groups frame mode for now, see
-                // https://github.com/MaterializeInc/materialize/issues/21940
+                // https://github.com/MaterializeInc/database-issues/issues/6588
                 unreachable!()
             }
         }
@@ -2594,10 +2594,10 @@ impl AggregateFunc {
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
-                        fields: vec![
+                        fields: [
                             (column_name, output_type_inner),
                             (ColumnName::from("?orig_row?"), original_row_type),
-                        ],
+                        ].into(),
                         custom_id: None,
                     }),
                     custom_id: None,
@@ -2615,10 +2615,10 @@ impl AggregateFunc {
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
-                        fields: vec![
+                        fields: [
                             (ColumnName::from("?first_value?"), value_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
-                        ],
+                        ].into(),
                         custom_id: None,
                     }),
                     custom_id: None,
@@ -2636,10 +2636,10 @@ impl AggregateFunc {
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
-                        fields: vec![
+                        fields: [
                             (ColumnName::from("?last_value?"), value_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
-                        ],
+                        ].into(),
                         custom_id: None,
                     }),
                     custom_id: None,
@@ -2660,10 +2660,10 @@ impl AggregateFunc {
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
-                        fields: vec![
+                        fields: [
                             (ColumnName::from("?window_agg?"), wrapped_aggr_out_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
-                        ],
+                        ].into(),
                         custom_id: None,
                     }),
                     custom_id: None,
@@ -2682,7 +2682,7 @@ impl AggregateFunc {
 
                 ScalarType::List {
                     element_type: Box::new(ScalarType::Record {
-                        fields: vec![
+                        fields: [
                             (ColumnName::from("?fused_value_window_func?"), ScalarType::Record {
                                 fields: encoded_args_type.into_iter().zip_eq(funcs).map(|(arg_type, func)| {
                                     match func {
@@ -2710,7 +2710,7 @@ impl AggregateFunc {
                                 custom_id: None,
                             }.nullable(false)),
                             (ColumnName::from("?orig_row?"), original_row_type),
-                        ],
+                        ].into(),
                         custom_id: None,
                     }),
                     custom_id: None,
@@ -2782,7 +2782,7 @@ impl AggregateFunc {
         match input_type.scalar_type {
             ScalarType::Record { ref fields, .. } => ScalarType::List {
                 element_type: Box::new(ScalarType::Record {
-                    fields: vec![
+                    fields: [
                         (
                             ColumnName::from(col_name),
                             ScalarType::Int64.nullable(false),
@@ -2794,7 +2794,8 @@ impl AggregateFunc {
                             };
                             inner.nullable(false)
                         }),
-                    ],
+                    ]
+                    .into(),
                     custom_id: None,
                 }),
                 custom_id: None,
@@ -2943,7 +2944,7 @@ where
 {
     if step == N::zero() {
         return Err(EvalError::InvalidParameterValue(
-            "step size cannot equal zero".to_owned(),
+            "step size cannot equal zero".into(),
         ));
     }
     Ok(num::range_step_inclusive(start, stop, step)
@@ -3000,7 +3001,7 @@ fn generate_series_ts<T: TimestampLike>(
     let normalized_step = step.as_microseconds();
     if normalized_step == 0 {
         return Err(EvalError::InvalidParameterValue(
-            "step size cannot equal zero".to_owned(),
+            "step size cannot equal zero".into(),
         ));
     }
     let rev = normalized_step < 0;
@@ -3027,17 +3028,16 @@ fn generate_subscripts_array(
     match a.unwrap_array().dims().into_iter().nth(
         (dim - 1)
             .try_into()
-            .map_err(|_| EvalError::Int32OutOfRange((dim - 1).to_string()))?,
+            .map_err(|_| EvalError::Int32OutOfRange((dim - 1).to_string().into()))?,
     ) {
         Some(requested_dim) => Ok(Box::new(generate_series::<i32>(
-            requested_dim
-                .lower_bound
-                .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange(requested_dim.lower_bound.to_string()))?,
+            requested_dim.lower_bound.try_into().map_err(|_| {
+                EvalError::Int32OutOfRange(requested_dim.lower_bound.to_string().into())
+            })?,
             requested_dim
                 .length
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange(requested_dim.length.to_string()))?,
+                .map_err(|_| EvalError::Int32OutOfRange(requested_dim.length.to_string().into()))?,
             1,
         )?)),
         None => Ok(Box::new(iter::empty())),
@@ -3282,7 +3282,7 @@ impl RustType<ProtoAnalyzedRegex> for AnalyzedRegex {
 }
 
 impl AnalyzedRegex {
-    pub fn new(s: String) -> Result<Self, regex::Error> {
+    pub fn new(s: &str) -> Result<Self, regex::Error> {
         let r = ReprRegex::new(s, false)?;
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
@@ -3298,7 +3298,7 @@ impl AnalyzedRegex {
                 index: i as u32,
                 name: name.map(String::from),
                 // TODO -- we can do better.
-                // https://github.com/MaterializeInc/materialize/issues/1685
+                // https://github.com/MaterializeInc/database-issues/issues/612
                 nullable: true,
             })
             .collect();

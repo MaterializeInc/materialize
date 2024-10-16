@@ -77,6 +77,9 @@ class TestAnalyticsDb:
         self._communication_failed(f"Loading data failed! {e}")
 
     def _communication_failed(self, message: str) -> None:
+        if not buildkite.is_in_buildkite():
+            print(message)
+
         if not self.shall_notify_qa_team():
             return
 

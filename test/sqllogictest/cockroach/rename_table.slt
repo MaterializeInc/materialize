@@ -297,7 +297,7 @@ EXPLAIN ALTER TABLE kv RENAME TO kv2
 ----
 rename table  ·  ·
 
-# Verify that the EXPLAIN above does not actually rename the table (#30543)
+# Verify that the EXPLAIN above does not actually rename the table (cockroach#30543)
 query T
 SHOW TABLES
 ----

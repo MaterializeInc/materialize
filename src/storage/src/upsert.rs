@@ -80,11 +80,6 @@ impl From<&[u8]> for UpsertKey {
     }
 }
 
-thread_local! {
-    /// A thread-local datum cache used to calculate hashes
-    pub static KEY_DATUMS: RefCell<DatumVec> = RefCell::new(DatumVec::new());
-}
-
 /// The hash function used to map upsert keys. It is important that this hash is a cryptographic
 /// hash so that there is no risk of collisions. Collisions on SHA256 have a probability of 2^128
 /// which is many orders of magnitude smaller than many other events that we don't even think about
@@ -96,23 +91,29 @@ impl UpsertKey {
         Self::from_iter(key.map(|r| r.iter()))
     }
 
-    pub fn from_value(value: Result<&Row, &UpsertError>, mut key_indices: &[usize]) -> Self {
-        Self::from_iter(value.map(|value| {
-            value.iter().enumerate().flat_map(move |(idx, datum)| {
-                let key_idx = key_indices.get(0)?;
-                if idx == *key_idx {
-                    key_indices = &key_indices[1..];
-                    Some(datum)
-                } else {
-                    None
-                }
-            })
-        }))
+    pub fn from_value(value: Result<&Row, &UpsertError>, key_indices: &[usize]) -> Self {
+        thread_local! {
+            /// A thread-local datum cache used to calculate hashes
+            static VALUE_DATUMS: RefCell<DatumVec> = RefCell::new(DatumVec::new());
+        }
+        VALUE_DATUMS.with(|value_datums| {
+            let mut value_datums = value_datums.borrow_mut();
+            let value = value.map(|v| value_datums.borrow_with(v));
+            let key = match value {
+                Ok(ref datums) => Ok(key_indices.iter().map(|&idx| datums[idx])),
+                Err(err) => Err(err),
+            };
+            Self::from_iter(key)
+        })
     }
 
     pub fn from_iter<'a, 'b>(
         key: Result<impl Iterator<Item = Datum<'a>> + 'b, &UpsertError>,
     ) -> Self {
+        thread_local! {
+            /// A thread-local datum cache used to calculate hashes
+            static KEY_DATUMS: RefCell<DatumVec> = RefCell::new(DatumVec::new());
+        }
         KEY_DATUMS.with(|key_datums| {
             let mut key_datums = key_datums.borrow_mut();
             // Borrowing the DatumVec gives us a temporary buffer to store datums in that will be
@@ -213,6 +214,7 @@ pub(crate) fn upsert<G: Scope, FromTime>(
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, Infallible>,
     PressOnDropButton,
 )
 where
@@ -225,10 +227,6 @@ where
         backpressure_metrics,
     );
 
-    // If we are configured to delay raw sources till we rehydrate, we do so. Otherwise, skip
-    // this, to prevent unnecessary work.
-    let wait_for_input_resumption =
-        dyncfgs::DELAY_SOURCES_PAST_REHYDRATION.get(storage_configuration.config_set());
     let rocksdb_cleanup_tries =
         dyncfgs::STORAGE_ROCKSDB_CLEANUP_TRIES.get(storage_configuration.config_set());
 
@@ -246,7 +244,6 @@ where
         dyncfgs::STORAGE_ROCKSDB_USE_MERGE_OPERATOR.get(storage_configuration.config_set());
 
     let upsert_config = UpsertConfig {
-        wait_for_input_resumption,
         shrink_upsert_unused_buffers_by_ratio: storage_configuration
             .parameters
             .shrink_upsert_unused_buffers_by_ratio,
@@ -617,15 +614,12 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
 // Created a struct to hold the configs for upserts.
 // So that new configs don't require a new method parameter.
 struct UpsertConfig {
-    // Whether or not to wait for the `input` to reach the `resumption_frontier`
-    // before we finalize `rehydration`.
-    wait_for_input_resumption: bool,
     shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
 fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
-    mut key_indices: Vec<usize>,
+    key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
     previous: Collection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Vec<PressOnDropButton>>,
@@ -638,6 +632,7 @@ fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, Infallible>,
     PressOnDropButton,
 )
 where
@@ -647,9 +642,6 @@ where
     US: UpsertStateBackend<Option<FromTime>>,
     FromTime: timely::ExchangeData + Ord,
 {
-    // Sort key indices to ensure we can construct the key by iterating over the datums of the row
-    key_indices.sort_unstable();
-
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
     // We only care about UpsertValueError since this is the only error that we can retract
@@ -665,6 +657,12 @@ where
         Some((UpsertKey::from_value(value.as_ref(), &key_indices), value))
     });
     let (mut output_handle, output) = builder.new_output();
+
+    // An output that just reports progress of the snapshot consolidation process upstream to the
+    // persist source to ensure that backpressure is applied
+    let (_snapshot_handle, snapshot_stream) =
+        builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
+
     let (mut health_output, health_stream) = builder.new_output();
     let mut input = builder.new_input_for(
         &input.inner,
@@ -680,7 +678,7 @@ where
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
     let shutdown_button = builder.build(move |caps| async move {
-        let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
+        let [mut output_cap, mut snapshot_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
 
         // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
         // (as required for `consolidate_snapshot_chunk`), with slightly more efficient serialization
@@ -696,58 +694,24 @@ where
         let mut snapshot_upper = Antichain::from_elem(Timestamp::minimum());
 
         let mut stash = vec![];
-        let mut input_upper = Antichain::from_elem(Timestamp::minimum());
         let mut legacy_errors_to_correct = vec![];
 
         let mut error_emitter = (&mut health_output, &health_cap);
 
-        while !PartialOrder::less_equal(&resume_upper, &snapshot_upper)
-            || (upsert_config.wait_for_input_resumption
-                && !PartialOrder::less_equal(&resume_upper, &input_upper))
-        {
-            let previous_event = tokio::select! {
-                // Note that these are both cancel-safe. The reason we drain the `input` is to
-                // ensure the `output_frontier` (and therefore flow control on `previous`) make
-                // progress.
-                Some(previous_event) = previous.next(), if !PartialOrder::less_equal(
-                    &resume_upper,
-                    &snapshot_upper,
-                ) => {
-                    previous_event
-                }
-                Some(input_event) = input.next() => {
-                    match input_event {
-                        AsyncEvent::Data(_cap, mut data) => {
-                            stage_input(
-                                &mut stash,
-                                &mut data,
-                                &input_upper,
-                                &resume_upper,
-                                upsert_config.shrink_upsert_unused_buffers_by_ratio
-                            );
-                        }
-                        AsyncEvent::Progress(upper) => {
-                            input_upper = upper;
-                        }
-                    }
-                    continue;
-                }
-            };
-            match previous_event {
-                AsyncEvent::Data(_cap, data) => {
-                    events.extend(data.into_iter().filter_map(|((key, value), ts, diff)| {
-                        if !resume_upper.less_equal(&ts) {
-                            Some((key, value, diff))
-                        } else {
-                            None
-                        }
-                    }))
-                }
-                AsyncEvent::Progress(upper) => snapshot_upper = upper,
-            };
-            while let Some(event) = previous.next().now_or_never() {
+        tracing::info!(
+            ?resume_upper,
+            ?snapshot_upper,
+            "timely-{} upsert source {} starting rehydration",
+            source_config.worker_id,
+            source_config.id
+        );
+        // Read and consolidate the snapshot from the 'previous' input until it
+        // reaches the `resume_upper`.
+        while !PartialOrder::less_equal(&resume_upper, &snapshot_upper) {
+            previous.ready().await;
+            while let Some(event) = previous.next_sync() {
                 match event {
-                    Some(AsyncEvent::Data(_cap, data)) => {
+                    AsyncEvent::Data(_cap, data) => {
                         events.extend(data.into_iter().filter_map(|((key, value), ts, diff)| {
                             if !resume_upper.less_equal(&ts) {
                                 Some((key, value, diff))
@@ -756,12 +720,10 @@ where
                             }
                         }))
                     }
-                    Some(AsyncEvent::Progress(upper)) => snapshot_upper = upper,
-                    None => {
-                        snapshot_upper = Antichain::new();
-                        break;
+                    AsyncEvent::Progress(upper) => {
+                        snapshot_upper = upper;
                     }
-                }
+                };
             }
 
             for (_, value, diff) in events.iter_mut() {
@@ -791,6 +753,7 @@ where
                         // `resume_upper`, which we ignore above. We don't want our output capability to make
                         // it further than the `resume_upper`.
                         if !resume_upper.less_equal(&ts) {
+                            snapshot_cap.downgrade(&ts);
                             output_cap.downgrade(&ts);
                         }
                     }
@@ -807,8 +770,9 @@ where
         }
 
         drop(events);
-
         drop(previous_token);
+        drop(snapshot_cap);
+
         // Exchaust the previous input. It is expected to immediately reach the empty
         // antichain since we have dropped its token.
         //
@@ -862,18 +826,9 @@ where
 
         // Now can can resume consuming the collection
         let mut output_updates = vec![];
-        let mut post_snapshot = true;
+        let mut input_upper = Antichain::from_elem(Timestamp::minimum());
 
-        while let Some(event) = {
-            // Synthesize a `Progress` event that allows us to drain the `stash` of values
-            // obtained during snapshotting.
-            if post_snapshot {
-                post_snapshot = false;
-                Some(AsyncEvent::Progress(input_upper.clone()))
-            } else {
-                input.next().await
-            }
-        } {
+        while let Some(event) = input.next().await {
             // Buffer as many events as possible. This should be bounded, as new data can't be
             // produced in this worker until we yield to timely.
             let events = [event]
@@ -978,6 +933,7 @@ where
             Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
         }),
         health_stream,
+        snapshot_stream,
         shutdown_button.press_on_drop(),
     )
 }

@@ -11,11 +11,9 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    env::set_var("PROTOC", mz_build_tools::protoc());
-
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-
     prost_build::Config::new()
+        .protoc_executable(mz_build_tools::protoc())
         .include_file("benchproto.rs")
         .file_descriptor_set_path(out_dir.join("file_descriptor_set.pb"))
         .btree_map(["."])

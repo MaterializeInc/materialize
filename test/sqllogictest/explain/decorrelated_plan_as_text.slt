@@ -811,7 +811,7 @@ Target cluster: quickstart
 
 EOF
 
-# Test #17348.
+# Test materialize#17348.
 
 statement ok
 CREATE TABLE r(f0 INT, f1 INT, f2 INT, f3 INT, f4 INT, f5 INT, f6 INT, f7 INT, f8 INT, f9 INT, f10 INT, f11 INT, f12 INT, f13 INT, f14 INT, f15 INT, f16 INT);

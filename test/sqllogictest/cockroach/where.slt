@@ -110,7 +110,7 @@ SELECT * FROM kv WHERE k IN (1, 5.0, 9)
 1 2
 5 6
 
-# Regression tests for #22670.
+# Regression tests for materialize#22670.
 statement ok
 CREATE TABLE ab (a INT, b INT)
 

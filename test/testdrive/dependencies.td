@@ -338,7 +338,7 @@ contains:unknown catalog item 'j2'
 
 > DROP SOURCE s5 CASCADE;
 
-# https://github.com/MaterializeInc/materialize/issues/5577
+# https://github.com/MaterializeInc/database-issues/issues/1714
 > CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4)
 
 > CREATE VIEW v1 AS SELECT CAST('{2}' AS int4_list)

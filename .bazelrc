@@ -33,24 +33,20 @@ build:release-stamp --stamp --workspace_status_command "python3 misc/bazel/build
 # Output all test output by default, this makes it most like cargo.
 #
 # Note: We used to have 'stream' here, but that forces Bazel to serialize test execution.
-test --test_output=all
+build --test_output=all
 # Environment variables to pass through to the test runner. These can impact
 # remote cache hits, so add them sparingly.
 #
 # TODO(parkmycar): Switch over to using `env_inherit` on `rust_test` once that's stable.
 # <https://github.com/bazelbuild/rules_rust/pull/2809>
-test --test_env=COCKROACH_URL
+build --test_env=COCKROACH_URL
 
 # Allows spaces to in filenames, without this Rust Doc tests fail to build.
 build:macos --experimental_inprocess_symlink_creation
 # Tracks stashed sandboxes in-memory so it uses less I/O on reuse.
 #
 # Bazel's sandbox performance on macOS doesn't scale very well, see: <https://github.com/bazelbuild/bazel/issues/8230>
-build:macos --experimental_inmemory_sandbox_stashes
-# `/dev/shm` is a RAM backed temporary filesystem, it should speedup sandbox creation.
-#
-# TODO(parkmycar): This would be great to enable but leads to out-of-disk errors.
-#build:ci --sandbox_base=/dev/shm
+build --experimental_inmemory_sandbox_stashes
 
 # Always have Bazel output why it rebuilt something, should make debugging builds easier.
 #
@@ -70,6 +66,11 @@ common --bes_upload_mode=fully_async
 # Tells `xz` to use all available cores.
 action_env=XZ_OPT=-T0
 
+#
+# Config when running Bazel from a script.
+#
+# Silence most UI output since it's noisy.
+run:script --ui_event_filters=-info,-stdout,-stderr --noshow_progress
 
 # LLVM's libc++ has different assertion modes which can be configured to catch
 # undefined behavior. See: <https://libcxx.llvm.org/Hardening.html>
@@ -77,24 +78,18 @@ build:debug --cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG"
 build:debug --host_cxxopt="-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG"
 build:debug --@rules_rust//:extra_rustc_flag="-Csplit-debuginfo=unpacked"
 
-
-# Common Build Configuration
-build --linkopt="-fuse-ld=lld"
-build --@rules_rust//:extra_rustc_flag="-Clink-arg=-fuse-ld=lld"
-build --@rules_rust//:extra_rustc_flag="-Csymbol-mangling-version=v0"
-# We use 64 because it's enough to totally saturate a CI builder so our builds
-# are as fast as possible, and it's less than the default of 256 used with
-# Cargo when incremental compilation is enabled.
 #
-# TODO(parkmycar): Investigate a "super release" build with codegen-units=1
-build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=64"
+# Debug Info Configuration
+#
 
-# TODO(parkmycar): toolchains_llvm uses ld64 for macOS which doesn't support
-# compressing debug sections.
+# TODO(parkmycar): Enable this for macOS. `toolchains_llvm` defaults to ld64 which
+# doesn't support zlib compression.
 build:linux --linkopt="-Wl,--compress-debug-sections=zlib"
-build:linux --linkopt="-Wl,-O2"
 build:linux --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,--compress-debug-sections=zlib"
+# Specifying "-O2" uses level 6 zlib compression.
+build:linux --linkopt="-Wl,-O2"
 build:linux --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,-O2"
+build:linux --copt="-gz=zlib"
 
 # Match the DWARF version used by Rust
 #
@@ -104,6 +99,28 @@ build:linux --linkopt="-gdwarf-4"
 build:macos --copt="-gdwarf-2"
 build:macos --linkopt="-gdwarf-2"
 
+# Emit full debug info, allowing us to easily analyze core dumps from staging
+# (and, in an emergency, also prod).
+build:debuginfo-full --@rules_rust//:extra_rustc_flag=-Cdebuginfo=2
+build:debuginfo-full --copt=-g2
+
+build:debuginfo-limited --@rules_rust//:extra_rustc_flag=-Cdebuginfo=line-tables-only
+build:debuginfo-limited --copt=-gline-tables-only
+
+#
+# Common Build Configuration
+#
+build --linkopt="-fuse-ld=lld"
+build --@rules_rust//:extra_rustc_flag="-Clink-arg=-fuse-ld=lld"
+build --@rules_rust//:extra_rustc_flag="-Csymbol-mangling-version=v0"
+# We use 64 because it's enough to totally saturate a CI builder so our builds
+# are as fast as possible, and it's less than the default of 256 used with
+# Cargo when incremental compilation is enabled.
+build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=64"
+# Enabling pipelined builds allows dependent libraries to begin compiling with
+# just `.rmeta` instead of the full `.rlib`.
+#build --@rules_rust//rust/settings:pipelined_compilation=True
+
 # As of Jan 2024 all of the x86-64 and aarch64 hardware we run on support these
 # CPU targets.
 build:linux-amd64 --copt="-m64"
@@ -112,7 +129,16 @@ build:linux-amd64 --@rules_rust//:extra_rustc_flag="-Ctarget-cpu=x86-64-v3"
 build:linux-arm64 --copt="-mcpu=neoverse-n1"
 build:linux-arm64 --@rules_rust//:extra_rustc_flag="-Ctarget-cpu=neoverse-n1"
 
+# CI Build Configuration
+#
+# Note: This shouldn't change any config of the built binary, just the way it
+# gets built.
+#
+# `/dev/shm` is a RAM backed temporary filesystem, it should speedup sandbox creation.
+build:ci --sandbox_base=/dev/shm
+
 # Release Build Configuration
+#
 build:release --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
 build:release --copt=-O3
 build:release --copt=-DNDEBUG
@@ -120,13 +146,19 @@ build:release --compilation_mode=opt
 build:release --copt=-flto=thin
 build:release --linkopt=-flto=thin
 build:release --@rules_rust//:extra_rustc_flag=-Clto=thin
-# Emit full debug info, allowing us to easily analyze core dumps from staging
-# (and, in an emergency, also prod).
-build:release --@rules_rust//:extra_rustc_flag=-Cdebuginfo=2
-build:release --copt=-g
 # `rules_rust` defaults to stripping debug symbols for release builds, undo that.
 build:release --strip=never
 build:release --@rules_rust//:extra_rustc_flag=-Cstrip=none
+
+# Builds from `main` or tagged builds.
+#
+# Note: We don't use a ramdisk for tagged builds because the full debuginfo is
+# too large and we OOD/OOM.
+build:release-tagged --config=release --config=release-stamp --config=debuginfo-full
+# Local builds and from PRs in CI.
+#
+# Not doing a full stamp nor omitting full debug info, greatly speeds up compile times.
+build:release-dev --config=release --config=debuginfo-limited
 
 # Build with the Rust Nightly Toolchain
 build:rust-nightly --@rules_rust//rust/toolchain/channel=nightly

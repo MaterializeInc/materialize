@@ -9,8 +9,21 @@
 
 mode cockroach
 
+# To make ordering deterministic for fast-path peeks, enable the
+# structured part format and set Persist to use that ordering.
+
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET persist_fast_path_limit = 100
+ALTER SYSTEM SET persist_batch_columnar_format = 'both_v2'
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_batch_columnar_format_percent = 100
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_batch_structured_order = true
 ----
 COMPLETE 0
 
@@ -68,10 +81,9 @@ INSERT INTO numbers SELECT generate_series(1, 3);
 statement ok
 INSERT INTO numbers SELECT generate_series(1, 10);
 
-# The ordering here is technically nondeterministic, but in practice unlikely to change.
-# Feel free to rewrite or remove if this causes trouble.
+# We should deterministically return the first N values.
 
-query T
+query T valuesort
 SELECT value from numbers LIMIT 20;
 ----
 1
@@ -103,22 +115,22 @@ statement ok
 INSERT INTO numbers SELECT generate_series(5, 100);
 
 statement ok
-INSERT INTO numbers SELECT generate_series(50, 1000);
+INSERT INTO numbers SELECT generate_series(-1, 10);
 
 statement ok
 INSERT INTO numbers SELECT generate_series(500, 10000);
 
-# Since we don't guarantee which of the rows are returned, transform the results
-# in a way that doesn't depend on the specific values.
+# Since we order the data in terms of its structured representation, we see the
+# smallest values regardless of which order they were inserted in.
 
-query T
-SELECT value < 999999 from numbers LIMIT 5;
+query T valuesort
+SELECT value from numbers LIMIT 5;
 ----
-true
-true
-true
-true
-true
+-1
+0
+1
+1
+1
 
 # Errors should always be returned even when the limit is small
 statement ok

@@ -1,7 +1,7 @@
 # Read Holds
 
-- Durable Subscribes epic: [17541](https://github.com/MaterializeInc/materialize/issues/17541)
-- Configurable compaction windows: [16701](https://github.com/MaterializeInc/materialize/issues/16701)
+- Durable Subscribes epic: [17541](https://github.com/MaterializeInc/database-issues/issues/5094)
+- Configurable compaction windows: [16701](https://github.com/MaterializeInc/database-issues/issues/4840)
 
 ## The Problem
 
@@ -135,7 +135,7 @@ Or, we could support multiple objects, but they must all be in the same schema a
 
 - These could be called `READ HOLD`s instead of `HOLD`s.
 
-- `SUBSCRIBES` themselves could be made durable, or we introduce `CREATE SUBSCRIPTION` that would similarly achieve this goal ((proposal)[https://github.com/MaterializeInc/materialize/issues/17541#issuecomment-1569340739]).
+- `SUBSCRIBES` themselves could be made durable, or we introduce `CREATE SUBSCRIPTION` that would similarly achieve this goal ((proposal)[https://github.com/MaterializeInc/database-issues/issues/5094#issuecomment-1569340739]).
 
 - Allow users to configure the compaction window of objects.
 This has problems: the window could be too short for recovery or too long and overuse resources, OOMing a cluster.

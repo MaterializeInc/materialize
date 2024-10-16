@@ -300,14 +300,14 @@ fn try_push_reduce_through_join(
         {
             if !agg.distinct {
                 // TODO: support non-distinct aggs.
-                // For more details, see https://github.com/MaterializeInc/materialize/issues/9604
+                // For more details, see https://github.com/MaterializeInc/database-issues/issues/2924
                 return None;
             }
             new_projection.push((component, new_reduces[component].arity()));
             new_reduces[component].add_aggregate(agg.clone());
         } else {
             // TODO: support multi- and zero- component aggs
-            // For more details, see https://github.com/MaterializeInc/materialize/issues/9604
+            // For more details, see https://github.com/MaterializeInc/database-issues/issues/2924
             return None;
         }
     }

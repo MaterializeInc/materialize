@@ -222,7 +222,7 @@ pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainEr
 
     if expr.is_recursive() {
         // `linear_chains` is not implemented for WMR, see
-        // https://github.com/MaterializeInc/materialize/issues/19012
+        // https://github.com/MaterializeInc/database-issues/issues/5631
         return Err(LinearChainsPlusRecursive);
     }
 

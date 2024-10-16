@@ -78,7 +78,7 @@ SELECT pow(1e-10::DECIMAL, 2)
 ----
 1E-20
 
-# inf panics (#13051)
+# inf panics (materialize#13051)
 query RR
 SELECT 'NaN'::FLOAT::DECIMAL, 'NaN'::DECIMAL
 ----
@@ -353,7 +353,7 @@ SELECT 101.00::decimal(4,6)
 statement error value with precision 2, scale 2 must round to an absolute value less than 1
 SELECT 1::decimal(2, 2)
 
-# Regression test for #16081
+# Regression test for materialize#16081
 
 statement ok
 CREATE TABLE a (b DECIMAL)

@@ -14,8 +14,7 @@ for testing and evaluation purposes. The Materialize Emulator is not
 representative of Materialize's performance and full feature set. To evaluate
 Materialize for production scenarios, sign up for a [free trial
 account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-or [schedule a
-demo](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+or [schedule a demo](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
 
 {{< warning >}}
 
@@ -49,11 +48,9 @@ not suitable for production deployments</redb>.
 
 {{< note >}}
 
-- Use of the Docker image is subject to Materialize's [BSL
-   License](https://github.com/MaterializeInc/materialize/blob/main/LICENSE).
+- Use of the Docker image is subject to Materialize's [BSL License](https://github.com/MaterializeInc/materialize/blob/main/LICENSE).
 
-- By downloading the Docker image, you are agreeing to Materialize's [privacy
-   policy](https://materialize.com/privacy-policy/).
+- By downloading the Docker image, you are agreeing to Materialize's [privacy policy](https://materialize.com/privacy-policy/).
 
 {{</ note >}}
 
@@ -62,17 +59,20 @@ not suitable for production deployments</redb>.
    been already downloaded.
 
    ```sh
-   docker run -d -p 6875:6875 -p 6876:6876 materialize/materialized:{{< version >}}
+   docker run -d -p 127.0.0.1:6875:6875 -p 127.0.0.1:6876:6876 materialize/materialized:{{< version >}}
    ```
 
    When running locally:
 
+   - The Docker container binds exclusively to localhost, for security reasons.
    - The SQL interface is available on port `6875`.
    - Logs are available via `docker logs <container-id>`.
    - A default user `materialize` is created.
    - A default database `materialize` is created.
 
-1. Connect to the Materialize Emulator using your preferred SQL client, using
+1. <a name="materialize-emulator-connect-client"></a>
+
+   Connect to the Materialize Emulator using your preferred SQL client, using
    the following connection field values:
 
    | Field    | Value         |
@@ -93,16 +93,14 @@ not suitable for production deployments</redb>.
 
 ### Next steps
 
-- To start ingesting your own data from an external system like Kafka MySQL or
+- To start ingesting your own data from an external system like Kafka, MySQL or
   PostgreSQL, check the documentation for [sources](/sql/create-source/).
 
-- Join the [Materialize Community on
-  Slack](https://materialize.com/s/chat).
+- Join the [Materialize Community on Slack](https://materialize.com/s/chat).
 
 - To more fully evaluate Materialize and its features, sign up for a [free trial
   account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-  or [schedule a
-  demo](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+  or [schedule a demo](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
 
 ### Technical Support
 

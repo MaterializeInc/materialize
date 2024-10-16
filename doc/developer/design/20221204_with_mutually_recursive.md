@@ -7,7 +7,7 @@
 // Be sure to capture the customer impact - framing this as a release note may be useful.
 -->
 
-Progressively introduce support for `WITH MUTUALLY RECURSIVE` common table expressions, as demonstrated in https://github.com/MaterializeInc/materialize/issues/11176. This alternate form of `WITH` requires column names and identifiers for each binding, but allows all bindings to reference each other bindings, and introduces support for recursion and mutual recursion.
+Progressively introduce support for `WITH MUTUALLY RECURSIVE` common table expressions, as demonstrated in https://github.com/MaterializeInc/database-issues/issues/3264. This alternate form of `WITH` requires column names and identifiers for each binding, but allows all bindings to reference each other bindings, and introduces support for recursion and mutual recursion.
 
 ## Goals
 
@@ -63,7 +63,7 @@ These are not likely to be renderable in the foreseeable future, as they cannot 
 // If applicable, be sure to call out any new testing/validation that will be required
 -->
 
-Much of this is taken from https://github.com/MaterializeInc/materialize/issues/11176.
+Much of this is taken from https://github.com/MaterializeInc/database-issues/issues/3264.
 
 We can extend SQL's `WITH` fragment with a new variant, not strictly more general, which looks like
 ```sql

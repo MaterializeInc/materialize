@@ -22,7 +22,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.1"
+prost-build = "0.13.2"
 
 [features]
 default = ["mz-build-tools/default"]

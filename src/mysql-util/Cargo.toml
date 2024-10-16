@@ -21,7 +21,7 @@ mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }
 mysql_common = { version = "0.32.4", default-features = false, features = ["chrono"] }
 mysql_async = { version = "0.34.1", default-features = false, features = ["minimal", "tracing"] }
-prost = { version = "0.13.1", features = ["no-recursion-limit"] }
+prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
 fancy-regex = "0.11.0"
@@ -35,7 +35,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.1"
+prost-build = "0.13.2"
 tonic-build = "0.12.1"
 
 [features]

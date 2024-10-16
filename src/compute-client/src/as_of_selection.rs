@@ -743,8 +743,8 @@ mod tests {
 
     use async_trait::async_trait;
     use futures::future::BoxFuture;
-    use mz_compute_types::dataflows::IndexDesc;
     use mz_compute_types::dataflows::IndexImport;
+    use mz_compute_types::dataflows::{DataflowExpirationDesc, IndexDesc};
     use mz_compute_types::sinks::ComputeSinkConnection;
     use mz_compute_types::sinks::ComputeSinkDesc;
     use mz_compute_types::sinks::PersistSinkConnection;
@@ -760,6 +760,7 @@ mod tests {
     use mz_storage_types::controller::{CollectionMetadata, StorageError};
     use mz_storage_types::parameters::StorageParameters;
     use mz_storage_types::read_holds::ReadHoldError;
+    use mz_storage_types::sources::SourceExportDataConfig;
     use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
 
     use super::*;
@@ -870,6 +871,13 @@ mod tests {
             &self,
             _ingestion_id: GlobalId,
             _source_desc: SourceDesc,
+        ) -> Result<(), StorageError<Self::Timestamp>> {
+            unimplemented!()
+        }
+
+        async fn alter_ingestion_export_data_configs(
+            &self,
+            _source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
         ) -> Result<(), StorageError<Self::Timestamp>> {
             unimplemented!()
         }
@@ -997,6 +1005,7 @@ mod tests {
             initial_storage_as_of: Default::default(),
             refresh_schedule: Default::default(),
             debug_name: Default::default(),
+            dataflow_expiration_desc: DataflowExpirationDesc::default(),
         }
     }
 

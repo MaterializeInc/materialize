@@ -66,6 +66,7 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
             match command {
                 CreateTimely { .. } => metrics.create_timely_count.inc(),
                 InitializationComplete => metrics.initialization_complete_count.inc(),
+                AllowWrites => metrics.allow_writes_count.inc(),
                 UpdateConfiguration(_) => metrics.update_configuration_count.inc(),
                 RunIngestions(x) => metrics.run_ingestions_count.add(x.len().cast_into()),
                 RunSinks(x) => metrics.run_sinks_count.add(x.len().cast_into()),
@@ -80,6 +81,7 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
 
         let mut create_timely_command = None;
         let mut initialization_complete = false;
+        let mut allow_writes = false;
         let mut final_compactions = BTreeMap::new();
 
         // Collect the final definitions of ingestions and sinks.
@@ -100,6 +102,7 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
             match command {
                 cmd @ CreateTimely { .. } => create_timely_command = Some(cmd),
                 InitializationComplete => initialization_complete = true,
+                AllowWrites => allow_writes = true,
                 UpdateConfiguration(params) => final_configuration.update(params),
                 RunIngestions(cmds) => {
                     final_ingestions.extend(cmds.into_iter().map(|c| (c.id, c)));
@@ -188,6 +191,10 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
         self.metrics.initialization_complete_count.set(count);
         if initialization_complete {
             self.commands.push(StorageCommand::InitializationComplete);
+        }
+
+        if allow_writes {
+            self.commands.push(StorageCommand::AllowWrites);
         }
     }
 }

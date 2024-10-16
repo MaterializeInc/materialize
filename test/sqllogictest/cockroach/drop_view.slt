@@ -193,7 +193,7 @@ statement ok
 DROP VIEW y, x
 
 # Ensure that dropping a database works even when views get referred to more=
-# than once. See #15953 for more details.
+# than once. See materialize#15953 for more details.
 statement ok
 CREATE DATABASE a
 

@@ -114,7 +114,7 @@ pub async fn enable(
 /// Disable a region in the profile organization.
 ///
 /// This command can take several minutes to complete.
-pub async fn disable(cx: RegionContext) -> Result<(), Error> {
+pub async fn disable(cx: RegionContext, hard: bool) -> Result<(), Error> {
     let loading_spinner = cx
         .output_formatter()
         .loading_spinner("Retrieving information...");
@@ -131,7 +131,7 @@ pub async fn disable(cx: RegionContext) -> Result<(), Error> {
         .retry_async(|_| async {
             loading_spinner.set_message("Disabling region...");
             cx.cloud_client()
-                .delete_region(cloud_provider.clone())
+                .delete_region(cloud_provider.clone(), hard)
                 .await?;
 
             loading_spinner.finish_with_message("Region disabled.");

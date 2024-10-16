@@ -133,10 +133,6 @@ pub enum Command {
     Dump {
         tx: oneshot::Sender<Result<serde_json::Value, anyhow::Error>>,
     },
-
-    AllowWrites {
-        tx: oneshot::Sender<Result<bool, anyhow::Error>>,
-    },
 }
 
 impl Command {
@@ -153,8 +149,7 @@ impl Command {
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
-            | Command::Dump { .. }
-            | Command::AllowWrites { .. } => None,
+            | Command::Dump { .. } => None,
         }
     }
 
@@ -171,8 +166,7 @@ impl Command {
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
-            | Command::Dump { .. }
-            | Command::AllowWrites { .. } => None,
+            | Command::Dump { .. } => None,
         }
     }
 }

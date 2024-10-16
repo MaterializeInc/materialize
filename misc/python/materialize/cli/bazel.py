@@ -47,6 +47,7 @@ def gen_cmd(args: list[str]):
     parser = argparse.ArgumentParser(
         prog="gen", description="Generate BUILD.bazel files."
     )
+    parser.add_argument("--check", action="store_true")
     parser.add_argument(
         "path",
         type=pathlib.Path,
@@ -60,7 +61,7 @@ def gen_cmd(args: list[str]):
     else:
         path = None
 
-    gen(path)
+    gen(path, gen_args.check)
 
 
 def fmt_cmd(args: list[str]):
@@ -84,7 +85,7 @@ def bazel_cmd(args: list[str]):
     subprocess.run(["bazel"] + args, check=True)
 
 
-def gen(path):
+def gen(path, check):
     """
     Generates BUILD.bazel files from Cargo.toml.
 
@@ -95,25 +96,22 @@ def gen(path):
     if not path:
         path = MZ_ROOT / "Cargo.toml"
 
-    # Note: We build cargo-gazelle with optimizations because the speedup is
-    # worth it and Bazel should cache the resulting binary.
+    check_arg = []
+    if check:
+        check_arg += ["--check"]
 
-    # TODO(parkmycar): Use Bazel to run this lint.
     cmd_args = [
-        "cargo",
+        "bazel",
         "run",
-        "--release",
-        "--no-default-features",
-        "--manifest-path=misc/bazel/cargo-gazelle/Cargo.toml",
+        # TODO(parkmycar): Once bin/bazel gen is more stable in CI, enable this
+        # config to make the output less noisy.
+        # "--config=script",
+        "//misc/bazel/tools:cargo-gazelle",
         "--",
-        "--path",
+        *check_arg,
         f"{str(path)}",
     ]
     subprocess.run(cmd_args, check=True)
-
-    # Make sure we format everything after generating it so the linter doesn't
-    # conflict with the formatter.
-    fmt(path.parent)
 
 
 def fmt(path):
@@ -133,8 +131,7 @@ def fmt(path):
     cmd_args = [
         "bazel",
         "run",
-        "-c",
-        "opt",
+        "--config=script",
         "//misc/bazel/tools:buildifier",
         "--",
         "-r",
@@ -143,12 +140,14 @@ def fmt(path):
     subprocess.run(cmd_args, check=True)
 
 
-def output_path(target) -> pathlib.Path:
+def output_path(target) -> list[pathlib.Path]:
     """Returns the absolute path of the Bazel target."""
 
     cmd_args = ["bazel", "cquery", f"{target}", "--output=files"]
-    path = subprocess.check_output(cmd_args, text=True)
-    return pathlib.Path(path)
+    paths = subprocess.check_output(
+        cmd_args, text=True, stderr=subprocess.DEVNULL
+    ).splitlines()
+    return [pathlib.Path(path) for path in paths]
 
 
 if __name__ == "__main__":

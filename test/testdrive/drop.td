@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Test DROP ... CASCADE statements with multiple items
-# From https://github.com/MaterializeInc/materialize/issues/5316
+# From https://github.com/MaterializeInc/database-issues/issues/1647
 > CREATE TABLE t1 (f1 INTEGER)
 > CREATE TABLE t2 (f2 INTEGER)
 > CREATE MATERIALIZED VIEW v1 AS SELECT * FROM t1, t2
@@ -16,7 +16,7 @@
 
 # Test CREATE OR REPLACE statement that attempts to depend
 # on the object that is being replaced
-# https://github.com/MaterializeInc/materialize/issues/5272
+# https://github.com/MaterializeInc/database-issues/issues/1626
 > CREATE VIEW v2 AS SELECT 1
 ! CREATE OR REPLACE VIEW v2 AS SELECT * FROM v2
 contains:cannot replace view materialize.public.v2: depended upon by new materialize.public.v2 definition

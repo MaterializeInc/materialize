@@ -78,11 +78,11 @@ false
 > SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
 false
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/16326
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/4712
 
 > CREATE CLUSTER lgtpch_cluster_cleanup SIZE '1';
 
-> CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_cleanup FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1);
+> CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_cleanup FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1, UP TO 100);
 
 > CREATE TABLE customer FROM SOURCE lgtpch (REFERENCE customer);
 > CREATE TABLE lineitem FROM SOURCE lgtpch (REFERENCE lineitem);

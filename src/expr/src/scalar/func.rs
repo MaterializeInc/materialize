@@ -333,21 +333,21 @@ fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_add(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange(format!("{a} + {b}")))
+        .ok_or(EvalError::UInt16OutOfRange(format!("{a} + {b}").into()))
         .map(Datum::from)
 }
 
 fn add_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_add(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange(format!("{a} + {b}")))
+        .ok_or(EvalError::UInt32OutOfRange(format!("{a} + {b}").into()))
         .map(Datum::from)
 }
 
 fn add_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_add(b.unwrap_uint64())
-        .ok_or(EvalError::UInt64OutOfRange(format!("{a} + {b}")))
+        .ok_or(EvalError::UInt64OutOfRange(format!("{a} + {b}").into()))
         .map(Datum::from)
 }
 
@@ -481,9 +481,13 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-");
+    let encoding_name = b
+        .unwrap_str()
+        .to_lowercase()
+        .replace('_', "-")
+        .into_boxed_str();
 
-    // Supporting other encodings is tracked by #2282.
+    // Supporting other encodings is tracked by database-issues#797.
     if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some("utf-8") {
         return Err(EvalError::InvalidEncodingName(encoding_name));
     }
@@ -491,7 +495,7 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     match str::from_utf8(a.unwrap_bytes()) {
         Ok(from) => Ok(Datum::String(from)),
         Err(e) => Err(EvalError::InvalidByteSequence {
-            byte_sequence: e.to_string(),
+            byte_sequence: e.to_string().into(),
             encoding_name,
         }),
     }
@@ -523,7 +527,11 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-");
+    let encoding_name = b
+        .unwrap_str()
+        .to_lowercase()
+        .replace('_', "-")
+        .into_boxed_str();
 
     let enc = match encoding_from_whatwg_label(&encoding_name) {
         Some(enc) => enc,
@@ -534,7 +542,7 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
         Ok(s) => s,
         Err(e) => {
             return Err(EvalError::InvalidByteSequence {
-                byte_sequence: e.to_string(),
+                byte_sequence: e.into(),
                 encoding_name,
             })
         }
@@ -543,7 +551,7 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
     let count = decoded_string.chars().count();
     match i32::try_from(count) {
         Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::Int32OutOfRange(count.to_string())),
+        Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
     }
 }
 
@@ -612,7 +620,7 @@ fn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_interval()
         .checked_add(&b.unwrap_interval())
-        .ok_or(EvalError::IntervalOutOfRange(format!("{a} + {b}")))
+        .ok_or(EvalError::IntervalOutOfRange(format!("{a} + {b}").into()))
         .map(Datum::from)
 }
 
@@ -812,21 +820,21 @@ fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn sub_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_sub(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange(format!("{a} - {b}")))
+        .ok_or(EvalError::UInt16OutOfRange(format!("{a} - {b}").into()))
         .map(Datum::from)
 }
 
 fn sub_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_sub(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange(format!("{a} - {b}")))
+        .ok_or(EvalError::UInt32OutOfRange(format!("{a} - {b}").into()))
         .map(Datum::from)
 }
 
 fn sub_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_sub(b.unwrap_uint64())
-        .ok_or(EvalError::UInt64OutOfRange(format!("{a} - {b}")))
+        .ok_or(EvalError::UInt64OutOfRange(format!("{a} - {b}").into()))
         .map(Datum::from)
 }
 
@@ -899,7 +907,7 @@ fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     b.unwrap_interval()
         .checked_neg()
         .and_then(|b| b.checked_add(&a.unwrap_interval()))
-        .ok_or(EvalError::IntervalOutOfRange(format!("{a} - {b}")))
+        .ok_or(EvalError::IntervalOutOfRange(format!("{a} - {b}").into()))
         .map(Datum::from)
 }
 
@@ -911,7 +919,9 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     let dt = interval
         .months
         .checked_neg()
-        .ok_or(EvalError::IntervalOutOfRange(interval.months.to_string()))
+        .ok_or(EvalError::IntervalOutOfRange(
+            interval.months.to_string().into(),
+        ))
         .and_then(|months| add_timestamp_months(&dt, months))?;
     let dt = dt
         .checked_sub_signed(interval.duration_as_chrono())
@@ -950,21 +960,21 @@ fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn mul_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint16()
         .checked_mul(b.unwrap_uint16())
-        .ok_or(EvalError::UInt16OutOfRange(format!("{a} * {b}")))
+        .ok_or(EvalError::UInt16OutOfRange(format!("{a} * {b}").into()))
         .map(Datum::from)
 }
 
 fn mul_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint32()
         .checked_mul(b.unwrap_uint32())
-        .ok_or(EvalError::UInt32OutOfRange(format!("{a} * {b}")))
+        .ok_or(EvalError::UInt32OutOfRange(format!("{a} * {b}").into()))
         .map(Datum::from)
 }
 
 fn mul_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_uint64()
         .checked_mul(b.unwrap_uint64())
-        .ok_or(EvalError::UInt64OutOfRange(format!("{a} * {b}")))
+        .ok_or(EvalError::UInt64OutOfRange(format!("{a} * {b}").into()))
         .map(Datum::from)
 }
 
@@ -1012,7 +1022,7 @@ fn mul_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn mul_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_interval()
         .checked_mul(b.unwrap_float64())
-        .ok_or(EvalError::IntervalOutOfRange(format!("{a} * {b}")))
+        .ok_or(EvalError::IntervalOutOfRange(format!("{a} * {b}").into()))
         .map(Datum::from)
 }
 
@@ -1024,7 +1034,7 @@ fn div_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int16()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int16OutOfRange(format!("{a} / {b}")))
+            .ok_or(EvalError::Int16OutOfRange(format!("{a} / {b}").into()))
     }
 }
 
@@ -1036,7 +1046,7 @@ fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int32()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int32OutOfRange(format!("{a} / {b}")))
+            .ok_or(EvalError::Int32OutOfRange(format!("{a} / {b}").into()))
     }
 }
 
@@ -1048,7 +1058,7 @@ fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         a.unwrap_int64()
             .checked_div(b)
             .map(Datum::from)
-            .ok_or(EvalError::Int64OutOfRange(format!("{a} / {b}")))
+            .ok_or(EvalError::Int64OutOfRange(format!("{a} / {b}").into()))
     }
 }
 
@@ -1142,7 +1152,7 @@ fn div_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     } else {
         a.unwrap_interval()
             .checked_div(b)
-            .ok_or(EvalError::IntervalOutOfRange(format!("{a} / {b}")))
+            .ok_or(EvalError::IntervalOutOfRange(format!("{a} / {b}").into()))
             .map(Datum::from)
     }
 }
@@ -1239,15 +1249,15 @@ pub fn neg_interval(a: Datum) -> Result<Datum, EvalError> {
 fn neg_interval_inner(a: Datum) -> Result<Interval, EvalError> {
     a.unwrap_interval()
         .checked_neg()
-        .ok_or(EvalError::IntervalOutOfRange(a.to_string()))
+        .ok_or(EvalError::IntervalOutOfRange(a.to_string().into()))
 }
 
 fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError> {
     if val.is_negative() {
-        return Err(EvalError::NegativeOutOfDomain(function_name.to_owned()));
+        return Err(EvalError::NegativeOutOfDomain(function_name.into()));
     }
     if val.is_zero() {
-        return Err(EvalError::ZeroOutOfDomain(function_name.to_owned()));
+        return Err(EvalError::ZeroOutOfDomain(function_name.into()));
     }
     Ok(())
 }
@@ -1295,13 +1305,13 @@ fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_float64();
     if a == 0.0 && b.is_sign_negative() {
         return Err(EvalError::Undefined(
-            "zero raised to a negative power".to_owned(),
+            "zero raised to a negative power".into(),
         ));
     }
     if a.is_sign_negative() && b.fract() != 0.0 {
         // Equivalent to PG error:
         // > a negative number raised to a non-integer power yields a complex result
-        return Err(EvalError::ComplexOutOfRange("pow".to_owned()));
+        return Err(EvalError::ComplexOutOfRange("pow".into()));
     }
     let res = a.powf(b);
     if res.is_infinite() {
@@ -1329,14 +1339,14 @@ fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
         }
         if b.is_negative() {
             return Err(EvalError::Undefined(
-                "zero raised to a negative power".to_owned(),
+                "zero raised to a negative power".into(),
             ));
         }
     }
     if a.is_negative() && b.exponent() < 0 {
         // Equivalent to PG error:
         // > a negative number raised to a non-integer power yields a complex result
-        return Err(EvalError::ComplexOutOfRange("pow".to_owned()));
+        return Err(EvalError::ComplexOutOfRange("pow".into()));
     }
     let mut cx = numeric::cx_datum();
     cx.pow(&mut a, &b);
@@ -1738,7 +1748,7 @@ where
     let units = a.unwrap_str();
     match units.parse() {
         Ok(units) => Ok(date_part_interval_inner::<D>(units, b.unwrap_interval())?.into()),
-        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
+        Err(_) => Err(EvalError::UnknownUnits(units.into())),
     }
 }
 
@@ -1749,7 +1759,7 @@ where
     let units = a.unwrap_str();
     match units.parse() {
         Ok(units) => Ok(date_part_time_inner::<D>(units, b.unwrap_time())?.into()),
-        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
+        Err(_) => Err(EvalError::UnknownUnits(units.into())),
     }
 }
 
@@ -1761,7 +1771,7 @@ where
     let units = a.unwrap_str();
     match units.parse() {
         Ok(units) => Ok(date_part_timestamp_inner::<_, D>(units, ts)?.into()),
-        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
+        Err(_) => Err(EvalError::UnknownUnits(units.into())),
     }
 }
 
@@ -1769,7 +1779,7 @@ fn extract_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     let units = a.unwrap_str();
     match units.parse() {
         Ok(units) => Ok(extract_date_inner(units, b.unwrap_date().into())?.into()),
-        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
+        Err(_) => Err(EvalError::UnknownUnits(units.into())),
     }
 }
 
@@ -1783,20 +1793,18 @@ where
 {
     if stride.months != 0 {
         return Err(EvalError::DateBinOutOfRange(
-            "timestamps cannot be binned into intervals containing months or years".to_string(),
+            "timestamps cannot be binned into intervals containing months or years".into(),
         ));
     }
 
     let stride_ns = match stride.duration_as_chrono().num_nanoseconds() {
         Some(ns) if ns <= 0 => Err(EvalError::DateBinOutOfRange(
-            "stride must be greater than zero".to_string(),
+            "stride must be greater than zero".into(),
         )),
         Some(ns) => Ok(ns),
-        None => Err(EvalError::DateBinOutOfRange(format!(
-            "stride cannot exceed {}/{} nanoseconds",
-            i64::MAX,
-            i64::MIN,
-        ))),
+        None => Err(EvalError::DateBinOutOfRange(
+            format!("stride cannot exceed {}/{} nanoseconds", i64::MAX, i64::MIN,).into(),
+        )),
     }?;
 
     // Make sure the returned timestamp is at the start of the bin, even if the
@@ -1806,7 +1814,7 @@ where
 
     let tm_diff = (source - origin.clone()).num_nanoseconds().ok_or_else(|| {
         EvalError::DateBinOutOfRange(
-            "source and origin must not differ more than 2^63 nanoseconds".to_string(),
+            "source and origin must not differ more than 2^63 nanoseconds".into(),
         )
     })?;
 
@@ -1829,7 +1837,7 @@ where
     let units = a.unwrap_str();
     match units.parse() {
         Ok(units) => Ok(date_trunc_inner(units, ts)?.try_into()?),
-        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
+        Err(_) => Err(EvalError::UnknownUnits(units.into())),
     }
 }
 
@@ -1838,7 +1846,7 @@ fn date_trunc_interval<'a>(a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     let dtf = units
         .parse()
-        .map_err(|_| EvalError::UnknownUnits(units.to_owned()))?;
+        .map_err(|_| EvalError::UnknownUnits(units.into()))?;
 
     interval
         .truncate_low_fields(dtf, Some(0), RoundBehavior::Truncate)
@@ -1852,7 +1860,7 @@ fn date_diff_timestamp<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>,
     let unit = unit.unwrap_str();
     let unit = unit
         .parse()
-        .map_err(|_| EvalError::InvalidDatePart(unit.to_string()))?;
+        .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
 
     let a = a.unwrap_timestamp();
     let b = b.unwrap_timestamp();
@@ -1865,7 +1873,7 @@ fn date_diff_timestamptz<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a
     let unit = unit.unwrap_str();
     let unit = unit
         .parse()
-        .map_err(|_| EvalError::InvalidDatePart(unit.to_string()))?;
+        .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
 
     let a = a.unwrap_timestamptz();
     let b = b.unwrap_timestamptz();
@@ -1878,7 +1886,7 @@ fn date_diff_date<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, Eval
     let unit = unit.unwrap_str();
     let unit = unit
         .parse()
-        .map_err(|_| EvalError::InvalidDatePart(unit.to_string()))?;
+        .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
 
     let a = a.unwrap_date();
     let b = b.unwrap_date();
@@ -1895,7 +1903,7 @@ fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, Eval
     let unit = unit.unwrap_str();
     let unit = unit
         .parse()
-        .map_err(|_| EvalError::InvalidDatePart(unit.to_string()))?;
+        .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
 
     let a = a.unwrap_time();
     let b = b.unwrap_time();
@@ -1915,7 +1923,7 @@ fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, Eval
 /// The interpretation of fixed offsets depend on whether the POSIX or ISO 8601 standard is being
 /// used.
 pub(crate) fn parse_timezone(tz: &str, spec: TimezoneSpec) -> Result<Timezone, EvalError> {
-    Timezone::parse(tz, spec).map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
+    Timezone::parse(tz, spec).map_err(|_| EvalError::InvalidTimezone(tz.into()))
 }
 
 /// Converts the time datum `b`, which is assumed to be in UTC, to the timezone that the interval datum `a` is assumed
@@ -1995,7 +2003,7 @@ fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'s
     let mz_acl_item = a.unwrap_mz_acl_item();
     let privileges = b.unwrap_str();
     let acl_mode = AclMode::parse_multiple_privileges(privileges)
-        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))?;
+        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;
     let contains = !mz_acl_item.acl_mode.intersection(acl_mode).is_empty();
     Ok(contains.into())
 }
@@ -2034,8 +2042,8 @@ fn parse_ident<'a>(
 
             if buf.next() != Some('"') {
                 return Err(EvalError::InvalidIdentifier {
-                    ident: ident.to_string(),
-                    detail: Some("String has unclosed double quotes.".to_string()),
+                    ident: ident.into(),
+                    detail: Some("String has unclosed double quotes.".into()),
                 });
             }
             elems.push(Datum::String(s));
@@ -2051,17 +2059,17 @@ fn parse_ident<'a>(
         if missing_ident {
             if c == Some('.') {
                 return Err(EvalError::InvalidIdentifier {
-                    ident: ident.to_string(),
-                    detail: Some("No valid identifier before \".\".".to_string()),
+                    ident: ident.into(),
+                    detail: Some("No valid identifier before \".\".".into()),
                 });
             } else if after_dot {
                 return Err(EvalError::InvalidIdentifier {
-                    ident: ident.to_string(),
-                    detail: Some("No valid identifier after \".\".".to_string()),
+                    ident: ident.into(),
+                    detail: Some("No valid identifier after \".\".".into()),
                 });
             } else {
                 return Err(EvalError::InvalidIdentifier {
-                    ident: ident.to_string(),
+                    ident: ident.into(),
                     detail: None,
                 });
             }
@@ -2077,7 +2085,7 @@ fn parse_ident<'a>(
             }
             Some(_) if strict => {
                 return Err(EvalError::InvalidIdentifier {
-                    ident: ident.to_string(),
+                    ident: ident.into(),
                     detail: None,
                 })
             }
@@ -2135,8 +2143,9 @@ fn pretty_sql<'a>(
     let sql = sql.unwrap_str();
     let width = width.unwrap_int32();
     let width =
-        usize::try_from(width).map_err(|_| EvalError::PrettyError("invalid width".to_string()))?;
-    let pretty = pretty_str(sql, width).map_err(|e| EvalError::PrettyError(e.to_string()))?;
+        usize::try_from(width).map_err(|_| EvalError::PrettyError("invalid width".into()))?;
+    let pretty =
+        pretty_str(sql, width).map_err(|e| EvalError::PrettyError(e.to_string().into()))?;
     let pretty = temp_storage.push_string(pretty);
     Ok(Datum::String(pretty))
 }
@@ -2739,11 +2748,11 @@ impl BinaryFunc {
             TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
 
             TimezoneOffset => ScalarType::Record {
-                fields: vec![
+                fields: [
                     ("abbrev".into(), ScalarType::String.nullable(false)),
                     ("base_utc_offset".into(), ScalarType::Interval.nullable(false)),
                     ("dst_offset".into(), ScalarType::Interval.nullable(false)),
-                ],
+                ].into(),
                 custom_id: None,
             }.nullable(true),
 
@@ -3733,7 +3742,7 @@ impl fmt::Display for BinaryFunc {
                 Ok((regex, limit)) => write!(
                     f,
                     "regexp_replace[{}, case_insensitive={}, limit={}]",
-                    regex.pattern.escaped(),
+                    regex.pattern().escaped(),
                     regex.case_insensitive,
                     limit
                 ),
@@ -4707,7 +4716,6 @@ derive_unary!(
     CastNumericToMzTimestamp,
     CastTimestampToMzTimestamp,
     CastTimestampTzToMzTimestamp,
-    CastIntervalToMzTimestamp,
     CastDateToMzTimestamp,
     CastStringToBool,
     CastStringToPgLegacyChar,
@@ -5174,7 +5182,7 @@ impl Arbitrary for UnaryFunc {
                 .prop_map(|(return_ty, cast_exprs)| {
                     UnaryFunc::CastRecord1ToRecord2(CastRecord1ToRecord2 {
                         return_ty,
-                        cast_exprs,
+                        cast_exprs: cast_exprs.into(),
                     })
                 })
                 .boxed(),
@@ -5689,7 +5697,6 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastNumericToMzTimestamp(_) => CastNumericToMzTimestamp(()),
             UnaryFunc::CastTimestampToMzTimestamp(_) => CastTimestampToMzTimestamp(()),
             UnaryFunc::CastTimestampTzToMzTimestamp(_) => CastTimestampTzToMzTimestamp(()),
-            UnaryFunc::CastIntervalToMzTimestamp(_) => CastIntervalToMzTimestamp(()),
             UnaryFunc::CastDateToMzTimestamp(_) => CastDateToMzTimestamp(()),
             UnaryFunc::StepMzTimestamp(_) => StepMzTimestamp(()),
             UnaryFunc::RangeLower(_) => RangeLower(()),
@@ -6187,7 +6194,6 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastNumericToMzTimestamp(()) => Ok(impls::CastNumericToMzTimestamp.into()),
                 CastTimestampToMzTimestamp(()) => Ok(impls::CastTimestampToMzTimestamp.into()),
                 CastTimestampTzToMzTimestamp(()) => Ok(impls::CastTimestampTzToMzTimestamp.into()),
-                CastIntervalToMzTimestamp(()) => Ok(impls::CastIntervalToMzTimestamp.into()),
                 CastDateToMzTimestamp(()) => Ok(impls::CastDateToMzTimestamp.into()),
                 StepMzTimestamp(()) => Ok(impls::StepMzTimestamp.into()),
                 RangeLower(()) => Ok(impls::RangeLower.into()),
@@ -6282,12 +6288,12 @@ fn error_if_null<'a>(
             let err_msg = match datums[1] {
                 Datum::Null => {
                     return Err(EvalError::Internal(
-                        "unexpected NULL in error side of error_if_null".to_string(),
+                        "unexpected NULL in error side of error_if_null".into(),
                     ))
                 }
                 o => o.unwrap_str(),
             };
-            Err(EvalError::IfNullError(err_msg.to_string()))
+            Err(EvalError::IfNullError(err_msg.into()))
         }
         _ => Ok(datums[0]),
     }
@@ -6337,7 +6343,7 @@ fn pad_leading<'a>(
         Ok(len) => len,
         Err(_) => {
             return Err(EvalError::InvalidParameterValue(
-                "length must be nonnegative".to_owned(),
+                "length must be nonnegative".into(),
             ))
         }
     };
@@ -6374,10 +6380,13 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let start_idx = match usize::try_from(cmp::max(raw_start_idx, 0)) {
         Ok(i) => i,
         Err(_) => {
-            return Err(EvalError::InvalidParameterValue(format!(
-                "substring starting index ({}) exceeds min/max position",
-                raw_start_idx
-            )))
+            return Err(EvalError::InvalidParameterValue(
+                format!(
+                    "substring starting index ({}) exceeds min/max position",
+                    raw_start_idx
+                )
+                .into(),
+            ))
         }
     };
 
@@ -6391,7 +6400,7 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
         let end_idx = match i64::from(datums[2].unwrap_int32()) {
             e if e < 0 => {
                 return Err(EvalError::InvalidParameterValue(
-                    "negative substring length not allowed".to_owned(),
+                    "negative substring length not allowed".into(),
                 ))
             }
             e if e == 0 || e + raw_start_idx < 1 => return Ok(Datum::String("")),
@@ -6400,10 +6409,9 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
                 match usize::try_from(e) {
                     Ok(i) => i,
                     Err(_) => {
-                        return Err(EvalError::InvalidParameterValue(format!(
-                            "substring length ({}) exceeds max position",
-                            e
-                        )))
+                        return Err(EvalError::InvalidParameterValue(
+                            format!("substring length ({}) exceeds max position", e).into(),
+                        ))
                     }
                 }
             }
@@ -6426,7 +6434,7 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
         Ok(index) => index,
         Err(_) => {
             return Err(EvalError::InvalidParameterValue(
-                "field position must be greater than zero".to_owned(),
+                "field position must be greater than zero".into(),
             ))
         }
     };
@@ -6595,7 +6603,7 @@ pub fn build_regex(needle: &str, flags: &str) -> Result<Regex, EvalError> {
             _ => return Err(EvalError::InvalidRegexFlag(f)),
         }
     }
-    Ok(Regex::new(needle.to_string(), case_insensitive)?)
+    Ok(Regex::new(needle, case_insensitive)?)
 }
 
 pub fn hmac_string<'a>(
@@ -6655,7 +6663,7 @@ pub fn hmac_inner<'a>(
             mac.update(to_digest);
             mac.finalize().into_bytes().to_vec()
         }
-        other => return Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
+        other => return Err(EvalError::InvalidHashAlgorithm(other.into())),
     };
     Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
 }
@@ -7106,7 +7114,7 @@ fn array_position<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     }
 
     let skip: usize = match datums.get(2) {
-        Some(Datum::Null) => return Err(EvalError::MustNotBeNull("initial position".to_string())),
+        Some(Datum::Null) => return Err(EvalError::MustNotBeNull("initial position".into())),
         None => 0,
         Some(o) => usize::try_from(o.unwrap_int32())
             .unwrap_or(0)
@@ -7169,7 +7177,7 @@ fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
         let num_prefix_chars = string_prefix.chars().count();
         let num_prefix_chars = i32::try_from(num_prefix_chars)
-            .map_err(|_| EvalError::Int32OutOfRange(num_prefix_chars.to_string()))?;
+            .map_err(|_| EvalError::Int32OutOfRange(num_prefix_chars.to_string().into()))?;
 
         Ok(Datum::Int32(num_prefix_chars + 1))
     } else {
@@ -7187,14 +7195,14 @@ fn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         Ordering::Equal => 0,
         Ordering::Greater => {
             let n = usize::try_from(n).map_err(|_| {
-                EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
+                EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n).into())
             })?;
             // nth from the back
             byte_indices.nth(n).unwrap_or(string.len())
         }
         Ordering::Less => {
             let n = usize::try_from(n.abs() - 1).map_err(|_| {
-                EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
+                EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n).into())
             })?;
             byte_indices.rev().nth(n).unwrap_or(0)
         }
@@ -7213,7 +7221,7 @@ fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         string.len()
     } else if n > 0 {
         let n = usize::try_from(n - 1).map_err(|_| {
-            EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
+            EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n).into())
         })?;
         // nth from the back
         byte_indices.rev().nth(n).unwrap_or(0)
@@ -7223,7 +7231,7 @@ fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else {
         let n = n.abs();
         let n = usize::try_from(n).map_err(|_| {
-            EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
+            EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n).into())
         })?;
         byte_indices.nth(n).unwrap_or(string.len())
     };
@@ -7262,7 +7270,7 @@ fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
         Some(dim) => Datum::Int32(
             dim.length
                 .try_into()
-                .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string()))?,
+                .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string().into()))?,
         ),
     })
 }
@@ -7324,7 +7332,7 @@ fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
             Some(dim) => Datum::Int32(
                 dim.length
                     .try_into()
-                    .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string()))?,
+                    .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string().into()))?,
             ),
             None => Datum::Null,
         },
@@ -7366,7 +7374,7 @@ fn list_length_max<'a>(
         match max_len_on_layer(a, b) {
             Some(l) => match l.try_into() {
                 Ok(c) => Ok(Datum::Int32(c)),
-                Err(_) => Err(EvalError::Int32OutOfRange(l.to_string())),
+                Err(_) => Err(EvalError::Int32OutOfRange(l.to_string().into())),
             },
             None => Ok(Datum::Null),
         }
@@ -7581,7 +7589,7 @@ fn digest_inner<'a>(
         "sha256" => Sha256::digest(bytes).to_vec(),
         "sha384" => Sha384::digest(bytes).to_vec(),
         "sha512" => Sha512::digest(bytes).to_vec(),
-        other => return Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
+        other => return Err(EvalError::InvalidHashAlgorithm(other.into())),
     };
     Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
 }
@@ -7608,11 +7616,11 @@ fn make_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let grantor = Oid(datums[1].unwrap_uint32());
     let privileges = datums[2].unwrap_str();
     let acl_mode = AclMode::parse_multiple_privileges(privileges)
-        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))?;
+        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;
     let is_grantable = datums[3].unwrap_bool();
     if is_grantable {
         return Err(EvalError::Unsupported {
-            feature: "GRANT OPTION".to_string(),
+            feature: "GRANT OPTION".into(),
             discussion_no: None,
         });
     }
@@ -7628,19 +7636,19 @@ fn make_mz_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let grantee: RoleId = datums[0]
         .unwrap_str()
         .parse()
-        .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string()))?;
+        .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string().into()))?;
     let grantor: RoleId = datums[1]
         .unwrap_str()
         .parse()
-        .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string()))?;
+        .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string().into()))?;
     if grantor == RoleId::Public {
         return Err(EvalError::InvalidRoleId(
-            "mz_aclitem grantor cannot be PUBLIC role".to_string(),
+            "mz_aclitem grantor cannot be PUBLIC role".into(),
         ));
     }
     let privileges = datums[2].unwrap_str();
     let acl_mode = AclMode::parse_multiple_privileges(privileges)
-        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))?;
+        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;
 
     Ok(Datum::MzAclItem(MzAclItem {
         grantee,
@@ -7660,13 +7668,13 @@ fn array_fill<'a>(
     let fill = datums[0];
     if matches!(fill, Datum::Array(_)) {
         return Err(EvalError::Unsupported {
-            feature: "array_fill with arrays".to_string(),
+            feature: "array_fill with arrays".into(),
             discussion_no: None,
         });
     }
 
     let arr = match datums[1] {
-        Datum::Null => return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.to_string())),
+        Datum::Null => return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into())),
         o => o.unwrap_array(),
     };
 
@@ -7674,7 +7682,7 @@ fn array_fill<'a>(
         .elements()
         .iter()
         .map(|d| match d {
-            Datum::Null => Err(EvalError::MustNotBeNull(NULL_ELEM_ERR.to_string())),
+            Datum::Null => Err(EvalError::MustNotBeNull(NULL_ELEM_ERR.into())),
             d => Ok(usize::cast_from(u32::reinterpret_cast(d.unwrap_int32()))),
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -7682,14 +7690,14 @@ fn array_fill<'a>(
     let lower_bounds = match datums.get(2) {
         Some(d) => {
             let arr = match d {
-                Datum::Null => return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.to_string())),
+                Datum::Null => return Err(EvalError::MustNotBeNull(NULL_ARR_ERR.into())),
                 o => o.unwrap_array(),
             };
 
             arr.elements()
                 .iter()
                 .map(|l| match l {
-                    Datum::Null => Err(EvalError::MustNotBeNull(NULL_ELEM_ERR.to_string())),
+                    Datum::Null => Err(EvalError::MustNotBeNull(NULL_ELEM_ERR.into())),
                     l => Ok(isize::cast_from(l.unwrap_int32())),
                 })
                 .collect::<Result<Vec<_>, _>>()?
@@ -8006,7 +8014,7 @@ impl VariadicFunc {
                 .nullable(true),
             ListCreate { elem_type } => {
                 // commented out to work around
-                // https://github.com/MaterializeInc/materialize/issues/8963
+                // https://github.com/MaterializeInc/database-issues/issues/2730
                 // soft_assert!(
                 //     input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
                 //     "{}", format!("Args to ListCreate should have types that are compatible with the elem_type.\nArgs:{:#?}\nelem_type:{:#?}", input_types, elem_type)

@@ -37,12 +37,12 @@ use mz_ore::task;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
-use mz_sql::catalog::{CatalogCluster, CatalogSchema};
+use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::plan::ConnectionDetails;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
-    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
+    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS, MAX_CONTINUAL_TASKS,
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
     MAX_MYSQL_CONNECTIONS, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
     MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
@@ -367,13 +367,13 @@ impl Coordinator {
                 }
                 catalog::Op::CreateClusterReplica {
                     cluster_id,
-                    id,
+                    name,
                     config,
                     ..
                 } => {
                     cluster_replicas_to_create.push((
                         *cluster_id,
-                        *id,
+                        name.clone(),
                         config.location.num_processes(),
                     ));
                 }
@@ -563,7 +563,11 @@ impl Coordinator {
             }
         }
         let now = to_datetime((catalog.config().now)());
-        for (cluster_id, replica_id, num_processes) in cluster_replicas_to_create {
+        for (cluster_id, replica_name, num_processes) in cluster_replicas_to_create {
+            let replica_id = catalog
+                .resolve_replica_in_cluster(&cluster_id, &replica_name)
+                .expect("just created")
+                .replica_id();
             cluster_replica_statuses.initialize_cluster_replica_statuses(
                 cluster_id,
                 replica_id,
@@ -588,7 +592,7 @@ impl Coordinator {
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
-        let builtin_update_notify = self
+        let (builtin_update_notify, _) = self
             .builtin_table_update()
             .execute(builtin_table_updates)
             .await;
@@ -627,18 +631,17 @@ impl Coordinator {
             if !peeks_to_drop.is_empty() {
                 for (dropped_name, uuid) in peeks_to_drop {
                     if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
+                        let cancel_reason = PeekResponse::Error(format!(
+                            "query could not complete because {dropped_name} was dropped"
+                        ));
                         self.controller
                             .compute
-                            .cancel_peek(pending_peek.cluster_id, uuid)
+                            .cancel_peek(pending_peek.cluster_id, uuid, cancel_reason)
                             .unwrap_or_terminate("unable to cancel peek");
                         self.retire_execution(
                             StatementEndedExecutionReason::Canceled,
                             pending_peek.ctx_extra,
                         );
-                        // Client may have left.
-                        let _ = pending_peek.sender.send(PeekResponse::Error(format!(
-                            "query could not complete because {dropped_name} was dropped"
-                        )));
                     }
                 }
             }
@@ -667,9 +670,9 @@ impl Coordinator {
             // up external resources (PostgreSQL replication slots and secrets),
             // so we perform that cleanup in a background task.
             //
-            // TODO(materialize#14551): This is inherently best effort. An ill-timed crash
+            // TODO(database-issues#4154): This is inherently best effort. An ill-timed crash
             // means we'll never clean these resources up. Safer cleanup for non-Materialize resources.
-            // See <https://github.com/MaterializeInc/materialize/issues/14551>
+            // See <https://github.com/MaterializeInc/database-issues/issues/4154>
             task::spawn(|| "drop_replication_slots_and_secrets", {
                 let ssh_tunnel_manager = self.connection_context().ssh_tunnel_manager.clone();
                 let secrets_controller = Arc::clone(&self.secrets_controller);
@@ -1321,6 +1324,7 @@ impl Coordinator {
         let mut new_objects_per_schema = BTreeMap::new();
         let mut new_secrets = 0;
         let mut new_roles = 0;
+        let mut new_continual_tasks = 0;
         for op in ops {
             match op {
                 Op::CreateDatabase { .. } => {
@@ -1385,6 +1389,9 @@ impl Coordinator {
                         }
                         CatalogItem::Secret(_) => {
                             new_secrets += 1;
+                        }
+                        CatalogItem::ContinualTask(_) => {
+                            new_continual_tasks += 1;
                         }
                         CatalogItem::Log(_)
                         | CatalogItem::View(_)
@@ -1458,6 +1465,9 @@ impl Coordinator {
                                     CatalogItem::Secret(_) => {
                                         new_secrets -= 1;
                                     }
+                                    CatalogItem::ContinualTask(_) => {
+                                        new_continual_tasks -= 1;
+                                    }
                                     CatalogItem::Log(_)
                                     | CatalogItem::View(_)
                                     | CatalogItem::Index(_)
@@ -1492,7 +1502,8 @@ impl Coordinator {
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
-                    | CatalogItem::Func(_) => {}
+                    | CatalogItem::Func(_)
+                    | CatalogItem::ContinualTask(_) => {}
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
@@ -1507,11 +1518,12 @@ impl Coordinator {
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }
                 | Op::UpdateClusterReplicaConfig { .. }
+                | Op::UpdateSourceReferences { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }
-                | Op::WeirdBuiltinTableUpdates { .. }
+                | Op::WeirdStorageUsageUpdates { .. }
                 | Op::TransactionDryRun => {}
             }
         }
@@ -1692,6 +1704,13 @@ impl Coordinator {
             SystemVars::max_roles,
             "role",
             MAX_ROLES.name(),
+        )?;
+        self.validate_resource_limit(
+            self.catalog().user_continual_tasks().count(),
+            new_continual_tasks,
+            SystemVars::max_continual_tasks,
+            "continual_task",
+            MAX_CONTINUAL_TASKS.name(),
         )?;
         Ok(())
     }

@@ -9,7 +9,6 @@
 
 //! An abstraction presenting as a durable time-varying collection (aka shard)
 
-#![doc = include_str!("../README.md")]
 #![warn(missing_docs, missing_debug_implementations)]
 // #[track_caller] is currently a no-op on async functions, but that hopefully won't be the case
 // forever. So we already annotate those functions now and ignore the compiler warning until
@@ -75,29 +74,6 @@ pub mod operators {
     use mz_dyncfg::Config;
 
     pub mod shard_source;
-
-    // TODO(cfg): Move this next to the use.
-    pub(crate) const PERSIST_SINK_MINIMUM_BATCH_UPDATES: Config<usize> = Config::new(
-        "persist_sink_minimum_batch_updates",
-        0,
-        "\
-    In the compute persist sink, workers with less than the minimum number of \
-    updates will flush their records to single downstream worker to be batched \
-    up there... in the hopes of grouping our updates into fewer, larger \
-    batches.",
-    );
-
-    // TODO(cfg): Move this next to the use.
-    pub(crate) const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: Config<usize> = Config::new(
-        "storage_persist_sink_minimum_batch_updates",
-        // Reasonable default based on our experience in production.
-        1024,
-        "\
-    In the storage persist sink, workers with less than the minimum number of \
-    updates will flush their records to single downstream worker to be batched \
-    up there... in the hopes of grouping our updates into fewer, larger \
-    batches.",
-    );
 
     // TODO(cfg): Move this next to the use.
     pub(crate) const STORAGE_SOURCE_DECODE_FUEL: Config<usize> = Config::new(
@@ -1771,7 +1747,7 @@ mod tests {
         );
     }
 
-    // Regression test for #12131. Snapshot with as_of >= upper would
+    // Regression test for database-issues#3523. Snapshot with as_of >= upper would
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
     #[mz_persist_proc::test(tokio::test)]

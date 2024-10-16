@@ -54,7 +54,7 @@ steps:
         priority: 50
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-aarch64
+          queue: builder-linux-aarch64-mem
 
       - id: build-x86_64
         label: ":bazel: Build x86_64"
@@ -78,7 +78,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-aarch64
+          queue: builder-linux-aarch64-mem
 
       - id: build-wasm
         label: Build WASM
@@ -137,9 +137,9 @@ steps:
         inputs:
           - "*"
         depends_on: []
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         coverage: skip
         sanitizer: skip
 
@@ -152,7 +152,7 @@ steps:
           - "**/Cargo.toml"
           - "**/*.rs"
         depends_on: []
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
           # note: the `x86_64-unknown-linux-gnu` target may not be installed
           queue: builder-linux-x86_64
@@ -273,7 +273,7 @@ steps:
           composition: cargo-test
     agents:
       # Because of scratch-aws-access
-      queue: builder-linux-aarch64
+      queue: builder-linux-aarch64-mem
 
   - id: testdrive
     label: "Testdrive %N"
@@ -305,7 +305,7 @@ steps:
     label: "Fast SQL logic tests %N"
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    parallelism: 3
+    parallelism: 5
     inputs: [test/sqllogictest]
     plugins:
       - ./ci/plugins/mzcompose:
@@ -326,6 +326,7 @@ steps:
 
   - id: legacy-upgrade
     label: "Legacy upgrade tests (last version from docs)"
+    parallelism: 2
     depends_on: build-aarch64
     timeout_in_minutes: 60
     plugins:
@@ -395,7 +396,7 @@ steps:
 
       - id: mysql-cdc-resumption
         label: "MySQL CDC resumption tests %N"
-        parallelism: 3
+        parallelism: 4
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-cdc-resumption]
@@ -420,7 +421,8 @@ steps:
     key: postgres-tests
     steps:
       - id: pg-cdc
-        label: "Postgres CDC tests"
+        label: "Postgres CDC tests %N"
+        parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
@@ -433,7 +435,7 @@ steps:
 
       - id: pg-cdc-resumption
         label: "Postgres CDC resumption tests %N"
-        parallelism: 2
+        parallelism: 4
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc-resumption]
@@ -441,7 +443,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-resumption
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          # Larger agent for faster runtime
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: pg-rtr
         label: "Postgres RTR tests"
@@ -549,7 +552,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-rtr
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          # Larger agent to run test faster
+          queue: hetzner-aarch64-8cpu-16gb
 
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
@@ -596,33 +600,6 @@ steps:
               composition: platform-checks
               args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID"]
 
-  - id: cloudtest
-    label: Cloudtest %N
-    depends_on: build-aarch64
-    parallelism: 8
-    timeout_in_minutes: 60
-    inputs:
-      - test/cloudtest
-      - misc/python/materialize/cloudtest
-      - misc/kind
-    env:
-      CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/cloudtest:
-          args:
-            [
-              --exitfirst,
-              -m,
-              "not long and not node_recovery",
-              test/cloudtest/,
-            ]
-    agents:
-      # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
-      # queue: hetzner-aarch64-8cpu-16gb
-      queue: linux-aarch64
-    sanitizer: skip
-
   - id: source-sink-errors
     label: "Source/Sink Error Reporting %N"
     depends_on: build-aarch64
@@ -633,16 +610,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
-
-  - id: backup-restore
-    label: "CRDB / Persist backup and restore"
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: backup-restore
 
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
@@ -655,6 +622,7 @@ steps:
             [
               --scenario=KafkaUpsertUnique,
               --other-tag=common-ancestor,
+              --ignore-other-tag-missing,
             ]
     coverage: skip
     agents:
@@ -673,7 +641,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: replica-isolation
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      # Runs faster with larger agent
+      queue: hetzner-aarch64-8cpu-16gb
 
   - id: persistence
     label: Persistence tests
@@ -773,7 +742,7 @@ steps:
           composition: rtr-combined
     agents:
       queue: hetzner-aarch64-8cpu-16gb
-    skip: "Flakes because of materialize#29289"
+    skip: "Flakes because of database-issues#8489"
 
   - id: skip-version-upgrade
     label: "Skip Version Upgrade"

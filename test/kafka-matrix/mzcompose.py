@@ -12,6 +12,8 @@ Test various Confluent Platform d Redpanda versions to make sure they are all
 working with Materialize.
 """
 
+from materialize import buildkite
+from materialize.mzcompose import DEFAULT_CONFLUENT_PLATFORM_VERSION
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
@@ -25,25 +27,30 @@ REDPANDA_VERSIONS = [
     "v22.3.25",
     "v23.1.21",
     "v23.2.29",
-    "v23.3.18",
-    "v24.1.9",
+    "v23.3.21",
+    "v24.1.17",
     REDPANDA_VERSION,
+    "latest",
 ]
 
 CONFLUENT_PLATFORM_VERSIONS = [
-    "7.0.14",
-    "7.1.12",
-    "7.2.10",
-    "7.3.8",
-    "7.4.4",
-    "7.5.4",
-    "7.6.0",
+    "7.0.16",
+    "7.1.14",
+    "7.2.12",
+    "7.3.10",
+    "7.4.7",
+    "7.5.6",
+    "7.6.3",
+    DEFAULT_CONFLUENT_PLATFORM_VERSION,
     "latest",
 ]
 
 SERVICES = [
     Materialized(),
-    Testdrive(volumes_extra=["../testdrive:/workdir/testdrive"], default_timeout="60s"),
+    # Occasional timeouts in CI with 60s timeout
+    Testdrive(
+        volumes_extra=["../testdrive:/workdir/testdrive"], default_timeout="120s"
+    ),
     Redpanda(),
     Zookeeper(),
     Kafka(),
@@ -63,14 +70,24 @@ TD_CMD = [
 def workflow_default(c: Composition) -> None:
     c.up("localstack")
 
-    for redpanda_version in REDPANDA_VERSIONS:
+    redpanda_versions = buildkite.shard_list(REDPANDA_VERSIONS, lambda v: v)
+    print(
+        f"Redpanda versions in shard with index {buildkite.get_parallelism_index()}: {redpanda_versions}"
+    )
+
+    for redpanda_version in redpanda_versions:
         print(f"--- Testing Redpanda {redpanda_version}")
         with c.override(Redpanda(version=redpanda_version)):
             c.down(destroy_volumes=True)
             c.up("redpanda", "materialized")
             c.run_testdrive_files(*TD_CMD)
 
-    for confluent_version in CONFLUENT_PLATFORM_VERSIONS:
+    confluent_versions = buildkite.shard_list(CONFLUENT_PLATFORM_VERSIONS, lambda v: v)
+    print(
+        f"Confluent Platform versions in shard with index {buildkite.get_parallelism_index()}: {confluent_versions}"
+    )
+
+    for confluent_version in confluent_versions:
         print(f"--- Testing Confluent Platform {confluent_version}")
         with c.override(
             Zookeeper(tag=confluent_version),

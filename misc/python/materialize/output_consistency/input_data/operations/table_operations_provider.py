@@ -61,6 +61,10 @@ from materialize.output_consistency.operation.operation import (
     OperationRelevance,
 )
 
+TAG_TABLE_FUNCTION_WITH_NON_NUMERIC_SORT_ORDER = (
+    "table_function_with_non_numeric_sort_order"
+)
+
 TABLE_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 TABLE_OPERATION_TYPES.append(
@@ -129,6 +133,7 @@ TABLE_OPERATION_TYPES.append(
         NumericReturnTypeSpec(only_integer=True),
         is_table_function=True,
         comment="Returns indices of the specified array dimension",
+        tags={TAG_TABLE_FUNCTION_WITH_NON_NUMERIC_SORT_ORDER},
     ),
 )
 
@@ -141,7 +146,7 @@ TABLE_OPERATION_TYPES.append(
         ],
         StringReturnTypeSpec(),
         is_table_function=True,
-        tags={TAG_REGEX},
+        tags={TAG_REGEX, TAG_TABLE_FUNCTION_WITH_NON_NUMERIC_SORT_ORDER},
     ),
 )
 
@@ -153,7 +158,7 @@ TABLE_OPERATION_TYPES.append(
         is_table_function=True,
         # It is not possible to specify the order so that inconsistencies are inevitable.
         is_pg_compatible=False,
-        tags={TAG_REGEX},
+        tags={TAG_REGEX, TAG_TABLE_FUNCTION_WITH_NON_NUMERIC_SORT_ORDER},
     ),
 )
 
@@ -165,6 +170,7 @@ TABLE_OPERATION_TYPES.append(
         ],
         CollectionEntryReturnTypeSpec(param_index_to_take_type=0),
         is_table_function=True,
+        tags={TAG_TABLE_FUNCTION_WITH_NON_NUMERIC_SORT_ORDER},
     ),
 )
 
@@ -176,6 +182,7 @@ TABLE_OPERATION_TYPES.append(
         ],
         CollectionEntryReturnTypeSpec(param_index_to_take_type=0),
         is_table_function=True,
+        tags={TAG_TABLE_FUNCTION_WITH_NON_NUMERIC_SORT_ORDER},
     ),
 )
 
@@ -187,5 +194,6 @@ TABLE_OPERATION_TYPES.append(
         ],
         RecordReturnTypeSpec(),
         is_table_function=True,
+        tags={TAG_TABLE_FUNCTION_WITH_NON_NUMERIC_SORT_ORDER},
     ),
 )

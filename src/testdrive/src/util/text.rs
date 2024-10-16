@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use atty::Stream;
 use similar::{ChangeTag, TextDiff};
+use std::io::IsTerminal;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 /// Trims trailing whitespace from each line of `s`.
@@ -22,7 +22,7 @@ pub fn trim_trailing_space(s: &str) -> String {
 
 /// Prints a colorized line diff of `expected` and `actual`.
 pub fn print_diff(expected: &str, actual: &str) {
-    let color_choice = if atty::is(Stream::Stderr) {
+    let color_choice = if std::io::stderr().is_terminal() {
         ColorChoice::Auto
     } else {
         ColorChoice::Never

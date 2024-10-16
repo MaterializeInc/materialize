@@ -128,7 +128,7 @@ Not supported. Support is not planned for the near term.
 A huge thank you to [Josh Wills](https://github.com/jwills), who created the
 original version of this adapter. 🤠
 
-[#5266]: https://github.com/MaterializeInc/materialize/issues/5266
+[#5266]: https://github.com/MaterializeInc/database-issues/issues/1623
 [dbt]: https://www.getdbt.com/
 [index]: https://materialize.com/docs/sql/create-index/
 [Materialize]: http://materialize.com

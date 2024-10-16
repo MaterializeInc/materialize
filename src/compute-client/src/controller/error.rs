@@ -18,9 +18,10 @@
 //! of each method and make it easy for callers to ensure that all possible errors are handled.
 
 use mz_repr::GlobalId;
+use mz_storage_types::read_holds::ReadHoldError;
 use thiserror::Error;
 
-use crate::controller::{instance, ComputeInstanceId, ReplicaId};
+use crate::controller::{ComputeInstanceId, ReplicaId};
 
 /// The error returned by replica-targeted peeks and subscribes when the target replica
 /// disconnects.
@@ -50,10 +51,10 @@ pub struct HydrationCheckBadTarget(pub Vec<ReplicaId>);
 /// Errors arising during compute collection lookup.
 #[derive(Error, Debug)]
 pub enum CollectionLookupError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
 }
@@ -73,15 +74,12 @@ impl From<CollectionMissing> for CollectionLookupError {
 /// Errors arising during compute replica creation.
 #[derive(Error, Debug)]
 pub enum ReplicaCreationError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("replica exists already: {0}")]
     ReplicaExists(ReplicaId),
-    /// TODO(materialize#25239): Add documentation.
-    #[error("collection does not exist: {0}")]
-    CollectionMissing(GlobalId),
 }
 
 impl From<InstanceMissing> for ReplicaCreationError {
@@ -90,25 +88,13 @@ impl From<InstanceMissing> for ReplicaCreationError {
     }
 }
 
-impl From<instance::ReplicaExists> for ReplicaCreationError {
-    fn from(error: instance::ReplicaExists) -> Self {
-        Self::ReplicaExists(error.0)
-    }
-}
-
-impl From<CollectionMissing> for ReplicaCreationError {
-    fn from(error: CollectionMissing) -> Self {
-        Self::CollectionMissing(error.0)
-    }
-}
-
 /// Errors arising during compute replica removal.
 #[derive(Error, Debug)]
 pub enum ReplicaDropError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
 }
@@ -116,12 +102,6 @@ pub enum ReplicaDropError {
 impl From<InstanceMissing> for ReplicaDropError {
     fn from(error: InstanceMissing) -> Self {
         Self::InstanceMissing(error.0)
-    }
-}
-
-impl From<instance::ReplicaMissing> for ReplicaDropError {
-    fn from(error: instance::ReplicaMissing) -> Self {
-        Self::ReplicaMissing(error.0)
     }
 }
 
@@ -159,16 +139,17 @@ impl From<InstanceMissing> for DataflowCreationError {
     }
 }
 
-impl From<instance::DataflowCreationError> for DataflowCreationError {
-    fn from(error: instance::DataflowCreationError) -> Self {
-        use instance::DataflowCreationError::*;
+impl From<CollectionMissing> for DataflowCreationError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
+    }
+}
+
+impl From<ReadHoldError> for DataflowCreationError {
+    fn from(error: ReadHoldError) -> Self {
         match error {
-            CollectionMissing(id) => Self::CollectionMissing(id),
-            ReplicaMissing(id) => Self::ReplicaMissing(id),
-            MissingAsOf => Self::MissingAsOf,
-            SinceViolation(id) => Self::SinceViolation(id),
-            EmptyAsOfForSubscribe => Self::EmptyAsOfForSubscribe,
-            EmptyAsOfForCopyTo => Self::EmptyAsOfForCopyTo,
+            ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
+            ReadHoldError::SinceViolation(id) => Self::SinceViolation(id),
         }
     }
 }
@@ -176,16 +157,16 @@ impl From<instance::DataflowCreationError> for DataflowCreationError {
 /// Errors arising during peek processing.
 #[derive(Error, Debug)]
 pub enum PeekError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
 }
@@ -196,13 +177,17 @@ impl From<InstanceMissing> for PeekError {
     }
 }
 
-impl From<instance::PeekError> for PeekError {
-    fn from(error: instance::PeekError) -> Self {
-        use instance::PeekError::*;
+impl From<CollectionMissing> for PeekError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
+    }
+}
+
+impl From<ReadHoldError> for PeekError {
+    fn from(error: ReadHoldError) -> Self {
         match error {
-            CollectionMissing(id) => Self::CollectionMissing(id),
-            ReplicaMissing(id) => Self::ReplicaMissing(id),
-            SinceViolation(id) => Self::SinceViolation(id),
+            ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
+            ReadHoldError::SinceViolation(id) => Self::SinceViolation(id),
         }
     }
 }
@@ -210,10 +195,10 @@ impl From<instance::PeekError> for PeekError {
 /// Errors arising during collection updates.
 #[derive(Error, Debug)]
 pub enum CollectionUpdateError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
 }
@@ -233,13 +218,13 @@ impl From<CollectionMissing> for CollectionUpdateError {
 /// Errors arising during collection read policy assignment.
 #[derive(Error, Debug)]
 pub enum ReadPolicyError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("collection is write-only: {0}")]
     WriteOnlyCollection(GlobalId),
 }
@@ -250,20 +235,16 @@ impl From<InstanceMissing> for ReadPolicyError {
     }
 }
 
-impl From<instance::ReadPolicyError> for ReadPolicyError {
-    fn from(error: instance::ReadPolicyError) -> Self {
-        use instance::ReadPolicyError::*;
-        match error {
-            CollectionMissing(id) => Self::CollectionMissing(id),
-            WriteOnlyCollection(id) => Self::WriteOnlyCollection(id),
-        }
+impl From<CollectionMissing> for ReadPolicyError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
     }
 }
 
 /// Errors arising during orphan removal.
 #[derive(Error, Debug)]
 pub enum RemoveOrphansError {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     #[error("orchestrator error: {0}")]
     OrchestratorError(anyhow::Error),
 }

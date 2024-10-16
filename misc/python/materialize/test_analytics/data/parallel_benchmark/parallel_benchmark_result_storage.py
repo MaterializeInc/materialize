@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from dataclasses import dataclass
+from math import isfinite
 
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
@@ -50,7 +51,7 @@ class ParallelBenchmarkResultStorage(BaseDataStorage):
         sql_statements = []
 
         for result_entry in results:
-            # TODO: remove NULL castings when materialize#27429 is resolved
+            # TODO: remove NULL castings when database-issues#8100 is resolved
             sql_statements.append(
                 f"""
                 INSERT INTO parallel_benchmark_result
@@ -99,7 +100,7 @@ class ParallelBenchmarkResultStorage(BaseDataStorage):
                     {result_entry.p99_9999},
                     {result_entry.p99_99999},
                     {result_entry.p99_999999},
-                    {result_entry.std},
+                    {result_entry.std if isfinite(result_entry.std) else 'NULL::FLOAT'},
                     {result_entry.slope}
                 ;
                 """

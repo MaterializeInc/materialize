@@ -8,10 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use bytesize::ByteSize;
+use ipnet::IpNet;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
@@ -72,7 +72,7 @@ pub struct StateConfig {
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
     /// IP Addresses which will be used for egress.
-    pub egress_ips: Vec<Ipv4Addr>,
+    pub egress_addresses: Vec<IpNet>,
     /// Context for generating an AWS Principal.
     pub aws_principal_context: Option<AwsPrincipalContext>,
     /// Supported AWS PrivateLink availability zone ids.

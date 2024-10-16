@@ -381,7 +381,7 @@ where
 
             errors.push(errs);
 
-            // TODO(vmarcos): We should implement further arrangement specialization here (materialize#22104).
+            // TODO(vmarcos): We should implement further arrangement specialization here (database-issues#6659).
             // By knowing how types propagate through joins we could specialize intermediate
             // arrangements as well, either in values or eventually in keys.
             let arranged = keyed.mz_arrange::<RowRowSpine<_, _>>("JoinStage");

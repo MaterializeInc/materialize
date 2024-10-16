@@ -99,8 +99,23 @@ idx_c  FOR  240000
 # Test subsource propagation. Test sources with and without subsources and view dependencies to
 # ensure the alter code correctly ignores the views.
 statement ok
-CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION WITH (RETAIN HISTORY = FOR '1m')
 ----
+
+statement ok
+CREATE TABLE accounts FROM SOURCE auction_house (REFERENCE accounts);
+
+statement ok
+CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);
+
+statement ok
+CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
+
+statement ok
+CREATE TABLE organizations FROM SOURCE auction_house (REFERENCE organizations);
+
+statement ok
+CREATE TABLE users FROM SOURCE auction_house (REFERENCE users);
 
 statement ok
 CREATE VIEW auction_house_view AS SELECT * FROM users
@@ -115,13 +130,22 @@ CREATE VIEW counter_view AS SELECT * FROM counter
 ----
 
 query TTT
-SELECT o.name, h.strategy, h.value FROM mz_internal.mz_history_retention_strategies h
+SELECT o.name, h.strategy, h.value
+FROM mz_internal.mz_history_retention_strategies h
 JOIN mz_objects o ON o.id = h.id
+LEFT OUTER JOIN mz_sources s ON s.id = o.id
+LEFT OUTER JOIN mz_tables t ON t.id = o.id
 WHERE o.id LIKE 'u%'
+AND (
+    o.oid IN (SELECT oid FROM mz_sources)
+    OR o.oid IN (SELECT oid FROM mz_tables WHERE source_id IN (SELECT id FROM mz_sources WHERE name = 'auction_house'))
+    OR o.oid IN (SELECT oid FROM mz_indexes WHERE on_id IN (SELECT id FROM mz_views WHERE id like 'u%'))
+    OR o.name = 'tab_a'
+)
 ORDER BY o.name
 ----
 accounts  FOR  1000
-auction_house  FOR  1000
+auction_house  FOR  60000
 auction_house_progress  FOR  1000
 auctions  FOR  1000
 bids  FOR  1000
@@ -148,19 +172,19 @@ JOIN mz_objects o ON o.id = h.id
 WHERE o.id LIKE 'u%'
 ORDER BY o.name
 ----
-accounts  FOR  60000
+accounts  FOR  1000
 auction_house  FOR  60000
 auction_house_progress  FOR  1000
-auctions  FOR  60000
-bids  FOR  60000
+auctions  FOR  1000
+bids  FOR  1000
 counter  FOR  60000
 counter_progress  FOR  1000
 idx_a  FOR  420000
 idx_b  FOR  360000
 idx_c  FOR  240000
-organizations  FOR  60000
+organizations  FOR  1000
 tab_a  FOR  1000
-users  FOR  60000
+users  FOR  1000
 
 statement ok
 ALTER SOURCE counter RESET (RETAIN HISTORY)

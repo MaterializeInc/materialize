@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/6305
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/1947
 
 > CREATE TABLE t1 (i1 INT8);
 

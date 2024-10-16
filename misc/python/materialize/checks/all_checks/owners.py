@@ -126,6 +126,8 @@ class Owners(Check):
         return Testdrive(
             dedent(
                 """
+                > SET SESSION enable_session_rbac_checks TO true
+
                 $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEROLE ON SYSTEM TO materialize
 
@@ -150,7 +152,12 @@ class Owners(Check):
         return [
             Testdrive(s)
             for s in [
-                self._create_objects("owner_role_01", 3)
+                dedent(
+                    """
+                        > SET SESSION enable_session_rbac_checks TO true
+                    """
+                )
+                + self._create_objects("owner_role_01", 3)
                 + self._create_objects("owner_role_01", 4)
                 + self._alter_object_owners(4)
                 + dedent(
@@ -194,6 +201,12 @@ class Owners(Check):
 
     def validate(self) -> Testdrive:
         return Testdrive(
+            dedent(
+                """
+                > SET SESSION enable_session_rbac_checks TO true
+                """
+            )
+            +
             # materialize role is not allowed to drop the objects since it is
             # not the owner, verify this:
             (

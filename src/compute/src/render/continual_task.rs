@@ -170,8 +170,8 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
                 let name = source_id.to_string();
                 // Keep only the inserts.
                 //
-                // TODO(ct): At some point this will become a user option to instead
-                // keep only deletes.
+                // At some point this will become a user option to instead keep
+                // only deletes.
                 let oks = oks.inner.filter(|(_, _, diff)| *diff > 0);
                 // Grab the original times for use in the sink operator.
                 let times = oks.map(|(_row, ts, diff)| ((), ts, diff));
@@ -261,7 +261,7 @@ where
         let sink_write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
         collection.sink_write_frontier = Some(Rc::clone(&sink_write_frontier));
 
-        // TODO(ct): Obey `compute_state.read_only_rx`
+        // TODO(ct1): Obey `compute_state.read_only_rx`
         //
         // Seemingly, the read-only env needs to tail the output shard and keep
         // historical updates around until it sees that the output frontier
@@ -291,7 +291,7 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
     let scope = to_append.scope();
     let mut op = AsyncOperatorBuilder::new(format!("ct_sink({})", name), scope.clone());
 
-    // TODO(ct): This all works perfectly well data parallel (assuming we
+    // TODO(ct2): This all works perfectly well data parallel (assuming we
     // broadcast the append_times). We just need to hook it up to the
     // multi-worker persist-sink, but that requires some refactoring. This would
     // also remove the need for this to be an async timely operator.
@@ -393,11 +393,22 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
             debug!("ct_sink got write {:?}: {:?}", new_upper, to_append);
 
             let mut expected_upper = write_handle.shared_upper();
-            while PartialOrder::less_than(&expected_upper, &new_upper) {
+            loop {
+                if !PartialOrder::less_than(&expected_upper, &new_upper) {
+                    state.output_progress = expected_upper.clone();
+                    debug!("ct_sink skipping {:?}", new_upper.elements());
+                    break;
+                }
                 let res = write_handle
                     .compare_and_append(&to_append, expected_upper.clone(), new_upper.clone())
                     .await
                     .expect("usage was valid");
+                debug!(
+                    "ct_sink write res {:?}-{:?}: {:?}",
+                    expected_upper.elements(),
+                    new_upper.elements(),
+                    res
+                );
                 match res {
                     Ok(()) => {
                         state.output_progress = new_upper;
@@ -445,8 +456,6 @@ impl<D: Ord> SinkState<D, Timestamp> {
     }
 
     /// Returns data to write to the output, if any, and the new upper to use.
-    ///
-    /// TODO(ct): Remove the Vec allocation here.
     fn process(&mut self) -> Option<(Antichain<Timestamp>, Vec<((&D, &()), &Timestamp, &Diff)>)> {
         // We can only append at times >= the output_progress, so pop off
         // anything unnecessary.
@@ -500,7 +509,7 @@ impl<D: Ord> SinkState<D, Timestamp> {
         for ((_, t), _) in self.to_append.iter_mut() {
             t.advance_by(AntichainRef::new(as_of))
         }
-        // TODO(ct): Metrics for vec len and cap.
+        // TODO(ct2): Metrics for vec len and cap.
         self.to_append.consolidate();
 
         let append_data = self
@@ -512,7 +521,7 @@ impl<D: Ord> SinkState<D, Timestamp> {
     }
 }
 
-// TODO(ct): Write this as a non-async operator.
+// TODO(ct2): Write this as a non-async operator.
 //
 // Unfortunately, we can _almost_ use the stock `delay` operator, but not quite.
 // This must advance both data and the output frontier forward, while delay only
@@ -558,7 +567,7 @@ where
     output_stream.as_collection()
 }
 
-// TODO(ct): Write this as a non-async operator.
+// TODO(ct2): Write this as a non-async operator.
 fn step_forward<G, D, R>(name: &str, input: Collection<G, D, R>) -> Collection<G, D, R>
 where
     G: Scope<Timestamp = Timestamp>,

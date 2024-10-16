@@ -421,7 +421,7 @@ SELECT small.c, large.d FROM small LEFT JOIN large ON small.c = large.b AND larg
 27  NULL
 30  NULL
 
-# Lookup joins against interleaved tables. Regression test for #28981.
+# Lookup joins against interleaved tables. Regression test for materialize#28981.
 # This is now tested more thoroughly by joinreader_test.go.
 
 statement ok

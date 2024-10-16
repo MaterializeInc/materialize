@@ -40,7 +40,7 @@ ALTER TABLE other.t REPLICA IDENTITY FULL;
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 ! CREATE TABLE t FROM SOURCE mz_source (REFERENCE t);
-contains: reference to t is ambiguous
+contains: reference t is ambiguous
 
 > CREATE TABLE t FROM SOURCE mz_source (REFERENCE public.t);
 

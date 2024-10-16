@@ -113,7 +113,7 @@ use mz_timely_util::builder_async::{
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{Header, OwnedHeaders, ToBytes};
-use rdkafka::producer::{BaseProducer, BaseRecord, Producer};
+use rdkafka::producer::{BaseRecord, Producer, ThreadedProducer};
 use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -219,7 +219,7 @@ struct TransactionalProducer {
     /// A task to periodically refresh the partition count.
     _partition_count_task: AbortOnDropHandle<()>,
     /// The underlying Kafka producer.
-    producer: BaseProducer<TunnelingClientContext<MzClientContext>>,
+    producer: ThreadedProducer<TunnelingClientContext<MzClientContext>>,
     /// A handle to the metrics associated with this sink.
     statistics: SinkStatistics,
     /// The number of messages staged for the currently open transactions. It is reset to zero
@@ -293,7 +293,7 @@ impl TransactionalProducer {
             collect_statistics(stats_receiver, Arc::clone(&metrics)),
         );
 
-        let producer: BaseProducer<_> = connection
+        let producer: ThreadedProducer<_> = connection
             .connection
             .create_with_context(storage_configuration, ctx, &options, InTask::Yes)
             .await?;
@@ -396,7 +396,9 @@ impl TransactionalProducer {
     /// status in case of failure.
     async fn spawn_blocking<F, R>(&self, f: F) -> Result<R, ContextCreationError>
     where
-        F: FnOnce(BaseProducer<TunnelingClientContext<MzClientContext>>) -> Result<R, KafkaError>
+        F: FnOnce(
+                ThreadedProducer<TunnelingClientContext<MzClientContext>>,
+            ) -> Result<R, KafkaError>
             + Send
             + 'static,
         R: Send + 'static,
@@ -434,7 +436,7 @@ impl TransactionalProducer {
             // internal use, so we silently drop any such user-specified
             // headers. While this behavior is documented, it'd be a nicer UX to
             // send a warning or error somewhere. Unfortunately sinks don't have
-            // anywhere user-visible to send errors. See #17672.
+            // anywhere user-visible to send errors. See database-issues#5148.
             if header.key.starts_with("materialize-") {
                 continue;
             }
@@ -1177,7 +1179,7 @@ fn parse_progress_record(payload: &[u8]) -> Result<ProgressRecord, anyhow::Error
 
 /// Fetches the partition count for the identified topic.
 async fn fetch_partition_count(
-    producer: &BaseProducer<TunnelingClientContext<MzClientContext>>,
+    producer: &ThreadedProducer<TunnelingClientContext<MzClientContext>>,
     sink_id: GlobalId,
     topic_name: &str,
 ) -> Result<u64, anyhow::Error> {
@@ -1211,7 +1213,7 @@ async fn fetch_partition_count(
 /// When an updated partition count is discovered, invokes
 /// `update_partition_count` with the new partition count.
 async fn fetch_partition_count_loop<F>(
-    producer: BaseProducer<TunnelingClientContext<MzClientContext>>,
+    producer: ThreadedProducer<TunnelingClientContext<MzClientContext>>,
     sink_id: GlobalId,
     topic_name: String,
     interval: Duration,
@@ -1358,28 +1360,30 @@ fn encode_collection<G: Scope>(
                         let mut headers = vec![];
                         if connection.headers_index.is_some() || connection.partition_by.is_some() {
                             // Header values and partition by values are derived from the row that
-                            // produces an event. But only the upsert envelope makes it unambiguous
-                            // as to whether to use the `before` or `after` from the event. The rule
-                            // is simple: use `after` if it exists (insertions and updates),
-                            // otherwise fall back to `before` (deletions).
+                            // produces an event. But it is ambiguous whether to use the `before` or
+                            // `after` from the event. The rule applied here is simple: use `after`
+                            // if it exists (insertions and updates), otherwise fall back to `before`
+                            // (deletions).
                             //
-                            // The assertions and unwrapping are safe here because the SQL planner
-                            // ensures that neither `headers_index` nor `partition_by` is set with
-                            // non-upsert envelopes.
-                            assert!(envelope == SinkEnvelope::Upsert);
-                            let unambiguous_row = value
+                            // It is up to the SQL planner to ensure this produces sensible results.
+                            // (When using the upsert envelope and both `before` and `after` are
+                            // present, it's always unambiguous to use `after` because that's all
+                            // that will be present in the Kafka message; when using the Debezium
+                            // envelope, it's okay to refer to columns in the key because those
+                            // are guaranteed to be the same in both `before` and `after`.)
+                            let row = value
                                 .after
                                 .as_ref()
                                 .or(value.before.as_ref())
                                 .expect("one of before or after must be set");
-                            let unambiguous_row = datums.borrow_with(unambiguous_row);
+                            let row = datums.borrow_with(row);
 
                             if let Some(i) = connection.headers_index {
-                                headers = encode_headers(unambiguous_row[i]);
+                                headers = encode_headers(row[i]);
                             }
 
                             if let Some(partition_by) = &connection.partition_by {
-                                hash = Some(evaluate_partition_by(partition_by, &unambiguous_row));
+                                hash = Some(evaluate_partition_by(partition_by, &row));
                             }
                         }
                         let (key, hash) = match key {
@@ -1453,7 +1457,7 @@ fn evaluate_partition_by(partition_by: &MirScalarExpr, row: &[Datum]) -> u64 {
     // to 0 is somewhat surpising. Ideally, we would put the sink in a
     // permanently errored state if the partition by expression produces an
     // error or invalid value. But we don't presently have a way for sinks to
-    // report errors (see #17688), so the current behavior was determined to be
+    // report errors (see materialize#17688), so the current behavior was determined to be
     // the best available option. The behavior is clearly documented in the
     // user-facing `CREATE SINK` docs.
     let temp_storage = RowArena::new();

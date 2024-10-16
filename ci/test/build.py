@@ -25,7 +25,7 @@ from materialize.xcompile import Arch
 DEBUGINFO_S3_BUCKET = "materialize-debuginfo"
 
 # The binaries for which debuginfo should be uploaded to S3 and Polar Signals.
-DEBUGINFO_BINS = ["environmentd", "clusterd"]
+DEBUGINFO_BINS = ["environmentd", "clusterd", "balancerd"]
 
 
 def main() -> None:
@@ -93,7 +93,7 @@ def maybe_upload_debuginfo(
 
     for bin in bins:
         if repo.rd.bazel:
-            options = ["--config=release"] if repo.rd.release_mode else []
+            options = repo.rd.bazel_config()
             paths = bazel.output_paths(bazel_bins[bin], options)
             assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
             bin_path = paths[0]
@@ -162,7 +162,7 @@ def maybe_upload_debuginfo(
             print(f"Constructing source tarball for {bin}...")
             with tempfile.NamedTemporaryFile() as tarball:
                 p1 = subprocess.Popen(
-                    [*repo.rd.tool("llvm-dwarfdump"), "--show-sources", bin_path],
+                    ["llvm-dwarfdump", "--show-sources", bin_path],
                     stdout=subprocess.PIPE,
                 )
                 p2 = subprocess.Popen(

@@ -221,21 +221,20 @@ impl PreDelimitedFormat {
             PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
             PreDelimitedFormat::Json => {
                 let j = mz_repr::adt::jsonb::Jsonb::from_slice(bytes).map_err(|e| {
-                    DecodeErrorKind::Bytes(format!(
-                        "Failed to decode JSON: {}",
-                        e.display_with_causes(),
-                    ))
+                    DecodeErrorKind::Bytes(
+                        format!("Failed to decode JSON: {}", e.display_with_causes(),).into(),
+                    )
                 })?;
                 Ok(Some(j.into_row()))
             }
             PreDelimitedFormat::Text => {
                 let s = std::str::from_utf8(bytes)
-                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".to_string()))?;
+                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".into()))?;
                 Ok(Some(Row::pack(Some(Datum::String(s)))))
             }
             PreDelimitedFormat::Regex(regex, row_buf) => {
                 let s = std::str::from_utf8(bytes)
-                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".to_string()))?;
+                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".into()))?;
                 let captures = match regex.captures(s) {
                     Some(captures) => captures,
                     None => return Ok(None),
@@ -429,9 +428,10 @@ async fn decode_delimited(
                     None => decoder.eof(&mut remaining_buf)?,
                 }
             } else {
-                Err(DecodeErrorKind::Text(format!(
-                    "Unexpected bytes remaining for decoded value: {remaining_buf:?}"
-                )))
+                Err(DecodeErrorKind::Text(
+                    format!("Unexpected bytes remaining for decoded value: {remaining_buf:?}")
+                        .into(),
+                ))
             }
         }
         Err(err) => Err(err),

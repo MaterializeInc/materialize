@@ -10,7 +10,7 @@
 $ set-arg-default default-replica-size=1
 $ set-arg-default single-replica-cluster=quickstart
 
-# TODO(def-) Remove when materialize#29397 and materialize#29435 are fixed
+# TODO(def-) Remove when database-issues#8515 and database-issues#8526 are fixed
 $ skip-if
 SELECT true
 
@@ -32,6 +32,7 @@ contains: not supported
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_create_table_from_source = true
+ALTER SYSTEM SET enable_load_generator_key_value = true
 
 #
 # Multi-output load generator source using source-fed tables
@@ -54,7 +55,24 @@ ALTER SYSTEM SET enable_create_table_from_source = true
 > SELECT count(*) FROM bids2
 255
 
+
+# Validate that the available source references table was correctly populated
+> SELECT u.name, u.namespace, u.columns
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_references u ON s.id = u.source_id
+  WHERE
+  s.name = 'auction_house'
+  ORDER BY u.name;
+accounts auction {id,org_id,balance}
+auctions auction {id,seller,item,end_time}
+bids auction {id,buyer,auction_id,amount,bid_time}
+organizations auction {id,name}
+users auction {id,org_id,name}
+
 > DROP SOURCE auction_house CASCADE;
+
+> SELECT count(*) FROM mz_internal.mz_source_references;
+0
 
 #
 # Single-output load generator source using source-fed tables
@@ -280,7 +298,7 @@ var1 4444 12
 ! SELECT * FROM mysql_table_3;
 contains:unknown catalog item 'mysql_table_3'
 
-# TODO(def-) Remove when materialize#29397 and materialize#29435 are fixed
+# TODO(def-) Remove when database-issues#8515 and database-issues#8526 are fixed
 $ skip-end
 
 #
@@ -336,6 +354,10 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
+> CREATE TABLE avro_table_append_cols (a, b) FROM SOURCE avro_source (REFERENCE "testdrive-avroavro-${testdrive.seed}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+
 > SELECT * from avro_table_upsert
 key           f1       f2
 ---------------------------
@@ -353,3 +375,53 @@ goose    1
 moose    1
 moose    2
 moose    42
+
+> SELECT * from avro_table_append_cols
+a       b
+---------------
+fish     1000
+geese    2
+geese    56
+goose    1
+moose    1
+moose    2
+moose    42
+
+
+#
+# Key-value load generator source using source-fed tables
+#
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_table_from_source = true
+ALTER SYSTEM SET enable_load_generator_key_value = true
+
+> CREATE SOURCE keyvalue
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR KEY VALUE (
+    KEYS 16,
+    PARTITIONS 4,
+    SNAPSHOT ROUNDS 3,
+    SEED 123,
+    VALUE SIZE 10,
+    BATCH SIZE 2,
+    TICK INTERVAL '1s'
+  );
+
+> CREATE TABLE kv_1 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE UPSERT;
+
+> CREATE TABLE kv_2 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE NONE;
+
+> SELECT partition, count(*) FROM kv_1 GROUP BY partition
+0   4
+1   4
+2   4
+3   4
+
+> SELECT partition, count(*) > 10 FROM kv_2 GROUP BY partition
+0   true
+1   true
+2   true
+3   true
+
+> DROP SOURCE keyvalue CASCADE;

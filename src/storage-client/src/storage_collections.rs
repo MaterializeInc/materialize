@@ -48,6 +48,7 @@ use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExport,
+    SourceExportDataConfig,
 };
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::{DataSnapshot, TxnsRead};
@@ -61,7 +62,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
 
 use crate::controller::{
-    CollectionDescription, DataSource, DataSourceOther, PersistEpoch, StorageMetadata, StorageTxn,
+    CollectionDescription, DataSource, PersistEpoch, StorageMetadata, StorageTxn,
 };
 use crate::storage_collections::metrics::{ShardIdSet, StorageCollectionsMetrics};
 
@@ -239,6 +240,12 @@ pub trait StorageCollections: Debug {
         &self,
         ingestion_id: GlobalId,
         source_desc: SourceDesc,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    /// Alters the data config for the specified source exports of the specified ingestions.
+    async fn alter_ingestion_export_data_configs(
+        &self,
+        source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Alters each identified collection to use the correlated
@@ -809,9 +816,9 @@ where
         let dependencies = match &data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
-            | DataSource::Other(DataSourceOther::TableWrites)
+            | DataSource::Table
             | DataSource::Progress
-            | DataSource::Other(DataSourceOther::Compute) => Vec::new(),
+            | DataSource::Other => Vec::new(),
             DataSource::IngestionExport { ingestion_id, .. } => {
                 // Ingestion exports depend on their primary source's remap
                 // collection.
@@ -1441,7 +1448,7 @@ where
                 let (id, description, metadata) = data?;
 
                 // should be replaced with real introspection
-                // (https://github.com/MaterializeInc/materialize/issues/14266)
+                // (https://github.com/MaterializeInc/database-issues/issues/4078)
                 // but for now, it's helpful to have this mapping written down
                 // somewhere
                 debug!(
@@ -1473,8 +1480,8 @@ where
                     | DataSource::Webhook
                     | DataSource::Ingestion(_)
                     | DataSource::Progress
-                    | DataSource::Other(DataSourceOther::Compute) => {},
-                    DataSource::Other(DataSourceOther::TableWrites) => {
+                    | DataSource::Other => {},
+                    DataSource::Table => {
                         let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
                         if since_handle.since().elements() == &[T::minimum()] && !migrated_storage_collections.contains(&id) {
                             debug!("advancing {} to initial since of {:?}", id, register_ts);
@@ -1632,7 +1639,7 @@ where
 
                     self_collections.insert(id, collection_state);
                 }
-                DataSource::Other(DataSourceOther::TableWrites) => {
+                DataSource::Table => {
                     // See comment on self.initial_txn_upper on why we're doing
                     // this.
                     if is_in_txns(id, &metadata)
@@ -1652,7 +1659,7 @@ where
                     }
                     self_collections.insert(id, collection_state);
                 }
-                DataSource::Progress | DataSource::Other(DataSourceOther::Compute) => {
+                DataSource::Progress | DataSource::Other => {
                     self_collections.insert(id, collection_state);
                 }
                 DataSource::Ingestion(_) => {
@@ -1693,6 +1700,66 @@ where
 
         curr_ingestion.desc = source_desc;
         debug!("altered {ingestion_id}'s SourceDesc");
+
+        Ok(())
+    }
+
+    async fn alter_ingestion_export_data_configs(
+        &self,
+        source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let mut self_collections = self.collections.lock().expect("lock poisoned");
+
+        for (source_export_id, new_data_config) in source_exports {
+            // We need to adjust the data config on the CollectionState for
+            // the source export collection directly
+            let source_export_collection = self_collections
+                .get_mut(&source_export_id)
+                .ok_or_else(|| StorageError::IdentifierMissing(source_export_id))?;
+            let ingestion_id = match &mut source_export_collection.description.data_source {
+                DataSource::IngestionExport {
+                    ingestion_id,
+                    details: _,
+                    data_config,
+                } => {
+                    *data_config = new_data_config.clone();
+                    *ingestion_id
+                }
+                o => {
+                    tracing::warn!("alter_ingestion_export_data_configs called on {:?}", o);
+                    Err(StorageError::IdentifierInvalid(source_export_id))?
+                }
+            };
+            // We also need to adjust the data config on the CollectionState of the
+            // Ingestion that the export is associated with.
+            let ingestion_collection = self_collections
+                .get_mut(&ingestion_id)
+                .ok_or_else(|| StorageError::IdentifierMissing(ingestion_id))?;
+
+            match &mut ingestion_collection.description.data_source {
+                DataSource::Ingestion(ingestion_desc) => {
+                    let source_export = ingestion_desc
+                        .source_exports
+                        .get_mut(&source_export_id)
+                        .ok_or_else(|| StorageError::IdentifierMissing(source_export_id))?;
+
+                    if source_export.data_config != new_data_config {
+                        tracing::info!(?source_export_id, from = ?source_export.data_config, to = ?new_data_config, "alter_ingestion_export_data_configs, updating");
+                        source_export.data_config = new_data_config;
+                    } else {
+                        tracing::warn!(
+                            "alter_ingestion_export_data_configs called on \
+                                    export {source_export_id} of {ingestion_id} but \
+                                    the data config was the same"
+                        );
+                    }
+                }
+                o => {
+                    tracing::warn!("alter_ingestion_export_data_configs called on {:?}", o);
+                    Err(StorageError::IdentifierInvalid(ingestion_id))?;
+                }
+            }
+        }
 
         Ok(())
     }
@@ -1745,10 +1812,7 @@ where
         // TODO(alter_table): To support changing the `RelationDesc` of sources
         // we'll need to cancel the currently running `BackgroundCmd` that
         // fetches recent uppers. See `BackgroundCmd::Register`.
-        if !matches!(
-            &collection.description.data_source,
-            DataSource::Other(DataSourceOther::TableWrites)
-        ) {
+        if !matches!(&collection.description.data_source, DataSource::Table) {
             return Err(StorageError::IdentifierInvalid(table_id));
         }
 

@@ -17,7 +17,7 @@ $ postgres-connect name=mz_support url=postgres://mz_support:materialize@${testd
 
 > CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION;
+  FROM LOAD GENERATOR AUCTION (UP TO 100);
 
 > CREATE TABLE accounts FROM SOURCE auction_house (REFERENCE accounts);
 > CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);

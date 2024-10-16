@@ -236,14 +236,23 @@ class Composition:
                 if self.preserve_ports and not ":" in str(port):
                     # If preserving ports, bind the container port to the same
                     # host port, assuming the host port is available.
-                    ports[i] = f"{port}:{port}"
-                elif ":" in str(port) and not config.get("allow_host_ports", False):
+                    ports[i] = f"127.0.0.1:{port}:{port}"
+                elif ":" in str(port).removeprefix("127.0.0.1::") and not config.get(
+                    "allow_host_ports", False
+                ):
                     # Raise an error for host-bound ports, unless
                     # `allow_host_ports` is `True`
                     raise UIError(
-                        "programming error: disallowed host port in service {name!r}",
+                        f"programming error: disallowed host port in service {name!r}: {port}",
                         hint='Add `"allow_host_ports": True` to the service config to disable this check.',
                     )
+                elif not str(port).startswith("127.0.0.1:"):
+                    # Only bind to localhost, otherwise the service is
+                    # available to anyone with network access to us
+                    if ":" in str(port):
+                        ports[i] = f"127.0.0.1:{port}"
+                    else:
+                        ports[i] = f"127.0.0.1::{port}"
 
             if "allow_host_ports" in config:
                 config.pop("allow_host_ports")
@@ -461,7 +470,7 @@ class Composition:
             name: The name of the workflow to run.
             args: The arguments to pass to the workflow function.
         """
-        ui.header(f"Running workflow {name}")
+        print(f"--- Running workflow {name}")
         func = self.workflows[name]
         parser = WorkflowArgumentParser(name, inspect.getdoc(func), list(args))
         try:
@@ -922,20 +931,20 @@ class Composition:
             )
             exclusion_clause = f"name NOT IN ({excluded_items})"
 
-        # starting sources are currently expected if no new data is produced, see #21980
+        # starting sources are currently expected if no new data is produced, see database-issues#6605
         results = self.sql_query(
             f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_source_statuses
             WHERE NOT(
-                status IN ('running', 'starting') OR
+                status IN ('running', 'starting', 'paused') OR
                 (type = 'progress' AND status = 'created')
             )
             AND {exclusion_clause}
             """
         )
         for name, status, error, details in results:
-            return f"Source {name} is expected to be running/created, but is {status}, error: {error}, details: {details}"
+            return f"Source {name} is expected to be running/created/paused, but is {status}, error: {error}, details: {details}"
 
         results = self.sql_query(
             f"""

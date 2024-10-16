@@ -134,4 +134,4 @@ I think if we want to go down this road, we'll want something like an "is a" tab
 // These questions may be technical, product, or anything in-between.
 -->
 
-[#5825]: https://github.com/MaterializeInc/materialize/issues/5825
+[#5825]: https://github.com/MaterializeInc/database-issues/issues/1793

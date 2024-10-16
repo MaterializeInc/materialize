@@ -23,6 +23,7 @@ use std::{env, io};
 
 use anyhow::{anyhow, Context};
 use derivative::Derivative;
+use ipnet::IpNet;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_adapter::{load_remote_system_parameters, AdapterError};
@@ -55,6 +56,7 @@ use crate::deployment::preflight::{PreflightInput, PreflightOutput};
 use crate::deployment::state::DeploymentState;
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 
+pub use crate::deployment::state::DeploymentStatus;
 pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 mod deployment;
@@ -90,7 +92,7 @@ pub struct Config {
     pub cors_allowed_origin: AllowOrigin,
     /// Public IP addresses which the cloud environment has configured for
     /// egress.
-    pub egress_ips: Vec<Ipv4Addr>,
+    pub egress_addresses: Vec<IpNet>,
     /// The external host name to connect to the HTTP server of this
     /// environment.
     ///
@@ -510,7 +512,7 @@ impl Listeners {
         //
         // Preflight checks determine whether to boot in read-only mode or not.
         let mut read_only = false;
-        let mut clusters_hydrated_trigger = None;
+        let mut caught_up_trigger = None;
         let preflight_config = PreflightInput {
             boot_ts,
             environment_id: config.environment_id.clone(),
@@ -523,14 +525,14 @@ impl Listeners {
             deployment_state: deployment_state.clone(),
             openable_adapter_storage,
             catalog_metrics: Arc::clone(&config.catalog_config.metrics),
-            hydration_max_wait: with_0dt_deployment_max_wait,
+            caught_up_max_wait: with_0dt_deployment_max_wait,
             panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
         };
         if enable_0dt_deployment {
             PreflightOutput {
                 openable_adapter_storage,
                 read_only,
-                clusters_hydrated_trigger,
+                caught_up_trigger,
             } = deployment::preflight::preflight_0dt(preflight_config).await?;
         } else {
             openable_adapter_storage =
@@ -641,7 +643,7 @@ impl Listeners {
             storage_usage_collection_interval: config.storage_usage_collection_interval,
             storage_usage_retention_period: config.storage_usage_retention_period,
             segment_client: segment_client.clone(),
-            egress_ips: config.egress_ips,
+            egress_addresses: config.egress_addresses,
             remote_system_parameters,
             aws_account_id: config.aws_account_id,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
@@ -651,7 +653,7 @@ impl Listeners {
             tracing_handle: config.tracing_handle,
             read_only_controllers: read_only,
             enable_0dt_deployment,
-            clusters_hydrated_trigger,
+            caught_up_trigger,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;

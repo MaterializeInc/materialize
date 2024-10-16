@@ -611,10 +611,13 @@ impl SourceRender for KafkaSourceConnection {
                             let prev_pid_count = prev_pid_info.map(|info| info.len()).unwrap_or(0);
                             let pid_count = partitions.len();
                             let err = DataflowError::SourceError(Box::new(SourceError {
-                                error: SourceErrorDetails::Other(format!(
-                                    "topic was recreated: partition \
+                                error: SourceErrorDetails::Other(
+                                    format!(
+                                        "topic was recreated: partition \
                                      count regressed from {prev_pid_count} to {pid_count}"
-                                )),
+                                    )
+                                    .into(),
+                                ),
                             }));
                             let time = data_cap.time().clone();
                             data_output
@@ -629,11 +632,14 @@ impl SourceRender for KafkaSourceConnection {
                                 let watermarks = &partitions[&pid];
                                 if !(prev_watermarks.high <= watermarks.high) {
                                     let err = DataflowError::SourceError(Box::new(SourceError {
-                                        error: SourceErrorDetails::Other(format!(
-                                            "topic was recreated: high watermark of \
+                                        error: SourceErrorDetails::Other(
+                                            format!(
+                                                "topic was recreated: high watermark of \
                                         partition {pid} regressed from {} to {}",
-                                            prev_watermarks.high, watermarks.high
-                                        )),
+                                                prev_watermarks.high, watermarks.high
+                                            )
+                                            .into(),
+                                        ),
                                     }));
                                     let time = data_cap.time().clone();
                                     data_output
@@ -756,7 +762,9 @@ impl SourceRender for KafkaSourceConnection {
                                         let part_cap = &reader.partition_capabilities[pid].data;
                                         let msg = msg.map_err(|e| {
                                             DataflowError::SourceError(Box::new(SourceError {
-                                                error: SourceErrorDetails::Other(format!("{}", e)),
+                                                error: SourceErrorDetails::Other(
+                                                    e.to_string().into(),
+                                                ),
                                             }))
                                         });
                                         data_output
@@ -806,7 +814,9 @@ impl SourceRender for KafkaSourceConnection {
                                         let part_cap = &reader.partition_capabilities[pid].data;
                                         let msg = msg.map_err(|e| {
                                             DataflowError::SourceError(Box::new(SourceError {
-                                                error: SourceErrorDetails::Other(format!("{}", e)),
+                                                error: SourceErrorDetails::Other(
+                                                    e.to_string().into(),
+                                                ),
                                             }))
                                         });
                                         data_output

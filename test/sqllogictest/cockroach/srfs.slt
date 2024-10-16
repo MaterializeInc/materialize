@@ -334,7 +334,7 @@ ascii
 99
 
 subtest nested_SRF
-# See #20511
+# See materialize#20511
 
 query error unimplemented: nested set-returning functions
 SELECT generate_series(generate_series(1, 3), 3)
@@ -349,7 +349,7 @@ SELECT generate_series(1, 3) + generate_series(1, 3)
 query error pq: column "generate_series" does not exist
 SELECT generate_series(1, 3) FROM t WHERE generate_series > 3
 
-# Regressions for #15900: ensure that null parameters to generate_series don't
+# Regressions for materialize#15900: ensure that null parameters to generate_series don't
 # cause issues.
 
 query T colnames
@@ -369,7 +369,7 @@ SELECT information_schema._pg_expandarray((SELECT current_schemas((SELECT isnan(
 ----
 information_schema._pg_expandarray
 
-# Regression for #18021.
+# Regression for materialize#18021.
 query I colnames
 SELECT generate_series(9223372036854775807::int, -9223372036854775807::int, -9223372036854775807::int)
 ----
@@ -380,7 +380,7 @@ generate_series
 
 subtest pg_get_keywords
 
-# pg_get_keywords for compatibility (#10291)
+# pg_get_keywords for compatibility (materialize#10291)
 query TTT colnames
 SELECT * FROM pg_get_keywords() WHERE word IN ('alter', 'and', 'between', 'cross') ORDER BY word
 ----
@@ -397,7 +397,7 @@ SELECT a.*, b.*, c.* FROM generate_series(1,1) a, unnest(ARRAY[1]) b, pg_get_key
 ----
 a  b  word  catcode  catdesc
 
-# Regression for #36501: the column from a single-column SRF should not be
+# Regression for cockroach#36501: the column from a single-column SRF should not be
 # renamed because of a higher-level table alias.
 query I colnames
 SELECT * FROM (SELECT * FROM generate_series(1, 2)) AS a
@@ -427,7 +427,7 @@ ON uq.filter_id2 = ab.filter_id
 ----
 1  1
 
-# Beware of multi-valued SRFs in render position (#19149)
+# Beware of multi-valued SRFs in render position (database-issues#5675)
 query TTT colnames
 SELECT 'a' AS a, pg_get_keywords(), 'c' AS c LIMIT 1
 ----
@@ -450,7 +450,7 @@ a  ()  c
 
 subtest upper
 
-# Regular scalar functions can be used as functions too. #22312
+# Regular scalar functions can be used as functions too. materialize#22312
 query T colnames
 SELECT * FROM upper('abc')
 ----
@@ -955,7 +955,7 @@ vals       (2,2)
 vals       (3,1)
 
 # The following query needs indclass to become an oidvector.
-# See bug #26504.
+# See bug materialize#26504.
 # query III
 # SELECT
 #     indexrelid,
@@ -998,7 +998,7 @@ vals  woo      2
 
 subtest dbviz_example_query
 
-# DbVisualizer query from #24649 listed in #16971.
+# DbVisualizer query from materialize#24649 listed in materialize#16971.
 query TTI
 SELECT   a.attname, a.atttypid, atttypmod
     FROM pg_catalog.pg_class ct
@@ -1019,8 +1019,8 @@ x  20  -1
 
 subtest metabase_confluent_example_query
 
-# Test from metabase listed on #16971.
-# Also Kafka Confluent sink query from #25854.
+# Test from metabase listed on materialize#16971.
+# Also Kafka Confluent sink query from materialize#25854.
 query TTTTIT
 SELECT NULL AS TABLE_CAT,
        n.nspname AS TABLE_SCHEM,
@@ -1044,9 +1044,9 @@ NULL  public  j  x  1  primary
 
 subtest liquibase_example_query
 
-# # Test from #24713 (Liquibase) listed on #16971.
+# # Test from materialize#24713 (Liquibase) listed on materialize#16971.
 # # TODO(knz) Needs support for pg_get_indexdef with 3 arguments,
-# # see #26629.
+# # see database-issues#7870.
 # query TTTBTTIITTTTT
 # SELECT NULL AS table_cat,
 #        n.nspname AS table_schem,

@@ -27,4 +27,4 @@ one
 one
 
 !ALTER SOURCE data ADD SUBSOURCE t;
-contains:data is a kafka source, which does not support ALTER SOURCE.
+contains:source data does not support ALTER SOURCE.

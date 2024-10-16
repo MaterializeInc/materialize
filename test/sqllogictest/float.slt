@@ -152,7 +152,7 @@ SELECT SUM(f1) FROM t1
 ----
 -282409603651671152154661355520.000
 
-# This *should* be zero, known issue https://github.com/MaterializeInc/materialize/issues/15186
+# This *should* be zero, known issue https://github.com/MaterializeInc/database-issues/issues/4341
 query T
 SELECT MIN(f1+f2)-SUM(f1) FROM t1
 ----

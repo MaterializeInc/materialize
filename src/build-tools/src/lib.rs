@@ -49,7 +49,7 @@ pub fn protoc() -> PathBuf {
     cfg_if! {
         if #[cfg(bazel)] {
             let r = runfiles::Runfiles::create().unwrap();
-            r.rlocation("protobuf/protoc")
+            r.rlocation("protobuf/protoc").expect("set by Bazel")
         } else if #[cfg(feature = "protobuf-src")] {
             protobuf_src::protoc()
         } else {
@@ -70,7 +70,7 @@ pub fn protoc_include() -> PathBuf {
     cfg_if! {
         if #[cfg(bazel)] {
             let r = runfiles::Runfiles::create().unwrap();
-            r.rlocation("protobuf/src")
+            r.rlocation("protobuf/src").expect("set by Bazel")
         } else if #[cfg(feature = "protobuf-src")] {
             protobuf_src::include()
         } else {

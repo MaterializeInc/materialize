@@ -21,9 +21,9 @@ import requests
 from psycopg.errors import OperationalError
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import PostgresAsCockroach
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -42,7 +42,7 @@ SERVICES = [
         ],
     ),
     testdrive_no_reset,
-    Cockroach(setup_materialize=True),
+    PostgresAsCockroach(),
 ]
 
 
@@ -213,7 +213,7 @@ def workflow_audit_log(c: Composition) -> None:
         raise Exception("audit logs emtpy or not equal after restart")
 
 
-# Test for GitHub issue #13726
+# Test for GitHub issue database-issues#3923
 def workflow_timelines(c: Composition) -> None:
     for _ in range(3):
         c.up("zookeeper", "kafka", "schema-registry", "materialized")
@@ -250,7 +250,7 @@ def workflow_stash(c: Composition) -> None:
         cursor.execute("CREATE TABLE b (i INT)")
 
         # No implicit restart as sanity check here, will panic:
-        # https://github.com/MaterializeInc/materialize/issues/20510
+        # https://github.com/MaterializeInc/database-issues/issues/6168
         c.down(sanity_restart_mz=False)
 
 
@@ -436,6 +436,76 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     # Re-allow new user sessions.
     c.sql(
         "ALTER SYSTEM SET allow_user_sessions = true",
+        port=6877,
+        user="mz_system",
+    )
+
+    # SQL and HTTP user sessions should work again.
+    assert c.sql_query("SELECT 1") == [(1,)]
+    assert requests.post(
+        f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
+    ).json()["results"][0]["rows"] == [["1"]]
+
+    # The cursor from the beginning of the test should still work.
+    cursor.execute("SELECT 1")
+    assert cursor.fetchall() == [(1,)]
+
+
+def workflow_network_policies(c: Composition) -> None:
+    c.up("materialized")
+    http_port = c.port("materialized", 6876)
+
+    # Ensure new user sessions are allowed.
+    c.sql(
+        "ALTER SYSTEM SET allow_user_sessions = true",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        "ALTER SYSTEM SET default_network_policy_allow_list = '0.0.0.0/0'",
+        port=6877,
+        user="mz_system",
+    )
+
+    # SQL and HTTP user sessions should work.
+    assert c.sql_query("SELECT 1") == [(1,)]
+    assert requests.post(
+        f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
+    ).json()["results"][0]["rows"] == [["1"]]
+
+    # Save a cursor for later.
+    cursor = c.sql_cursor()
+
+    # Block external user session by ip.
+    c.sql(
+        "ALTER SYSTEM SET default_network_policy_allow_list = '0.0.0.0/32'",
+        port=6877,
+        user="mz_system",
+    )
+
+    # New SQL and HTTP user sessions should now fail.
+    try:
+        c.sql_query("SELECT 1")
+    except OperationalError as e:
+        # assert e.pgcode == "MZ010" # Not exposed by psycopg
+        assert "session denied" in str(e)
+        assert "DETAIL:  Access denied for address" in e.args[0], e.args
+
+    res = requests.post(
+        f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
+    )
+    assert res.status_code == 403
+    assert res.json()["message"] == "session denied"
+    assert res.json()["code"] == "MZ011"
+    assert "Access denied for address" in res.json()["detail"]
+
+    # The cursor from the beginning of the test should still work.
+    cursor.execute("SELECT 1")
+    assert cursor.fetchall() == [(1,)]
+
+    # Re-allow new user sessions.
+    c.sql(
+        "ALTER SYSTEM SET default_network_policy_allow_list = '0.0.0.0/0'",
         port=6877,
         user="mz_system",
     )

@@ -31,7 +31,7 @@ use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
-use crate::plan::{AvailableCollections, GetPlan, Plan};
+use crate::plan::{AvailableCollections, GetPlan, Plan, PlanNode};
 
 /// An [abstract interpreter] for [Plan] expressions.
 ///
@@ -46,19 +46,19 @@ use crate::plan::{AvailableCollections, GetPlan, Plan};
 ///     <https://www.cs.utexas.edu/~wcook/Drafts/2012/ecoop2012.pdf>
 /// [tagless final encoding]: <https://okmij.org/ftp/tagless-final/>
 ///
-/// TODO(materialize#24943): align this with the `Plan` structure
+/// TODO(database-issues#7446): align this with the `Plan` structure
 pub trait Interpreter<T = mz_repr::Timestamp> {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     type Domain: Debug + Sized;
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     fn constant(
         &self,
         ctx: &Context<Self::Domain>,
         rows: &Result<Vec<(Row, T, Diff)>, EvalError>,
     ) -> Self::Domain;
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     fn get(
         &self,
         ctx: &Context<Self::Domain>,
@@ -67,7 +67,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         plan: &GetPlan,
     ) -> Self::Domain;
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     fn mfp(
         &self,
         ctx: &Context<Self::Domain>,
@@ -76,7 +76,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         input_key_val: &Option<(Vec<MirScalarExpr>, Option<Row>)>,
     ) -> Self::Domain;
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     fn flat_map(
         &self,
         ctx: &Context<Self::Domain>,
@@ -87,7 +87,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         input_key: &Option<Vec<MirScalarExpr>>,
     ) -> Self::Domain;
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     fn join(
         &self,
         ctx: &Context<Self::Domain>,
@@ -95,7 +95,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         plan: &JoinPlan,
     ) -> Self::Domain;
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     fn reduce(
         &self,
         ctx: &Context<Self::Domain>,
@@ -106,7 +106,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         mfp_after: &MapFilterProject,
     ) -> Self::Domain;
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     fn top_k(
         &self,
         ctx: &Context<Self::Domain>,
@@ -114,10 +114,10 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         top_k_plan: &TopKPlan,
     ) -> Self::Domain;
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     fn negate(&self, ctx: &Context<Self::Domain>, input: Self::Domain) -> Self::Domain;
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     fn threshold(
         &self,
         ctx: &Context<Self::Domain>,
@@ -125,7 +125,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         threshold_plan: &ThresholdPlan,
     ) -> Self::Domain;
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     fn union(
         &self,
         ctx: &Context<Self::Domain>,
@@ -133,7 +133,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         consolidate_output: bool,
     ) -> Self::Domain;
 
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     fn arrange_by(
         &self,
         ctx: &Context<Self::Domain>,
@@ -153,7 +153,7 @@ pub struct InterpreterContext<Domain> {
     pub is_rec: bool,
 }
 
-/// TODO(materialize#25239): Add documentation.
+/// TODO(database-issues#7533): Add documentation.
 pub type Context<Domain> = InterpreterContext<Domain>;
 
 impl<Domain> Default for InterpreterContext<Domain> {
@@ -225,7 +225,7 @@ where
     I: Interpreter<T>,
     I::Domain: BoundedLattice + Clone,
 {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn new(interpreter: I) -> Self {
         Self {
             interpret: interpreter,
@@ -247,28 +247,18 @@ where
         expr: &Plan<T>,
         rg: &RecursionGuard,
     ) -> Result<I::Domain, RecursionLimitError> {
-        use Plan::*;
+        use PlanNode::*;
         rg.checked_recur(|_| {
-            match expr {
-                Constant { rows, lir_id: _ } => {
+            match &expr.node {
+                Constant { rows } => {
                     // Interpret the current node.
                     Ok(self.interpret.constant(&self.ctx, rows))
                 }
-                Get {
-                    id,
-                    keys,
-                    plan,
-                    lir_id: _,
-                } => {
+                Get { id, keys, plan } => {
                     // Interpret the current node.
                     Ok(self.interpret.get(&self.ctx, id, keys, plan))
                 }
-                Let {
-                    id,
-                    value,
-                    body,
-                    lir_id: _,
-                } => {
+                Let { id, value, body } => {
                     // Extend context with the `value` result.
                     let res_value = self.apply_rec(value, rg)?;
                     let old_entry = self
@@ -291,7 +281,6 @@ where
                     values,
                     limits,
                     body,
-                    lir_id: _,
                 } => {
                     // Make context recursive and extend it with `bottom` for each recursive
                     // binding. This corresponds to starting with the most optimistic value.
@@ -369,7 +358,6 @@ where
                     input,
                     mfp,
                     input_key_val,
-                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -382,7 +370,6 @@ where
                     exprs,
                     mfp_after: mfp,
                     input_key,
-                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -391,11 +378,7 @@ where
                         .interpret
                         .flat_map(&self.ctx, input, func, exprs, mfp, input_key))
                 }
-                Join {
-                    inputs,
-                    plan,
-                    lir_id: _,
-                } => {
+                Join { inputs, plan } => {
                     // Descend recursively into all children.
                     let inputs = inputs
                         .iter()
@@ -410,7 +393,6 @@ where
                     plan,
                     input_key,
                     mfp_after,
-                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -424,17 +406,13 @@ where
                         mfp_after,
                     ))
                 }
-                TopK {
-                    input,
-                    top_k_plan,
-                    lir_id: _,
-                } => {
+                TopK { input, top_k_plan } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     Ok(self.interpret.top_k(&self.ctx, input, top_k_plan))
                 }
-                Negate { input, lir_id: _ } => {
+                Negate { input } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
@@ -443,7 +421,6 @@ where
                 Threshold {
                     input,
                     threshold_plan,
-                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -453,7 +430,6 @@ where
                 Union {
                     inputs,
                     consolidate_output,
-                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let inputs = inputs
@@ -468,7 +444,6 @@ where
                     forms,
                     input_key,
                     input_mfp,
-                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -500,7 +475,7 @@ where
     I::Domain: BoundedLattice + Clone,
     A: FnMut(&mut Plan<T>, &I::Domain, &[I::Domain]),
 {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn new(interpreter: I, action: A) -> Self {
         Self {
             interpret: interpreter,
@@ -527,10 +502,10 @@ where
         expr: &mut Plan<T>,
         rg: &RecursionGuard,
     ) -> Result<I::Domain, RecursionLimitError> {
-        use Plan::*;
+        use PlanNode::*;
         rg.checked_recur(|_| {
-            match expr {
-                Constant { rows, lir_id: _ } => {
+            match &mut expr.node {
+                Constant { rows } => {
                     // Interpret the current node.
                     let result = self.interpret.constant(&self.ctx, rows);
                     // Mutate the current node using the given `action`.
@@ -538,12 +513,7 @@ where
                     // Pass the interpretation result up.
                     Ok(result)
                 }
-                Get {
-                    id,
-                    keys,
-                    plan,
-                    lir_id: _,
-                } => {
+                Get { id, keys, plan } => {
                     // Interpret the current node.
                     let result = self.interpret.get(&self.ctx, id, keys, plan);
                     // Mutate the current node using the given `action`.
@@ -551,12 +521,7 @@ where
                     // Pass the interpretation result up.
                     Ok(result)
                 }
-                Let {
-                    id,
-                    value,
-                    body,
-                    lir_id: _,
-                } => {
+                Let { id, value, body } => {
                     // Extend context with the `value` result.
                     let res_value = self.apply_rec(value, rg)?;
                     let old_entry = self
@@ -579,7 +544,6 @@ where
                     values,
                     limits,
                     body,
-                    lir_id: _,
                 } => {
                     // Make context recursive and extend it with `bottom` for each recursive
                     // binding. This corresponds to starting with the most optimistic value.
@@ -657,7 +621,6 @@ where
                     input,
                     mfp,
                     input_key_val,
-                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -676,7 +639,6 @@ where
                     exprs,
                     mfp_after: mfp,
                     input_key,
-                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -694,11 +656,7 @@ where
                     // Pass the interpretation result up.
                     Ok(result)
                 }
-                Join {
-                    inputs,
-                    plan,
-                    lir_id: _,
-                } => {
+                Join { inputs, plan } => {
                     // Descend recursively into all children.
                     let inputs: Vec<_> = inputs
                         .iter_mut()
@@ -717,7 +675,6 @@ where
                     plan,
                     input_key,
                     mfp_after,
-                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -735,11 +692,7 @@ where
                     // Pass the interpretation result up.
                     Ok(result)
                 }
-                TopK {
-                    input,
-                    top_k_plan,
-                    lir_id: _,
-                } => {
+                TopK { input, top_k_plan } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
@@ -749,7 +702,7 @@ where
                     // Pass the interpretation result up.
                     Ok(result)
                 }
-                Negate { input, lir_id: _ } => {
+                Negate { input } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
@@ -762,7 +715,6 @@ where
                 Threshold {
                     input,
                     threshold_plan,
-                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -778,7 +730,6 @@ where
                 Union {
                     inputs,
                     consolidate_output,
-                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let inputs: Vec<_> = inputs
@@ -799,7 +750,6 @@ where
                     forms,
                     input_key,
                     input_mfp,
-                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;

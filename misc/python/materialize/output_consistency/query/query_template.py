@@ -148,7 +148,10 @@ class QueryTemplate:
         return self._post_format_sql(sql, output_format)
 
     def uses_join(self) -> bool:
-        return len(self.additional_sources) > 0
+        return self.count_joins() > 0
+
+    def count_joins(self) -> int:
+        return len(self.additional_sources)
 
     def has_where_condition(self) -> bool:
         return self.where_expression is not None

@@ -164,7 +164,7 @@ class Materialized(Service):
             )
         )
         command += [
-            # Issue #15858 prevents the habitual use of large introspection
+            # Issue database-issues#4562 prevents the habitual use of large introspection
             # clusters, so we leave the builtin cluster replica size as is.
             # f"--bootstrap-builtin-cluster-replica-size={self.default_replica_size}",
             f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
@@ -178,6 +178,8 @@ class Materialized(Service):
             ]
             environment += [
                 f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
+                "MZ_NO_BUILTIN_POSTGRES=1",
+                # For older Materialize versions
                 "MZ_NO_BUILTIN_COCKROACH=1",
                 # Set the adapter stash URL for older environments that need it (versions before
                 # v0.92.0).

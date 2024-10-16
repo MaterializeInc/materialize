@@ -716,6 +716,11 @@ pub struct BatchWriteMetrics {
     pub(crate) write_stalls: IntCounter,
     pub(crate) key_lower_too_big: IntCounter,
 
+    pub(crate) unordered: IntCounter,
+    pub(crate) codec_order: IntCounter,
+    pub(crate) structured_order: IntCounter,
+    _order_counts: IntCounterVec,
+
     pub(crate) step_stats: Counter,
     pub(crate) step_part_writing: Counter,
     pub(crate) step_inline: Counter,
@@ -723,6 +728,15 @@ pub struct BatchWriteMetrics {
 
 impl BatchWriteMetrics {
     fn new(registry: &MetricsRegistry, name: &str) -> Self {
+        let order_counts: IntCounterVec = registry.register(metric!(
+                name: format!("mz_persist_{}_write_batch_order", name),
+                help: "count of batches by the data ordering",
+                var_labels: ["order"],
+        ));
+        let unordered = order_counts.with_label_values(&["unordered"]);
+        let codec_order = order_counts.with_label_values(&["codec"]);
+        let structured_order = order_counts.with_label_values(&["structured"]);
+
         BatchWriteMetrics {
             bytes: registry.register(metric!(
                 name: format!("mz_persist_{}_bytes", name),
@@ -750,6 +764,10 @@ impl BatchWriteMetrics {
                     name
                 ),
             )),
+            unordered,
+            codec_order,
+            structured_order,
+            _order_counts: order_counts,
             step_stats: registry.register(metric!(
                 name: format!("mz_persist_{}_step_stats", name),
                 help: format!("time spent computing {} update stats", name),
@@ -1869,10 +1887,6 @@ impl UpdateDelta {
 /// abstraction boundary of the client, it's convenient to manage them together.
 #[derive(Debug, Clone)]
 pub struct SinkMetrics {
-    /// Number of small batches that were forwarded to the central append operator
-    pub forwarded_batches: Counter,
-    /// Number of updates that were forwarded to the centralized append operator
-    pub forwarded_updates: Counter,
     /// Cumulative record insertions made to the correction buffer across workers
     correction_insertions_total: IntCounter,
     /// Cumulative record deletions made to the correction buffer across workers
@@ -1890,14 +1904,6 @@ pub struct SinkMetrics {
 impl SinkMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         SinkMetrics {
-            forwarded_batches: registry.register(metric!(
-                name: "mz_persist_sink_forwarded_batches",
-                help: "number of batches forwarded to the central append operator",
-            )),
-            forwarded_updates: registry.register(metric!(
-                name: "mz_persist_sink_forwarded_updates",
-                help: "number of updates forwarded to the central append operator",
-            )),
             correction_insertions_total: registry.register(metric!(
                 name: "mz_persist_sink_correction_insertions_total",
                 help: "The cumulative insertions observed on the correction buffer across workers and persist sinks.",

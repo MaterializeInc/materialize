@@ -147,7 +147,7 @@ WORKLOADS = [
         reference_implementation=None,
         validator="QueryProperties,RepeatableRead",
     ),
-    # Added as part of MaterializeInc/materialize#25340.
+    # Added as part of MaterializeInc/database-issues#7561.
     Workload(
         name="left-join-stacks",
         dataset=Dataset.STAR_SCHEMA,

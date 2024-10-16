@@ -53,12 +53,13 @@ impl Client {
         &self,
         method: Method,
         path: P,
+        query: Option<&[(&str, &str)]>,
     ) -> Result<RequestBuilder, Error>
     where
         P: IntoIterator,
         P::Item: AsRef<str>,
     {
-        self.build_request(method, path, self.endpoint.clone(), None)
+        self.build_request(method, path, query, self.endpoint.clone(), None)
             .await
     }
 
@@ -73,6 +74,7 @@ impl Client {
         &self,
         method: Method,
         path: P,
+        query: Option<&[(&str, &str)]>,
         cloud_provider: &CloudProvider,
         api_version: Option<u16>,
     ) -> Result<RequestBuilder, Error>
@@ -83,6 +85,7 @@ impl Client {
         self.build_request(
             method,
             path,
+            query,
             cloud_provider.url.clone(),
             api_version.and_then(|api_ver| {
                 let mut headers = HeaderMap::with_capacity(1);
@@ -98,6 +101,7 @@ impl Client {
         &self,
         method: Method,
         path: P,
+        query: Option<&[(&str, &str)]>,
         mut domain: Url,
         headers: Option<HeaderMap>,
     ) -> Result<RequestBuilder, Error>
@@ -114,6 +118,9 @@ impl Client {
         let mut req = self.inner.request(method, domain);
         if let Some(header_map) = headers {
             req = req.headers(header_map);
+        }
+        if let Some(query_params) = query {
+            req = req.query(&query_params);
         }
         let token = self.auth_client.auth().await?;
 

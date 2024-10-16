@@ -16,7 +16,7 @@ use crate::plan::interpret::{PhysicallyMonotonic, SingleTimeMonotonic};
 use crate::plan::reduce::{HierarchicalPlan, MonotonicPlan};
 use crate::plan::top_k::{MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan};
 use crate::plan::transform::{BottomUpTransform, TransformConfig};
-use crate::plan::{Plan, ReducePlan};
+use crate::plan::{Plan, PlanNode, ReducePlan};
 
 /// A transformation that takes the result of single-time physical monotonicity
 /// analysis and refines, as appropriate, the setting of the `must_consolidate`
@@ -27,7 +27,7 @@ pub struct RelaxMustConsolidate<T = mz_repr::Timestamp> {
 }
 
 impl<T> RelaxMustConsolidate<T> {
-    /// TODO(materialize#25239): Add documentation.
+    /// TODO(database-issues#7533): Add documentation.
     pub fn new() -> Self {
         RelaxMustConsolidate {
             _phantom: Default::default(),
@@ -51,9 +51,9 @@ impl<T> BottomUpTransform<T> for RelaxMustConsolidate<T> {
     fn action(plan: &mut Plan<T>, _plan_info: &Self::Info, input_infos: &[Self::Info]) {
         // Look at `input_infos` and type of `Plan` node and refine the `must_consolidate` flag.
         // Note that the LIR nodes we care about have a single input.
-        match (plan, input_infos) {
+        match (&mut plan.node, input_infos) {
             (
-                Plan::Reduce {
+                PlanNode::Reduce {
                     plan:
                         ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(MonotonicPlan {
                             must_consolidate,
@@ -61,14 +61,14 @@ impl<T> BottomUpTransform<T> for RelaxMustConsolidate<T> {
                         })),
                     ..
                 }
-                | Plan::TopK {
+                | PlanNode::TopK {
                     top_k_plan:
                         TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                             must_consolidate, ..
                         }),
                     ..
                 }
-                | Plan::TopK {
+                | PlanNode::TopK {
                     top_k_plan:
                         TopKPlan::MonotonicTopK(MonotonicTopKPlan {
                             must_consolidate, ..

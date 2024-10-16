@@ -218,7 +218,7 @@ pub enum HirScalarExpr {
     /// * 0 rows, return NULL
     /// * 1 row, return the value of that row
     /// * >1 rows, the sql spec says we should throw an error but we can't
-    ///   (see <https://github.com/MaterializeInc/materialize/issues/489>)
+    ///   (see <https://github.com/MaterializeInc/database-issues/issues/154>)
     ///   so instead we return all the rows.
     ///   If there are multiple `Select` expressions in a single SQL query, the result is that we take the product of all of them.
     ///   This is counter to the spec, but is consistent with eg postgres' treatment of multiple set-returning-functions
@@ -924,7 +924,7 @@ impl CoercibleScalarType {
                 fields.push((name, ty))
             }
             ScalarType::Record {
-                fields,
+                fields: fields.into(),
                 custom_id: None,
             }
         }

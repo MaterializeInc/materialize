@@ -269,4 +269,4 @@ of `source_progress`.
 
 [`CreateSourceCommand`]: https://dev.materialize.com/api/rust/mz_dataflow_types/client/struct.CreateSourceCommand.html
 [`GlobalId`]: https://dev.materialize.com/api/rust/mz_expr/enum.GlobalId.html
-[#11218]: https://github.com/MaterializeInc/materialize/issues/11218#issuecomment-1087849617
+[#11218]: https://github.com/MaterializeInc/database-issues/issues/3271#issuecomment-1087849617

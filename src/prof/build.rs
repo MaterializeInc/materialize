@@ -14,8 +14,8 @@
 // limitations under the License.
 
 fn main() -> Result<(), anyhow::Error> {
-    std::env::set_var("PROTOC", mz_build_tools::protoc());
     prost_build::Config::new()
+        .protoc_executable(mz_build_tools::protoc())
         .btree_map(["."])
         .compile_protos(&["prof/src/pprof_types.proto"], &[".."])?;
 

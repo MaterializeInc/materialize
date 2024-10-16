@@ -35,7 +35,13 @@ To enable logical replication in Azure DB, see the
 
 {{% postgres-direct/create-a-publication-other %}}
 
-## B. Configure network security
+## B. (Optional) Configure network security
+
+{{< note >}}
+If you are prototyping and your AzureDB instance is publicly accessible, **you
+can skip this step**. For production scenarios, we recommend configuring one of
+the network security options below.
+{{</ note >}}
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -197,7 +203,7 @@ created [earlier](#2-create-a-publication-and-a-replication-user):
     ```
 
     - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP
-      address and port of the SSH bastion host you created [earlier](#b-configure-network-security).
+      address and port of the SSH bastion host you created [earlier](#b-optional-configure-network-security).
 
     - Replace `<SSH_BASTION_USER>` with the username for the key pair you
       created for your SSH bastion host.

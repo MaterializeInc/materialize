@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_adapter_types::dyncfgs::ENABLE_CONTINUAL_TASK_BUILTINS;
 use mz_catalog::builtin::{
     Builtin, BuiltinTable, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
     BUILTIN_PREFIXES, BUILTIN_ROLES, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
@@ -28,7 +29,6 @@ use mz_catalog::durable::objects::{
 };
 use mz_catalog::durable::{
     ClusterVariant, ClusterVariantManaged, Transaction, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -36,7 +36,6 @@ use mz_catalog::memory::objects::{
     StateUpdate,
 };
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_cluster_client::ReplicaId;
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{is_cluster_size_v2, ClusterId};
@@ -49,8 +48,8 @@ use mz_repr::namespaces::is_unstable_schema;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
-    RoleMembership, RoleVars,
+    BuiltinsConfig, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+    CatalogItemType, RoleMembership, RoleVars,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::SchemaId;
@@ -142,7 +141,7 @@ impl CatalogItemRebuilder {
         }
     }
 
-    fn build(self, state: &CatalogState) -> CatalogItem {
+    fn build(self, id: GlobalId, state: &CatalogState) -> CatalogItem {
         match self {
             Self::SystemSource(item) => item,
             Self::Object {
@@ -151,6 +150,7 @@ impl CatalogItemRebuilder {
                 custom_logical_compaction_window,
             } => state
                 .parse_item(
+                    id,
                     &sql,
                     None,
                     is_retained_metrics_object,
@@ -233,6 +233,7 @@ impl Catalog {
             default_privileges: DefaultPrivileges::default(),
             system_privileges: PrivilegeMap::default(),
             comments: CommentsMap::default(),
+            source_references: BTreeMap::new(),
             storage_metadata: Default::default(),
             temporary_schemas: BTreeMap::new(),
             config: mz_sql::catalog::CatalogConfig {
@@ -245,10 +246,20 @@ impl Catalog {
                 timestamp_interval: Duration::from_secs(1),
                 now: config.now.clone(),
                 connection_context: config.connection_context,
+                builtins_cfg: BuiltinsConfig {
+                    // This will fall back to the default in code (false) if we timeout on the
+                    // initial LD sync. We're just using this to get some additional testing in on
+                    // CTs so a false negative is fine, we're only worried about false positives.
+                    include_continual_tasks: get_dyncfg_val_from_defaults_and_remote(
+                        &config.system_parameter_defaults,
+                        config.remote_system_parameters.as_ref(),
+                        &ENABLE_CONTINUAL_TASK_BUILTINS,
+                    ),
+                },
             },
             cluster_replica_sizes: config.cluster_replica_sizes,
             availability_zones: config.availability_zones,
-            egress_ips: config.egress_ips,
+            egress_addresses: config.egress_addresses,
             aws_principal_context: config.aws_principal_context,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             http_host_name: config.http_host_name,
@@ -271,7 +282,7 @@ impl Catalog {
             }
             // Add any new builtin objects and remove old ones.
             let (migrated_builtins, new_builtins) =
-                add_new_remove_old_builtin_items_migration(&mut txn)?;
+                add_new_remove_old_builtin_items_migration(&state.config().builtins_cfg, &mut txn)?;
             let cluster_sizes = BuiltinBootstrapClusterSizes {
                 system_cluster: config.builtin_system_cluster_replica_size,
                 catalog_server_cluster: config.builtin_catalog_server_cluster_replica_size,
@@ -478,7 +489,7 @@ impl Catalog {
                 }
             }
 
-            for ip in &catalog.state.egress_ips {
+            for ip in &catalog.state.egress_addresses {
                 builtin_table_updates.push(
                     catalog
                         .state
@@ -693,13 +704,14 @@ impl Catalog {
                 }
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
-                | CatalogItem::MaterializedView(_) => {
+                | CatalogItem::MaterializedView(_)
+                | CatalogItem::ContinualTask(_) => {
                     // Storage objects don't have any external objects to drop.
                 }
                 CatalogItem::Sink(_) => {
                     // Sinks don't have any external objects to drop--however,
                     // this would change if we add a collections for sinks
-                    // #17672.
+                    // database-issues#5148.
                 }
                 CatalogItem::View(_) => {
                     // Views don't have any external objects to drop.
@@ -771,7 +783,7 @@ impl Catalog {
                 error!(
                     "user sink {full_name} will be recreated as part of a builtin migration which \
                     can result in duplicate data being emitted. This is a known issue, \
-                    https://github.com/MaterializeInc/materialize/issues/18767. Please inform the \
+                    https://github.com/MaterializeInc/database-issues/issues/5553. Please inform the \
                     customer that their sink may produce duplicate data."
                 )
             }
@@ -807,7 +819,7 @@ impl Catalog {
             item_rebuilder,
         } in migration_metadata.user_item_create_ops.drain(..)
         {
-            let item = item_rebuilder.build(state);
+            let item = item_rebuilder.build(id, state);
             let serialized_item = item.to_serialized();
             txn.insert_item(
                 id,
@@ -852,6 +864,7 @@ impl CatalogState {
 /// Returns the list of builtin [`GlobalId`]s that need to be migrated, and the list of new builtin
 /// [`GlobalId`]s.
 fn add_new_remove_old_builtin_items_migration(
+    builtins_cfg: &BuiltinsConfig,
     txn: &mut mz_catalog::durable::Transaction<'_>,
 ) -> Result<(Vec<GlobalId>, Vec<GlobalId>), mz_catalog::durable::CatalogError> {
     let mut new_builtins = Vec::new();
@@ -860,7 +873,7 @@ fn add_new_remove_old_builtin_items_migration(
 
     // We compare the builtin items that are compiled into the binary with the builtin items that
     // are persisted in the catalog to discover new, deleted, and migrated builtin items.
-    let builtins: Vec<_> = BUILTINS::iter()
+    let builtins: Vec<_> = BUILTINS::iter(builtins_cfg)
         .map(|builtin| {
             (
                 SystemObjectDescription {
@@ -1133,12 +1146,9 @@ fn add_new_builtin_cluster_replicas_migration(
                 }
             };
 
-            let replica_id = txn.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
-            let replica_id = ReplicaId::System(replica_id);
             let config = builtin_cluster_replica_config(replica_size);
             txn.insert_cluster_replica(
                 cluster.id,
-                replica_id,
                 builtin_replica.name,
                 config,
                 MZ_SYSTEM_ROLE_ID,
@@ -1301,6 +1311,31 @@ pub(crate) fn into_consolidatable_updates_startup(
             (kind, ts, Diff::from(diff))
         })
         .collect()
+}
+
+fn get_dyncfg_val_from_defaults_and_remote<T: mz_dyncfg::ConfigDefault>(
+    defaults: &BTreeMap<String, String>,
+    remote: Option<&BTreeMap<String, String>>,
+    cfg: &mz_dyncfg::Config<T>,
+) -> T::ConfigType {
+    let mut val = T::into_config_type(cfg.default().clone());
+    let get_fn = |map: &BTreeMap<String, String>| {
+        let val = map.get(cfg.name())?;
+        match <T::ConfigType as mz_dyncfg::ConfigType>::parse(val) {
+            Ok(x) => Some(x),
+            Err(err) => {
+                tracing::warn!("could not parse {} value [{}]: {}", cfg.name(), val, err);
+                None
+            }
+        }
+    };
+    if let Some(x) = get_fn(defaults) {
+        val = x;
+    }
+    if let Some(x) = remote.and_then(get_fn) {
+        val = x;
+    }
+    val
 }
 
 #[cfg(test)]

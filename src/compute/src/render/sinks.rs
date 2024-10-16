@@ -92,6 +92,13 @@ where
         let mut ok_collection = ok_collection.leave();
         let mut err_collection = err_collection.leave();
 
+        // Ensure that the frontier does not advance past the expiration time, if set. Otherwise,
+        // we might write down incorrect data.
+        if let Some(&expiration) = self.dataflow_expiration.as_option() {
+            ok_collection = ok_collection.expire_collection_at(expiration);
+            err_collection = err_collection.expire_collection_at(expiration);
+        }
+
         let non_null_assertions = sink.non_null_assertions.clone();
         let from_desc = sink.from_desc.clone();
         if !non_null_assertions.is_empty() {
@@ -107,10 +114,10 @@ where
                         idx += skip + 1;
                         if datum.is_null() {
                             return Err(DataflowError::EvalError(Box::new(
-                                EvalError::MustNotBeNull(format!(
-                                    "column {}",
-                                    from_desc.get_name(i).as_str().quoted()
-                                )),
+                                EvalError::MustNotBeNull(
+                                    format!("column {}", from_desc.get_name(i).as_str().quoted())
+                                        .into(),
+                                ),
                             )));
                         }
                     }
@@ -171,7 +178,7 @@ where
         start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-        // TODO(ct): Figure out a better way to smuggle this in, potentially by
+        // TODO(ct2): Figure out a better way to smuggle this in, potentially by
         // removing the `SinkRender` trait entirely.
         ct_times: Option<Collection<G, (), Diff>>,
     ) -> Option<Rc<dyn Any>>;

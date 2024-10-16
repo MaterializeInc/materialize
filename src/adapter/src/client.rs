@@ -710,16 +710,6 @@ impl SessionClient {
         self.send_without_session(|tx| Command::Dump { tx }).await
     }
 
-    /// Allow the controller (and clusters they control) to now affect changes
-    /// to external systems.
-    ///
-    /// No authorization is performed, so access to this function must be
-    /// limited to internal servers or superusers.
-    pub async fn controller_allow_writes(&mut self) -> Result<bool, anyhow::Error> {
-        self.send_without_session(|tx| Command::AllowWrites { tx })
-            .await
-    }
-
     /// Tells the coordinator a statement has finished execution, in the cases
     /// where we have no other reason to communicate with the coordinator.
     pub fn retire_execute(
@@ -889,7 +879,6 @@ impl SessionClient {
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }
                 | Command::Dump { .. } => {}
-                Command::AllowWrites { .. } => {}
             };
             cmd
         });

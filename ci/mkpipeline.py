@@ -90,11 +90,6 @@ so it is executed.""",
     )
     parser.add_argument("pipeline", type=str)
     parser.add_argument(
-        "--bazel",
-        default=ui.env_is_truthy("CI_BAZEL_BUILD", "1"),
-        action="store_true",
-    )
-    parser.add_argument(
         "--bazel-remote-cache",
         default=os.getenv("CI_BAZEL_REMOTE_CACHE"),
         action="store",
@@ -131,7 +126,7 @@ so it is executed.""",
                 copy.deepcopy(pipeline),
                 args.coverage,
                 args.sanitizer,
-                args.bazel,
+                ui.env_is_truthy("CI_BAZEL_BUILD", "1"),
                 args.bazel_remote_cache,
             )
         else:
@@ -140,7 +135,7 @@ so it is executed.""",
                 pipeline,
                 args.coverage,
                 args.sanitizer,
-                args.bazel,
+                ui.env_is_truthy("CI_BAZEL_BUILD", "1"),
                 args.bazel_remote_cache,
             )
 
@@ -162,7 +157,7 @@ so it is executed.""",
                 elif agent == "linux-aarch64-medium":
                     agent = "linux-aarch64-large"
                 elif agent == "linux-aarch64-large":
-                    agent = "builder-linux-aarch64"
+                    agent = "builder-linux-aarch64-mem"
                 elif agent == "linux-x86_64-small":
                     agent = "linux-x86_64"
                 elif agent == "linux-x86_64":
@@ -210,6 +205,11 @@ so it is executed.""",
             if step.get("sanitizer") == "only":
                 step["skip"] = True
 
+            # Skip the Cargo driven builds if the Sanitizers aren't specified since everything
+            # relies on the Bazel builds.
+            if step.get("id") in ("rust-build-x86_64", "rust-build-aarch64"):
+                step["skip"] = True
+
         for step in pipeline["steps"]:
             visit(step)
             if "group" in step:
@@ -251,9 +251,7 @@ so it is executed.""",
 
     add_version_to_preflight_tests(pipeline)
 
-    trim_builds(
-        pipeline, args.coverage, args.sanitizer, args.bazel, args.bazel_remote_cache
-    )
+    trim_builds(pipeline, args.coverage, args.sanitizer, args.bazel_remote_cache)
 
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline and for coverage runs.
@@ -586,28 +584,22 @@ def trim_builds(
     pipeline: Any,
     coverage: bool,
     sanitizer: Sanitizer,
-    bazel: bool,
     bazel_remote_cache: str,
 ) -> None:
     """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
-    # Used to make sure we don't recalculate hashes since there are multiple
-    # builds (Bazel, Cargo) at the moment
-    deps_check = {}
 
-    def get_deps(arch: Arch) -> tuple[mzbuild.DependencySet, bool]:
-        if arch not in deps_check:
-            repo = mzbuild.Repository(
-                Path("."),
-                arch=arch,
-                coverage=coverage,
-                sanitizer=sanitizer,
-                bazel=bazel,
-                bazel_remote_cache=bazel_remote_cache,
-            )
-            deps = repo.resolve_dependencies(image for image in repo if image.publish)
-            check = deps.check()
-            deps_check[arch] = (deps, check)
-        return deps_check[arch]
+    def get_deps(arch: Arch, bazel: bool = False) -> tuple[mzbuild.DependencySet, bool]:
+        repo = mzbuild.Repository(
+            Path("."),
+            arch=arch,
+            coverage=coverage,
+            sanitizer=sanitizer,
+            bazel=bazel,
+            bazel_remote_cache=bazel_remote_cache,
+        )
+        deps = repo.resolve_dependencies(image for image in repo if image.publish)
+        check = deps.check()
+        return (deps, check)
 
     def hash(deps: mzbuild.DependencySet) -> str:
         h = hashlib.sha1()
@@ -634,17 +626,15 @@ def trim_builds(
                 step["concurrency"] = 1
                 step["concurrency_group"] = f"rust-build-aarch64/{hash(deps)}"
         elif step.get("id") == "build-x86_64":
-            (deps, check) = get_deps(Arch.X86_64)
-            inputs = step.get("inputs") or []
-            if check and not have_paths_changed(inputs):
+            (deps, check) = get_deps(Arch.X86_64, bazel=True)
+            if check:
                 step["skip"] = True
             else:
                 step["concurrency"] = 1
                 step["concurrency_group"] = f"build-x86_64/{hash(deps)}"
         elif step.get("id") == "build-aarch64":
-            (deps, check) = get_deps(Arch.AARCH64)
-            inputs = step.get("inputs") or []
-            if check and not have_paths_changed(inputs):
+            (deps, check) = get_deps(Arch.AARCH64, bazel=True)
+            if check:
                 step["skip"] = True
             else:
                 step["concurrency"] = 1

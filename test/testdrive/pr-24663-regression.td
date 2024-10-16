@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # This is a test that was used to ensure a specific ordering of updates
-# in `upsert` continued to be processed properly in pr #24663. Its short,
+# in `upsert` continued to be processed properly in pr materialize#24663. Its short,
 # so its copied here.
 
 $ set-arg-default default-storage-size=1

@@ -18,7 +18,7 @@
 # Check out https://www.postgresql.org/docs/13/auth-pg-hba-conf.html
 # for more details.
 
-# TODO: Reenable when materialize#14037 is fixed
+# TODO: Reenable when database-issues#4009 is fixed
 $ skip-if
 SELECT true
 

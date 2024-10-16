@@ -10,6 +10,6 @@
 statement ok
 CREATE TABLE decimal_zero (f1 DECIMAL)
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/7360
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/2297
 statement ok
 INSERT INTO decimal_zero VALUES ('0.0'), (0)

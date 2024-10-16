@@ -176,8 +176,6 @@ toCSS | fingerprint }}
 
     // activate first tab
     $(".nav-tabs li:first-child a").click();
-    // if the url anchor matches the id of a tab, activate that tab
-    var deeplinkedTab = $(`.nav-tabs a[href='${document.location.hash}']`);
-    if (deeplinkedTab) deeplinkedTab.click().get(0).scrollIntoView();
+
   });
 </script>

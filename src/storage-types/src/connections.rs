@@ -175,8 +175,14 @@ impl ConnectionContext {
         ConnectionContext {
             environment_id: "test-environment-id".into(),
             librdkafka_log_level: tracing::Level::INFO,
-            aws_external_id_prefix: None,
-            aws_connection_role_arn: None,
+            aws_external_id_prefix: Some(
+                AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable(
+                    "test-aws-external-id-prefix",
+                ),
+            ),
+            aws_connection_role_arn: Some(
+                "arn:aws:iam::123456789000:role/MaterializeConnection".into(),
+            ),
             secrets_reader,
             cloud_resource_reader: None,
             ssh_tunnel_manager: SshTunnelManager::default(),
@@ -855,7 +861,7 @@ impl KafkaConnection {
 
                 // Don't drop the consumer until after we've drained the errors
                 // channel. Dropping the consumer can introduce spurious errors.
-                // See #24901.
+                // See database-issues#7432.
                 drop(consumer);
 
                 match main_err {

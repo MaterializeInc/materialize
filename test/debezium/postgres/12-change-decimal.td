@@ -9,7 +9,7 @@
 
 #
 # Changing the definition of a DECIMAL column results in a source error
-# see discussion in https://github.com/MaterializeInc/materialize/issues/6536
+# see discussion in https://github.com/MaterializeInc/database-issues/issues/2032
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres

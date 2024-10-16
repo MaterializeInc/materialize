@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# Test that multiple scalar subqueries are properly flattened by #8582 whenever possible.
+# Test that multiple scalar subqueries are properly flattened by materialize#8582 whenever possible.
 #
 # For eligible queries:
 # - a (number_of_subqueries + 1)-way join is expected at the bottom of the plan

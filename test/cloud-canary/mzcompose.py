@@ -33,9 +33,9 @@ from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.postgres import PostgresAsCockroach
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.redpanda_cloud import RedpandaCloud
 from materialize.ui import UIError
@@ -48,15 +48,15 @@ REDPANDA_USER = "ci-user"
 REGION = "aws/us-east-1"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "staging")
 USERNAME = os.getenv("NIGHTLY_CANARY_USERNAME", "infra+nightly-canary@materialize.com")
-APP_PASSWORD = os.environ["NIGHTLY_CANARY_APP_PASSWORD"]
-VERSION = f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
+APP_PASSWORD = os.getenv("NIGHTLY_CANARY_APP_PASSWORD")
+VERSION = f"{MzVersion.parse_cargo()}--pr.g{os.getenv('BUILDKITE_COMMIT')}"
 
 # The DevEx account in the Confluent Cloud is used to provide Kafka services
 KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"
 SCHEMA_REGISTRY_ENDPOINT = "https://psrc-8kz20.us-east-2.aws.confluent.cloud"
 # The actual values are stored in the i2 repository
-CONFLUENT_API_KEY = os.environ["CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME"]
-CONFLUENT_API_SECRET = os.environ["CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD"]
+CONFLUENT_API_KEY = os.getenv("CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME")
+CONFLUENT_API_SECRET = os.getenv("CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD")
 
 
 class Redpanda:
@@ -193,7 +193,7 @@ class Redpanda:
 
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    PostgresAsCockroach(),
     Materialized(
         # We use materialize/environmentd and not materialize/materialized here
         # in order to ensure a perfect match to the container that should be
@@ -213,7 +213,7 @@ SERVICES = [
     Mz(
         region=REGION,
         environment=ENVIRONMENT,
-        app_password=APP_PASSWORD,
+        app_password=APP_PASSWORD or "",
     ),
 ]
 
@@ -261,7 +261,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         try:
             c.run("mz", "region", "enable", "--version", VERSION)
         except UIError:
-            # Work around https://github.com/MaterializeInc/materialize/issues/17219
+            # Work around https://github.com/MaterializeInc/database-issues/issues/4989
             pass
 
         time.sleep(10)
@@ -299,7 +299,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
-    c.run("mz", "region", "disable")
+    c.run("mz", "region", "disable", "--hard")
 
 
 def wait_for_cloud(c: Composition) -> None:
@@ -351,6 +351,7 @@ def td(
     text: str | None = None,
     redpanda: Redpanda | None = None,
 ) -> None:
+    assert APP_PASSWORD is not None
     materialize_url = f"postgres://{urllib.parse.quote(USERNAME)}:{urllib.parse.quote(APP_PASSWORD)}@{urllib.parse.quote(c.cloud_hostname())}:6875"
 
     assert bool(filename) != bool(text)

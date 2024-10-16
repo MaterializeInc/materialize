@@ -49,14 +49,16 @@ use crate::durable::objects::{
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
     Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
+    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
     AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
     USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
@@ -503,6 +505,27 @@ impl<'a> Transaction<'a> {
     pub fn insert_cluster_replica(
         &mut self,
         cluster_id: ClusterId,
+        replica_name: &str,
+        config: ReplicaConfig,
+        owner_id: RoleId,
+    ) -> Result<ReplicaId, CatalogError> {
+        let replica_id = match cluster_id {
+            ClusterId::System(_) => self.allocate_system_replica_id()?,
+            ClusterId::User(_) => self.allocate_user_replica_id()?,
+        };
+        self.insert_cluster_replica_with_id(
+            cluster_id,
+            replica_id,
+            replica_name,
+            config,
+            owner_id,
+        )?;
+        Ok(replica_id)
+    }
+
+    pub(crate) fn insert_cluster_replica_with_id(
+        &mut self,
+        cluster_id: ClusterId,
         replica_id: ReplicaId,
         replica_name: &str,
         config: ReplicaConfig,
@@ -655,6 +678,11 @@ impl<'a> Transaction<'a> {
             .collect())
     }
 
+    pub fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
+        let id = self.get_and_increment_id(USER_REPLICA_ID_ALLOC_KEY.to_string())?;
+        Ok(ReplicaId::User(id))
+    }
+
     pub fn allocate_system_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
         let id = self.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
         Ok(ReplicaId::System(id))
@@ -662,6 +690,10 @@ impl<'a> Transaction<'a> {
 
     pub fn allocate_audit_log_id(&mut self) -> Result<u64, CatalogError> {
         self.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())
+    }
+
+    pub fn allocate_storage_usage_ids(&mut self) -> Result<u64, CatalogError> {
+        self.get_and_increment_id(STORAGE_USAGE_ID_ALLOC_KEY.to_string())
     }
 
     /// Allocates `amount` OIDs. OIDs can be recycled if they aren't currently assigned to any
@@ -904,6 +936,18 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    pub fn remove_source_references(&mut self, source_id: GlobalId) -> Result<(), CatalogError> {
+        let deleted = self
+            .source_references
+            .delete_by_key(SourceReferencesKey { source_id }, self.op_id)
+            .is_some();
+        if deleted {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownItem(source_id.to_string()).into())
+        }
+    }
+
     /// Removes the role `name` from the transaction.
     ///
     /// Returns an error if `name` is not found.
@@ -953,33 +997,6 @@ impl<'a> Transaction<'a> {
         }
 
         Ok(())
-    }
-
-    /// Removes the cluster `id` from the transaction.
-    ///
-    /// Returns an error if `id` is not found.
-    ///
-    /// Runtime is linear with respect to the total number of clusters in the catalog.
-    /// DO NOT call this function in a loop, use [`Self::remove_clusters`] instead.
-    pub fn remove_cluster(&mut self, id: ClusterId) -> Result<(), CatalogError> {
-        let deleted = self
-            .clusters
-            .delete_by_key(ClusterKey { id }, self.op_id)
-            .is_some();
-        if deleted {
-            Err(SqlCatalogError::UnknownCluster(id.to_string()).into())
-        } else {
-            // Cascade delete introspection sources and cluster replicas.
-            //
-            // TODO(benesch): this doesn't seem right. Cascade deletions should
-            // be entirely the domain of the higher catalog layer, not the
-            // storage layer.
-            self.cluster_replicas
-                .delete(|_k, v| v.cluster_id == id, self.op_id);
-            self.introspection_sources
-                .delete(|k, _v| k.cluster_id == id, self.op_id);
-            Ok(())
-        }
     }
 
     /// Removes all cluster in `clusters` from the transaction.
@@ -1694,6 +1711,21 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    pub fn update_source_references(
+        &mut self,
+        source_id: GlobalId,
+        references: Vec<SourceReference>,
+        updated_at: u64,
+    ) -> Result<(), CatalogError> {
+        let key = SourceReferencesKey { source_id };
+        let value = SourceReferencesValue {
+            references,
+            updated_at,
+        };
+        self.source_references.set(key, Some(value), self.op_id)?;
+        Ok(())
+    }
+
     /// Upserts persisted system configuration `name` to `value`.
     pub fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), CatalogError> {
         let key = ServerConfigurationKey {
@@ -2006,6 +2038,7 @@ impl<'a> Transaction<'a> {
             introspection_sources: self.introspection_sources.pending(),
             id_allocator: self.id_allocator.pending(),
             configs: self.configs.pending(),
+            source_references: self.source_references.pending(),
             settings: self.settings.pending(),
             system_gid_mapping: self.system_gid_mapping.pending(),
             system_configurations: self.system_configurations.pending(),
@@ -2042,6 +2075,7 @@ impl<'a> Transaction<'a> {
             introspection_sources,
             id_allocator,
             configs,
+            source_references,
             settings,
             system_gid_mapping,
             system_configurations,
@@ -2066,6 +2100,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(id_allocator);
         differential_dataflow::consolidation::consolidate_updates(configs);
         differential_dataflow::consolidation::consolidate_updates(settings);
+        differential_dataflow::consolidation::consolidate_updates(source_references);
         differential_dataflow::consolidation::consolidate_updates(system_gid_mapping);
         differential_dataflow::consolidation::consolidate_updates(system_configurations);
         differential_dataflow::consolidation::consolidate_updates(default_privileges);
@@ -2259,6 +2294,11 @@ pub struct TransactionBatch {
         proto::DefaultPrivilegesValue,
         Diff,
     )>,
+    pub(crate) source_references: Vec<(
+        proto::SourceReferencesKey,
+        proto::SourceReferencesValue,
+        Diff,
+    )>,
     pub(crate) system_privileges: Vec<(
         proto::SystemPrivilegesKey,
         proto::SystemPrivilegesValue,
@@ -2290,6 +2330,7 @@ impl TransactionBatch {
             id_allocator,
             configs,
             settings,
+            source_references,
             system_gid_mapping,
             system_configurations,
             default_privileges,
@@ -2311,6 +2352,7 @@ impl TransactionBatch {
             && id_allocator.is_empty()
             && configs.is_empty()
             && settings.is_empty()
+            && source_references.is_empty()
             && system_gid_mapping.is_empty()
             && system_configurations.is_empty()
             && default_privileges.is_empty()

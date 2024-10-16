@@ -72,7 +72,6 @@ use crate::BUILD_INFO;
 
 mod catalog;
 mod console;
-mod control;
 mod memory;
 mod metrics;
 mod probe;
@@ -387,13 +386,6 @@ impl InternalHttpServer {
                 "/api/coordinator/dump",
                 routing::get(catalog::handle_coordinator_dump),
             )
-            // This is called /api/control, because it's mean as a control endpoint.
-            // Not controller, as in the thing that a Coordinator holds and which is
-            // currently the only thing that this _can_ control.
-            .route(
-                "/api/control/allow-writes",
-                routing::post(control::handle_controller_allow_writes),
-            )
             .route(
                 "/internal-console",
                 routing::get(|| async { Redirect::temporary("/internal-console/") }),
@@ -623,7 +615,9 @@ where
         .await
         .map_err(|e| {
             let status = match e {
-                AdapterError::UserSessionsDisallowed => StatusCode::FORBIDDEN,
+                AdapterError::UserSessionsDisallowed | AdapterError::NetworkPolicyDenied(_) => {
+                    StatusCode::FORBIDDEN
+                }
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             };
             (status, Json(SqlError::from(e))).into_response()

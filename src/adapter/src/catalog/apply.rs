@@ -611,6 +611,7 @@ impl CatalogState {
             Builtin::Index(index) => {
                 let mut item = self
                     .parse_item(
+                        id,
                         &index.create_sql(),
                         None,
                         index.is_retained_metrics_object,
@@ -733,9 +734,48 @@ impl CatalogState {
                     PrivilegeMap::from_mz_acl_items(acl_items),
                 );
             }
+            Builtin::ContinualTask(ct) => {
+                let mut acl_items = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::Source,
+                    MZ_SYSTEM_ROLE_ID,
+                )];
+                acl_items.extend_from_slice(&ct.access);
+
+                let item = self
+                    .parse_item(
+                        id,
+                        &ct.create_sql(),
+                        None,
+                        false,
+                        None,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "internal error: failed to load bootstrap continual task:\n\
+                                    {}\n\
+                                    error:\n\
+                                    {:?}\n\n\
+                                    make sure that the schema name is specified in the builtin continual task's create sql statement.",
+                            ct.name, e
+                        )
+                    });
+                let CatalogItem::ContinualTask(_) = &item else {
+                    panic!("internal error: builtin continual task {}'s SQL does not begin with \"CREATE CONTINUAL TASK\".", ct.name);
+                };
+
+                self.insert_item(
+                    id,
+                    ct.oid,
+                    name,
+                    item,
+                    MZ_SYSTEM_ROLE_ID,
+                    PrivilegeMap::from_mz_acl_items(acl_items),
+                );
+            }
             Builtin::Connection(connection) => {
                 let mut item = self
                     .parse_item(
+                        id,
                         connection.sql,
                         None,
                         false,
@@ -855,7 +895,7 @@ impl CatalogState {
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
                         if retraction.create_sql() != create_sql {
-                            let item = self.deserialize_item(&create_sql).unwrap_or_else(|e| {
+                            let item = self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
                             retraction.item = item;
@@ -869,9 +909,10 @@ impl CatalogState {
                         retraction
                     }
                     None => {
-                        let catalog_item = self.deserialize_item(&create_sql).unwrap_or_else(|e| {
-                            panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                        });
+                        let catalog_item =
+                            self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
+                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                            });
                         CatalogEntry {
                             item: catalog_item,
                             referenced_by: Vec::new(),
@@ -943,16 +984,26 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_source_references_update(
         &mut self,
-        _source_references: mz_catalog::durable::SourceReferences,
+        source_references: mz_catalog::durable::SourceReferences,
         diff: StateDiff,
         _retractions: &mut InProgressRetractions,
     ) {
         match diff {
             StateDiff::Addition => {
-                unimplemented!("source references are not yet implemented");
+                let prev = self
+                    .source_references
+                    .insert(source_references.source_id, source_references.into());
+                assert!(
+                    prev.is_none(),
+                    "values must be explicitly retracted before inserting a new value: {prev:?}"
+                );
             }
             StateDiff::Retraction => {
-                unimplemented!("source references are not yet implemented");
+                let prev = self.source_references.remove(&source_references.source_id);
+                assert!(
+                    prev.is_some(),
+                    "retraction for a non-existent existing value: {source_references:?}"
+                );
             }
         }
     }
@@ -1182,7 +1233,7 @@ impl CatalogState {
                     let handle = mz_ore::task::spawn(
                         || "parse view",
                         async move {
-                            let res = task_state.parse_item(&create_sql, None, false, None);
+                            let res = task_state.parse_item(id, &create_sql, None, false, None);
                             (id, res)
                         }
                         .instrument(span),
@@ -1326,6 +1377,11 @@ impl CatalogState {
             }
         }
         for u in entry.uses() {
+            // Ignore self for self-referential tasks (e.g. Continual Tasks), if
+            // present.
+            if u == entry.id() {
+                continue;
+            }
             match self.entry_by_id.get_mut(&u) {
                 Some(metadata) => metadata.used_by.push(entry.id()),
                 None => panic!(
@@ -1619,7 +1675,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let mut builtin_index_additions = Vec::new();
     for (builtin_item_update, ts, diff) in builtin_item_updates {
         match &builtin_item_update.description.object_type {
-            CatalogItemType::Index => push_update(
+            CatalogItemType::Index | CatalogItemType::ContinualTask => push_update(
                 StateUpdate {
                     kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
                     ts,

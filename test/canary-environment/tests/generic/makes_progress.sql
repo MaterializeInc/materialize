@@ -14,7 +14,7 @@
    SET CLUSTER = qa_canary_environment_compute;
    BEGIN;
    DECLARE c1 CURSOR FOR SUBSCRIBE ( SELECT * FROM {{ model }} )  WITH (SNAPSHOT = FALSE);
-   -- TODO: Switch timeout back to 60s after materialize#22061 is fixed
+   -- TODO: Switch timeout back to 60s after database-issues#6647 is fixed
    FETCH 1 c1 WITH (timeout='300s');
 {% endset %}
 

@@ -170,7 +170,9 @@ class QueryGenerator:
 
         return queries
 
-    def add_random_where_condition_to_query(self, query: QueryTemplate) -> None:
+    def add_random_where_condition_to_query(
+        self, query: QueryTemplate, test_summary: ConsistencyTestSummary
+    ) -> None:
         if not self.randomized_picker.random_boolean(
             probability.GENERATE_WHERE_EXPRESSION
         ):
@@ -187,7 +189,9 @@ class QueryGenerator:
             where_expression, query.row_selection
         )
 
-        if not ignore_verdict.ignore:
+        if isinstance(ignore_verdict, YesIgnore):
+            test_summary.record_ignore_reason_usage(ignore_verdict.reason)
+        else:
             query.where_expression = where_expression
             self._assign_random_sources(
                 query.get_all_data_sources(), [query.where_expression]
@@ -211,7 +215,9 @@ class QueryGenerator:
                 offset_index : offset_index + self.config.max_cols_per_query
             ]
 
-            data_source, additional_sources = self._select_sources(storage_layout)
+            data_source, additional_sources = self._select_sources(
+                storage_layout, test_summary
+            )
             self._assign_random_sources(
                 [data_source] + as_data_sources(additional_sources),
                 expressions,
@@ -232,7 +238,7 @@ class QueryGenerator:
             if self.randomized_picker.random_boolean(
                 probability.NO_SOURCE_MINIMIZATION
             ):
-                # do not minimize sources to catch errors like materialize#29110
+                # do not minimize sources to catch errors like database-issues#8463
                 pass
             else:
                 # remove sources that are not used by any (remaining) expression
@@ -371,11 +377,12 @@ class QueryGenerator:
     def _select_sources(
         self,
         storage_layout: ValueStorageLayout,
+        test_summary: ConsistencyTestSummary,
     ) -> tuple[DataSource, list[AdditionalSource]]:
         if storage_layout == ValueStorageLayout.HORIZONTAL:
             return DataSource(table_index=None), []
 
-        return self._random_source_tables(storage_layout)
+        return self._random_source_tables(storage_layout, test_summary)
 
     def minimize_sources(
         self,
@@ -409,7 +416,9 @@ class QueryGenerator:
         return data_source, additional_sources
 
     def _random_source_tables(
-        self, storage_layout: ValueStorageLayout
+        self,
+        storage_layout: ValueStorageLayout,
+        test_summary: ConsistencyTestSummary,
     ) -> tuple[DataSource, list[AdditionalSource]]:
         main_source = DataSource(table_index=0)
 
@@ -434,7 +443,9 @@ class QueryGenerator:
                     join_constraint, ALL_ROWS_SELECTION
                 )
 
-                if not ignore_verdict.ignore:
+                if isinstance(ignore_verdict, YesIgnore):
+                    test_summary.record_ignore_reason_usage(ignore_verdict.reason)
+                else:
                     self._validate_join_constraint(join_constraint)
                     additional_source.join_constraint = join_constraint
 
@@ -462,6 +473,7 @@ class QueryGenerator:
                 test_summary.count_ignored_select_expressions = (
                     test_summary.count_ignored_select_expressions + 1
                 )
+                test_summary.record_ignore_reason_usage(ignore_verdict.reason)
                 self._log_skipped_expression(
                     test_summary, expression, ignore_verdict.reason
                 )

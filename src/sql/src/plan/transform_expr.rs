@@ -299,7 +299,7 @@ fn column_type(
 /// For now, we fuse only value window function calls (`WindowExprType::Value`).
 /// TODO: We should consider fusing the other types later:
 /// - `WindowExprType::Aggregate`: Would be great to also fuse these soon, see e.g.
-///   <https://github.com/MaterializeInc/materialize/issues/20741#issuecomment-2231723718>
+///   <https://github.com/MaterializeInc/database-issues/issues/6247#issuecomment-2231723718>
 /// - `WindowExprType::Scalar`: probably won't need to fuse these for a long time.)
 ///
 /// For now, we can fuse value window function calls where the

@@ -1,7 +1,7 @@
 # Graceful Reconfiguration of Managed Clusters
 
 Associated issues/prs:
-[#20010](https://github.com/MaterializeInc/materialize/issues/20010)
+[#20010](https://github.com/MaterializeInc/database-issues/issues/5976)
 [#26401](https://github.com/MaterializeInc/materialize/pull/26401)
 
 ## The Problem
@@ -346,7 +346,7 @@ based metrics for scheduling in `compute-client/src/controller/
 instance:update_hydration_status`, this works very well for a single data flow,
 but can't gauge the hydration status of a replica as a whole.
 
-What we likely want is a mechanism [discussed here](https://github.com/MaterializeInc/materialize/issues/20010#issuecomment-2058563052), where we
+What we likely want is a mechanism [discussed here](https://github.com/MaterializeInc/database-issues/issues/5976#issuecomment-2058563052), where we
 compare the data-flow frontiers between reconfiguration and active replicas,
 and when the reconfiguration replicas have all data-flows within some threshold
 of the active, we send a claim that the check condition has been met and proceed with

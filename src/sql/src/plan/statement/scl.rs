@@ -25,7 +25,6 @@ use crate::ast::{
 };
 use crate::names::{self, Aug};
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
     FetchPlan, InspectShardPlan, Params, Plan, PlanError, PreparePlan, ResetVariablePlan,
@@ -284,7 +283,7 @@ pub fn describe_execute(
     // means if the statement is now invalid due to an object having been dropped,
     // describe is unable to notice that. This is currently an existing problem
     // with prepared statements over pgwire as well, so we can leave this for now.
-    // See #8397.
+    // See database-issues#2563.
     Ok(plan_execute_desc(scx, stmt)?.0.clone())
 }
 

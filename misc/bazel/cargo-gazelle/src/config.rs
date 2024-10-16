@@ -94,7 +94,7 @@ impl CrateConfig {
         self.skip_generating
     }
 
-    pub fn additive_content(&self) -> Option<AdditiveContent<'_>> {
+    pub fn additive_content(&self) -> Option<AdditiveContent> {
         self.additive_content
             .as_ref()
             .map(|s| AdditiveContent::new(s.as_str()))
@@ -144,6 +144,9 @@ pub struct LibraryConfig {
     /// Extra proc macro dependencies to include.
     #[serde(default)]
     extra_proc_macro_deps: Vec<String>,
+    /// Should we disable pipelined compilation for this library.
+    #[serde(default)]
+    disable_pipelining: Option<bool>,
 }
 
 impl LibraryConfig {
@@ -161,6 +164,10 @@ impl LibraryConfig {
 
     pub fn extra_proc_macro_deps(&self) -> &[String] {
         &self.extra_proc_macro_deps
+    }
+
+    pub fn disable_pipelining(&self) -> Option<bool> {
+        self.disable_pipelining
     }
 }
 

@@ -324,6 +324,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                         debug_name: dataflow.debug_name.clone(),
                         initial_storage_as_of: dataflow.initial_storage_as_of.clone(),
                         refresh_schedule: dataflow.refresh_schedule.clone(),
+                        dataflow_expiration_desc: dataflow.dataflow_expiration_desc.clone(),
                     })
                     .map(ComputeCommand::CreateDataflow)
                     .collect()
@@ -473,6 +474,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     compute_state.report_operator_hydration();
                     compute_state.report_frontiers();
                     compute_state.report_dropped_collections();
+                    compute_state.report_metrics();
                 }
 
                 self.metrics
@@ -805,7 +807,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // distinct TVCs, so the controller doesn't expect any historical consistency from
             // these collections when it reconnects to a replica.
             //
-            // TODO(materialize#27730): Consider resolving this with controller-side reconciliation instead.
+            // TODO(database-issues#8152): Consider resolving this with controller-side reconciliation instead.
             if let Some(config) = old_instance_config {
                 for id in config.logging.index_logs.values() {
                     let trace = compute_state

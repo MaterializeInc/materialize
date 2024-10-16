@@ -24,7 +24,7 @@ statement ok
 INSERT INTO t1 VALUES (0, 'nnn'), (1, 'l1'), (1, 'a'), (2, 'l2'), (3, 'l3'), (1234, 'xxx'), (3456, 'yyy'), (12345, 'zzz'), (null, 'nnn')
 
 # A very large IN list shouldn't cause a stack overflow or other issue in the optimizer, see
-# https://github.com/MaterializeInc/materialize/issues/6247
+# https://github.com/MaterializeInc/database-issues/issues/1924
 
 query T rowsort
 SELECT b FROM t1
@@ -455,7 +455,7 @@ WHERE a+a IN (-1, 1, 2, 3, 6, 7, 9)
 
 # A non-trivial expression in a literal constraint, and the same expression also appears in the output.
 # Exercises the second part of `inline_literal_constraints`.
-# https://github.com/MaterializeInc/materialize/issues/13151#issuecomment-1192763523
+# https://github.com/MaterializeInc/database-issues/issues/3783#issuecomment-1192763523
 
 query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT a+a FROM t1
@@ -510,7 +510,7 @@ WHERE (a,b) IN ((1, 4*a), (2, 5*a), (3, a+20))
 1  4  7
 3  23  33
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/14532
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/4144
 # Copied from test/sqllogictest/sqlite/test/index/orderby_nosort/100/slt_good_3.test
 
 statement ok
@@ -528,7 +528,7 @@ SELECT pk FROM tab0 WHERE (((col4 >= 660.98) AND ((col4 IN (724.71,445.29,441.2,
 0
 1
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/14548
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/4153
 # Also tests the situation when `constraints_to_residual_sets` has multiple elements in the sets.
 
 statement ok
@@ -1126,7 +1126,7 @@ Target cluster: quickstart
 
 EOF
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/15696
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/4506
 # CREATE INDEX should call reduce on index expressions.
 
 statement ok
@@ -1149,7 +1149,7 @@ Target cluster: quickstart
 
 EOF
 
-# Regression test for https://github.com/MaterializeInc/materialize/issues/18410
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/5424
 # We should resist the temptation to do an index lookup in the following test; `preserves_uniqueness` should be checked
 # not just on the inverse cast, but on the original cast as well.
 

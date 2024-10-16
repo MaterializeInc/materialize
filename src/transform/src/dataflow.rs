@@ -769,7 +769,7 @@ id: {}, key: {:?}",
 /// - Some indexes might be less skewed than others. (Although, picking a unique key tries to
 ///   capture this already.)
 /// - Some indexes might have an error, while others don't.
-///   <https://github.com/MaterializeInc/materialize/issues/15557>
+///   <https://github.com/MaterializeInc/database-issues/issues/4455>
 /// - Some indexes might have more extra data in their keys (because of being on more complicated
 ///   expressions than just column references), which won't be used in a full scan.
 fn choose_index(
@@ -896,7 +896,7 @@ impl<'a> CollectIndexRequests<'a> {
                         }
                         JoinImplementation::DeltaQuery(..) => {
                             // For Delta joins, the first input is special, see
-                            // https://github.com/MaterializeInc/materialize/issues/6789
+                            // https://github.com/MaterializeInc/database-issues/issues/2115
                             this.collect_index_reqs_inner(
                                 &mut inputs[0],
                                 &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(DeltaJoinIndexUsageType::Unknown)),
@@ -1025,7 +1025,7 @@ impl<'a> CollectIndexRequests<'a> {
                         // top of the Let, or when the 2 uses each have an `ArrangeBy`. In both cases,
                         // we'll add only 1 full scan, which would be wrong in the latter case. However,
                         // the latter case can't currently happen until we do
-                        // https://github.com/MaterializeInc/materialize/issues/21145
+                        // https://github.com/MaterializeInc/database-issues/issues/6363
                         // Also note that currently we are deduplicating index usage types when
                         // printing index usages in EXPLAIN.
                         if let Some((idx_id, key)) = pick_index_for_full_scan(global_id) {

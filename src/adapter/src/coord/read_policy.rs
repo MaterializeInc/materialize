@@ -324,7 +324,7 @@ impl crate::coord::Coordinator {
     /// Will panic if any of the referenced collections in `id_bundle` don't
     /// exist.
     pub(crate) fn acquire_read_holds(
-        &mut self,
+        &self,
         id_bundle: &CollectionIdBundle,
     ) -> ReadHolds<Timestamp> {
         let mut read_holds = ReadHolds::new();

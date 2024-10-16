@@ -1398,9 +1398,10 @@ impl_display_t!(CreateMaterializedViewStatement);
 /// `CREATE CONTINUAL TASK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateContinualTaskStatement<T: AstInfo> {
-    pub name: UnresolvedItemName,
+    pub name: T::ItemName,
     pub columns: Vec<CteMutRecColumnDef<T>>,
     pub in_cluster: Option<T::ClusterName>,
+    pub as_of: Option<u64>,
 
     // The thing we get input diffs from
     pub input: T::ItemName,
@@ -1413,7 +1414,6 @@ pub struct CreateContinualTaskStatement<T: AstInfo> {
 pub enum ContinualTaskStmt<T: AstInfo> {
     Delete(DeleteStatement<T>),
     Insert(InsertStatement<T>),
-    // TODO(ct): Update/upsert?
 }
 
 impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
@@ -1443,6 +1443,11 @@ impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
             }
         }
         f.write_str(")");
+
+        if let Some(time) = &self.as_of {
+            f.write_str(" AS OF ");
+            f.write_str(time);
+        }
     }
 }
 impl_display_t!(CreateContinualTaskStatement);
@@ -1609,12 +1614,30 @@ pub struct TableFromSourceOption<T: AstInfo> {
 }
 impl_display_for_with_option!(TableFromSourceOption);
 
+/// `CREATE TABLE .. FROM SOURCE` columns specification
+/// can have 3 states:
+/// Before purification they can be `NotSpecified` or `Named`
+/// by the user to specify the column names to use.
+/// After purification they can be in any of the 3 states.
+/// For some source types we define the columns during purification
+/// and for others the columns are defined during planning based
+/// on the encoding option of the source.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TableFromSourceColumns<T: AstInfo> {
+    /// The user did not specify which columns to use.
+    NotSpecified,
+    /// The user requested the named columns. Only compatible
+    /// with source types that allow user-specified column names.
+    Named(Vec<Ident>),
+    /// Columns defined during purification for some source types.
+    Defined(Vec<ColumnDef<T>>),
+}
+
 /// `CREATE TABLE .. FROM SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateTableFromSourceStatement<T: AstInfo> {
-    /// Table name
     pub name: UnresolvedItemName,
-    pub columns: Vec<ColumnDef<T>>,
+    pub columns: TableFromSourceColumns<T>,
     pub constraints: Vec<TableConstraint<T>>,
     pub if_not_exists: bool,
     pub source: T::ItemName,
@@ -1644,10 +1667,18 @@ impl<T: AstInfo> AstDisplay for CreateTableFromSourceStatement<T> {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(name);
-        if !columns.is_empty() || !constraints.is_empty() {
+        if !matches!(columns, TableFromSourceColumns::NotSpecified) || !constraints.is_empty() {
             f.write_str(" (");
 
-            f.write_node(&display::comma_separated(columns));
+            match columns {
+                TableFromSourceColumns::NotSpecified => unreachable!(),
+                TableFromSourceColumns::Named(columns) => {
+                    f.write_node(&display::comma_separated(columns))
+                }
+                TableFromSourceColumns::Defined(columns) => {
+                    f.write_node(&display::comma_separated(columns))
+                }
+            };
             if !constraints.is_empty() {
                 f.write_str(", ");
                 f.write_node(&display::comma_separated(constraints));
@@ -3163,6 +3194,9 @@ pub enum ShowObjectType<T: AstInfo> {
     RoleMembership {
         role: Option<T::RoleName>,
     },
+    ContinualTask {
+        in_cluster: Option<T::ClusterName>,
+    },
 }
 /// `SHOW <object>S`
 ///
@@ -3204,6 +3238,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Privileges { .. } => "PRIVILEGES",
             ShowObjectType::DefaultPrivileges { .. } => "DEFAULT PRIVILEGES",
             ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
+            ShowObjectType::ContinualTask { .. } => "CONTINUAL TASKS",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -3228,7 +3263,8 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::MaterializedView { in_cluster }
             | ShowObjectType::Index { in_cluster, .. }
             | ShowObjectType::Sink { in_cluster }
-            | ShowObjectType::Source { in_cluster } => {
+            | ShowObjectType::Source { in_cluster }
+            | ShowObjectType::ContinualTask { in_cluster } => {
                 if let Some(cluster) = in_cluster {
                     f.write_str(" IN CLUSTER ");
                     f.write_node(cluster);
@@ -3800,6 +3836,7 @@ pub enum ObjectType {
     Schema,
     Func,
     Subsource,
+    ContinualTask,
 }
 
 impl ObjectType {
@@ -3815,7 +3852,8 @@ impl ObjectType {
             | ObjectType::Secret
             | ObjectType::Connection
             | ObjectType::Func
-            | ObjectType::Subsource => true,
+            | ObjectType::Subsource
+            | ObjectType::ContinualTask => true,
             ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
@@ -3844,6 +3882,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
             ObjectType::Subsource => "SUBSOURCE",
+            ObjectType::ContinualTask => "CONTINUAL TASK",
         })
     }
 }
@@ -5135,6 +5174,7 @@ pub enum CommentObjectType<T: AstInfo> {
     Schema { name: T::SchemaName },
     Cluster { name: T::ClusterName },
     ClusterReplica { name: QualifiedReplica },
+    ContinualTask { name: T::ItemName },
 }
 
 impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
@@ -5204,6 +5244,10 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
             }
             ClusterReplica { name } => {
                 f.write_str("CLUSTER REPLICA ");
+                f.write_node(name);
+            }
+            ContinualTask { name } => {
+                f.write_str("CONTINUAL TASK ");
                 f.write_node(name);
             }
         }

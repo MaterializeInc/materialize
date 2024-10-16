@@ -143,7 +143,7 @@ where
     // Group messages by key at each timestamp.
     //
     // Allow access to `arrange_named` because we cannot access Mz's wrapper
-    // from here. TODO(materialize#17413): Revisit with cluster unification.
+    // from here. TODO(database-issues#5046): Revisit with cluster unification.
     #[allow(clippy::disallowed_methods)]
     let mut collection =
         combine_at_timestamp(collection.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Sink"));
@@ -165,7 +165,7 @@ where
             //
             // TODO: put the sink in a user-visible errored state instead of
             // only logging internally. See:
-            // https://github.com/MaterializeInc/materialize/issues/17549.
+            // https://github.com/MaterializeInc/database-issues/issues/5099.
             if !key_is_synthetic && vs.len() > 1 {
                 // We rate limit how often we emit this warning to avoid
                 // flooding logs.

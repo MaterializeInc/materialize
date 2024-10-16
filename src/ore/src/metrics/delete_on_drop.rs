@@ -182,7 +182,7 @@ impl<'a> PromLabelsExt<'a> for BTreeMap<&'a str, &'a str> {
 /// NOTE: This type implements [`Borrow`], which imposes some constraints on implementers. To
 /// ensure these constraints, do *not* implement any of the `Eq`, `Ord`, or `Hash` traits on this.
 /// type.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DeleteOnDropMetric<'a, V, L>
 where
     V: MetricVec_,

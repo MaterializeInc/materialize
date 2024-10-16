@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test for #25545.
+# Regression test for materialize#25545.
 
 statement ok
 with table_privileges as (

@@ -48,7 +48,7 @@ INSERT INTO schema2.t1 SELECT * FROM schema2.t1;
 contains:catalog item 't1' already exists
 
 
-# TODO: materialize#24797
+# TODO: database-issues#7397
 # CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
 # contains:table t1 is ambiguous, consider specifying the schema
 

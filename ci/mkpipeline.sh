@@ -27,7 +27,7 @@ for arch in x86_64 aarch64; do
         if ! MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder exists $toolchain; then
             queue=builder-linux-x86_64
             if [[ $arch = aarch64 ]]; then
-                queue=builder-linux-aarch64
+                queue=builder-linux-aarch64-mem
             fi
             bootstrap_steps+="
   - label: bootstrap $toolchain $arch
@@ -45,7 +45,8 @@ steps:
   - wait
   - label: mkpipeline
     env:
-      CI_BUILD_WTIH_BAZEL: 1
+      CI_BAZEL_BUILD: 1
+      CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
     command: bin/ci-builder run stable bin/pyactivate -m ci.mkpipeline $pipeline $@
     priority: 200
     agents:

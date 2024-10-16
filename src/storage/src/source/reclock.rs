@@ -1738,7 +1738,7 @@ mod tests {
     }
 
     // Regression test for
-    // https://github.com/MaterializeInc/materialize/issues/14740.
+    // https://github.com/MaterializeInc/database-issues/issues/4216.
     #[mz_ore::test(tokio::test(start_paused = true))]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_since_hold() {

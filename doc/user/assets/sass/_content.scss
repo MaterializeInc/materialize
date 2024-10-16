@@ -227,7 +227,6 @@ p+p {
     .multilinkbox {
         margin: var(--small) 0;
         display: flex;
-        justify-content: space-between;
         gap: var(--milli);
 
         @media(max-width: 1325px) {

@@ -69,7 +69,22 @@ statement ok
 DROP SOURCE s;
 
 statement ok
-CREATE SOURCE multiplex FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+CREATE SOURCE multiplex FROM LOAD GENERATOR AUCTION;
+
+statement ok
+CREATE TABLE accounts FROM SOURCE multiplex (REFERENCE accounts);
+
+statement ok
+CREATE TABLE auctions FROM SOURCE multiplex (REFERENCE auctions);
+
+statement ok
+CREATE TABLE bids FROM SOURCE multiplex (REFERENCE bids);
+
+statement ok
+CREATE TABLE organizations FROM SOURCE multiplex (REFERENCE organizations);
+
+statement ok
+CREATE TABLE users FROM SOURCE multiplex (REFERENCE users);
 
 statement ok
 ALTER CLUSTER REPLICA foo.r RENAME TO s;
@@ -168,11 +183,11 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 44  drop  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public"}  materialize
 45  create  source  {"cluster_id":null,"database":"materialize","id":"u9","item":"multiplex_progress","schema":"public","type":"progress"}  materialize
 46  create  source  {"cluster_id":"u1","database":"materialize","id":"u10","item":"multiplex","schema":"public","type":"load-generator"}  materialize
-47  create  source  {"cluster_id":"u1","database":"materialize","id":"u11","item":"accounts","schema":"public","type":"subsource"}  materialize
-48  create  source  {"cluster_id":"u1","database":"materialize","id":"u12","item":"auctions","schema":"public","type":"subsource"}  materialize
-49  create  source  {"cluster_id":"u1","database":"materialize","id":"u13","item":"bids","schema":"public","type":"subsource"}  materialize
-50  create  source  {"cluster_id":"u1","database":"materialize","id":"u14","item":"organizations","schema":"public","type":"subsource"}  materialize
-51  create  source  {"cluster_id":"u1","database":"materialize","id":"u15","item":"users","schema":"public","type":"subsource"}  materialize
+47  create  table  {"database":"materialize","id":"u11","item":"accounts","schema":"public"}  materialize
+48  create  table  {"database":"materialize","id":"u12","item":"auctions","schema":"public"}  materialize
+49  create  table  {"database":"materialize","id":"u13","item":"bids","schema":"public"}  materialize
+50  create  table  {"database":"materialize","id":"u14","item":"organizations","schema":"public"}  materialize
+51  create  table  {"database":"materialize","id":"u15","item":"users","schema":"public"}  materialize
 52  alter  cluster-replica  {"cluster_id":"u2","new_name":"s","old_name":"r","replica_id":"u2"}  materialize
 53  comment  cluster  {"id":"Cluster(User(2))","name":"foo"}  materialize
 54  comment  cluster  {"id":"Cluster(User(2))","name":"foo"}  materialize

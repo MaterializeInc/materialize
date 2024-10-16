@@ -42,7 +42,7 @@ use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{BatchPart, HollowBatch, RunMeta, RunOrder};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::{CodecSort, Consolidator, StructuredSort};
-use crate::{Metrics, PersistConfig, ShardId, WriterId};
+use crate::{Metrics, PersistConfig, ShardId};
 
 /// A request for compaction.
 ///
@@ -79,12 +79,12 @@ pub struct CompactConfig {
 
 impl CompactConfig {
     /// Initialize the compaction config from Persist configuration.
-    pub fn new(value: &PersistConfig, writer_id: &WriterId) -> Self {
+    pub fn new(value: &PersistConfig, shard_id: ShardId) -> Self {
         let mut ret = CompactConfig {
             compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
-            batch: BatchBuilderConfig::new(value, writer_id, true),
+            batch: BatchBuilderConfig::new(value, shard_id, true),
         };
         // Use compaction as a method of getting inline writes out of state, to
         // make room for more inline writes. We could instead do this at the end
@@ -145,7 +145,6 @@ where
     pub fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
-        writer_id: WriterId,
         write_schemas: Schemas<K, V>,
         gc: GarbageCollector<K, V, T, D>,
     ) -> Self {
@@ -194,7 +193,6 @@ where
                     .queued_seconds
                     .inc_by(enqueued.elapsed().as_secs_f64());
 
-                let writer_id = writer_id.clone();
                 let write_schemas = write_schemas.clone();
 
                 let compact_span =
@@ -202,7 +200,7 @@ where
                 compact_span.follows_from(&Span::current());
                 let gc = gc.clone();
                 mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
-                    let res = Self::compact_and_apply(&mut machine, req, writer_id, write_schemas)
+                    let res = Self::compact_and_apply(&mut machine, req, write_schemas)
                         .instrument(compact_span)
                         .await;
                     let res = res.map(|(res, maintenance)| {
@@ -278,7 +276,6 @@ where
     pub(crate) async fn compact_and_apply(
         machine: &mut Machine<K, V, T, D>,
         req: CompactReq<T>,
-        writer_id: WriterId,
         write_schemas: Schemas<K, V>,
     ) -> Result<(ApplyMergeResult, RoutineMaintenance), anyhow::Error> {
         let metrics = Arc::clone(&machine.applier.metrics);
@@ -315,7 +312,7 @@ where
                 .spawn_named(
                     || "persist::compact::consolidate",
                     Self::compact(
-                        CompactConfig::new(&machine.applier.cfg, &writer_id),
+                        CompactConfig::new(&machine.applier.cfg, machine.shard_id()),
                         Arc::clone(&machine.applier.state_versions.blob),
                         Arc::clone(&metrics),
                         Arc::clone(&machine.applier.shard_metrics),
@@ -554,7 +551,7 @@ where
         Vec<(&'a Description<T>, &'a RunMeta, &'a [BatchPart<T>])>,
         usize,
     )> {
-        let ordered_runs = Self::order_runs(req);
+        let ordered_runs = Self::order_runs(req, cfg.batch.expected_order);
         let mut ordered_runs = ordered_runs.iter().peekable();
 
         let mut chunks = vec![];
@@ -623,7 +620,10 @@ where
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
     /// ```
-    fn order_runs(req: &CompactReq<T>) -> Vec<(&Description<T>, &RunMeta, &[BatchPart<T>])> {
+    fn order_runs(
+        req: &CompactReq<T>,
+        target_order: RunOrder,
+    ) -> Vec<(&Description<T>, &RunMeta, &[BatchPart<T>])> {
         let total_number_of_runs = req
             .inputs
             .iter()
@@ -640,7 +640,23 @@ where
 
         while let Some((desc, mut runs)) = batch_runs.pop_front() {
             if let Some((meta, run)) = runs.next() {
-                ordered_runs.push((desc, meta, run));
+                let same_order = meta.order.unwrap_or(RunOrder::Codec) == target_order;
+                if same_order {
+                    ordered_runs.push((desc, meta, run));
+                } else {
+                    // The downstream consolidation step will handle a length-N run that's not in
+                    // the desired order by splitting it up into N length-1 runs. This preserves
+                    // correctness, but it means that we may end up needing to iterate through
+                    // many more parts concurrently than expected, increasing memory use. Instead,
+                    // we break up those runs before they're grouped together to be passed to
+                    // consolidation.
+                    // The downside is that this breaks the usual property that compaction produces
+                    // fewer runs than it takes in. This should generally be resolved by future
+                    // runs of compaction.
+                    for part in run {
+                        ordered_runs.push((desc, meta, std::slice::from_ref(part)));
+                    }
+                }
                 batch_runs.push_back((desc, runs));
             }
         }
@@ -690,7 +706,7 @@ where
         );
 
         // Duplicating a large codepath here during the migration.
-        // TODO(materialize#23942): dedup once the migration is complete.
+        // TODO(database-issues#7188): dedup once the migration is complete.
         if cfg.batch.expected_order == RunOrder::Structured {
             // If we're not writing down the record metadata, we must always use the old compaction
             // order. (Since that's the default when the metadata's not present.)
@@ -902,7 +918,7 @@ mod tests {
 
     use super::*;
 
-    // A regression test for a bug caught during development of #13160 (never
+    // A regression test for a bug caught during development of materialize#13160 (never
     // made it to main) where batches written by compaction would always have a
     // since of the minimum timestamp.
     #[mz_persist_proc::test(tokio::test)]
@@ -946,7 +962,7 @@ mod tests {
             val: Arc::new(StringSchema),
         };
         let res = Compactor::<String, String, u64, i64>::compact(
-            CompactConfig::new(&write.cfg, &write.writer_id),
+            CompactConfig::new(&write.cfg, write.shard_id()),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
@@ -1026,7 +1042,7 @@ mod tests {
             val: Arc::new(StringSchema),
         };
         let res = Compactor::<String, String, Product<u32, u32>, i64>::compact(
-            CompactConfig::new(&write.cfg, &write.writer_id),
+            CompactConfig::new(&write.cfg, write.shard_id()),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id(), ""),

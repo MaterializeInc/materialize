@@ -20,6 +20,7 @@ from materialize.output_consistency.expression.expression_characteristics import
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     involves_data_type_category,
     is_any_date_time_expression,
+    is_known_to_involve_exact_data_types,
     is_operation_tagged,
     matches_fun_by_any_name,
     matches_fun_by_name,
@@ -41,9 +42,15 @@ from materialize.output_consistency.ignore_filter.internal_output_inconsistency_
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     TAG_REGEX,
 )
+from materialize.output_consistency.input_data.types.number_types_provider import (
+    NON_INTEGER_TYPE_IDENTIFIERS,
+)
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.row_selection import DataRowSelection
 from materialize.output_consistency.validation.validation_message import ValidationError
+from materialize.postgres_consistency.ignore_filter.pg_inconsistency_ignore_filter import (
+    MATH_FUNCTIONS_WITH_PROBLEMATIC_FLOATING_BEHAVIOR,
+)
 
 # Do not specify "-dev" versions. The suffix will be cropped; it is not necessary.
 MZ_VERSION_0_77_0 = MzVersion.parse_mz("v0.77.0")
@@ -220,6 +227,26 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
                 True,
             ):
                 return YesIgnore("Changes to byte array presentation in PR 29591")
+
+            if is_any_date_time_expression(expression):
+                return YesIgnore(
+                    "Implicit cast from interval to mz_timestamp removed in PR 29579"
+                )
+
+            if expression.matches(
+                partial(
+                    matches_fun_by_any_name,
+                    function_names_in_lower_case=MATH_FUNCTIONS_WITH_PROBLEMATIC_FLOATING_BEHAVIOR,
+                ),
+                True,
+            ) or expression.matches(
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers=NON_INTEGER_TYPE_IDENTIFIERS,
+                ),
+                True,
+            ):
+                return YesIgnore("Introduced variable-length encoding in PR 29454")
 
         return super().shall_ignore_expression(expression, row_selection)
 

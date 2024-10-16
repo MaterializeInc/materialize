@@ -351,6 +351,7 @@ impl Plan {
                 ObjectType::Database => "drop database",
                 ObjectType::Schema => "drop schema",
                 ObjectType::Func => "drop function",
+                ObjectType::ContinualTask => "drop continual task",
             },
             Plan::DropOwned(_) => "drop owned",
             Plan::EmptyQuery => "do nothing",
@@ -390,6 +391,7 @@ impl Plan {
                 ObjectType::Database => "alter database",
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
+                ObjectType::ContinualTask => "alter continual task",
             },
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
@@ -424,6 +426,7 @@ impl Plan {
                 ObjectType::Database => "alter database owner",
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
+                ObjectType::ContinualTask => "alter continual task owner",
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
             Plan::Declare(_) => "declare",
@@ -632,12 +635,31 @@ pub struct CreateSourcePlan {
     pub in_cluster: Option<ClusterId>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceReferences {
+    pub updated_at: u64,
+    pub references: Vec<SourceReference>,
+}
+
+/// An available external reference for a source and if possible to retrieve,
+/// any column names it contains.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceReference {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub columns: Vec<String>,
+}
+
 /// A [`CreateSourcePlan`] and the metadata necessary to sequence it.
 #[derive(Debug)]
 pub struct CreateSourcePlanBundle {
     pub source_id: GlobalId,
     pub plan: CreateSourcePlan,
     pub resolved_ids: ResolvedIds,
+    /// All the available upstream references for this source.
+    /// Populated for top-level sources that can contain subsources/tables
+    /// and used during sequencing to populate the appropriate catalog fields.
+    pub available_source_references: Option<SourceReferences>,
 }
 
 #[derive(Debug)]
@@ -709,11 +731,12 @@ pub struct CreateMaterializedViewPlan {
 #[derive(Debug, Clone)]
 pub struct CreateContinualTaskPlan {
     pub name: QualifiedItemName,
+    // During initial creation, the `LocalId` placeholder for this CT in
+    // `continual_task.expr`. None on restart.
+    pub placeholder_id: Option<mz_expr::LocalId>,
     pub desc: RelationDesc,
-    // TODO(ct): Multiple inputs.
     pub input_id: GlobalId,
     pub continual_task: MaterializedView,
-    // TODO(ct): replace, drop_ids, if_not_exists
 }
 
 #[derive(Debug, Clone)]
@@ -786,12 +809,19 @@ pub struct SetTransactionPlan {
     pub modes: Vec<TransactionMode>,
 }
 
+/// A plan for select statements.
 #[derive(Clone, Debug)]
 pub struct SelectPlan {
-    pub select: Option<SelectStatement<Aug>>,
+    /// The `SELECT` statement itself. Used for explain/notices, but not otherwise
+    /// load-bearing. Boxed to save stack space.
+    pub select: Option<Box<SelectStatement<Aug>>>,
+    /// The plan as a HIR.
     pub source: HirRelationExpr,
+    /// At what time should this select happen?
     pub when: QueryWhen,
+    /// Instructions how to form the result set.
     pub finishing: RowSetFinishing,
+    /// For `COPY TO`, the format to use.
     pub copy_to: Option<CopyFormat>,
 }
 
@@ -1323,7 +1353,7 @@ pub struct CommentPlan {
     pub object_id: CommentObjectId,
     /// A sub-component of the object that this comment is associated with, e.g. a column.
     ///
-    /// TODO(parkmycar): <https://github.com/MaterializeInc/materialize/issues/22246>.
+    /// TODO(parkmycar): <https://github.com/MaterializeInc/database-issues/issues/6711>.
     pub sub_component: Option<usize>,
     /// The comment itself. If `None` that indicates we should clear the existing comment.
     pub comment: Option<String>,

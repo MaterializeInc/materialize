@@ -42,20 +42,19 @@ use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::TransformCtx;
 use timely::progress::Antichain;
 
-use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
-    OptimizeMode, OptimizerConfig, OptimizerError,
+    OptimizeMode, OptimizerCatalog, OptimizerConfig, OptimizerError,
 };
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
-    catalog: Arc<Catalog>,
+    catalog: Arc<dyn OptimizerCatalog>,
     /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// A durable GlobalId to be used with the exported materialized view sink.
@@ -77,11 +76,15 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
+    /// Whether the timeline is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
+    ///
+    /// Used to determine if it is safe to enable dataflow expiration.
+    is_timeline_epoch_ms: bool,
 }
 
 impl Optimizer {
     pub fn new(
-        catalog: Arc<Catalog>,
+        catalog: Arc<dyn OptimizerCatalog>,
         compute_instance: ComputeInstanceSnapshot,
         sink_id: GlobalId,
         view_id: GlobalId,
@@ -91,6 +94,7 @@ impl Optimizer {
         debug_name: String,
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
+        is_timeline_epoch_ms: bool,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -105,6 +109,7 @@ impl Optimizer {
             config,
             metrics,
             duration: Default::default(),
+            is_timeline_epoch_ms,
         }
     }
 }
@@ -217,11 +222,12 @@ impl Optimize<LocalMirPlan> for Optimizer {
         let rel_desc = RelationDesc::new(rel_typ, self.column_names.clone());
 
         let mut df_builder = {
-            let catalog = self.catalog.state();
             let compute = self.compute_instance.clone();
-            DataflowBuilder::new(catalog, compute).with_config(&self.config)
+            DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
+
+        df_desc.dataflow_expiration_desc.is_timeline_epoch_ms = self.is_timeline_epoch_ms;
 
         df_desc.refresh_schedule.clone_from(&self.refresh_schedule);
 

@@ -14,7 +14,7 @@
         name = 'schema_test' AND status = 'running';
 true
 
-# TODO: redesign ceased status materialize#25768
+# TODO: redesign ceased status database-issues#7687
 # # dummy subsource is put into error state
 # > SELECT true
 #     FROM mz_internal.mz_source_statuses

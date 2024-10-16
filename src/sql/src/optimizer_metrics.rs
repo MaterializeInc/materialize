@@ -43,7 +43,14 @@ impl OptimizerMetrics {
     pub fn observe_e2e_optimization_time(&self, object_type: &str, duration: Duration) {
         self.e2e_optimization_time_seconds
             .with_label_values(&[object_type])
-            .observe(duration.as_secs_f64())
+            .observe(duration.as_secs_f64());
+        if duration > Duration::from_millis(500) {
+            tracing::warn!(
+                object_type = object_type,
+                duration = format!("{}ms", duration.as_millis()),
+                "optimizer took more than 500ms"
+            );
+        }
     }
 
     pub fn inc_outer_join_lowering(&self, case: &str) {

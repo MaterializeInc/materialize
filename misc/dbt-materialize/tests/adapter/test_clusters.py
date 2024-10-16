@@ -110,7 +110,7 @@ class TestModelCluster:
     # In the absence of the pre-installed `quickstart` cluster, Materialize
     # should not error if a user-provided cluster is specified as a profile,
     # model, test, or seed config, but will error otherwise.
-    # See #17197: https://github.com/MaterializeInc/materialize/pull/17197
+    # See materialize#17197: https://github.com/MaterializeInc/materialize/pull/17197
     @pytest.fixture(scope="class")
     def project_config_update(self):
         return {

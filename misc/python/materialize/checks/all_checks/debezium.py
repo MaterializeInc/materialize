@@ -52,7 +52,7 @@ class DebeziumPostgres(Check):
 
                 $ kafka-wait-topic topic=postgres.public.debezium_table
 
-                # UPSERT is requred due to https://github.com/MaterializeInc/materialize/issues/14211
+                # UPSERT is requred due to https://github.com/MaterializeInc/database-issues/issues/4064
                 > CREATE SOURCE debezium_source1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

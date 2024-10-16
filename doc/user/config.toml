@@ -3,11 +3,10 @@ title = "Materialize Documentation"
 pygmentsCodeFences = true
 pygmentsUseClasses = true
 
+disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
-bannerMessage = "Register for the upcoming live workshop: Materialize vs. PostgreSQL Read Replicas. Oct. 3rd, 2PM ET"
-bannerLink="https://materialize.com/events/operational-data-store-vs-read-replica/?utm_medium=docs-banner&utm_source=documentation&utm_campaign=FY25_Q3_Webinar_Hosted_-Operational-Data-Store-vs.-Read-Replica&utm_term=&utm_content="
 
 [frontmatter]
 publishDate = ["publishDate"]
@@ -29,18 +28,6 @@ weight= 5
 identifier = "ingest-data"
 name = "Ingest data"
 weight= 11
-
-[[menu.main]]
-name = "MySQL"
-parent = 'ingest-data'
-identifier = 'mysql'
-weight = 5
-
-[[menu.main]]
-name = "PostgreSQL"
-parent = 'ingest-data'
-identifier = 'postgresql'
-weight = 10
 
 [[menu.main]]
 name = "SQL Server"
@@ -140,13 +127,6 @@ identifier = "monitor"
 weight= 5
 parent = "manage"
 
-[[menu.main]]
-identifier = "manage-dbt"
-name = "Use dbt to manage Materialize"
-weight= 10
-parent = "manage"
-
-
 #
 # Reference
 #
@@ -156,12 +136,6 @@ identifier = "reference"
 name = "Reference"
 weight= 15
 
-[[menu.main]]
-identifier = "cs_kafka"
-name = "Kafka"
-parent = "create-source"
-url = "/sql/create-source/kafka"
-weight= 5
 
 [[menu.main]]
 identifier = "cs_redpanda"
@@ -169,12 +143,6 @@ name = "Redpanda"
 parent = "create-source"
 url = "/sql/create-source/kafka"
 weight= 10
-
-[[menu.main]]
-identifier = "csink_kafka"
-name = "Kafka"
-parent = "create-sink"
-url = "/sql/create-sink/kafka"
 
 [[menu.main]]
 identifier = "csink_redpanda"
@@ -208,13 +176,6 @@ name = "Tools and integrations"
 weight= 25
 
 [[menu.main]]
-identifier = "tools-and-integrations"
-name = "Overview"
-parent = "integrations"
-url = "/integrations"
-weight = 5
-
-[[menu.main]]
 identifier = "cli-reference"
 name = "Command reference"
 parent = "cli"
@@ -224,6 +185,15 @@ identifier = "client-libraries"
 name = "SQL drivers"
 parent = "integrations"
 weight = 15
+
+#
+# Releases
+#
+
+[[menu.main]]
+identifier = "releases-previews"
+name = "Releases and previews"
+weight = 65
 
 #
 # About

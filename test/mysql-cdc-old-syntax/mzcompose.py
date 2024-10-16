@@ -11,6 +11,7 @@
 Functional test for the native (non-Debezium) MySQL sources.
 """
 
+import glob
 import threading
 from textwrap import dedent
 
@@ -77,8 +78,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if remaining_args:
         workflow_cdc(c, parser)
     else:
+        workflows_with_internal_sharding = ["cdc"]
         # Otherwise we are running all workflows
-        sharded_workflows = buildkite.shard_list(list(c.workflows), lambda w: w)
+        sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
+            [w for w in c.workflows if w not in workflows_with_internal_sharding],
+            lambda w: w,
+        )
         print(
             f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
         )
@@ -98,6 +103,14 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="limit to only the files matching filter",
     )
     args = parser.parse_args()
+
+    matching_files = []
+    for filter in args.filter:
+        matching_files.extend(glob.glob(filter, root_dir="test/mysql-cdc-old-syntax"))
+    sharded_files: list[str] = sorted(
+        buildkite.shard_list(matching_files, lambda file: file)
+    )
+    print(f"Files: {sharded_files}")
 
     mysql_version = get_targeted_mysql_version(parser)
     with c.override(create_mysql(mysql_version)):
@@ -119,7 +132,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
             "--var=mysql-user-password=us3rp4ssw0rd",
             f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-            *args.filter,
+            *sharded_files,
         )
 
 

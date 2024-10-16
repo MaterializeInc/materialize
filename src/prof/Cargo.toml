@@ -19,7 +19,7 @@ pprof_util = "0.6"
 libc = "0.2.138"
 mz-ore = { path = "../ore", default-features = false }
 pprof = "0.11.1"
-prost = { version = "0.13.1", features = ["no-recursion-limit"] }
+prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 tempfile = "3.8.1"
 tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
 tracing = "0.1.37"
@@ -29,7 +29,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [build-dependencies]
 anyhow = "1.0.66"
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.1"
+prost-build = "0.13.2"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]

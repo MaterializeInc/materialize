@@ -123,7 +123,7 @@ impl Transcoder {
                         .context("parsing protobuf JSON")?;
                     let mut out = vec![];
                     if *confluent_wire_format {
-                        // See: https://github.com/MaterializeInc/materialize/issues/9250
+                        // See: https://github.com/MaterializeInc/database-issues/issues/2837
                         // The first byte is a magic byte (0) that indicates the Confluent
                         // serialization format version, and the next four bytes are a
                         // 32-bit schema ID, which we default to something fun.

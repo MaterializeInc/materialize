@@ -49,7 +49,7 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
 
 # Test that an OOMing cluster replica generates expected entries in
 # `mz_cluster_replica_statuses`
-@pytest.mark.skip(reason="Now fails after a Buildkite upgrade materialize#20948")
+@pytest.mark.skip(reason="Now fails after a Buildkite upgrade database-issues#6307")
 def test_oom_clusterd(mz: MaterializeApplication) -> None:
     def verify_cluster_oomed() -> None:
         with mz.environmentd.sql_cursor(autocommit=False) as cur:

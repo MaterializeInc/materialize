@@ -33,7 +33,7 @@ CREATE TABLE t1 (f1 INT, f2 INT INVISIBLE, f3 INT INVISIBLE);
 INSERT INTO t1 (f1, f2, f3) VALUES (10, 20, 30);
 INSERT INTO t1 VALUES (11);
 
-# TODO: materialize#26152 (invisible columns not supported)
+# TODO: database-issues#7782 (invisible columns not supported)
 # > CREATE SOURCE mz_source
 #   FROM MYSQL CONNECTION mysql_conn
 #   FOR ALL TABLES;

@@ -54,7 +54,7 @@ user and set the transactional isolation to serializable on connection using
 
 ```bash
 # Using the options connection string parameter
-psql "postgres://<MZ_USER>@<MZ_HOST>:6875/materialize?sslmode=require&options=--cluster%3Dprod%20--transaction_isolation%3Dserializable
+psql "postgres://<MZ_USER>@<MZ_HOST>:6875/materialize?sslmode=require&options=--cluster%3Dprod%20--transaction_isolation%3Dserializable"
 ```
 
 ```bash

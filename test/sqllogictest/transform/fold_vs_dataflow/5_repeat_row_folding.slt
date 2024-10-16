@@ -22,7 +22,7 @@ INSERT INTO t_base VALUES (1, 9223372036854775807);
 statement ok
 INSERT INTO t_base VALUES (1, 9223372036854775807);
 
-# see also: https://github.com/MaterializeInc/materialize/issues/17758
+# see also: https://github.com/MaterializeInc/database-issues/issues/5172
 # statement error
 # CREATE VIEW v_using_constant_folding AS
 #  SELECT data FROM (

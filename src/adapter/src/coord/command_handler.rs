@@ -62,8 +62,8 @@ use crate::command::{
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::{
-    ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
-    PurifiedStatementReady,
+    ConnMeta, Coordinator, DeferredPlanStatement, Message, NetworkPolicy, PendingTxn,
+    PlanStatement, PlanValidity, PurifiedStatementReady,
 };
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -235,40 +235,12 @@ impl Coordinator {
                 }
 
                 Command::Dump { tx } => {
-                    let _ = tx.send(self.dump());
-                }
-
-                Command::AllowWrites { tx } => {
-                    self.handle_allow_writes(tx).await;
+                    let _ = tx.send(self.dump().await);
                 }
             }
         }
         .instrument(debug_span!("handle_command"))
         .boxed_local()
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn handle_allow_writes(&mut self, tx: oneshot::Sender<Result<bool, anyhow::Error>>) {
-        if !self.controller.read_only() {
-            let _ = tx.send(Ok(false));
-            return;
-        }
-
-        let init_ts = self.get_local_write_ts().await.timestamp;
-        self.controller.allow_writes(Some(init_ts)).await;
-
-        let builtin_table_updates = self
-            .buffered_builtin_table_updates
-            .take()
-            .expect("in read-only mode");
-
-        let entries: Vec<_> = self.catalog().entries().cloned().collect();
-
-        self.bootstrap_tables(&entries, builtin_table_updates)
-            .await
-            .await;
-
-        let _ = tx.send(Ok(true));
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -284,10 +256,10 @@ impl Coordinator {
         notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     ) {
         // Early return if successful, otherwise cleanup any possible state.
-        match self.handle_startup_inner(&user, &conn_id).await {
+        match self.handle_startup_inner(&user, &conn_id, &client_ip).await {
             Ok(role_id) => {
-                let mut session_defaults = BTreeMap::new();
                 let system_config = self.catalog().state().system_config();
+                let mut session_defaults = BTreeMap::new();
 
                 // Override the session with any system defaults.
                 session_defaults.extend(
@@ -375,7 +347,30 @@ impl Coordinator {
         &mut self,
         user: &User,
         conn_id: &ConnectionId,
+        client_ip: &Option<IpAddr>,
     ) -> Result<RoleId, AdapterError> {
+        // Validate network policies for external users. Internal users
+        // can only connect on the internal interfaces (internal HTTP/
+        // pgwire). It is up to the person deploying the system to
+        // ensure these internal interfaces are well secured.
+        let system_config = self.catalog().state().system_config();
+        if !user.is_internal() {
+            let default_policy = NetworkPolicy::new(system_config.default_network_policy());
+            if let Some(ip) = client_ip {
+                match default_policy.validate(ip) {
+                    Ok(_) => {}
+                    Err(e) => return Err(AdapterError::NetworkPolicyDenied(e)),
+                }
+            } else {
+                // Only temporary and internal representation of a session
+                // should be missing a client_ip. These sessions should not be
+                // making requests or going through handle_startup.
+                return Err(AdapterError::NetworkPolicyDenied(
+                    super::NetworkPolicyError::MissingIp,
+                ));
+            }
+        }
+
         if self.catalog().try_get_role_by_name(&user.name).is_none() {
             // If the user has made it to this point, that means they have been fully authenticated.
             // This includes preventing any user, except a pre-defined set of system users, from
@@ -1107,10 +1102,10 @@ impl Coordinator {
                 // If we didn't do this, then there would be a danger of missing the first refresh,
                 // which might cause the materialized view to be unreadable for hours. This might
                 // be what was happening here:
-                // https://github.com/MaterializeInc/materialize/issues/24288#issuecomment-1931856361
+                // https://github.com/MaterializeInc/database-issues/issues/7265#issuecomment-1931856361
                 //
                 // In the long term, it would be good to actually block the MV creation statement
-                // until `least_valid_read`. https://github.com/MaterializeInc/materialize/issues/25127
+                // until `least_valid_read`. https://github.com/MaterializeInc/database-issues/issues/7504
                 // Without blocking, we have the problem that a REFRESH AT CREATION is not linearized
                 // with the CREATE MATERIALIZED VIEW statement, in the sense that a query from the MV
                 // after its creation might see input changes that happened after the CRATE MATERIALIZED
@@ -1240,7 +1235,7 @@ impl Coordinator {
             // If the session doesn't exist in `active_conns`, then this method will panic later on.
             // Instead we explicitly panic here while dumping the entire Coord to the logs to help
             // debug. This panic is very infrequent so we want as much information as possible.
-            // See https://github.com/MaterializeInc/materialize/issues/18996.
+            // See https://github.com/MaterializeInc/database-issues/issues/5627.
             panic!("unknown connection: {conn_id:?}\n\n{self:?}")
         }
 

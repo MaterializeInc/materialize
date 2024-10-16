@@ -26,12 +26,12 @@ pub mod targets;
 ///
 /// This includes an auto-generated header, `load(...)` statements, and all
 /// Bazel targets.
-pub struct BazelBuildFile<'a> {
+pub struct BazelBuildFile {
     pub header: header::BazelHeader,
-    pub targets: Vec<&'a dyn RustTarget>,
+    pub targets: Vec<Box<dyn RustTarget>>,
 }
 
-impl<'a> fmt::Display for BazelBuildFile<'a> {
+impl fmt::Display for BazelBuildFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.header.format(f)?;
         for target in &self.targets {
@@ -59,6 +59,13 @@ impl<T: ToBazelDefinition> ToBazelDefinition for Option<T> {
             Some(val) => val.format(writer),
             None => Ok(()),
         }
+    }
+}
+
+impl ToBazelDefinition for bool {
+    fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
+        let bazel_str = if *self { "True" } else { "False" };
+        writer.write_str(bazel_str)
     }
 }
 
@@ -236,6 +243,11 @@ impl<T> List<T> {
     /// Returns an iterator over all of the `items`.
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.items.iter()
+    }
+
+    /// Returns if this [`List`] is empty.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty() && self.objects.is_empty()
     }
 }
 

@@ -1,0 +1,365 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1218.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (input TEXT);
+
+statement ok
+INSERT INTO input VALUES (
+'R 1 (#53d732)
+L 5 (#292431)
+U 6 (#4c7272)
+L 9 (#49ace3)
+U 3 (#7b94e6)
+R 1 (#5579d4)
+L 9 (#1d7886)
+U 3 (#171219)
+R 9 (#45fa39)
+R 11 (#222422)
+U 6 (#91c869)
+L 8 (#7581c5)
+U 9 (#46aab5)
+R 9 (#6f72a5)
+L 7 (#42abb1)');
+
+query II
+WITH MUTUALLY RECURSIVE
+
+    lines(r INT, line TEXT) AS (
+        SELECT r, regexp_split_to_array(input, '\n')[r] as line
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n'), 1)) r
+    ),
+
+    split1(r INT, dr INT, dc INT, steps INT) AS (
+        SELECT
+            r,
+            CASE WHEN regexp_split_to_array(line, ' ')[1] = 'U' THEN -1
+                 WHEN regexp_split_to_array(line, ' ')[1] = 'D' THEN  1
+                 ELSE 0
+            END,
+            CASE WHEN regexp_split_to_array(line, ' ')[1] = 'L' THEN -1
+                 WHEN regexp_split_to_array(line, ' ')[1] = 'R' THEN  1
+                 ELSE 0
+            END,
+            regexp_split_to_array(line, ' ')[2]::INT
+        FROM lines
+    ),
+
+    -- Part 1 is prefix sum followed by area calculations.
+    -- We'll brute force the prefix sum part, and use the
+    -- "trapezoid formula", summing + and - contributions
+    -- as the path moves around.
+    path1(r1 INT, c1 INT, r2 INT, c2 INT, rounds INT) AS (
+        SELECT 0, 0, 0, 0, 1
+        UNION
+        SELECT
+            path1.r2,
+            path1.c2,
+            path1.r2 + split1.dr * split1.steps,
+            path1.c2 + split1.dc * split1.steps,
+            path1.rounds + 1
+        FROM path1, split1
+        WHERE path1.rounds = split1.r
+    ),
+    -- The area carved by the path, plus half a unit of area
+    -- for each path step, plus 4 * (1/4) units for the net
+    -- four 90 degree turns.
+    part1(part1 BIGINT) AS (
+        SELECT
+            ABS((SELECT SUM((r1 + r2) * (c1 - c2)) FROM path1)) / 2
+          + (SELECT SUM(steps) FROM split1) / 2
+          + 1
+    ),
+
+    -- Part 2 changes how we parse each line to give long paths.
+    split2(r INT, dr INT, dc INT, steps INT) AS (
+        SELECT
+            r,
+            CASE WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '3' THEN -1
+                 WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '1' THEN  1
+                 ELSE 0
+            END,
+            CASE WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '2' THEN -1
+                 WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '0' THEN  1
+                 ELSE 0
+            END,
+            256 * 256 * get_byte(decode('0' || substring(regexp_split_to_array(line, ' ')[3], 3, 5), 'hex'), 0)
+                + 256 * get_byte(decode('0' || substring(regexp_split_to_array(line, ' ')[3], 3, 5), 'hex'), 1)
+                      + get_byte(decode('0' || substring(regexp_split_to_array(line, ' ')[3], 3, 5), 'hex'), 2)
+        FROM lines
+    ),
+
+    path2(r1 BIGINT, c1 BIGINT, r2 BIGINT, c2 BIGINT, rounds INT) AS (
+        SELECT 0, 0, 0, 0, 1
+        UNION
+        SELECT
+            path2.r2,
+            path2.c2,
+            path2.r2 + split2.dr * split2.steps,
+            path2.c2 + split2.dc * split2.steps,
+            path2.rounds + 1
+        FROM path2, split2
+        WHERE path2.rounds = split2.r
+    ),
+    -- The area carved by the path, plus half a unit of area
+    -- for each path step, plus 4 * (1/4) units for the net
+    -- four 90 degree turns.
+    part2(part2 BIGINT) AS (
+        SELECT
+            ABS((SELECT SUM((r1 + r2) * (c1 - c2)) FROM path2)) / 2
+          + (SELECT SUM(steps) FROM split2) / 2
+          + 1
+    )
+
+SELECT * FROM part1, part2;
+----
+73  34133752459
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+
+    lines(r INT, line TEXT) AS (
+        SELECT r, regexp_split_to_array(input, '\n')[r] as line
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n'), 1)) r
+    ),
+
+    split1(r INT, dr INT, dc INT, steps INT) AS (
+        SELECT
+            r,
+            CASE WHEN regexp_split_to_array(line, ' ')[1] = 'U' THEN -1
+                 WHEN regexp_split_to_array(line, ' ')[1] = 'D' THEN  1
+                 ELSE 0
+            END,
+            CASE WHEN regexp_split_to_array(line, ' ')[1] = 'L' THEN -1
+                 WHEN regexp_split_to_array(line, ' ')[1] = 'R' THEN  1
+                 ELSE 0
+            END,
+            regexp_split_to_array(line, ' ')[2]::INT
+        FROM lines
+    ),
+
+    -- Part 1 is prefix sum followed by area calculations.
+    -- We'll brute force the prefix sum part, and use the
+    -- "trapezoid formula", summing + and - contributions
+    -- as the path moves around.
+    path1(r1 INT, c1 INT, r2 INT, c2 INT, rounds INT) AS (
+        SELECT 0, 0, 0, 0, 1
+        UNION
+        SELECT
+            path1.r2,
+            path1.c2,
+            path1.r2 + split1.dr * split1.steps,
+            path1.c2 + split1.dc * split1.steps,
+            path1.rounds + 1
+        FROM path1, split1
+        WHERE path1.rounds = split1.r
+    ),
+    -- The area carved by the path, plus half a unit of area
+    -- for each path step, plus 4 * (1/4) units for the net
+    -- four 90 degree turns.
+    part1(part1 BIGINT) AS (
+        SELECT
+            ABS((SELECT SUM((r1 + r2) * (c1 - c2)) FROM path1)) / 2
+          + (SELECT SUM(steps) FROM split1) / 2
+          + 1
+    ),
+
+    -- Part 2 changes how we parse each line to give long paths.
+    split2(r INT, dr INT, dc INT, steps INT) AS (
+        SELECT
+            r,
+            CASE WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '3' THEN -1
+                 WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '1' THEN  1
+                 ELSE 0
+            END,
+            CASE WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '2' THEN -1
+                 WHEN substring(regexp_split_to_array(line, ' ')[3], 8, 1) = '0' THEN  1
+                 ELSE 0
+            END,
+            256 * 256 * get_byte(decode('0' || substring(regexp_split_to_array(line, ' ')[3], 3, 5), 'hex'), 0)
+                + 256 * get_byte(decode('0' || substring(regexp_split_to_array(line, ' ')[3], 3, 5), 'hex'), 1)
+                      + get_byte(decode('0' || substring(regexp_split_to_array(line, ' ')[3], 3, 5), 'hex'), 2)
+        FROM lines
+    ),
+
+    path2(r1 BIGINT, c1 BIGINT, r2 BIGINT, c2 BIGINT, rounds INT) AS (
+        SELECT 0, 0, 0, 0, 1
+        UNION
+        SELECT
+            path2.r2,
+            path2.c2,
+            path2.r2 + split2.dr * split2.steps,
+            path2.c2 + split2.dc * split2.steps,
+            path2.rounds + 1
+        FROM path2, split2
+        WHERE path2.rounds = split2.r
+    ),
+    -- The area carved by the path, plus half a unit of area
+    -- for each path step, plus 4 * (1/4) units for the net
+    -- four 90 degree turns.
+    part2(part2 BIGINT) AS (
+        SELECT
+            ABS((SELECT SUM((r1 + r2) * (c1 - c2)) FROM path2)) / 2
+          + (SELECT SUM(steps) FROM split2) / 2
+          + 1
+    )
+
+SELECT * FROM part1, part2;
+----
+Explained Query:
+  Return
+    Return
+      Project (#4, #5)
+        Map ((((abs(#0) / 2) + (#1 / 2)) + 1), numeric_to_bigint((((abs(#2) / 2) + bigint_to_numeric((#3 / 2))) + 1)))
+          CrossJoin type=delta
+            ArrangeBy keys=[[]]
+              Union
+                Get l3
+                Map (null)
+                  Union
+                    Negate
+                      Project ()
+                        Get l3
+                    Constant
+                      - ()
+            ArrangeBy keys=[[]]
+              Union
+                Get l5
+                Map (null)
+                  Union
+                    Negate
+                      Project ()
+                        Get l5
+                    Constant
+                      - ()
+            ArrangeBy keys=[[]]
+              Union
+                Get l8
+                Map (null)
+                  Union
+                    Negate
+                      Project ()
+                        Get l8
+                    Constant
+                      - ()
+            ArrangeBy keys=[[]]
+              Union
+                Get l10
+                Map (null)
+                  Union
+                    Negate
+                      Project ()
+                        Get l10
+                    Constant
+                      - ()
+    With
+      cte l10 =
+        Union
+          Get l9
+          Map (null)
+            Union
+              Negate
+                Project ()
+                  Get l9
+              Constant
+                - ()
+      cte l9 =
+        Reduce aggregates=[sum(#0)]
+          Project (#3)
+            Map (decode(("0" || substr(array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 3), 3, 5)), "hex"), (((65536 * get_byte(#2, 0)) + (256 * get_byte(#2, 1))) + get_byte(#2, 2)))
+              Get l0
+      cte l8 =
+        Union
+          Get l7
+          Map (null)
+            Union
+              Negate
+                Project ()
+                  Get l7
+              Constant
+                - ()
+      cte l7 =
+        Reduce aggregates=[sum(((#0 + #2) * (#1 - #3)))]
+          Project (#0..=#3)
+            Get l6
+  With Mutually Recursive
+    cte l6 =
+      Distinct project=[#0..=#4]
+        Union
+          Project (#0, #1, #7..=#9)
+            Map ((#0 + integer_to_bigint((#4 * #6))), (#1 + integer_to_bigint((#5 * #6))), (#2 + 1))
+              Join on=(#2 = #3) type=differential
+                ArrangeBy keys=[[#2]]
+                  Project (#2..=#4)
+                    Get l6
+                ArrangeBy keys=[[#0]]
+                  Project (#0, #4, #5, #7)
+                    Map (array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 3), substr(#2, 8, 1), case when (#3 = "3") then -1 else case when ("1" = substr(array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 3), 8, 1)) then 1 else 0 end end, case when (#3 = "2") then -1 else case when ("0" = substr(array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 3), 8, 1)) then 1 else 0 end end, decode(("0" || substr(#2, 3, 5)), "hex"), (((65536 * get_byte(#6, 0)) + (256 * get_byte(#6, 1))) + get_byte(#6, 2)))
+                      Get l0
+          Constant
+            - (0, 0, 0, 0, 1)
+    cte l5 =
+      Union
+        Get l4
+        Map (null)
+          Union
+            Negate
+              Project ()
+                Get l4
+            Constant
+              - ()
+    cte l4 =
+      Reduce aggregates=[sum(#0)]
+        Project (#2)
+          Map (text_to_integer(array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 2)))
+            Get l0
+    cte l3 =
+      Union
+        Get l2
+        Map (null)
+          Union
+            Negate
+              Project ()
+                Get l2
+            Constant
+              - ()
+    cte l2 =
+      Reduce aggregates=[sum(((#0 + #2) * (#1 - #3)))]
+        Project (#0..=#3)
+          Get l1
+    cte l1 =
+      Distinct project=[#0..=#4]
+        Union
+          Project (#0, #1, #7..=#9)
+            Map ((#0 + (#4 * #6)), (#1 + (#5 * #6)), (#2 + 1))
+              Join on=(#2 = #3) type=differential
+                ArrangeBy keys=[[#2]]
+                  Project (#2..=#4)
+                    Get l1
+                ArrangeBy keys=[[#0]]
+                  Project (#0, #4..=#6)
+                    Map (regexp_split_to_array[" ", case_insensitive=false](#1), array_index(#2, 1), case when (#3 = "U") then -1 else case when ("D" = array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 1)) then 1 else 0 end end, case when (#3 = "L") then -1 else case when ("R" = array_index(regexp_split_to_array[" ", case_insensitive=false](#1), 1)) then 1 else 0 end end, text_to_integer(array_index(#2, 2)))
+                      Get l0
+          Constant
+            - (0, 0, 0, 0, 1)
+    cte l0 =
+      Project (#1, #2)
+        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0), integer_to_bigint(#1)))
+          FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0) array_length 1), 1)
+            ReadStorage materialize.public.input
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF

@@ -87,7 +87,6 @@ use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeUngroupedColumn};
 use crate::plan::statement::{show, StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
-use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidWmrRecursionLimit;
 use crate::plan::{
     literal, transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
@@ -165,7 +164,7 @@ pub fn plan_root_query(
     })
 }
 
-/// TODO(ct): Dedup this with [plan_root_query].
+/// TODO(ct2): Dedup this with [plan_root_query].
 #[mz_ore::instrument(target = "compiler", level = "trace", name = "ast_to_hir")]
 pub fn plan_ct_query(
     qcx: &mut QueryContext,
@@ -277,8 +276,13 @@ pub fn plan_insert_query(
     }
     let desc = table.desc(&scx.catalog.resolve_full_name(table.name()))?;
     let mut defaults = table
-        .table_details()
-        .expect("attempted to insert into non-table")
+        .writable_table_details()
+        .ok_or_else(|| {
+            sql_err!(
+                "cannot insert into non-writeable table '{}'",
+                table_name.full_name_str()
+            )
+        })?
         .to_vec();
 
     for default in &mut defaults {
@@ -532,9 +536,12 @@ pub fn plan_copy_from(
         );
     }
 
-    let _ = table
-        .table_details()
-        .expect("attempted to insert into non-table");
+    let _ = table.writable_table_details().ok_or_else(|| {
+        sql_err!(
+            "cannot insert into non-writeable table '{}'",
+            table_name.full_name_str()
+        )
+    })?;
 
     if table.id().is_system() {
         sql_bail!(
@@ -562,8 +569,8 @@ pub fn plan_copy_from_rows(
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
     let mut defaults = table
-        .table_details()
-        .expect("attempted to insert into non-table")
+        .writable_table_details()
+        .ok_or_else(|| sql_err!("cannot copy into non-writeable table"))?
         .to_vec();
 
     for default in &mut defaults {
@@ -688,6 +695,12 @@ pub fn plan_mutation_query_inner(
             table_name.full_name_str()
         );
     }
+    let _ = item.writable_table_details().ok_or_else(|| {
+        sql_err!(
+            "cannot mutate non-writeable table '{}'",
+            table_name.full_name_str()
+        )
+    })?;
     if id.is_system() {
         sql_bail!(
             "cannot mutate system table '{}'",
@@ -3192,7 +3205,7 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
                 // take and return the `HirRelationExpr` that is being aliased,
                 // which is a rather large refactor.
                 //
-                // [0]: https://github.com/MaterializeInc/materialize/issues/16920
+                // [0]: https://github.com/MaterializeInc/database-issues/issues/4887
                 None
             };
             item.column_name = columns
@@ -3455,7 +3468,15 @@ fn plan_join(
     let mut right_qcx = left_qcx.derived_context(left_scope.clone(), left_qcx.relation_type(&left));
     if !kind.can_be_correlated() {
         for item in &mut right_qcx.outer_scopes[0].items {
-            item.lateral_error_if_referenced = true;
+            // Per PostgreSQL (and apparently SQL:2008), we can't simply remove
+            // these items from scope. These items need to *exist* because they
+            // might shadow variables in outer scopes that would otherwise be
+            // valid to reference, but accessing them needs to produce an error.
+            item.error_if_referenced =
+                Some(|table, column| PlanError::WrongJoinTypeForLateralColumn {
+                    table: table.cloned(),
+                    column: column.clone(),
+                });
         }
     }
     let (right, right_scope) = plan_table_factor(&right_qcx, &join.relation)?;
@@ -4609,7 +4630,7 @@ fn plan_array(
     };
 
     // Arrays of `char` type are disallowed due to a known limitation:
-    // https://github.com/MaterializeInc/materialize/issues/7613.
+    // https://github.com/MaterializeInc/database-issues/issues/2360.
     //
     // Arrays of `list` and `map` types are disallowed due to mind-bending
     // semantics.
@@ -5145,7 +5166,7 @@ fn plan_function<'a>(
                 let (ignore_nulls, order_by_exprs, col_orders, window_frame, partition_by) =
                     plan_window_function_common(ecx, &f.name, &f.over)?;
 
-                // https://github.com/MaterializeInc/materialize/issues/22268
+                // https://github.com/MaterializeInc/database-issues/issues/6720
                 match (&window_frame.start_bound, &window_frame.end_bound) {
                     (
                         mz_expr::WindowFrameBound::UnboundedPreceding,
@@ -5167,7 +5188,7 @@ fn plan_function<'a>(
                 }
 
                 if ignore_nulls {
-                    // https://github.com/MaterializeInc/materialize/issues/22272
+                    // https://github.com/MaterializeInc/database-issues/issues/6722
                     // If we ever add support for ignore_nulls for a window aggregate, then don't
                     // forget to also update HIR EXPLAIN.
                     bail_unsupported!(IGNORE_NULLS_ERROR_MSG);
@@ -5176,7 +5197,7 @@ fn plan_function<'a>(
                 let aggregate_expr = plan_aggregate_common(ecx, f)?;
 
                 if aggregate_expr.distinct {
-                    // https://github.com/MaterializeInc/materialize/issues/22015
+                    // https://github.com/MaterializeInc/database-issues/issues/6626
                     bail_unsupported!("DISTINCT in window aggregates");
                 }
 
@@ -5590,7 +5611,7 @@ fn plan_window_frame(
     }
 
     // RANGE is only supported in the default frame
-    // https://github.com/MaterializeInc/materialize/issues/21934
+    // https://github.com/MaterializeInc/database-issues/issues/6585
     if units == mz_expr::WindowFrameUnits::Range
         && (start_bound != UnboundedPreceding || end_bound != CurrentRow)
     {
@@ -5806,7 +5827,7 @@ pub fn scalar_type_from_catalog(
                     element_type: Box::new(scalar_type_from_catalog(catalog, *element_id, &[])?),
                 }),
                 CatalogType::Record { fields } => {
-                    let scalars: Vec<(ColumnName, ColumnType)> = fields
+                    let scalars: Box<[(ColumnName, ColumnType)]> = fields
                         .iter()
                         .map(|f| {
                             let scalar_type = scalar_type_from_catalog(
@@ -5822,7 +5843,7 @@ pub fn scalar_type_from_catalog(
                                 },
                             ))
                         })
-                        .collect::<Result<Vec<_>, PlanError>>()?;
+                        .collect::<Result<Box<_>, PlanError>>()?;
                     Ok(ScalarType::Record {
                         fields: scalars,
                         custom_id: Some(id),
@@ -6230,6 +6251,17 @@ impl<'a> QueryContext<'a> {
             }
             ResolvedItemName::Cte { id, name } => {
                 let name = name.into();
+                let cte = self.ctes.get(&id).unwrap();
+                let expr = HirRelationExpr::Get {
+                    id: Id::Local(id),
+                    typ: cte.desc.typ().clone(),
+                };
+
+                let scope = Scope::from_source(Some(name), cte.desc.iter_names());
+
+                Ok((expr, scope))
+            }
+            ResolvedItemName::ContinualTask { id, name } => {
                 let cte = self.ctes.get(&id).unwrap();
                 let expr = HirRelationExpr::Get {
                     id: Id::Local(id),

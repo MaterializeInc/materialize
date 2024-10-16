@@ -16,6 +16,9 @@ from materialize.output_consistency.input_data.params.boolean_operation_param im
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
 )
+from materialize.output_consistency.input_data.params.row_indices_param import (
+    RowIndicesParam,
+)
 from materialize.output_consistency.input_data.params.same_operation_param import (
     SameOperationParam,
 )
@@ -148,11 +151,13 @@ AGGREGATE_OPERATION_TYPES.append(
 AGGREGATE_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "string_agg",
-        {3: "string_agg($, $ ORDER BY row_index, $)"},
+        {5: "string_agg($, $ ORDER BY $, $, $)"},
         [
             StringOperationParam(),
             # separator value
             StringOperationParam(),
+            RowIndicesParam(index_of_param_to_share_data_source=0),
+            RowIndicesParam(index_of_param_to_share_data_source=1),
             SameOperationParam(index_of_previous_param=0),
         ],
         StringReturnTypeSpec(),

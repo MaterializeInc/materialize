@@ -17,11 +17,9 @@ use std::sync::Arc;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
 use futures::StreamExt;
-use mz_compute_types::dyncfgs::PERSIST_SINK_OBEY_READ_ONLY;
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
-use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
-use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
+use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_persist_client::Diagnostics;
@@ -31,7 +29,6 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
-use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{probe, Broadcast, Capability, CapabilitySet, Inspect};
@@ -198,8 +195,6 @@ where
         );
     }
 
-    let obey_read_only_mode = PERSIST_SINK_OBEY_READ_ONLY.get(&compute_state.worker_config);
-
     let (batch_descriptions, desired_oks, desired_errs, mint_token) = mint_batch_descriptions(
         sink_id,
         operator_name.clone(),
@@ -222,7 +217,6 @@ where
         &persist_errs,
         Arc::clone(&persist_clients),
         compute_state.read_only_rx.clone(),
-        obey_read_only_mode,
     );
 
     let append_token = append_batches(
@@ -233,7 +227,6 @@ where
         &written_batches,
         persist_clients,
         compute_state.read_only_rx.clone(),
-        obey_read_only_mode,
     );
 
     let token = Rc::new((mint_token, write_token, append_token));
@@ -585,16 +578,6 @@ where
     )
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-enum BatchOrData {
-    Batch(ProtoBatch),
-    Data {
-        lower: Antichain<Timestamp>,
-        upper: Antichain<Timestamp>,
-        contents: Vec<(Result<Row, DataflowError>, Timestamp, Diff)>,
-    },
-}
-
 /// Writes `desired_stream - persist_stream` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` for any batch of updates that was written.
@@ -609,8 +592,7 @@ fn write_batches<G>(
     persist_errs: &Stream<G, (DataflowError, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
     mut read_only: watch::Receiver<bool>,
-    obey_read_only: bool,
-) -> (Stream<G, BatchOrData>, Rc<dyn Any>)
+) -> (Stream<G, ProtoBatch>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -868,7 +850,7 @@ where
             in_flight_batches
                 .retain(|(lower, _upper), _cap| PartialOrder::less_equal(&persist_upper, lower));
 
-            if obey_read_only && read_only.borrow().clone() {
+            if read_only.borrow().clone() {
                 // We are not allowed to do writes, so go back to the beginning
                 // of the loop.
                 //
@@ -917,36 +899,24 @@ where
                 let update_count = to_append_oks.len() + to_append_errs.len();
 
                 if update_count > 0 {
-                    let minimum_batch_updates = persist_clients.cfg().sink_minimum_batch_updates();
-                    let batch_or_data = if update_count >= minimum_batch_updates {
-                        let oks = to_append_oks.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r));
-                        let errs = to_append_errs.map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r));
-                        let batch = write
-                            .batch(oks.chain(errs), batch_lower, batch_upper)
-                            .await
-                            .expect("invalid usage");
+                    let oks = to_append_oks.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r));
+                    let errs = to_append_errs.map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r));
+                    let batch = write
+                        .batch(oks.chain(errs), batch_lower, batch_upper)
+                        .await
+                        .expect("invalid usage");
 
-                        if sink_id.is_user() {
-                            trace!(
-                                "persist_sink {sink_id}/{shard_id}: \
+                    if sink_id.is_user() {
+                        trace!(
+                            "persist_sink {sink_id}/{shard_id}: \
                                 wrote batch from worker {}: ({:?}, {:?})",
-                                worker_index,
-                                batch.lower(),
-                                batch.upper()
-                            );
-                        }
-                        BatchOrData::Batch(batch.into_transmittable_batch())
-                    } else {
-                        let oks = to_append_oks.map(|(d, t, r)| (Ok(d), t, r));
-                        let errs = to_append_errs.map(|(d, t, r)| (Err(d), t, r));
-                        BatchOrData::Data {
-                            lower: batch_lower,
-                            upper: batch_upper,
-                            contents: oks.chain(errs).collect(),
-                        }
-                    };
+                            worker_index,
+                            batch.lower(),
+                            batch.upper()
+                        );
+                    }
 
-                    output.give(&cap, batch_or_data);
+                    output.give(&cap, batch.into_transmittable_batch());
                 }
             }
         }
@@ -974,10 +944,9 @@ fn append_batches<G>(
     operator_name: String,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    batches: &Stream<G, BatchOrData>,
+    batches: &Stream<G, ProtoBatch>,
     persist_clients: Arc<PersistClientCache>,
     mut read_only: watch::Receiver<bool>,
-    obey_read_only: bool,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1025,12 +994,6 @@ where
             (Antichain<Timestamp>, Antichain<Timestamp>)
         >::new();
 
-        #[derive(Debug, Default)]
-        struct BatchSet {
-            finished: Vec<Batch<SourceData, (), Timestamp, Diff>>,
-            incomplete: Option<BatchBuilder<SourceData, (), Timestamp, Diff>>,
-        }
-
         // We use iteration only for weeding out batches that no longer have a
         // chance of being applied. Otherwise we only use insertion and
         // deletion. We don't use iteration order for determining what batches
@@ -1038,7 +1001,7 @@ where
         #[allow(clippy::disallowed_types)]
         let mut in_flight_batches = std::collections::HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
-            BatchSet,
+            Vec<Batch<SourceData, (), Timestamp, Diff>>,
         >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
@@ -1105,31 +1068,14 @@ where
                         Event::Data(_cap, data) => {
                             // Ingest new written batches
                             for batch in data {
-                                match batch {
-                                    BatchOrData::Batch(batch) => {
-                                        let batch = write.batch_from_transmittable_batch(batch);
-                                        let batch_description = (batch.lower().clone(), batch.upper().clone());
+                                let batch = write.batch_from_transmittable_batch(batch);
+                                let batch_description = (batch.lower().clone(), batch.upper().clone());
 
-                                        let batches = in_flight_batches
-                                            .entry(batch_description)
-                                            .or_default();
+                                let batches = in_flight_batches
+                                    .entry(batch_description)
+                                    .or_default();
 
-                                        batches.finished.push(batch);
-                                    }
-                                    BatchOrData::Data { lower, upper, contents } => {
-                                        let batches = in_flight_batches
-                                            .entry((lower.clone(), upper))
-                                            .or_default();
-                                        let builder = batches.incomplete.get_or_insert_with(|| {
-                                            write.builder(lower)
-                                        });
-                                        for (data, time, diff) in contents {
-                                            persist_client.metrics().sink.forwarded_updates.inc();
-                                            builder.add(&SourceData(data), &(), &time, &diff).await.expect("invalid usage");
-                                        }
-                                    }
-                                }
-
+                                batches.push(batch);
                             }
 
                             continue;
@@ -1156,40 +1102,33 @@ where
                 PartialOrder::less_equal(&persist_upper, lower)
             });
 
-            for ((lower, upper), batch_set) in in_flight_batches.iter_mut() {
+            for ((lower, _upper), batches) in in_flight_batches.iter_mut() {
                 if PartialOrder::less_equal(&persist_upper, lower) {
                     continue;
                 }
 
                 // We're not keeping this batch. Be nice and delete any data
                 // that has been written.
-                for batch in batch_set.finished.drain(..) {
+                for batch in batches.drain(..) {
                     batch.delete().await;
-                }
-                if let Some(batch) = batch_set.incomplete.take() {
-                    batch
-                        .finish(upper.clone()).await
-                        .expect("invalid usage")
-                        .delete().await;
                 }
             }
             // It's annoying that we're first iterating and doing the retain,
             // but we can't do the batch deletion inside retain because we need
             // async.
-            in_flight_batches.retain(|(lower, _upper), batch_set| {
+            in_flight_batches.retain(|(lower, _upper), batches| {
                 if PartialOrder::less_equal(&persist_upper, lower) {
                     return true;
                 }
 
                 // We're not keeping this batch, make sure that the above loop
                 // cleared and deleted all the batches.
-                assert!(batch_set.finished.is_empty());
-                assert_none!(batch_set.incomplete);
+                assert!(batches.is_empty());
 
                 false
             });
 
-            if obey_read_only && read_only.borrow().clone() {
+            if read_only.borrow().clone() {
                 // We are not allowed to do writes, so go back to the beginning
                 // of the loop.
                 //
@@ -1241,17 +1180,9 @@ where
             for done_batch_metadata in done_batches.into_iter() {
                 in_flight_descriptions.remove(&done_batch_metadata);
 
-                let batch_set = in_flight_batches
+                let mut batches = in_flight_batches
                     .remove(&done_batch_metadata)
                     .unwrap_or_default();
-
-                let mut batches = batch_set.finished;
-                if let Some(builder) = batch_set.incomplete {
-                    let (_lower, upper) = &done_batch_metadata;
-                    let batch = builder.finish(upper.clone()).await.expect("invalid usage");
-                    batches.push(batch);
-                    persist_client.metrics().sink.forwarded_batches.inc();
-                }
 
                 trace!(
                     "persist_sink {sink_id}/{shard_id}: \

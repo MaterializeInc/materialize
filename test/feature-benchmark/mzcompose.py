@@ -9,8 +9,8 @@
 
 """
 Simple benchmark of mostly individual queries using testdrive. Can find
-wallclock/memory/messages regressions in single-connection query executions,
-not suitable for concurrency.
+wallclock/memorys regressions in single-connection query executions, not
+suitable for concurrency.
 """
 
 import argparse
@@ -154,7 +154,7 @@ def run_one_scenario(
     scenario_name = scenario_class.__name__
     print(f"--- Now benchmarking {scenario_name} ...")
 
-    measurement_types = [MeasurementType.WALLCLOCK, MeasurementType.MESSAGES]
+    measurement_types = [MeasurementType.WALLCLOCK]
     if args.measure_memory:
         measurement_types.append(MeasurementType.MEMORY_MZ)
         measurement_types.append(MeasurementType.MEMORY_CLUSTERD)
@@ -444,6 +444,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--ignore-other-tag-missing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Don't run anything if 'OTHER' tag is missing",
+    )
+
+    parser.add_argument(
         "--other-size", metavar="N", type=int, default=4, help="SIZE to use for 'OTHER'"
     )
 
@@ -514,7 +521,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         reports.append(report)
 
         for scenario_class in scenario_classes_scheduled_to_run:
-            scenario_result = run_one_scenario(c, scenario_class, args)
+            try:
+                scenario_result = run_one_scenario(c, scenario_class, args)
+            except RuntimeError as e:
+                if (
+                    "No image found for commit hash" in str(e)
+                    and args.ignore_other_tag_missing
+                ):
+                    print(
+                        "Missing image for base, which can happen when main branch fails to build, ignoring"
+                    )
+                    return
+                raise e
 
             if scenario_result.is_empty():
                 continue
@@ -778,7 +796,6 @@ def _create_feature_benchmark_result_entry(
         scale=scale or "default",
         is_regression=is_regression,
         wallclock=measurements[MeasurementType.WALLCLOCK],
-        messages=measurements[MeasurementType.MESSAGES],
         memory_mz=measurements[MeasurementType.MEMORY_MZ],
         memory_clusterd=measurements[MeasurementType.MEMORY_CLUSTERD],
     )

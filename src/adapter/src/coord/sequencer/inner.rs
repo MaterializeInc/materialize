@@ -81,9 +81,7 @@ use mz_sql_parser::ast::{
     WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::{
-    CollectionDescription, DataSource, DataSourceOther, ExportDescription,
-};
+use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::stats::RelationPartStats;
@@ -279,6 +277,7 @@ impl Coordinator {
                      source_id,
                      plan,
                      resolved_ids: _,
+                     available_source_references: _,
                  }| {
                     if plan.if_not_exists {
                         Some((*source_id, plan.name.clone()))
@@ -293,6 +292,7 @@ impl Coordinator {
             source_id,
             mut plan,
             resolved_ids,
+            available_source_references,
         } in plans
         {
             let name = plan.name.clone();
@@ -330,6 +330,16 @@ impl Coordinator {
                 }
             }
 
+            // If this source contained a set of available source references, update the
+            // source references catalog table.
+            let mut reference_ops = vec![];
+            if let Some(references) = &available_source_references {
+                reference_ops.push(catalog::Op::UpdateSourceReferences {
+                    source_id,
+                    references: references.clone().into(),
+                });
+            }
+
             let source = Source::new(plan, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
@@ -338,6 +348,8 @@ impl Coordinator {
                 owner_id: *session.current_role_id(),
             });
             sources.push((source_id, source));
+            // These operations must be executed after the source is added to the catalog.
+            ops.extend(reference_ops);
         }
 
         Ok(CreateSourceInner {
@@ -374,6 +386,7 @@ impl Coordinator {
             source_id,
             plan,
             resolved_ids,
+            available_source_references: None,
         })
     }
 
@@ -427,6 +440,7 @@ impl Coordinator {
         progress_stmt: CreateSubsourceStatement<Aug>,
         mut source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
+        available_source_references: plan::SourceReferences,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         let mut create_source_plans = Vec::with_capacity(subsources.len() + 2);
 
@@ -489,6 +503,7 @@ impl Coordinator {
             source_id,
             plan: source_plan,
             resolved_ids: resolved_ids.clone(),
+            available_source_references: Some(available_source_references),
         });
 
         // 3. Finally, plan all the subsources
@@ -941,7 +956,7 @@ impl Coordinator {
                         // may also be trying to use `register_ts` for a different
                         // purpose.
                         //
-                        // See #28216.
+                        // See database-issues#8273.
                         coord
                             .catalog
                             .confirm_leadership()
@@ -952,10 +967,7 @@ impl Coordinator {
                             coord.set_statement_execution_timestamp(id, register_ts);
                         }
 
-                        let collection_desc = CollectionDescription::from_desc(
-                            table.desc.clone(),
-                            DataSourceOther::TableWrites,
-                        );
+                        let collection_desc = CollectionDescription::for_table(table.desc.clone());
                         let storage_metadata = coord.catalog.state().storage_metadata();
                         coord
                             .controller
@@ -1872,7 +1884,7 @@ impl Coordinator {
                 let vars = session.vars();
 
                 // Emit a warning when deprecated variables are used.
-                // TODO(materialize#27285) remove this after sufficient time has passed
+                // TODO(database-issues#8069) remove this after sufficient time has passed
                 if name == vars::OLD_AUTO_ROUTE_CATALOG_QUERIES {
                     session.add_notice(AdapterNotice::AutoRouteIntrospectionQueriesUsage);
                 } else if name == vars::CLUSTER.name()
@@ -2181,7 +2193,7 @@ impl Coordinator {
     /// Checks to see if the session needs a real time recency timestamp and if so returns
     /// a future that will return the timestamp.
     pub(super) async fn determine_real_time_recent_timestamp(
-        &mut self,
+        &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
     ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
@@ -2610,7 +2622,7 @@ impl Coordinator {
                         }
                     }
                     match entry.item().typ() {
-                        typ @ (Func | View | MaterializedView) => {
+                        typ @ (Func | View | MaterializedView | ContinualTask) => {
                             ids_to_check.extend(entry.uses());
                             let valid_id = id.is_user() || matches!(typ, Func);
                             valid_id
@@ -2947,7 +2959,9 @@ impl Coordinator {
         }];
         self.catalog_transact_with_side_effects(Some(session), ops, |coord| async {
             let cluster = match coord.catalog().get_entry(&plan.id).item() {
-                CatalogItem::Table(_) | CatalogItem::MaterializedView(_) => None,
+                CatalogItem::Table(_)
+                | CatalogItem::MaterializedView(_)
+                | CatalogItem::ContinualTask(_) => None,
                 CatalogItem::Index(index) => Some(index.cluster_id),
                 CatalogItem::Source(_) => {
                     let read_policies = coord.catalog().source_read_policies(plan.id);
@@ -3073,7 +3087,7 @@ impl Coordinator {
                 session_var.visible(session.user(), Some(catalog.system_vars()))?;
 
                 // Emit a warning when deprecated variables are used.
-                // TODO(materialize#27285) remove this after sufficient time has passed
+                // TODO(database-issues#8069) remove this after sufficient time has passed
                 if variable.name() == vars::OLD_AUTO_ROUTE_CATALOG_QUERIES {
                     notices.push(AdapterNotice::AutoRouteIntrospectionQueriesUsage);
                 } else if let PlannedRoleVariable::Set {
@@ -3512,6 +3526,7 @@ impl Coordinator {
 
         let mut source_connections = BTreeMap::new();
         let mut sink_connections = BTreeMap::new();
+        let mut source_export_data_configs = BTreeMap::new();
 
         while let Some(id) = connections.pop_front() {
             for id in self.catalog.get_entry(&id).used_by() {
@@ -3539,6 +3554,17 @@ impl Coordinator {
                                 .into_inline_connection(self.catalog().state()),
                         );
                     }
+                    CatalogItemType::Table => {
+                        // This is a source-fed table that reference a schema registry
+                        // connection as a part of its encoding / data config
+                        if let Some((_, _, _, export_data_config)) = entry.source_export_details() {
+                            let data_config = export_data_config.clone();
+                            source_export_data_configs.insert(
+                                *id,
+                                data_config.into_inline_connection(self.catalog().state()),
+                            );
+                        }
+                    }
                     t => unreachable!("connection dependency not expected on {}", t),
                 }
             }
@@ -3558,6 +3584,14 @@ impl Coordinator {
                 .alter_export_connections(sink_connections)
                 .await
                 .unwrap_or_terminate("altering exports after txn must succeed");
+        }
+
+        if !source_export_data_configs.is_empty() {
+            self.controller
+                .storage
+                .alter_ingestion_export_data_configs(source_export_data_configs)
+                .await
+                .unwrap_or_terminate("altering source export data configs after txn must succeed");
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
@@ -4617,7 +4651,8 @@ impl Coordinator {
             Some(
                 self.builtin_table_update()
                     .execute(builtin_table_updates)
-                    .await,
+                    .await
+                    .0,
             )
         } else {
             // Save the metainfo.

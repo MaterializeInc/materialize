@@ -18,6 +18,7 @@ materializing the view.
 
 ### Usage patterns
 
+{{% views-indexes/table-usage-pattern-intro %}}
 {{% views-indexes/table-usage-pattern %}}
 
 ## Syntax

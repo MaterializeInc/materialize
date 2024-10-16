@@ -31,7 +31,7 @@ statement ok
 INSERT INTO a VALUES(1)
 
 # Ensure that timestamp serialization doesn't break even if the computation is
-# distributed: #28110.
+# distributed: materialize#28110.
 
 query T
 SELECT TIMESTAMP '2000-05-05 10:00:00' FROM a

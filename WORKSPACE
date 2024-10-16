@@ -125,10 +125,14 @@ maybe(
 #
 # 4. `make` 4.2 fails to compile on Linux because of unrecognized symbols so we patch the source.
 #    See: <https://github.com/MaterializeInc/rules_foreign_cc/commit/de4a79280f54d8796e86b7ab0b631939b7b44d05>
+#
+# 5. Mirror the GNU source code for `make` from the `MaterializeInc/toolchains` repository. We've
+#    previously seen the upstream GNU FTP server go down which causes CI to break.
+#    See: <https://github.com/MaterializeInc/rules_foreign_cc/commit/c994a0d6a86480d274dc1937d8861a56e6011cf0>
 
-RULES_FOREIGN_CC_VERSION = "de4a79280f54d8796e86b7ab0b631939b7b44d05"
+RULES_FOREIGN_CC_VERSION = "c994a0d6a86480d274dc1937d8861a56e6011cf0"
 
-RULES_FOREIGN_CC_INTEGRITY = "sha256-WwRg/GJuUjT3SMJEagTni2ZH+g3szIkHaqGgbYCN1u0="
+RULES_FOREIGN_CC_INTEGRITY = "sha256-kFSk41S84sVupSj7p+OxlHV5wXKoo67PvBy2vlXiQsg="
 
 maybe(
     http_archive,
@@ -171,14 +175,14 @@ filegroup(
 
 DARWIN_SYSROOT_VERSION = "14.5"
 
-DARWIN_SYSROOT_INTEGRITY = "sha256-k8OxF+DSVq0L1dy1S9TPqhFxDHF/bT32Ust3a1ldat8="
+DARWIN_SYSROOT_INTEGRITY = "sha256-JCleYWOca1Z/B4Li1iwDKGEP/IkWWgKqXoygtJXyNTU="
 
 http_archive(
     name = "sysroot_darwin_universal",
     build_file_content = _SYSROOT_DARWIN_BUILD_FILE,
     integrity = DARWIN_SYSROOT_INTEGRITY,
-    strip_prefix = "MacOSX{0}.sdk".format(DARWIN_SYSROOT_VERSION),
-    urls = ["https://github.com/MaterializeInc/toolchains/releases/download/macos-sysroot-sdk-{0}/MacOSX{0}.sdk.tar.zst".format(DARWIN_SYSROOT_VERSION)],
+    strip_prefix = "MacOSX{0}.sdk-min".format(DARWIN_SYSROOT_VERSION),
+    urls = ["https://github.com/MaterializeInc/toolchains/releases/download/macos-sysroot-sdk-{0}-1/MacOSX{0}.sdk-min.tar.zst".format(DARWIN_SYSROOT_VERSION)],
 )
 
 _LINUX_SYSROOT_BUILD_FILE = """
@@ -307,9 +311,9 @@ c_repositories()
 # Rules for building Rust crates, and several convienence macros for building all transitive
 # dependencies.
 
-RULES_RUST_VERSION = "0.49.3"
+RULES_RUST_VERSION = "0.51.0"
 
-RULES_RUST_INTEGRITY = "sha256-3QBrdyIdWeTRQSB8DnrfEbH7YNFEC4/KA7+SVheTKmA="
+RULES_RUST_INTEGRITY = "sha256-BCrPtzRpstGEj+FI2Bw0IsYepHqeGQDxyew29R6OcZM="
 
 maybe(
     http_archive,
@@ -595,6 +599,7 @@ crates_repository(
         "//:src/orchestrator-kubernetes/Cargo.toml",
         "//:src/orchestrator-process/Cargo.toml",
         "//:src/orchestrator-tracing/Cargo.toml",
+        "//:src/orchestratord/Cargo.toml",
         "//:src/orchestrator/Cargo.toml",
         "//:src/ore-proc/Cargo.toml",
         "//:src/ore/Cargo.toml",
@@ -650,6 +655,18 @@ crates_repository(
         "//:misc/bazel/cargo-gazelle/Cargo.toml",
     ],
     rust_version = RUST_VERSION,
+    # Restricting the set of platform triples we support _greatly_ reduces the
+    # time it takes to "Splice Cargo Workspace" because it reduces the amount
+    # of metadata that needs to be collected.
+    #
+    # Feel free to add more targets if need be but try to keep this list small.
+    supported_platform_triples = [
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "wasm32-unknown-unknown",
+    ],
     # Only used if developing rules_rust.
     # generator = "@cargo_bazel_bootstrap//:cargo-bazel",
 )

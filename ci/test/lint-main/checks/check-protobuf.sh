@@ -44,10 +44,18 @@ fi
 echo $IN_BUILDKITE_PR
 echo $IN_LOCAL_NON_MAIN_BRANCH
 
+if [[ "${1:-}" = --offline ]]; then
+  fetch_from_git=false
+else
+  fetch_from_git=true
+fi
+
 if [[ $IN_BUILDKITE_PR || $IN_LOCAL_NON_MAIN_BRANCH ]]; then
   # see ./ci/test/lint-buf/README.md
 
-  fetch_pr_target_branch
+  if $fetch_from_git; then
+    fetch_pr_target_branch
+  fi
 
   ci_collapsed_heading "Verify that protobuf config is up-to-date"
   try bin/pyactivate ./ci/test/lint-buf/generate-buf-config.py
@@ -58,6 +66,10 @@ if [[ $IN_BUILDKITE_PR || $IN_LOCAL_NON_MAIN_BRANCH ]]; then
   COMMON_ANCESTOR="$(get_common_ancestor_commit_of_pr_and_target)"
   # Default is depth 50, which can be insufficient to grab the relevant ancestor commit
   try buf breaking src --against ".git#ref=$COMMON_ANCESTOR,subdir=src,depth=10000" --verbose
+
+  ci_collapsed_heading "Lint protobuf formatting"
+  # Proto formatting
+  try buf format src --diff --exit-code
 fi
 
 try_status_report

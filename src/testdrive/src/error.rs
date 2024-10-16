@@ -17,10 +17,9 @@
 //! they are returned externally.
 
 use std::fmt::{self, Write as _};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-use atty::Stream;
 use mz_ore::error::ErrorExt;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
@@ -42,7 +41,7 @@ impl Error {
 
     /// Prints the error to `stderr`, with coloring if the terminal supports it.
     pub fn print_stderr(&self) -> io::Result<()> {
-        let color_choice = if atty::is(Stream::Stderr) {
+        let color_choice = if std::io::stderr().is_terminal() {
             ColorChoice::Auto
         } else {
             ColorChoice::Never

@@ -26,6 +26,7 @@ pub struct S3BlobMetrics {
     pub(crate) connect_timeouts: IntCounter,
     pub(crate) read_timeouts: IntCounter,
     pub(crate) get_part: IntCounter,
+    pub(crate) get_invalid_resp: IntCounter,
     pub(crate) set_single: IntCounter,
     pub(crate) set_multi_create: IntCounter,
     pub(crate) set_multi_part: IntCounter,
@@ -66,6 +67,7 @@ impl S3BlobMetrics {
                 help: "number of timeouts waiting on first response byte from S3",
             )),
             get_part: operations.with_label_values(&["get_part"]),
+            get_invalid_resp: operations.with_label_values(&["get_invalid_resp"]),
             set_single: operations.with_label_values(&["set_single"]),
             set_multi_create: operations.with_label_values(&["set_multi_create"]),
             set_multi_part: operations.with_label_values(&["set_multi_part"]),
@@ -201,6 +203,7 @@ pub struct ParquetMetrics {
     pub(crate) d_metrics: ParquetColumnMetrics,
     pub(crate) k_s_metrics: ParquetColumnMetrics,
     pub(crate) v_s_metrics: ParquetColumnMetrics,
+    pub(crate) elided_null_buffers: IntCounter,
 }
 
 impl ParquetMetrics {
@@ -231,6 +234,10 @@ impl ParquetMetrics {
             d_metrics: ParquetColumnMetrics::new("d", &column_size),
             k_s_metrics: ParquetColumnMetrics::new("k_s", &column_size),
             v_s_metrics: ParquetColumnMetrics::new("v_s", &column_size),
+            elided_null_buffers: registry.register(metric!(
+                name: "mz_persist_parquet_elided_null_buffer_count",
+                help: "times we dropped an unnecessary null buffer returned by parquet decoding",
+            )),
         }
     }
 }

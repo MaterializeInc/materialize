@@ -14,7 +14,7 @@ package mz_tracing.params;
 message ProtoTracingParameters {
   optional string log_filter = 1;
   optional string opentelemetry_filter = 2;
-  repeated string log_filter_defaults= 3;
+  repeated string log_filter_defaults = 3;
   repeated string opentelemetry_filter_defaults = 4;
   repeated string sentry_filters = 5;
 }

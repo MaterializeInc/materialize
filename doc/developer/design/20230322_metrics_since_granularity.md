@@ -1,5 +1,5 @@
 - Feature name: Retained metrics "since" granularity
-- Associated: https://github.com/MaterializeInc/materialize/issues/17741
+- Associated: https://github.com/MaterializeInc/database-issues/issues/5166
 
 # Summary
 [summary]: #summary
@@ -41,4 +41,4 @@ Slightly increases system complexity
 # Future work
 [future-work]: #future-work
 
-We still need to complete the other tasks in https://github.com/MaterializeInc/materialize/issues/18347 .
+We still need to complete the other tasks in https://github.com/MaterializeInc/database-issues/issues/5405 .

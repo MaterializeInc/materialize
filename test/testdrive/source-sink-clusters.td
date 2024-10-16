@@ -26,7 +26,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 contains:CLUSTER "storage" has no replicas available to service request
 
 # Creating a source in an empty, zero-replica cluster should work.
-> CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
+> CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER (UP TO 100)
 
 ! ALTER SOURCE loadgen SET (SIZE = '1')
 contains:Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
@@ -46,7 +46,7 @@ contains:Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
 contains:cannot create more than one replica of a cluster containing sources or sinks
 
 # Creating sources on clusters containing compute objects is allowed
-> CREATE SOURCE lg2 IN CLUSTER storage FROM LOAD GENERATOR COUNTER
+> CREATE SOURCE lg2 IN CLUSTER storage FROM LOAD GENERATOR COUNTER (UP TO 100)
 
 # Test that `DROP CLUSTER` only succeeds with `CASCADE`.
 ! DROP CLUSTER storage

@@ -33,6 +33,16 @@ sh_binary(
     ),
 )
 
+# Convience wrapper around `cargo-gazelle` that specifies our formatter.
+sh_binary(
+    name = "cargo-gazelle",
+    srcs = ["@//misc/bazel/cargo-gazelle:main"],
+    data = ["@//misc/bazel/tools:buildifier"],
+    env = {
+        "FORMATTER": "$(location @//misc/bazel/tools:buildifier)",
+    },
+)
+
 # We alias some tools from the Clang toolchain for easy consumption from other
 # parts of our build system, e.g. `mzbuild.py`.
 #

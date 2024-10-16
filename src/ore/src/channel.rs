@@ -72,7 +72,7 @@ where
 /// A wrapper around tokio's `UnboundedSender` that increments a metric when a send occurs.
 ///
 /// The metric is not dropped until this sender is dropped.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InstrumentedUnboundedSender<T, M> {
     tx: UnboundedSender<T>,
     metric: M,

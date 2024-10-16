@@ -80,7 +80,7 @@ impl Client {
     pub async fn get_region(&self, provider: CloudProvider) -> Result<Region, Error> {
         // Send request to the subdomain
         let req = self
-            .build_region_request(Method::GET, ["api", "region"], &provider, Some(1))
+            .build_region_request(Method::GET, ["api", "region"], None, &provider, Some(1))
             .await?;
 
         match self.send_request::<Region>(req).await {
@@ -139,7 +139,13 @@ impl Client {
         };
 
         let req = self
-            .build_region_request(Method::PATCH, ["api", "region"], &cloud_provider, Some(1))
+            .build_region_request(
+                Method::PATCH,
+                ["api", "region"],
+                None,
+                &cloud_provider,
+                Some(1),
+            )
             .await?;
         let req = req.json(&body);
         // Creating a region can take some time
@@ -149,6 +155,8 @@ impl Client {
 
     /// Deletes a customer region in a particular cloud region for the current user.
     ///
+    /// Soft deletes by default.
+    ///
     /// NOTE that this operation is only available to Materialize employees
     /// This operation has a long duration, it can take
     /// several minutes to complete.
@@ -156,7 +164,11 @@ impl Client {
     /// indicating that the API is working on the deletion.
     /// A request returning a 202 indicates that
     /// no region is available to delete (the delete request is complete.)
-    pub async fn delete_region(&self, cloud_provider: CloudProvider) -> Result<(), Error> {
+    pub async fn delete_region(
+        &self,
+        cloud_provider: CloudProvider,
+        hard: bool,
+    ) -> Result<(), Error> {
         /// A struct that deserializes nothing.
         ///
         /// Useful for deserializing empty response bodies.
@@ -171,6 +183,12 @@ impl Client {
             }
         }
 
+        let query = if hard {
+            Some([("hardDelete", "true")].as_slice())
+        } else {
+            None
+        };
+
         // We need to continuously try to delete the environment
         // until it succeeds (Status code: 202) or an unexpected error occurs.
         let mut loops = 0;
@@ -178,7 +196,13 @@ impl Client {
             loops += 1;
 
             let req = self
-                .build_region_request(Method::DELETE, ["api", "region"], &cloud_provider, Some(1))
+                .build_region_request(
+                    Method::DELETE,
+                    ["api", "region"],
+                    query,
+                    &cloud_provider,
+                    Some(1),
+                )
                 .await?;
 
             // This timeout corresponds to the same in our cloud services tests.

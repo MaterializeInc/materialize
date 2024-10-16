@@ -9,6 +9,9 @@
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.data_value.source_column_identifier import (
+    SourceColumnIdentifier,
+)
 from materialize.output_consistency.execution.sql_dialect_adjuster import (
     SqlDialectAdjuster,
 )
@@ -44,8 +47,9 @@ class DataValue(LeafExpression):
             data_type,
             characteristics,
             ValueStorageLayout.HORIZONTAL,
-            False,
-            False,
+            data_source=DataSource(table_index=None),
+            is_aggregate=False,
+            is_expect_error=False,
         )
         self.value = value
         self.vertical_table_indices: set[int] = set()
@@ -69,8 +73,10 @@ class DataValue(LeafExpression):
     def collect_vertical_table_indices(self) -> set[int]:
         return self.vertical_table_indices
 
-    def get_data_source(self) -> DataSource:
-        return DataSource(table_index=None)
+    def get_source_column_identifier(self) -> SourceColumnIdentifier:
+        source_column_identifier = super().get_source_column_identifier()
+        assert source_column_identifier is not None
+        return source_column_identifier
 
     def __str__(self) -> str:
         return f"DataValue (column='{self.column_name}', value={self.value}, type={self.data_type})"

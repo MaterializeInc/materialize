@@ -15,7 +15,6 @@ use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
 use mz_ore::cast::CastLossy;
-use mz_ore::future::TimeoutError;
 use mz_ore::task;
 use tokio::time;
 
@@ -51,6 +50,7 @@ where
     }
     let ld_client = if let Some(key) = launchdarkly_sdk_key {
         let client = ld::Client::build(ld::ConfigBuilder::new(key).build())?;
+        client.start_with_default_executor();
         let init = async {
             let max_backoff = Duration::from_secs(60);
             let mut backoff = Duration::from_secs(5);
@@ -59,16 +59,14 @@ where
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(max_backoff);
             }
-            Ok(())
         };
-        match mz_ore::future::timeout(config_sync_timeout, init).await {
-            Ok(_) => Some(client),
-            Err(TimeoutError::Inner(e)) => return Err(e),
-            Err(TimeoutError::DeadlineElapsed) => {
-                tracing::info!("SyncedConfigSet initialize on boot: initialize has timed out");
-                None
-            }
+        if tokio::time::timeout(config_sync_timeout, init)
+            .await
+            .is_err()
+        {
+            tracing::info!("SyncedConfigSet initialize on boot: initialize has timed out");
         }
+        Some(client)
     } else {
         None
     };

@@ -125,6 +125,7 @@ IGNORE_RE = re.compile(
     | restart-materialized-1\ *|\ thread\ 'coordinator'\ panicked\ at\ 'external\ operation\ .*\ failed\ unrecoverably.*
     # Expected in cluster test
     | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
+    | cluster-clusterd1-1\ .*\ has\ exceeded\ expiration
     # Emitted by tests employing explicit mz_panic()
     | forced\ panic
     # Emitted by broken_statements.slt in order to stop panic propagation, as 'forced panic' will unwantedly panic the `environmentd` thread.
@@ -255,7 +256,7 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
         return f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        filters = [{"id": "issue", "value": f"materialize/{self.issue_number} "}]
+        filters = [{"id": "issue", "value": f"database-issues/{self.issue_number} "}]
         ci_failures_url = f"https://ci-failures.dev.materialize.com/?key=test-failures&tfFilters={urllib.parse.quote(json.dumps(filters), safe='')}"
         return f'<a href="{ci_failures_url}">{self.error_type}</a> <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
@@ -722,7 +723,7 @@ def _collect_errors_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
     for match in ERROR_RE.finditer(data):
         if IGNORE_RE.search(match.group(0)):
             continue
-        # environmentd segfaults during normal shutdown in coverage builds, see #20016
+        # environmentd segfaults during normal shutdown in coverage builds, see database-issues#5980
         # Ignoring this in regular ways would still be quite spammy.
         if (
             b"environmentd" in match.group(0)
@@ -940,7 +941,7 @@ def store_annotation_in_test_analytics(
             error_type=error.internal_error_type,
             message=error.to_text(),
             issue=(
-                f"materialize/{error.issue_number}"
+                f"database-issues/{error.issue_number}"
                 if isinstance(error, WithIssue)
                 else None
             ),

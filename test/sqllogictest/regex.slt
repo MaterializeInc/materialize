@@ -22,7 +22,7 @@ asdf asdf NULL
 asdfjkl asdf NULL
 jkl NULL jkl
 
-# TODO - Test that the columns have the correct nullability, once they actually do (materialize#1685)
+# TODO - Test that the columns have the correct nullability, once they actually do (database-issues#612)
 
 # Standard regex matching.
 query TTT
@@ -486,7 +486,7 @@ ORDER BY 1
 {hello,world}
 {hello,world}
 
-# TODO: Correct ordering when materialize#16464 is fixed.
+# TODO: Correct ordering when database-issues#4764 is fixed.
 query T
 SELECT foo FROM regexp_split_to_table('the quick brown fox jumps over the lazy dog', '\s+') AS foo ORDER BY 1
 ----
@@ -500,7 +500,7 @@ quick
 the
 the
 
-# TODO: Correct ordering when materialize#16464 is fixed.
+# TODO: Correct ordering when database-issues#4764 is fixed.
 query T
 SELECT foo FROM regexp_split_to_table('the quick brown fox', '\s*') AS foo ORDER BY 1
 ----

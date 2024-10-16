@@ -365,7 +365,7 @@ where
             .try_into()
             .expect("reasonable duration");
         // SUBTLE: Retries of compare_and_append with Indeterminate errors are
-        // tricky (more discussion of this in #12797):
+        // tricky (more discussion of this in database-issues#3680):
         //
         // - (1) We compare_and_append and get an Indeterminate error back from
         //   CRDB/Consensus. This means we don't know if it committed or not.
@@ -1415,7 +1415,7 @@ pub mod datadriven {
 
     use crate::batch::{
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-        BLOB_TARGET_SIZE,
+        BLOB_TARGET_SIZE, STRUCTURED_ORDER,
     };
     use crate::fetch::{Cursor, EncodedPart};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
@@ -1455,6 +1455,12 @@ pub mod datadriven {
             client
                 .cfg
                 .set_config(&BLOB_TARGET_SIZE, *BLOB_TARGET_SIZE.default());
+            // Our structured compaction code uses slightly different estimates
+            // for array size than the old path, which can affect the results of
+            // some compaction tests.
+            client
+                .cfg
+                .set_config(&STRUCTURED_ORDER, *STRUCTURED_ORDER.default());
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
@@ -1747,7 +1753,7 @@ pub mod datadriven {
             .collect();
 
         let mut cfg =
-            BatchBuilderConfig::new(&datadriven.client.cfg, &WriterId::new(), consolidate);
+            BatchBuilderConfig::new(&datadriven.client.cfg, datadriven.shard_id, consolidate);
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
@@ -1935,7 +1941,6 @@ pub mod datadriven {
         let lower = args.expect_antichain("lower");
         let upper = args.expect_antichain("upper");
         let since = args.expect_antichain("since");
-        let writer_id = args.optional("writer_id");
         let target_size = args.optional("target_size");
         let memory_bound = args.optional("memory_bound");
 
@@ -1962,14 +1967,13 @@ pub mod datadriven {
             desc: Description::new(lower, upper, since),
             inputs,
         };
-        let writer_id = writer_id.unwrap_or_else(WriterId::new);
         let schemas = Schemas {
             id: None,
             key: Arc::new(StringSchema),
             val: Arc::new(UnitSchema),
         };
         let res = Compactor::<String, (), u64, i64>::compact(
-            CompactConfig::new(&cfg, &writer_id),
+            CompactConfig::new(&cfg, datadriven.shard_id),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
@@ -2366,7 +2370,8 @@ pub mod datadriven {
                 }
                 CompareAndAppendRes::InlineBackpressure => {
                     let mut b = datadriven.to_batch(batch.clone());
-                    let cfg = BatchBuilderConfig::new(&datadriven.client.cfg, &writer_id, false);
+                    let cfg =
+                        BatchBuilderConfig::new(&datadriven.client.cfg, datadriven.shard_id, false);
                     let schemas = Schemas::<String, ()> {
                         id: None,
                         key: Arc::new(StringSchema),
@@ -2476,7 +2481,7 @@ pub mod tests {
                 .await;
             // Flush this batch out so the CaA doesn't get inline writes
             // backpressure.
-            let cfg = BatchBuilderConfig::new(&client.cfg, &write.writer_id, false);
+            let cfg = BatchBuilderConfig::new(&client.cfg, write.shard_id(), false);
             batch
                 .flush_to_blob(
                     &cfg,
@@ -2519,7 +2524,7 @@ pub mod tests {
         );
     }
 
-    // A regression test for #14719, where a bug in gc led to an incremental
+    // A regression test for database-issues#4206, where a bug in gc led to an incremental
     // state invariant being violated which resulted in gc being permanently
     // wedged for the shard.
     #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
@@ -2568,7 +2573,7 @@ pub mod tests {
         let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;
     }
 
-    // A regression test for #20776, where a bug meant that compare_and_append
+    // A regression test for materialize#20776, where a bug meant that compare_and_append
     // would not fetch the latest state after an upper mismatch. This meant that
     // a write that could succeed if retried on the latest state would instead
     // return an UpperMismatch.

@@ -488,6 +488,11 @@ mod impls {
         }
 
         fn parse(s: &str) -> Result<Self, String> {
+            match s {
+                "on" => return Ok(true),
+                "off" => return Ok(false),
+                _ => {}
+            }
             s.parse().map_err(|e: ParseBoolError| e.to_string())
         }
     }
@@ -795,7 +800,7 @@ mod tests {
 
     #[mz_ore::test]
     fn config_updates_extend() {
-        // Regression test for #26196.
+        // Regression test for database-issues#7793.
         //
         // Construct two ConfigUpdates with overlapping, but not identical, sets
         // of configs. Combine them and assert that the expected number of
@@ -834,7 +839,9 @@ mod tests {
     #[mz_ore::test]
     fn config_parse() {
         assert_eq!(BOOL.parse_val("true"), Ok(ConfigVal::Bool(true)));
+        assert_eq!(BOOL.parse_val("on"), Ok(ConfigVal::Bool(true)));
         assert_eq!(BOOL.parse_val("false"), Ok(ConfigVal::Bool(false)));
+        assert_eq!(BOOL.parse_val("off"), Ok(ConfigVal::Bool(false)));
         assert_err!(BOOL.parse_val("42"));
         assert_err!(BOOL.parse_val("66.6"));
         assert_err!(BOOL.parse_val("farragut"));

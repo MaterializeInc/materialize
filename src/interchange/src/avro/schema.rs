@@ -259,7 +259,7 @@ fn validate_schema_2(
                 }
             }
             ScalarType::Record {
-                fields: columns,
+                fields: columns.into(),
                 custom_id: None,
             }
         }

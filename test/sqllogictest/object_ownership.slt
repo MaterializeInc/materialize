@@ -2300,7 +2300,22 @@ COMPLETE 0
 # object and primary source owners.
 
 statement ok
-CREATE SOURCE s FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+CREATE SOURCE s FROM LOAD GENERATOR AUCTION
+
+statement ok
+CREATE TABLE accounts FROM SOURCE s (REFERENCE accounts);
+
+statement ok
+CREATE TABLE auctions FROM SOURCE s (REFERENCE auctions);
+
+statement ok
+CREATE TABLE bids FROM SOURCE s (REFERENCE bids);
+
+statement ok
+CREATE TABLE organizations FROM SOURCE s (REFERENCE organizations);
+
+statement ok
+CREATE TABLE users FROM SOURCE s (REFERENCE users);
 
 query TT
 SELECT mz_sources.name, mz_roles.name
@@ -2309,12 +2324,20 @@ SELECT mz_sources.name, mz_roles.name
   WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_sources.name
 ----
+s  materialize
+s_progress  materialize
+
+query TT
+SELECT mz_tables.name, mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  ORDER BY mz_tables.name
+----
 accounts       materialize
 auctions       materialize
 bids           materialize
 organizations  materialize
-s              materialize
-s_progress     materialize
 users          materialize
 
 query TT
@@ -2343,6 +2366,11 @@ ALTER CLUSTER REPLICA materialize_public_s.linked OWNER TO joe
 simple conn=mz_system,user=mz_system
 ALTER SOURCE accounts OWNER TO joe
 ----
+db error: ERROR: accounts is a table not a source
+
+simple conn=mz_system,user=mz_system
+ALTER TABLE accounts OWNER TO joe
+----
 COMPLETE 0
 
 statement error cannot ALTER this type of source
@@ -2355,12 +2383,20 @@ SELECT mz_sources.name, mz_roles.name
   WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_sources.name
 ----
+s  materialize
+s_progress  materialize
+
+query TT
+SELECT mz_tables.name, mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  ORDER BY mz_tables.name
+----
 accounts       joe
 auctions       materialize
 bids           materialize
 organizations  materialize
-s              materialize
-s_progress     materialize
 users          materialize
 
 query TT
@@ -2392,12 +2428,20 @@ SELECT mz_sources.name, mz_roles.name
   WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_sources.name
 ----
+s  joe
+s_progress  joe
+
+query TT
+SELECT mz_tables.name, mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  ORDER BY mz_tables.name
+----
 accounts       joe
 auctions       materialize
 bids           materialize
 organizations  materialize
-s              joe
-s_progress     joe
 users          materialize
 
 query TT

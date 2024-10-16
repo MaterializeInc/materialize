@@ -32,9 +32,9 @@ use futures::future::BoxFuture;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_client::controller::{
-    ComputeController, ComputeControllerResponse, ComputeControllerTimestamp,
+    ComputeController, ComputeControllerResponse, ComputeControllerTimestamp, PeekNotification,
 };
-use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
+use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_controller_types::WatchSetId;
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
@@ -109,12 +109,12 @@ pub struct ControllerConfig {
 /// Responses that [`Controller`] can produce.
 #[derive(Debug)]
 pub enum ControllerResponse<T = mz_repr::Timestamp> {
-    /// The worker's response to a specified (by connection id) peek.
+    /// Notification of a worker's response to a specified (by connection id) peek.
     ///
     /// Additionally, an `OpenTelemetryContext` to forward trace information
     /// back into coord. This allows coord traces to be children of work
     /// done in compute!
-    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
+    PeekNotification(Uuid, PeekNotification, OpenTelemetryContext),
     /// The worker's next response to a specified subscribe.
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
     /// The worker's next response to a specified copy to.
@@ -223,7 +223,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
     /// Returns the state of the [`Controller`] formatted as JSON.
     ///
     /// The returned value is not guaranteed to be stable and may change at any point in time.
-    pub fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+    pub async fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Note: We purposefully use the `Debug` formatting for the value of all fields in the
         // returned object as a tradeoff between usability and stability. `serde_json` will fail
         // to serialize an object if the keys aren't strings, so `Debug` formatting the values
@@ -252,6 +252,8 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             immediate_watch_sets,
         } = self;
 
+        let compute = compute.dump().await?;
+
         let unfulfilled_watch_sets: BTreeMap<_, _> = unfulfilled_watch_sets
             .iter()
             .map(|(ws_id, watches)| (format!("{ws_id:?}"), format!("{watches:?}")))
@@ -270,7 +272,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
         }
 
         let map = serde_json::Map::from_iter([
-            field("compute", compute.dump()?)?,
+            field("compute", compute)?,
             field("deploy_generation", deploy_generation)?,
             field("read_only", read_only)?,
             field("readiness", format!("{readiness:?}"))?,
@@ -305,31 +307,6 @@ where
     /// Reports whether the controller is in read only mode.
     pub fn read_only(&self) -> bool {
         self.read_only
-    }
-
-    /// Allow this controller and instances controlled by it to write to
-    /// external systems.
-    ///
-    /// If the controller has previously been told about tables (via
-    /// [StorageController::create_collections]), the caller must provide a
-    /// `register_ts`, the timestamp at which any tables that are known to the
-    /// controller should be registered in the txn system.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the controller knows about tables but not `register_ts` is
-    /// provided.
-    pub async fn allow_writes(&mut self, register_ts: Option<T>) {
-        if !self.read_only {
-            // Already transitioned out of read-only mode!
-            return;
-        }
-
-        self.read_only = false;
-
-        self.compute.allow_writes();
-        self.storage.allow_writes(register_ts).await;
-        self.remove_past_generation_replicas_in_background();
     }
 
     /// Returns `Some` if there is an immediately available
@@ -495,8 +472,8 @@ where
         let response = self.compute.process(&mut *self.storage);
 
         let response = response.and_then(|r| match r {
-            ComputeControllerResponse::PeekResponse(uuid, peek, otel_ctx) => {
-                Some(ControllerResponse::PeekResponse(uuid, peek, otel_ctx))
+            ComputeControllerResponse::PeekNotification(uuid, peek, otel_ctx) => {
+                Some(ControllerResponse::PeekNotification(uuid, peek, otel_ctx))
             }
             ComputeControllerResponse::SubscribeResponse(id, tail) => {
                 Some(ControllerResponse::SubscribeResponse(id, tail))
@@ -623,7 +600,7 @@ where
     /// If no items in `ids` connect to external systems, this function will
     /// return `Ok(T::minimum)`.
     pub async fn determine_real_time_recent_timestamp(
-        &mut self,
+        &self,
         ids: BTreeSet<GlobalId>,
         timeout: Duration,
     ) -> Result<BoxFuture<'static, Result<T, StorageError<T>>>, StorageError<T>> {
@@ -717,17 +694,14 @@ where
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
-        let mut this = Self {
+        let this = Self {
             storage: Box::new(storage_controller),
             storage_collections: collections_ctl,
             compute: compute_controller,
             clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,
             deploy_generation: config.deploy_generation,
-            // We initialize to true, but then call `allow_writes()` below,
-            // based on our input. This way we avoid having the same logic in
-            // two places.
-            read_only: true,
+            read_only,
             orchestrator: config.orchestrator.namespace("cluster"),
             readiness: Readiness::NotReady,
             metrics_tasks: BTreeMap::new(),
@@ -742,15 +716,8 @@ where
             immediate_watch_sets: Vec::new(),
         };
 
-        // We have some logic that we want to run both when initialized with
-        // `read_only = false` _and_ when later transitioning out of read-only
-        // mode. This way we keep that logic in one place.
-        if !read_only {
-            // We did not yet tell the controller about any collections, so
-            // there are no tables to initialize yet. Hence we don't need a
-            // register_ts.
-            let register_ts = None;
-            this.allow_writes(register_ts).await;
+        if !this.read_only {
+            this.remove_past_generation_replicas_in_background();
         }
 
         this

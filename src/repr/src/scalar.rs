@@ -1500,7 +1500,9 @@ pub enum ScalarType {
     Record {
         /// The names and types of the fields of the record, in order from left
         /// to right.
-        fields: Vec<(ColumnName, ColumnType)>,
+        ///
+        /// Boxed slice to reduce the size of the enum variant.
+        fields: Box<[(ColumnName, ColumnType)]>,
         custom_id: Option<GlobalId>,
     },
     /// A PostgreSQL object identifier.
@@ -2713,7 +2715,7 @@ impl ScalarType {
                             },
                         )
                     })
-                    .collect_vec();
+                    .collect();
                 Record {
                     fields,
                     custom_id: None,
@@ -3556,7 +3558,7 @@ impl ScalarType {
 
             ScalarType::Array(elem) => Ok(elem.array_of_self_elem_type()?),
 
-            // https://github.com/MaterializeInc/materialize/issues/7613
+            // https://github.com/MaterializeInc/database-issues/issues/2360
             t @ (ScalarType::Char { .. }
             // not sensible to put in arrays
             | ScalarType::Map { .. }
@@ -3683,7 +3685,10 @@ impl Arbitrary for ScalarType {
 
                     // Now we combine it with the default strategies to get Records.
                     (fields_strat, any::<Option<GlobalId>>())
-                        .prop_map(|(fields, custom_id)| ScalarType::Record { fields, custom_id })
+                        .prop_map(|(fields, custom_id)| ScalarType::Record {
+                            fields: fields.into(),
+                            custom_id,
+                        })
                         .boxed()
                 },
             ])
@@ -4332,27 +4337,29 @@ impl<'a> From<&'a PropDatum> for Datum<'a> {
 #[mz_ore::test]
 fn verify_base_eq_record_nullability() {
     let s1 = ScalarType::Record {
-        fields: vec![(
+        fields: [(
             "c".into(),
             ColumnType {
                 scalar_type: ScalarType::Bool,
                 nullable: true,
             },
-        )],
+        )]
+        .into(),
         custom_id: None,
     };
     let s2 = ScalarType::Record {
-        fields: vec![(
+        fields: [(
             "c".into(),
             ColumnType {
                 scalar_type: ScalarType::Bool,
                 nullable: false,
             },
-        )],
+        )]
+        .into(),
         custom_id: None,
     };
     let s3 = ScalarType::Record {
-        fields: vec![],
+        fields: [].into(),
         custom_id: None,
     };
     assert!(s1.base_eq(&s2));

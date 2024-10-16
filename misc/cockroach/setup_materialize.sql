@@ -10,7 +10,7 @@
 -- Sets up a CockroachDB cluster for use by Materialize.
 
 -- See: https://github.com/cockroachdb/cockroach/issues/93892
--- See: https://github.com/MaterializeInc/materialize/issues/16726
+-- See: https://github.com/MaterializeInc/database-issues/issues/4843
 SET CLUSTER SETTING sql.stats.forecasts.enabled = false;
 
 SET CLUSTER SETTING storage.max_sync_duration.fatal.enabled = false;

@@ -1,7 +1,7 @@
 # Compute Operator Hydration Status Tracking
 
-- Associated: https://github.com/MaterializeInc/materialize/issues/23859
-- Associated: https://github.com/MaterializeInc/materialize/issues/21723
+- Associated: https://github.com/MaterializeInc/database-issues/issues/7164
+- Associated: https://github.com/MaterializeInc/database-issues/issues/6518
 
 ## The Problem
 

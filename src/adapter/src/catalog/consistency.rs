@@ -110,6 +110,12 @@ impl CatalogState {
             }
         }
 
+        for (source_id, _references) in &self.source_references {
+            if !self.entry_by_id.contains_key(source_id) {
+                inconsistencies.push(InternalFieldsInconsistency::SourceReferences(*source_id));
+            }
+        }
+
         if inconsistencies.is_empty() {
             Ok(())
         } else {
@@ -237,7 +243,8 @@ impl CatalogState {
                 | CommentObjectId::Func(global_id)
                 | CommentObjectId::Connection(global_id)
                 | CommentObjectId::Type(global_id)
-                | CommentObjectId::Secret(global_id) => {
+                | CommentObjectId::Secret(global_id)
+                | CommentObjectId::ContinualTask(global_id) => {
                     let entry = self.entry_by_id.get(&global_id);
                     match entry {
                         None => comment_inconsistencies
@@ -589,6 +596,7 @@ enum InternalFieldsInconsistency {
     AmbientSchema(String, SchemaId),
     Cluster(String, ClusterId),
     Role(String, RoleId),
+    SourceReferences(GlobalId),
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]

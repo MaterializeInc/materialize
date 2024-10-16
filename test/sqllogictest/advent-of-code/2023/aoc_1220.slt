@@ -1,0 +1,394 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1220.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (input TEXT);
+
+# no input data
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+
+    lines(line TEXT) AS ( SELECT regexp_split_to_table(input, '\n') FROM input ),
+    links(name TEXT, link TEXT) AS (
+        SELECT
+            substring(regexp_split_to_array(line, ' ')[1], 2),
+            trim(',' FROM regexp_split_to_array(line, ' ')[x])
+        FROM
+            lines, generate_series(3, array_length(regexp_split_to_array(line, ' '), 1)) x
+    ),
+    -- One special line has op 'b' and name 'roadcaster'.
+    types(op TEXT, name TEXT) AS (
+        SELECT
+            substring(regexp_split_to_array(line, ' ')[1], 1, 1),
+            substring(regexp_split_to_array(line, ' ')[1], 2)
+        FROM
+            lines
+    ),
+
+    -- Part one: simulate 1000 steps of 'broadcaster' being activated with a low pulse.
+    -- tally up total low and high pulses, and then multiply.
+    -- The state carried across steps are the last-transmitted pulses of each operator.
+    -- This should also tell us the final state of the `%` operators.
+    -- We'll also need the totals of low and high pulses, so that we can add them up.
+
+    seed(press INT, counter INT) AS (
+        SELECT 1, 1
+        UNION
+        SELECT press, counter - 1
+        FROM seed
+        WHERE counter > 0
+        UNION
+        SELECT press + 1, 20
+        FROM seed
+        WHERE counter = 0
+          AND press < 4100
+    ),
+
+    -- Emitted pulses after various button presses, in various rounds of resolution.
+    pulses(name TEXT, press INT, round INT, pulse TEXT) AS (
+        -- One thousand button presses, each followed by rounds of resolution.
+        SELECT 'roadcaster', press, 1, 'lo' FROM seed WHERE counter = 0
+        UNION ALL SELECT * FROM flip
+        UNION ALL SELECT * FROM conj
+    ),
+
+    -- Counters; every 'lo' input pulse flips and emits the state.
+    flip(name TEXT, press INT, round INT, pulse TEXT) AS (
+        -- Each `signal` needs to behave as if all "prior" signals have been processed, ordered by (press, round, source).
+        SELECT
+            name,
+            press,
+            round + 1,
+            -- Look for the most recently emitted signal, and we'll produce the opposite of that one.
+            CASE WHEN (
+                    SELECT COUNT(*)
+                    FROM signal s1
+                    WHERE s1.target = types.name
+                      AND s1.pulse = 'lo'
+                      AND ((s1.press < signal.press) OR
+                           (s1.press = signal.press AND s1.round < signal.round) OR
+                           (s1.press = signal.press AND s1.round = signal.round AND s1.source < signal.source))
+                ) % 2 = 0
+                THEN 'hi'
+                ELSE 'lo'
+            END
+        FROM signal, types
+        WHERE signal.target = types.name
+            AND types.op = '%'
+            AND signal.pulse = 'lo'
+    ),
+
+    -- NAND gates; every input pulse evokes the NAND of most recent inputs.
+    conj(name TEXT, press INT, round INT, pulse TEXT) AS (
+        SELECT
+            name,
+            press,
+            round + 1,
+            -- Look for the most recently received signals from each input,
+            -- including this one, and iff all 'hi' then 'lo'.
+            CASE WHEN (
+                    (SELECT COUNT(*) FROM links WHERE link = types.name)
+                    =
+                    (SELECT COUNT(*) FROM (
+                        SELECT DISTINCT ON (source) source, pulse
+                        FROM signal s1
+                        WHERE s1.target = types.name
+                          AND ((s1.press < signal.press) OR
+                               (s1.press = signal.press AND s1.round < signal.round) OR
+                               (s1.press = signal.press AND s1.round = signal.round AND s1.source <= signal.source))
+                        OPTIONS (DISTINCT ON INPUT GROUP SIZE = 1000)
+                        ORDER BY source, press DESC, round DESC
+                    )
+                    WHERE pulse = 'hi'))
+                 THEN 'lo'
+                 ELSE 'hi'
+            END
+        FROM signal, types
+        WHERE signal.target = types.name
+            AND types.op = '&'
+    ),
+
+    -- A record of a pulse into an operator, from another operator.
+    -- We track the source so that '&' operators can make any sense.
+    signal(source TEXT, target TEXT, press INT, round INT, pulse TEXT) AS (
+        SELECT pulses.name, links.link, pulses.press, pulses.round, pulses.pulse
+        FROM pulses, links
+        WHERE pulses.name = links.name
+          AND pulses.round > 0
+    ),
+
+    part1(pulse TEXT, count BIGINT) AS (
+        SELECT pulse, count(*) FROM signal GROUP BY pulse
+    ),
+
+    potato(x INT) AS (SELECT 1)
+
+SELECT * FROM signal WHERE target = 'cn' AND pulse = 'hi';
+----
+Explained Query:
+  Return
+    Filter (#1 = "cn") AND (#4 = "hi")
+      Get l21
+  With Mutually Recursive
+    cte l21 =
+      Project (#0, #5, #1..=#3)
+        Join on=(#0 = #4) type=differential
+          ArrangeBy keys=[[#0]]
+            Get l3
+          ArrangeBy keys=[[#0]]
+            Filter (#0) IS NOT NULL
+              Get l1
+    cte l20 =
+      Project (#1, #2, #4, #11)
+        Map (case when (#5 = #10) then "lo" else "hi" end)
+          Join on=(#0 = #6 AND #1 = #9 AND #2 = #7 AND #3 = #8) type=differential
+            ArrangeBy keys=[[#0, #2, #3, #1]]
+              Get l15
+            ArrangeBy keys=[[#0..=#3]]
+              Union
+                Get l19
+                Project (#0..=#3, #8)
+                  Map (null)
+                    Join on=(#0 = #4 AND #1 = #5 AND #2 = #6 AND #3 = #7) type=differential
+                      ArrangeBy keys=[[#0..=#3]]
+                        Union
+                          Negate
+                            Distinct project=[#0..=#3]
+                              Project (#0..=#3)
+                                Get l19
+                          Get l16
+                      ArrangeBy keys=[[#0..=#3]]
+                        Get l16
+    cte l19 =
+      Union
+        Get l18
+        Map (error("more than one record produced in subquery"))
+          Project (#0..=#3)
+            Filter (#4 > 1)
+              Reduce group_by=[#0..=#3] aggregates=[count(*)]
+                Project (#0..=#3)
+                  Get l18
+    cte l18 =
+      Union
+        Get l17
+        Project (#0..=#3, #8)
+          Map (0)
+            Join on=(#0 = #4 AND #1 = #5 AND #2 = #6 AND #3 = #7) type=differential
+              ArrangeBy keys=[[#0..=#3]]
+                Union
+                  Negate
+                    Project (#0..=#3)
+                      Get l17
+                  Get l16
+              ArrangeBy keys=[[#0..=#3]]
+                Get l16
+    cte l17 =
+      Reduce group_by=[#0..=#3] aggregates=[count(*)]
+        Project (#0..=#3)
+          Filter (#7 = "hi")
+            TopK group_by=[#0..=#4] order_by=[#5 desc nulls_first, #6 desc nulls_first] limit=1 exp_group_size=1000
+              Project (#0..=#4, #6..=#8)
+                Filter ((#6 < #1) OR ((#1 = #6) AND ((#7 < #2) OR ((#2 = #7) AND (#4 <= #0)))))
+                  Join on=(#3 = #5) type=differential
+                    ArrangeBy keys=[[#3]]
+                      Get l16
+                    ArrangeBy keys=[[#1]]
+                      Filter (#1) IS NOT NULL
+                        Get l21
+    cte l16 =
+      Distinct project=[#0, #2, #3, #1]
+        Project (#0..=#3)
+          Get l15
+    cte l15 =
+      Project (#0..=#4, #6)
+        Join on=(#1 = #5) type=differential
+          ArrangeBy keys=[[#1]]
+            Get l10
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l14
+              Project (#0, #2)
+                Map (null)
+                  Join on=(#0 = #1) type=differential
+                    ArrangeBy keys=[[#0]]
+                      Union
+                        Negate
+                          Distinct project=[#0]
+                            Project (#0)
+                              Get l14
+                        Get l11
+                    ArrangeBy keys=[[#0]]
+                      Get l11
+    cte l14 =
+      Union
+        Get l13
+        Map (error("more than one record produced in subquery"))
+          Project (#0)
+            Filter (#1 > 1)
+              Reduce group_by=[#0] aggregates=[count(*)]
+                Project (#0)
+                  Get l13
+    cte l13 =
+      Union
+        Get l12
+        Project (#0, #2)
+          Map (0)
+            Join on=(#0 = #1) type=differential
+              ArrangeBy keys=[[#0]]
+                Union
+                  Negate
+                    Project (#0)
+                      Get l12
+                  Get l11
+              ArrangeBy keys=[[#0]]
+                Get l11
+    cte l12 =
+      Reduce group_by=[#0] aggregates=[count(*)]
+        Project (#0)
+          Join on=(#0 = #1) type=differential
+            ArrangeBy keys=[[#0]]
+              Get l11
+            ArrangeBy keys=[[#0]]
+              Project (#1)
+                Filter (#1) IS NOT NULL
+                  Get l1
+    cte l11 =
+      Distinct project=[#0]
+        Project (#1)
+          Get l10
+    cte l10 =
+      Project (#0..=#3, #5)
+        Map ((#3 + 1))
+          Join on=(#1 = #4) type=differential
+            ArrangeBy keys=[[#1]]
+              Project (#0..=#3)
+                Filter (#1) IS NOT NULL
+                  Get l21
+            ArrangeBy keys=[[#0]]
+              Project (#2)
+                Filter ("&" = substr(#1, 1, 1))
+                  Map (array_index(regexp_split_to_array[" ", case_insensitive=false](#0), 1), substr(#1, 2))
+                    Get l0
+    cte l9 =
+      Project (#1, #2, #4, #10)
+        Map (case when (0 = (#9 % 2)) then "hi" else "lo" end)
+          Join on=(#0 = #5 AND #1 = #8 AND #2 = #6 AND #3 = #7) type=differential
+            ArrangeBy keys=[[#0, #2, #3, #1]]
+              Get l4
+            ArrangeBy keys=[[#0..=#3]]
+              Union
+                Get l8
+                Project (#0..=#3, #8)
+                  Map (null)
+                    Join on=(#0 = #4 AND #1 = #5 AND #2 = #6 AND #3 = #7) type=differential
+                      ArrangeBy keys=[[#0..=#3]]
+                        Union
+                          Negate
+                            Distinct project=[#0..=#3]
+                              Project (#0..=#3)
+                                Get l8
+                          Get l5
+                      ArrangeBy keys=[[#0..=#3]]
+                        Get l5
+    cte l8 =
+      Union
+        Get l7
+        Map (error("more than one record produced in subquery"))
+          Project (#0..=#3)
+            Filter (#4 > 1)
+              Reduce group_by=[#0..=#3] aggregates=[count(*)]
+                Project (#0..=#3)
+                  Get l7
+    cte l7 =
+      Union
+        Get l6
+        Project (#0..=#3, #8)
+          Map (0)
+            Join on=(#0 = #4 AND #1 = #5 AND #2 = #6 AND #3 = #7) type=differential
+              ArrangeBy keys=[[#0..=#3]]
+                Union
+                  Negate
+                    Project (#0..=#3)
+                      Get l6
+                  Get l5
+              ArrangeBy keys=[[#0..=#3]]
+                Get l5
+    cte l6 =
+      Reduce group_by=[#0..=#3] aggregates=[count(*)]
+        Project (#0..=#3)
+          Filter ((#6 < #1) OR ((#1 = #6) AND ((#7 < #2) OR ((#2 = #7) AND (#4 < #0)))))
+            Join on=(#3 = #5) type=differential
+              ArrangeBy keys=[[#3]]
+                Get l5
+              ArrangeBy keys=[[#1]]
+                Project (#0..=#3)
+                  Filter (#4 = "lo") AND (#1) IS NOT NULL
+                    Get l21
+    cte l5 =
+      Distinct project=[#0, #2, #3, #1]
+        Project (#0..=#3)
+          Get l4
+    cte l4 =
+      Project (#0..=#3, #5)
+        Map ((#3 + 1))
+          Join on=(#1 = #4) type=differential
+            ArrangeBy keys=[[#1]]
+              Project (#0..=#3)
+                Filter (#4 = "lo") AND (#1) IS NOT NULL
+                  Get l21
+            ArrangeBy keys=[[#0]]
+              Project (#2)
+                Filter ("%" = substr(#1, 1, 1))
+                  Map (array_index(regexp_split_to_array[" ", case_insensitive=false](#0), 1), substr(#1, 2))
+                    Get l0
+    cte l3 =
+      Union
+        Project (#2, #0, #3, #4)
+          Filter (#1 = 0)
+            Map ("roadcaster", 1, "lo")
+              Get l2
+        Filter (#2 > 0)
+          Get l9
+        Filter (#2 > 0)
+          Get l20
+    cte l2 =
+      Distinct project=[#0, #1] monotonic
+        Union
+          Distinct project=[#0, #1] monotonic
+            Union
+              Project (#0, #2)
+                Filter (#1 > 0)
+                  Map ((#1 - 1))
+                    Get l2
+              Constant
+                - (1, 1)
+          Project (#2, #3)
+            Filter (#1 = 0) AND (#0 < 4100)
+              Map ((#0 + 1), 20)
+                Get l2
+    cte l1 =
+      Project (#3, #4)
+        Map (regexp_split_to_array[" ", case_insensitive=false](#0), substr(array_index(#2, 1), 2), btrim(array_index(#2, integer_to_bigint(#1)), ","))
+          FlatMap generate_series(3, (regexp_split_to_array[" ", case_insensitive=false](#0) array_length 1), 1)
+            Get l0
+    cte l0 =
+      Project (#1)
+        FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
+          ReadStorage materialize.public.input
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF

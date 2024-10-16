@@ -88,7 +88,7 @@ Target cluster: quickstart
 
 EOF
 
-## Regression test for https://github.com/MaterializeInc/materialize/issues/27702
+## Regression test for https://github.com/MaterializeInc/database-issues/issues/8146
 statement ok
 CREATE TABLE t1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
 

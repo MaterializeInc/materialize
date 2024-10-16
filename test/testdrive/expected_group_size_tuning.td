@@ -12,7 +12,7 @@
 
 # Start from a TPC-H load generator source with small data.
 > CREATE CLUSTER lgtpch_cluster_tuning SIZE '1';
-> CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_tuning FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.0001, TICK INTERVAL 0.1);
+> CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_tuning FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.0001, TICK INTERVAL 0.1, UP TO 1000);
 
 > CREATE TABLE customer FROM SOURCE lgtpch (REFERENCE customer);
 > CREATE TABLE lineitem FROM SOURCE lgtpch (REFERENCE lineitem);

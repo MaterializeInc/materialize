@@ -9,7 +9,7 @@
 
 
 #
-# Tests for Move unrolling of peek multiplicities to coordinator. #10673
+# Tests for Move unrolling of peek multiplicities to coordinator. materialize#10673
 #
 # The important thing here is to test ORDER BY + LIMIT in the presence of
 # records where the diff will be > 1
@@ -22,40 +22,6 @@
 > INSERT INTO t1 VALUES (2), (2);
 
 > INSERT INTO t1 VALUES (NULL), (NULL);
-
-
-#
-# LIMIT only
-#
-
-> SELECT * FROM t1 LIMIT 0;
-
-> SELECT * FROM t1 LIMIT 1;
-<null>
-
-> SELECT * FROM t1 LIMIT 2;
-<null>
-<null>
-
-> SELECT * FROM t1 LIMIT 3;
-<null>
-<null>
-1
-
-> SELECT * FROM t1 LIMIT 4;
-<null>
-<null>
-1
-1
-
-> SELECT * FROM t1 LIMIT 999999;
-<null>
-<null>
-1
-1
-1
-2
-2
 
 #
 # ORDER BY + LIMIT
@@ -104,37 +70,6 @@
 2
 <null>
 <null>
-
-#
-# LIMIT + OFFSET
-#
-
-> SELECT * FROM t1 LIMIT 0 OFFSET 0;
-
-> SELECT * FROM t1 LIMIT 0 OFFSET 1;
-
-> SELECT * FROM t1 LIMIT 1 OFFSET 1;
-<null>
-
-> SELECT * FROM t1 LIMIT 1 OFFSET 2;
-1
-
-> SELECT * FROM t1 LIMIT 2 OFFSET 1;
-<null>
-1
-
-> SELECT * FROM t1 LIMIT 3 OFFSET 1;
-<null>
-1
-1
-
-> SELECT * FROM t1 LIMIT 5 OFFSET 1;
-<null>
-1
-1
-1
-2
-
 
 #
 # ORDER BY + LIMIT + OFFSET

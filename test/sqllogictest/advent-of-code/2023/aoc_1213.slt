@@ -1,0 +1,494 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# https://github.com/MaterializeInc/advent-of-code-2023/blob/main/week1/aoc_1213.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE input (input TEXT);
+
+statement ok
+INSERT INTO input VALUES (
+'#.###..##
+..###..#.
+.##.....#
+..###....
+..##..#..
+.##.#..#.
+##...##..
+..#.#.#.#
+#####.###
+....#.##.
+.#.######
+....##...
+#..##...#
+<EMPTY_LINE>
+###.#..###.#....#
+...#....#..#..#.#
+...#...##.#.#.#..
+##.#...##.#.....#
+.#..#....##...##.
+.##....#...#.#...
+..#.##.##.#..##.#
+........#.##.#..#
+<EMPTY_LINE>
+#...#..#.......
+.#.###.##.#.###
+.#.##..........
+##.##.##.###.##
+..###.#.....#..
+..###.#.....#..
+##.##.##.###.##
+#....#.##...###
+#.#.....##..#..
+...###.....#...
+..#.....#..#...
+##.###.##......
+...#.##.#.#.#.#
+..........####.
+<EMPTY_LINE>
+...#.....
+...#.....
+...#.....
+#...##...
+..#.....#
+...#.####
+.##....##
+......#..
+#.....#..
+....#.#.#
+##...####
+<EMPTY_LINE>
+...##.##.#.##
+#....#..#..##
+##.##....###.
+#..###....#.#
+###...##..#..
+#.#...#.#.##.
+###..#.......
+..##.#.#...##
+##..#..#..#.#
+......#...###
+..#..#.##....
+##.#...#.#...
+#..#.....####
+....##.##..#.
+####......###
+<EMPTY_LINE>
+#.##..#..##
+.#.#####..#
+.##.##...##
+.#.#..#...#
+...####.#..
+#..######..
+..#....#...
+.#####.##.#
+..........#
+##.#..#.#.#
+.......#...
+<EMPTY_LINE>
+.#.#..#....###...
+######..#.###.#..
+##..##.#..#..#...
+...##...##...#.#.
+#...#..####..#.#.
+..####.#..#...#.#
+####.#......#.#..
+##..##...#.#...#.
+<EMPTY_LINE>
+#..#.##..........
+.#....##....#.#.#
+.##.....##....###
+#####...##...##..
+###.....#...###.#
+#....#.#......#.#
+#..#...###...#..#
+#.#......#.###.#.
+#..#.##..........
+<EMPTY_LINE>
+.##.#.#.##..#.#..
+...####...##..#..
+....##...#...##.#
+..###..#..#..####
+.#...##...#.###..
+...###.....#...##
+<EMPTY_LINE>
+.#...#.####.#
+##..#.#....#.
+.#..#...#..#.
+..#....#.#.#.
+.#...##....#.
+#.###.##..###
+#..#.#....###
+.##..#.#.#...
+.##.#.##..#..
+#...###..##..');
+
+statement ok
+UPDATE input SET input = replace(input, '<EMPTY_LINE>', '');
+
+query II
+WITH MUTUALLY RECURSIVE
+
+    blocks(b INT, block TEXT) AS (
+        SELECT b, regexp_split_to_array(input, '\n\n')[b] as block
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n\n'), 1)) b
+    ),
+    lines(b INT, r INT, line TEXT) AS (
+        SELECT b, r, regexp_split_to_array(block, '\n')[r] as block
+        FROM blocks, generate_series(1, array_length(regexp_split_to_array(block, '\n'), 1)) r
+    ),
+    cells(b INT, r INT, c INT, symbol TEXT) AS (
+        SELECT b, r, c, substring(line, c, 1)
+        FROM lines, generate_series(1, length(line)) c
+    ),
+    columns(b INT, c INT, column TEXT) AS (
+        SELECT b, c, string_agg(symbol, '' ORDER BY r) FROM cells GROUP BY b, c
+    ),
+
+    row_mirror(b INT, r INT) AS (
+        SELECT *
+        FROM (SELECT DISTINCT b, r FROM cells) o
+        WHERE NOT EXISTS (
+            -- We would be upset to find rows at mirrored positions that do not match
+            -- Rows that match, or have no mirrored position, are fine.
+            SELECT FROM lines
+            WHERE o.b = lines.b
+            GROUP BY abs(2 * lines.r - (2 * o.r - 1))
+            HAVING COUNT(DISTINCT lines.line) > 1
+        )
+    ),
+
+    col_mirror(b INT, c INT) AS (
+        SELECT *
+        FROM (SELECT DISTINCT b, c FROM cells) o
+        WHERE NOT EXISTS (
+            -- We would be upset to find rows at mirrored positions that do not match
+            -- Rows that match, or have no mirrored position, are fine.
+            SELECT FROM columns
+            WHERE o.b = columns.b
+            GROUP BY abs(2 * columns.c - (2 * o.c - 1))
+            HAVING COUNT(DISTINCT columns.column) > 1
+        )
+    ),
+
+    part1(part1 BIGINT) AS (
+        SELECT COALESCE((SELECT SUM(r-1) FROM row_mirror), 0) * 100
+             + COALESCE((SELECT SUM(c-1) FROM col_mirror), 0)
+    ),
+
+    row_mirror2(b INT, r INT) AS (
+        SELECT *
+        FROM (SELECT DISTINCT b, r FROM cells) o
+        WHERE 1 = (
+            SELECT COUNT(*)
+            FROM cells c1, cells c2
+            WHERE abs(2 * c1.r - (2 * o.r - 1)) = abs(2 * c2.r - (2 * o.r - 1))
+              AND c1.r < c2.r
+              AND c1.c = c2.c
+              AND c1.b = c2.b
+              AND c1.b = o.b
+              AND c1.symbol != c2.symbol
+        )
+    ),
+
+    col_mirror2(b INT, c INT) AS (
+        SELECT *
+        FROM (SELECT DISTINCT b, c FROM cells) o
+        WHERE 1 = (
+            SELECT COUNT(*)
+            FROM cells c1, cells c2
+            WHERE abs(2 * c1.c - (2 * o.c - 1)) = abs(2 * c2.c - (2 * o.c - 1))
+              AND c1.c < c2.c
+              AND c1.r = c2.r
+              AND c1.b = c2.b
+              AND c1.b = o.b
+              AND c1.symbol != c2.symbol
+        )
+    ),
+
+    part2(part2 BIGINT) AS (
+        SELECT COALESCE((SELECT SUM(r-1) FROM row_mirror2), 0) * 100
+             + COALESCE((SELECT SUM(c-1) FROM col_mirror2), 0)
+    ),
+
+    potato (x INT) AS ( SELECT 1 )
+
+SELECT * FROM part1, part2;
+----
+100  16
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE
+
+    blocks(b INT, block TEXT) AS (
+        SELECT b, regexp_split_to_array(input, '\n\n')[b] as block
+        FROM input, generate_series(1, array_length(regexp_split_to_array(input, '\n\n'), 1)) b
+    ),
+    lines(b INT, r INT, line TEXT) AS (
+        SELECT b, r, regexp_split_to_array(block, '\n')[r] as block
+        FROM blocks, generate_series(1, array_length(regexp_split_to_array(block, '\n'), 1)) r
+    ),
+    cells(b INT, r INT, c INT, symbol TEXT) AS (
+        SELECT b, r, c, substring(line, c, 1)
+        FROM lines, generate_series(1, length(line)) c
+    ),
+    columns(b INT, c INT, column TEXT) AS (
+        SELECT b, c, string_agg(symbol, '' ORDER BY r) FROM cells GROUP BY b, c
+    ),
+
+    row_mirror(b INT, r INT) AS (
+        SELECT *
+        FROM (SELECT DISTINCT b, r FROM cells) o
+        WHERE NOT EXISTS (
+            -- We would be upset to find rows at mirrored positions that do not match
+            -- Rows that match, or have no mirrored position, are fine.
+            SELECT FROM lines
+            WHERE o.b = lines.b
+            GROUP BY abs(2 * lines.r - (2 * o.r - 1))
+            HAVING COUNT(DISTINCT lines.line) > 1
+        )
+    ),
+
+    col_mirror(b INT, c INT) AS (
+        SELECT *
+        FROM (SELECT DISTINCT b, c FROM cells) o
+        WHERE NOT EXISTS (
+            -- We would be upset to find rows at mirrored positions that do not match
+            -- Rows that match, or have no mirrored position, are fine.
+            SELECT FROM columns
+            WHERE o.b = columns.b
+            GROUP BY abs(2 * columns.c - (2 * o.c - 1))
+            HAVING COUNT(DISTINCT columns.column) > 1
+        )
+    ),
+
+    part1(part1 BIGINT) AS (
+        SELECT COALESCE((SELECT SUM(r-1) FROM row_mirror), 0) * 100
+             + COALESCE((SELECT SUM(c-1) FROM col_mirror), 0)
+    ),
+
+    row_mirror2(b INT, r INT) AS (
+        SELECT *
+        FROM (SELECT DISTINCT b, r FROM cells) o
+        WHERE 1 = (
+            SELECT COUNT(*)
+            FROM cells c1, cells c2
+            WHERE abs(2 * c1.r - (2 * o.r - 1)) = abs(2 * c2.r - (2 * o.r - 1))
+              AND c1.r < c2.r
+              AND c1.c = c2.c
+              AND c1.b = c2.b
+              AND c1.b = o.b
+              AND c1.symbol != c2.symbol
+        )
+    ),
+
+    col_mirror2(b INT, c INT) AS (
+        SELECT *
+        FROM (SELECT DISTINCT b, c FROM cells) o
+        WHERE 1 = (
+            SELECT COUNT(*)
+            FROM cells c1, cells c2
+            WHERE abs(2 * c1.c - (2 * o.c - 1)) = abs(2 * c2.c - (2 * o.c - 1))
+              AND c1.c < c2.c
+              AND c1.r = c2.r
+              AND c1.b = c2.b
+              AND c1.b = o.b
+              AND c1.symbol != c2.symbol
+        )
+    ),
+
+    part2(part2 BIGINT) AS (
+        SELECT COALESCE((SELECT SUM(r-1) FROM row_mirror2), 0) * 100
+             + COALESCE((SELECT SUM(c-1) FROM col_mirror2), 0)
+    ),
+
+    potato (x INT) AS ( SELECT 1 )
+
+SELECT * FROM part1, part2;
+----
+Explained Query:
+  Return
+    Project (#4, #5)
+      Map (((coalesce(#0, 0) * 100) + coalesce(#1, 0)), ((coalesce(#2, 0) * 100) + coalesce(#3, 0)))
+        CrossJoin type=delta
+          ArrangeBy keys=[[]]
+            Union
+              Get l6
+              Map (null)
+                Union
+                  Negate
+                    Project ()
+                      Get l6
+                  Constant
+                    - ()
+          ArrangeBy keys=[[]]
+            Union
+              Get l9
+              Map (null)
+                Union
+                  Negate
+                    Project ()
+                      Get l9
+                  Constant
+                    - ()
+          ArrangeBy keys=[[]]
+            Union
+              Get l11
+              Map (null)
+                Union
+                  Negate
+                    Project ()
+                      Get l11
+                  Constant
+                    - ()
+          ArrangeBy keys=[[]]
+            Union
+              Get l13
+              Map (null)
+                Union
+                  Negate
+                    Project ()
+                      Get l13
+                  Constant
+                    - ()
+  With
+    cte l13 =
+      Union
+        Get l12
+        Map (null)
+          Union
+            Negate
+              Project ()
+                Get l12
+            Constant
+              - ()
+    cte l12 =
+      Reduce aggregates=[sum((#0 - 1))]
+        Project (#1)
+          Filter (#2 = 1)
+            Reduce group_by=[#0, #1] aggregates=[count(*)]
+              Project (#0, #1)
+                Filter (#5 != #9) AND (#4 < #8)
+                  Join on=(#0 = #2 = #6 AND #3 = #7 AND abs(((2 * #4) - ((2 * #1) - 1))) = abs(((2 * #8) - ((2 * #1) - 1)))) type=delta
+                    Get l7
+                    ArrangeBy keys=[[#0], [#0, #1]]
+                      Get l1
+                    ArrangeBy keys=[[#0, #1]]
+                      Get l1
+    cte l11 =
+      Union
+        Get l10
+        Map (null)
+          Union
+            Negate
+              Project ()
+                Get l10
+            Constant
+              - ()
+    cte l10 =
+      Reduce aggregates=[sum((#0 - 1))]
+        Project (#1)
+          Filter (#2 = 1)
+            Reduce group_by=[#0, #1] aggregates=[count(*)]
+              Project (#0, #1)
+                Filter (#5 != #9) AND (#3 < #7)
+                  Join on=(#0 = #2 = #6 AND #4 = #8 AND abs(((2 * #3) - ((2 * #1) - 1))) = abs(((2 * #7) - ((2 * #1) - 1)))) type=delta
+                    Get l4
+                    ArrangeBy keys=[[#0], [#0, #2]]
+                      Get l1
+                    ArrangeBy keys=[[#0, #2]]
+                      Get l1
+    cte l9 =
+      Union
+        Get l8
+        Map (null)
+          Union
+            Negate
+              Project ()
+                Get l8
+            Constant
+              - ()
+    cte l8 =
+      Reduce aggregates=[sum((#0 - 1))]
+        Union
+          Negate
+            Project (#1)
+              Distinct project=[#0, #1]
+                Project (#0, #1)
+                  Filter (#3 > 1)
+                    Reduce group_by=[#0, #1, abs(((2 * #2) - ((2 * #1) - 1)))] aggregates=[count(distinct #3)]
+                      Project (#0, #1, #3, #4)
+                        Join on=(#0 = #2) type=differential
+                          Get l7
+                          ArrangeBy keys=[[#0]]
+                            Reduce group_by=[#0, #2] aggregates=[string_agg[order_by=[#0 asc nulls_last]](row(row(#3, ""), #1))]
+                              Get l1
+          Project (#1)
+            Get l3
+    cte l7 =
+      ArrangeBy keys=[[#0]]
+        Get l3
+    cte l6 =
+      Union
+        Get l5
+        Map (null)
+          Union
+            Negate
+              Project ()
+                Get l5
+            Constant
+              - ()
+    cte l5 =
+      Reduce aggregates=[sum((#0 - 1))]
+        Union
+          Negate
+            Project (#1)
+              Distinct project=[#0, #1]
+                Project (#0, #1)
+                  Filter (#3 > 1)
+                    Reduce group_by=[#0, #1, abs(((2 * #2) - ((2 * #1) - 1)))] aggregates=[count(distinct #3)]
+                      Project (#0, #1, #3, #4)
+                        Join on=(#0 = #2) type=differential
+                          Get l4
+                          ArrangeBy keys=[[#0]]
+                            Get l0
+          Project (#1)
+            Get l2
+    cte l4 =
+      ArrangeBy keys=[[#0]]
+        Get l2
+    cte l3 =
+      Distinct project=[#0, #1]
+        Project (#0, #2)
+          Get l1
+    cte l2 =
+      Distinct project=[#0, #1]
+        Project (#0, #1)
+          Get l1
+    cte l1 =
+      Project (#0, #1, #3, #4)
+        Map (substr(#2, #3, 1))
+          FlatMap generate_series(1, char_length(#2), 1)
+            Get l0
+    cte l0 =
+      Project (#0, #2, #3)
+        Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#1), integer_to_bigint(#2)))
+          FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#1) array_length 1), 1)
+            Project (#1, #2)
+              Map (array_index(regexp_split_to_array["\n\n", case_insensitive=false](#0), integer_to_bigint(#1)))
+                FlatMap generate_series(1, (regexp_split_to_array["\n\n", case_insensitive=false](#0) array_length 1), 1)
+                  ReadStorage materialize.public.input
+
+Source materialize.public.input
+
+Target cluster: quickstart
+
+EOF

@@ -75,7 +75,7 @@ impl FoldConstants {
             MirRelationExpr::Get { .. } => {}
             MirRelationExpr::Let { .. } | MirRelationExpr::LetRec { .. } => {
                 // Constant propagation through bindings is currently handled by in NormalizeLets.
-                // Maybe we should move it / replicate it here (see #18180 for context)?
+                // Maybe we should move it / replicate it here (see database-issues#5346 for context)?
             }
             MirRelationExpr::Reduce {
                 input,
@@ -438,10 +438,9 @@ impl FoldConstants {
             // arrive at a reduce.
 
             if *diff <= 0 {
-                return Some(Err(EvalError::InvalidParameterValue(String::from(
-                    "constant folding encountered reduce on collection \
-                                               with non-positive multiplicities",
-                ))));
+                return Some(Err(EvalError::InvalidParameterValue(
+                    "constant folding encountered reduce on collection with non-positive multiplicities".into()
+                )));
             }
 
             if limit_remaining < *diff as usize {

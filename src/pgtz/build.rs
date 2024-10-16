@@ -34,9 +34,8 @@ fn main() -> Result<()> {
 
     // Build protobufs.
     {
-        env::set_var("PROTOC", mz_build_tools::protoc());
-
         prost_build::Config::new()
+            .protoc_executable(mz_build_tools::protoc())
             .btree_map(["."])
             .extern_path(".mz_proto", "::mz_proto")
             .compile_protos(&["pgtz/src/timezone.proto"], &[".."])?;

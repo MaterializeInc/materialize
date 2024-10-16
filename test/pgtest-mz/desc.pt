@@ -62,7 +62,7 @@ ReadyForQuery {"status":"I"}
 
 # Executing (which in mz starts the portal) will now complain that the plan
 # changed before execution can start.
-# See: #11214, #11258
+# See: materialize#11214, materialize#11258
 send
 Execute {"portal": "p"}
 Sync

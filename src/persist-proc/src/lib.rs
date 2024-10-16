@@ -98,12 +98,6 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                 {
                     // Write the format of a Part in State.
                     let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_batch_record_part_format", ::mz_dyncfg::ConfigVal::Bool(true));
-                    x
-                },
-                {
-                    // Write the format of a Part in State.
-                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
                     x.add_dynamic("persist_batch_record_run_meta", ::mz_dyncfg::ConfigVal::Bool(true));
                     x
                 },
@@ -118,6 +112,14 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let mut x = ::mz_dyncfg::ConfigUpdates::default();
                     x.add_dynamic("persist_batch_columnar_format", ::mz_dyncfg::ConfigVal::String("both_v2".into()));
                     x.add_dynamic("persist_batch_columnar_format_percent", ::mz_dyncfg::ConfigVal::Usize(100));
+                    x
+                },
+                {
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_batch_columnar_format", ::mz_dyncfg::ConfigVal::String("both_v2".into()));
+                    x.add_dynamic("persist_batch_columnar_format_percent", ::mz_dyncfg::ConfigVal::Usize(100));
+                    x.add_dynamic("persist_batch_structured_key_lower_len", ::mz_dyncfg::ConfigVal::Usize(256));
+                    x.add_dynamic("persist_batch_structured_order", ::mz_dyncfg::ConfigVal::Bool(true));
                     x
                 },
                 {

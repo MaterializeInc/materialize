@@ -67,6 +67,7 @@ use std::borrow::Cow;
 use std::clone::Clone;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::net::IpAddr;
 use std::string::ToString;
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
@@ -74,6 +75,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use im::OrdMap;
+use ipnet::IpNet;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal};
 use mz_ore::cast::CastFrom;
@@ -84,6 +86,8 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::user::ExternalUserMetadata;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use serde::Serialize;
+use thiserror::Error;
+use tracing::error;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;
@@ -836,7 +840,7 @@ impl SessionVars {
     }
 }
 
-// TODO(materialize#27285) remove together with `compat_translate`
+// TODO(database-issues#8069) remove together with `compat_translate`
 pub const OLD_CATALOG_SERVER_CLUSTER: &str = "mz_introspection";
 pub const OLD_AUTO_ROUTE_CATALOG_QUERIES: &str = "auto_route_introspection_queries";
 
@@ -846,7 +850,7 @@ pub const OLD_AUTO_ROUTE_CATALOG_QUERIES: &str = "auto_route_introspection_queri
 /// This method was introduced to gracefully handle the rename of the `mz_introspection` cluster to
 /// `mz_cluster_server`. The plan is to remove it once all users have migrated to the new name. The
 /// debug logs will be helpful for checking this in production.
-// TODO(materialize#27285) remove this after sufficient time has passed
+// TODO(database-issues#8069) remove this after sufficient time has passed
 fn compat_translate<'a, 'b>(name: &'a str, input: VarInput<'b>) -> (&'a str, VarInput<'b>) {
     if name == CLUSTER.name() {
         if let Ok(value) = CLUSTER.parse(input) {
@@ -991,6 +995,12 @@ impl Var for SystemVar {
     ) -> Result<(), super::vars::VarError> {
         self.definition.visible(user, system_vars)
     }
+}
+
+#[derive(Debug, Error)]
+pub enum NetworkPolicyError {
+    #[error("Access denied for address {0}")]
+    AddressDenied(IpAddr),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1179,6 +1189,7 @@ impl SystemVars {
             &MAX_OBJECTS_PER_SCHEMA,
             &MAX_SECRETS,
             &MAX_ROLES,
+            &MAX_CONTINUAL_TASKS,
             &MAX_RESULT_SIZE,
             &MAX_COPY_FROM_SIZE,
             &ALLOWED_CLUSTER_REPLICA_SIZES,
@@ -1238,11 +1249,12 @@ impl SystemVars {
             &KAFKA_DEFAULT_METADATA_FETCH_INTERVAL,
             &ENABLE_LAUNCHDARKLY,
             &MAX_CONNECTIONS,
+            &DEFAULT_NETWORK_POLICY_ALLOW_LIST,
             &SUPERUSER_RESERVED_CONNECTIONS,
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
             &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
             &KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES,
-            &KEEP_N_REPLICA_STATUS_HISTORY_ENTRIES,
+            &REPLICA_STATUS_HISTORY_RETENTION_WINDOW,
             &ARRANGEMENT_EXERT_PROPORTIONALITY,
             &ENABLE_STORAGE_SHARD_FINALIZATION,
             &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
@@ -1690,6 +1702,11 @@ impl SystemVars {
         *self.expect_value(&MAX_ROLES)
     }
 
+    /// Returns the value of the `max_continual_tasks` configuration parameter.
+    pub fn max_continual_tasks(&self) -> u32 {
+        *self.expect_value(&MAX_CONTINUAL_TASKS)
+    }
+
     /// Returns the value of the `max_result_size` configuration parameter.
     pub fn max_result_size(&self) -> u64 {
         self.expect_value::<ByteSize>(&MAX_RESULT_SIZE).as_bytes()
@@ -2015,6 +2032,11 @@ impl SystemVars {
         *self.expect_value(&MAX_CONNECTIONS)
     }
 
+    pub fn default_network_policy(&self) -> Vec<IpNet> {
+        self.expect_value::<Vec<IpNet>>(&DEFAULT_NETWORK_POLICY_ALLOW_LIST)
+            .clone()
+    }
+
     /// Returns the `superuser_reserved_connections` configuration parameter.
     pub fn superuser_reserved_connections(&self) -> u32 {
         *self.expect_value(&SUPERUSER_RESERVED_CONNECTIONS)
@@ -2032,8 +2054,8 @@ impl SystemVars {
         *self.expect_value(&KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES)
     }
 
-    pub fn keep_n_replica_status_history_entries(&self) -> usize {
-        *self.expect_value(&KEEP_N_REPLICA_STATUS_HISTORY_ENTRIES)
+    pub fn replica_status_history_retention_window(&self) -> Duration {
+        *self.expect_value(&REPLICA_STATUS_HISTORY_RETENTION_WINDOW)
     }
 
     /// Returns the `arrangement_exert_proportionality` configuration parameter.

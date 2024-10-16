@@ -66,8 +66,8 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
-    /// [#16271]: https://github.com/MaterializeInc/materialize/issues/16271
-    /// [#16274]: https://github.com/MaterializeInc/materialize/issues/16274
+    /// [#16271]: https://github.com/MaterializeInc/database-issues/issues/4699
+    /// [#16274]: https://github.com/MaterializeInc/database-issues/issues/4701
     Frontiers(GlobalId, FrontiersResponse<T>),
 
     /// `PeekResponse` reports the result of a previous [`Peek` command]. The peek is identified by

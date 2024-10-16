@@ -487,7 +487,7 @@ where
             };
 
             let res = Compactor::<K, V, T, D>::compact(
-                CompactConfig::new(&cfg, &writer_id),
+                CompactConfig::new(&cfg, shard_id),
                 Arc::clone(&blob),
                 Arc::clone(&metrics),
                 Arc::clone(&machine.applier.shard_metrics),
@@ -702,8 +702,6 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
     write: &WriteHandle<K, V, T, D>,
     fuel: impl Fn() -> usize,
     wait: impl Fn() -> Duration,
-    // TODO: Here to make the test semi-work until we fix materialize#29459.
-    max_attempts: Option<usize>,
 ) where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -714,7 +712,6 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
 
     let mut last_exert: Instant;
 
-    let mut attempts = 0;
     loop {
         last_exert = Instant::now();
         let fuel = fuel();
@@ -735,7 +732,6 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
             let res = Compactor::<K, V, T, D>::compact_and_apply(
                 &mut machine,
                 req,
-                write.writer_id.clone(),
                 write.write_schemas.clone(),
             )
             .await;
@@ -780,17 +776,6 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
             );
             return;
         }
-        attempts += 1;
-        if max_attempts.map_or(false, |max| attempts >= max) {
-            info!(
-                "dangerous_force_compaction_and_break_pushdown {} {} exiting with {} batches after {} attempts",
-                machine.applier.shard_metrics.name,
-                machine.applier.shard_metrics.shard_id,
-                num_batches,
-                attempts,
-            );
-            return;
-        }
     }
 }
 
@@ -799,7 +784,6 @@ mod tests {
     use std::time::Duration;
 
     use mz_dyncfg::ConfigUpdates;
-    use mz_ore::cast::CastFrom;
     use mz_persist_types::ShardId;
 
     use crate::tests::new_test_client;
@@ -821,17 +805,10 @@ mod tests {
             }
 
             // Run the tool and verify that we get down to at most two.
-            super::dangerous_force_compaction_and_break_pushdown(
-                &write,
-                || 1,
-                || Duration::ZERO,
-                Some(usize::cast_from(num_batches) * 2),
-            )
-            .await;
+            super::dangerous_force_compaction_and_break_pushdown(&write, || 1, || Duration::ZERO)
+                .await;
             let batches_after = machine.applier.all_batches().len();
-            println!("{}: got {} batches after", num_batches, batches_after);
-            // TODO: Enable this after materialize#29459 is fixed.
-            // assert!(batches_after < 2, "{} vs {}", num_batches, batches_after);
+            assert!(batches_after < 2, "{} vs {}", num_batches, batches_after);
         }
     }
 }

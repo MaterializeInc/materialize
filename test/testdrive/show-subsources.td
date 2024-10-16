@@ -12,7 +12,7 @@ $ set-arg-default single-replica-cluster=quickstart
 # Create a load generator source that has several subsources.
 > CREATE SOURCE lga
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION;
+  FROM LOAD GENERATOR AUCTION (UP TO 100);
 
 > CREATE TABLE accounts FROM SOURCE lga (REFERENCE accounts);
 > CREATE TABLE auctions FROM SOURCE lga (REFERENCE auctions);
@@ -41,10 +41,10 @@ users          ""
 > CREATE SCHEMA other
 > CREATE SOURCE lgc
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER
+  FROM LOAD GENERATOR COUNTER (UP TO 100)
 > CREATE SOURCE other.lgo
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER
+  FROM LOAD GENERATOR COUNTER (UP TO 100)
 
 > SHOW SUBSOURCES
 name           type

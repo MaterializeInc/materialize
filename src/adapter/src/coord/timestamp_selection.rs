@@ -25,7 +25,6 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{event, Level};
 
@@ -133,16 +132,27 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     pub fn antichain(&self) -> Antichain<T> {
         Antichain::from_elem(self.timestamp_or_default())
     }
+
+    /// Whether the context contains a timestamp of type [`Timeline::EpochMilliseconds`].
+    pub fn is_timeline_epoch_ms(&self) -> bool {
+        matches!(
+            self,
+            &Self::TimelineTimestamp {
+                timeline: Timeline::EpochMilliseconds,
+                ..
+            }
+        )
+    }
 }
 
 #[async_trait(?Send)]
 impl TimestampProvider for Coordinator {
     /// Reports a collection's current read frontier.
-    fn compute_read_frontier<'a>(
-        &'a self,
+    fn compute_read_frontier(
+        &self,
         instance: ComputeInstanceId,
         id: GlobalId,
-    ) -> AntichainRef<'a, Timestamp> {
+    ) -> Antichain<Timestamp> {
         self.controller
             .compute
             .collection_frontiers(id, Some(instance))
@@ -151,11 +161,11 @@ impl TimestampProvider for Coordinator {
     }
 
     /// Reports a collection's current write frontier.
-    fn compute_write_frontier<'a>(
-        &'a self,
+    fn compute_write_frontier(
+        &self,
         instance: ComputeInstanceId,
         id: GlobalId,
-    ) -> AntichainRef<'a, Timestamp> {
+    ) -> Antichain<Timestamp> {
         self.controller
             .compute
             .collection_frontiers(id, Some(instance))
@@ -173,7 +183,7 @@ impl TimestampProvider for Coordinator {
             .expect("missing collections")
     }
 
-    fn acquire_read_holds(&mut self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
+    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
         self.acquire_read_holds(id_bundle)
     }
 
@@ -184,16 +194,16 @@ impl TimestampProvider for Coordinator {
 
 #[async_trait(?Send)]
 pub trait TimestampProvider {
-    fn compute_read_frontier<'a>(
-        &'a self,
+    fn compute_read_frontier(
+        &self,
         instance: ComputeInstanceId,
         id: GlobalId,
-    ) -> AntichainRef<'a, Timestamp>;
-    fn compute_write_frontier<'a>(
-        &'a self,
+    ) -> Antichain<Timestamp>;
+    fn compute_write_frontier(
+        &self,
         instance: ComputeInstanceId,
         id: GlobalId,
-    ) -> AntichainRef<'a, Timestamp>;
+    ) -> Antichain<Timestamp>;
 
     /// Returns the implied capability (since) and write frontier (upper) for
     /// the specified storage collections.
@@ -243,7 +253,7 @@ pub trait TimestampProvider {
     ///
     /// The timeline that `id_bundle` belongs to is also returned, if one exists.
     fn determine_timestamp_for(
-        &mut self,
+        &self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
@@ -431,10 +441,7 @@ pub trait TimestampProvider {
 
     /// Acquires [ReadHolds], for the given `id_bundle` at the earliest possible
     /// times.
-    fn acquire_read_holds(
-        &mut self,
-        id_bundle: &CollectionIdBundle,
-    ) -> ReadHolds<mz_repr::Timestamp>;
+    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<mz_repr::Timestamp>;
 
     /// The smallest common valid write frontier among the specified collections.
     ///
@@ -452,7 +459,7 @@ pub trait TimestampProvider {
         {
             for (instance, compute_ids) in &id_bundle.compute_ids {
                 for id in compute_ids.iter() {
-                    upper.extend(self.compute_write_frontier(*instance, *id).iter().cloned());
+                    upper.extend(self.compute_write_frontier(*instance, *id).into_iter());
                 }
             }
         }
@@ -529,7 +536,7 @@ impl Coordinator {
     /// The caller is responsible for eventually dropping those read holds.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn determine_timestamp(
-        &mut self,
+        &self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,

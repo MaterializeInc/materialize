@@ -56,7 +56,7 @@ pub use crate::relation::{
     VersionedRelationDesc,
 };
 pub use crate::row::collection::{ProtoRowCollection, RowCollection, SortedRowCollectionIter};
-pub use crate::row::encoding2::{RowColumnarDecoder, RowColumnarEncoder};
+pub use crate::row::encode::{RowColumnarDecoder, RowColumnarEncoder};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};
 pub use crate::row::{
     datum_list_size, datum_size, datums_size, read_datum, row_size, DatumList, DatumMap,

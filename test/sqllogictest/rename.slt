@@ -613,10 +613,25 @@ ALTER SCHEMA d.amb RENAME TO this_rename_will_fail;
 # Test subsource renames
 
 statement ok
-CREATE SOURCE s FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+CREATE SOURCE s FROM LOAD GENERATOR AUCTION;
 
 statement ok
-ALTER SOURCE users RENAME TO userz
+CREATE TABLE accounts FROM SOURCE s (REFERENCE accounts);
+
+statement ok
+CREATE TABLE auctions FROM SOURCE s (REFERENCE auctions);
+
+statement ok
+CREATE TABLE bids FROM SOURCE s (REFERENCE bids);
+
+statement ok
+CREATE TABLE organizations FROM SOURCE s (REFERENCE organizations);
+
+statement ok
+CREATE TABLE users FROM SOURCE s (REFERENCE users);
+
+statement ok
+ALTER TABLE users RENAME TO userz
 
 statement ok
 SELECT * FROM userz LIMIT 0

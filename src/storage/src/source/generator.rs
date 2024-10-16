@@ -15,10 +15,12 @@ use std::time::Duration;
 
 use differential_dataflow::AsCollection;
 use futures::StreamExt;
+use mz_ore::iter::IteratorExt;
 use mz_repr::Row;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{
-    Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
+    Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorOutput,
+    LoadGeneratorSourceConnection,
 };
 use mz_storage_types::sources::{MzOffset, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
@@ -142,6 +144,24 @@ impl GeneratorKind {
         Stream<G, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
+        // figure out which output types from the generator belong to which output indexes
+        let mut output_map = BTreeMap::new();
+        for (_, export) in config.source_exports.iter() {
+            let output_type = match &export.export.details {
+                SourceExportDetails::LoadGenerator(details) => details.output,
+                // This is an export that doesn't need any data output to it.
+                SourceExportDetails::None => continue,
+                _ => panic!(
+                    "unexpected source export details: {:?}",
+                    export.export.details
+                ),
+            };
+            output_map
+                .entry(output_type)
+                .or_insert_with(Vec::new)
+                .push(export.ingestion_output);
+        }
+
         match self {
             GeneratorKind::Simple {
                 tick_micros,
@@ -156,10 +176,16 @@ impl GeneratorKind {
                 scope,
                 config,
                 committed_uppers,
+                output_map,
             ),
-            GeneratorKind::KeyValue(kv) => {
-                key_value::render(kv, scope, config, committed_uppers, start_signal)
-            }
+            GeneratorKind::KeyValue(kv) => key_value::render(
+                kv,
+                scope,
+                config,
+                committed_uppers,
+                start_signal,
+                output_map,
+            ),
         }
     }
 }
@@ -201,6 +227,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     scope: &mut G,
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Option<Stream<G, Infallible>>,
@@ -209,24 +236,6 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     Stream<G, Probe<MzOffset>>,
     Vec<PressOnDropButton>,
 ) {
-    // figure out which output types from the generator belong to which output indexes
-    let mut output_map = BTreeMap::new();
-    for (_, export) in config.source_exports.iter() {
-        let output_type = match &export.export.details {
-            SourceExportDetails::LoadGenerator(details) => details.output,
-            // This is an export that doesn't need any data output to it.
-            SourceExportDetails::None => continue,
-            _ => panic!(
-                "unexpected source export details: {:?}",
-                export.export.details
-            ),
-        };
-        output_map
-            .entry(output_type)
-            .or_insert_with(Vec::new)
-            .push(export.ingestion_output);
-    }
-
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
     let (mut data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
@@ -326,9 +335,9 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                         // generate a significant amount of data that will overwhelm the dataflow.
                         // Since those are not required downstream we eagerly ignore them here.
                         if resume_offset <= offset {
-                            for &output in outputs {
+                            for (&output, message) in outputs.iter().repeat_clone(message) {
                                 data_output
-                                    .give_fueled(&cap, ((output, message.clone()), offset, diff))
+                                    .give_fueled(&cap, ((output, message), offset, diff))
                                     .await;
                             }
                         }

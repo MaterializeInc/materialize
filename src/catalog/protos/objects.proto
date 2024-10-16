@@ -163,6 +163,7 @@ message CommentKey {
     GlobalId connection = 9;
     GlobalId type = 10;
     GlobalId secret = 11;
+    GlobalId continual_task = 17;
     RoleId role = 12;
     DatabaseId database = 13;
     ResolvedSchema schema = 14;
@@ -220,7 +221,9 @@ message TxnWalShardValue {
 // Note: Normally types like this would go in some sort of `common.proto` file, but we want to keep
 // our proto definitions in a single file to make snapshotting easier, hence them living here.
 
-message Empty {/* purposefully empty */}
+message Empty {
+  /* purposefully empty */
+}
 
 // In protobuf a "None" string is the same thing as an empty string. To get the same semantics of
 // an `Option<String>` from Rust, we need to wrap a string in a message.
@@ -254,6 +257,7 @@ enum CatalogItemType {
   CATALOG_ITEM_TYPE_FUNC = 8;
   CATALOG_ITEM_TYPE_SECRET = 9;
   CATALOG_ITEM_TYPE_CONNECTION = 10;
+  CATALOG_ITEM_TYPE_CONTINUAL_TASK = 11;
 }
 
 message CatalogItem {
@@ -457,6 +461,7 @@ enum ObjectType {
   OBJECT_TYPE_DATABASE = 13;
   OBJECT_TYPE_SCHEMA = 14;
   OBJECT_TYPE_FUNC = 15;
+  OBJECT_TYPE_CONTINUAL_TASK = 16;
 }
 
 message DefaultPrivilegesKey {
@@ -509,6 +514,7 @@ message AuditLogEventV1 {
     OBJECT_TYPE_TYPE = 14;
     OBJECT_TYPE_VIEW = 15;
     OBJECT_TYPE_SYSTEM = 16;
+    OBJECT_TYPE_CONTINUAL_TASK = 17;
   }
 
   message IdFullNameV1 {
@@ -802,6 +808,8 @@ message AuditLogEventV1 {
 
 // Wrapper of key-values used by the persist implementation to serialize the catalog.
 message StateUpdateKind {
+  reserved "Epoch";
+
   message AuditLog {
     AuditLogKey key = 1;
   }
@@ -839,10 +847,6 @@ message StateUpdateKind {
   message FenceToken {
     uint64 deploy_generation = 1;
     int64 epoch = 2;
-  }
-
-  message Epoch {
-    int64 epoch = 1;
   }
 
   message IdAlloc {
@@ -914,6 +918,8 @@ message StateUpdateKind {
   reserved "timestamp";
   reserved 22;
   reserved "persist_txn_shard";
+  reserved 8;
+  reserved "epoch";
 
   oneof kind {
     AuditLog audit_log = 1;
@@ -923,7 +929,6 @@ message StateUpdateKind {
     Config config = 5;
     Database database = 6;
     DefaultPrivileges default_privileges = 7;
-    Epoch epoch = 8;
     IdAlloc id_alloc = 9;
     ClusterIntrospectionSourceIndex cluster_introspection_source_index = 10;
     Item item = 11;

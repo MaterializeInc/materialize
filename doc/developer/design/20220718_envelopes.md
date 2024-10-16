@@ -116,7 +116,7 @@ confident in, we will re-evaluate this. Note that Debezium data from
 Microsoft SQL Server should work
 fine with `DEBEZIUM UPSERT`
 
-Solving the issue of [bounded input reliance](https://github.com/MaterializeInc/materialize/issues/13534)
+Solving the issue of [bounded input reliance](https://github.com/MaterializeInc/database-issues/issues/3875)
 is outside the scope of this project; until that issue is solved, we must assume
 that data is not being compacted away while we're busy reading it, which is
 somewhat problematic as we have no way to express our frontiers back upstream to

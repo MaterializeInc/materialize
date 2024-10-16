@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import time
 
-from materialize import ui
 from materialize.feature_benchmark.aggregation import Aggregation
 from materialize.feature_benchmark.executor import Executor
 from materialize.feature_benchmark.filter import Filter
@@ -47,7 +47,6 @@ class Benchmark:
         self._filter = filter
         self._termination_conditions = termination_conditions
         self._performance_aggregation = aggregation_class()
-        self._messages_aggregation = aggregation_class()
         self._default_size = default_size
         self._seed = seed
 
@@ -77,9 +76,10 @@ class Benchmark:
     def run(self) -> list[Aggregation]:
         scenario = self.create_scenario_instance()
 
-        ui.header(
-            f"Running scenario {scenario.name()}, scale = {scenario.scale()}, N = {scenario.n()}"
+        print(
+            f"--- Running scenario {scenario.name()}, scale = {scenario.scale()}, N = {scenario.n()}"
         )
+        start_time = time.time()
 
         # Run the shared() section once for both Mzs under measurement
         self.run_shared(scenario)
@@ -95,9 +95,13 @@ class Benchmark:
             performance_measurement = self.run_measurement(scenario, i)
 
             if self.shall_terminate(performance_measurement):
+                duration = time.time() - start_time
+                print(
+                    f"Scenario {scenario.name()}, scale = {scenario.scale()}, N = {scenario.n()} took {duration:.0f}s to run"
+                )
+
                 return [
                     self._performance_aggregation,
-                    self._messages_aggregation,
                     self._memory_mz_aggregation,
                     self._memory_clusterd_aggregation,
                 ]
@@ -168,7 +172,6 @@ class Benchmark:
         )
 
         self._collect_performance_measurement(i, performance_measurement)
-        self._collect_message_count(i)
 
         if self._memory_mz_aggregation:
             self._collect_memory_measurement(
@@ -202,23 +205,18 @@ class Benchmark:
             print(f"{i} {performance_measurement}")
             self._performance_aggregation.append_measurement(performance_measurement)
 
-    def _collect_message_count(self, i: int) -> None:
-        messages = self._executor.Messages()
-        if messages is not None:
-            messages_measurement = Measurement(
-                type=MeasurementType.MESSAGES,
-                value=messages,
-                unit=MeasurementUnit.COUNT,
-            )
-            print(f"{i}: {messages_measurement}")
-            self._messages_aggregation.append_measurement(messages_measurement)
-
     def _collect_memory_measurement(
         self, i: int, memory_measurement_type: MeasurementType, aggregation: Aggregation
     ) -> None:
+        if memory_measurement_type == MeasurementType.MEMORY_MZ:
+            value = self._executor.DockerMemMz()
+        elif memory_measurement_type == MeasurementType.MEMORY_CLUSTERD:
+            value = self._executor.DockerMemClusterd()
+        else:
+            raise ValueError(f"Unknown measurement type {memory_measurement_type}")
         memory_measurement = Measurement(
             type=memory_measurement_type,
-            value=self._executor.DockerMemMz() / 2**20,  # Convert to Mb
+            value=value / 2**20,  # Convert to Mb
             unit=MeasurementUnit.MEGABYTE,
         )
 

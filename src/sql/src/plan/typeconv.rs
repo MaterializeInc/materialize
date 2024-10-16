@@ -447,7 +447,6 @@ static VALID_CASTS: LazyLock<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl
             (Numeric, MzTimestamp) => Implicit: CastNumericToMzTimestamp(func::CastNumericToMzTimestamp),
             (Timestamp, MzTimestamp) => Implicit: CastTimestampToMzTimestamp(func::CastTimestampToMzTimestamp),
             (TimestampTz, MzTimestamp) => Implicit: CastTimestampTzToMzTimestamp(func::CastTimestampTzToMzTimestamp),
-            (Interval, MzTimestamp) => Implicit: CastIntervalToMzTimestamp(func::CastIntervalToMzTimestamp),
             (Date, MzTimestamp) => Implicit: CastDateToMzTimestamp(func::CastDateToMzTimestamp),
 
             // OID
@@ -710,7 +709,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl
                     .iter()
                     .zip_eq(to_type.unwrap_record_element_type())
                     .map(|(f, t)| plan_hypothetical_cast(ecx, ccx, f, t))
-                    .collect::<Option<Vec<_>>>()?;
+                    .collect::<Option<Box<_>>>()?;
                 let to = to_type.clone();
                 Some(|e: HirScalarExpr| e.call_unary(CastRecord1ToRecord2(func::CastRecord1ToRecord2 { return_ty: to, cast_exprs })))
             }),
@@ -1029,7 +1028,7 @@ pub fn guess_best_common_type(
                 fields.push((name, guess.nullable(nullable)));
             }
             return Ok(ScalarType::Record {
-                fields,
+                fields: fields.into(),
                 custom_id: None,
             });
         }

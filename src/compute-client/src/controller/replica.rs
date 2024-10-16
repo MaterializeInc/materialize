@@ -15,7 +15,9 @@ use std::time::Duration;
 use anyhow::bail;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
 use mz_dyncfg::ConfigSet;
+use mz_ore::channel::InstrumentedUnboundedSender;
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use mz_service::client::GenericClient;
@@ -25,9 +27,11 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, info, trace, warn};
 
+use crate::controller::instance::ReplicaResponse;
 use crate::controller::sequential_hydration::SequentialHydration;
 use crate::controller::{ComputeControllerTimestamp, ReplicaId};
 use crate::logging::LoggingConfig;
+use crate::metrics::IntCounter;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, InstanceConfig};
 use crate::protocol::response::ComputeResponse;
@@ -48,17 +52,11 @@ pub(super) struct ReplicaConfig {
 #[derive(Debug)]
 pub(super) struct ReplicaClient<T> {
     /// A sender for commands for the replica.
-    ///
-    /// If sending to this channel fails, the replica has failed and requires
-    /// rehydration.
     command_tx: UnboundedSender<ComputeCommand<T>>,
-    /// A receiver for responses from the replica.
-    ///
-    /// If receiving from the channel returns `None`, the replica has failed
-    /// and requires rehydration.
-    response_rx: UnboundedReceiver<ComputeResponse<T>>,
     /// A handle to the task that aborts it when the replica is dropped.
-    _task: AbortOnDropHandle<()>,
+    ///
+    /// If the task is finished, the replica has failed and needs rehydration.
+    task: AbortOnDropHandle<()>,
     /// Replica metrics.
     metrics: ReplicaMetrics,
 }
@@ -75,12 +73,14 @@ where
         epoch: ClusterStartupEpoch,
         metrics: ReplicaMetrics,
         dyncfg: Arc<ConfigSet>,
+        response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
     ) -> Self {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
         // the replica.
         let (command_tx, command_rx) = unbounded_channel();
-        let (response_tx, response_rx) = unbounded_channel();
+
+        let expiration_offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&dyncfg);
 
         let task = mz_ore::task::spawn(
             || format!("active-replication-replica-{id}"),
@@ -93,18 +93,20 @@ where
                 epoch,
                 metrics: metrics.clone(),
                 dyncfg,
+                expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
             }
             .run(),
         );
 
         Self {
             command_tx,
-            response_rx,
-            _task: task.abort_on_drop(),
+            task: task.abort_on_drop(),
             metrics,
         }
     }
+}
 
+impl<T> ReplicaClient<T> {
     /// Sends a command to this replica.
     pub(super) fn send(
         &self,
@@ -116,14 +118,9 @@ where
         })
     }
 
-    /// Receives the next response from this replica.
-    ///
-    /// This method is cancellation safe.
-    pub(super) async fn recv(&mut self) -> Option<ComputeResponse<T>> {
-        self.response_rx.recv().await.map(|r| {
-            self.metrics.inner.response_queue_size.dec();
-            r
-        })
+    /// Determine if the replica task has failed.
+    pub(super) fn is_failed(&self) -> bool {
+        self.task.is_finished()
     }
 }
 
@@ -138,7 +135,7 @@ struct ReplicaTask<T> {
     /// A channel upon which commands intended for the replica are delivered.
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
-    response_tx: UnboundedSender<ComputeResponse<T>>,
+    response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
     /// A number (technically, pair of numbers) identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
     epoch: ClusterStartupEpoch,
@@ -146,6 +143,8 @@ struct ReplicaTask<T> {
     metrics: ReplicaMetrics,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
+    /// The offset to use for replica expiration, if any.
+    expiration_offset: Option<Duration>,
 }
 
 impl<T> ReplicaTask<T>
@@ -223,6 +222,8 @@ where
         T: ComputeControllerTimestamp,
         ComputeGrpcClient: ComputeClient<T>,
     {
+        let id = self.replica_id;
+        let incarnation = self.epoch.replica();
         loop {
             select! {
                 // Command from controller to forward to replica.
@@ -244,7 +245,7 @@ where
 
                     self.observe_response(&response);
 
-                    if self.response_tx.send(response).is_err() {
+                    if self.response_tx.send((id, incarnation, response)).is_err() {
                         // Controller is no longer interested in this replica. Shut down.
                         break;
                     }
@@ -260,23 +261,36 @@ where
     /// Most `ComputeCommand`s are independent of the target replica, but some
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut ComputeCommand<T>) {
-        if let ComputeCommand::CreateInstance(InstanceConfig { logging }) = command {
-            *logging = self.config.logging.clone();
-        }
-
-        if let ComputeCommand::CreateTimely { config, epoch } = command {
-            *config = TimelyConfig {
-                workers: self.config.location.workers,
-                process: 0,
-                addresses: self.config.location.dataflow_addrs.clone(),
-                arrangement_exert_proportionality: self.config.arrangement_exert_proportionality,
-            };
-            *epoch = self.epoch;
+        match command {
+            ComputeCommand::CreateTimely { config, epoch } => {
+                *config = TimelyConfig {
+                    workers: self.config.location.workers,
+                    process: 0,
+                    addresses: self.config.location.dataflow_addrs.clone(),
+                    arrangement_exert_proportionality: self
+                        .config
+                        .arrangement_exert_proportionality,
+                };
+                *epoch = self.epoch;
+            }
+            ComputeCommand::CreateInstance(InstanceConfig {
+                logging,
+                expiration_offset,
+            }) => {
+                *logging = self.config.logging.clone();
+                *expiration_offset = self.expiration_offset;
+            }
+            _ => {}
         }
     }
 
     /// Update task state according to an observed command.
+    #[mz_ore::instrument(level = "debug")]
     fn observe_command(&mut self, command: &ComputeCommand<T>) {
+        if let ComputeCommand::Peek(peek) = command {
+            peek.otel_ctx.attach_as_parent();
+        }
+
         trace!(
             replica = ?self.replica_id,
             command = ?command,
@@ -287,13 +301,16 @@ where
     }
 
     /// Update task state according to an observed response.
+    #[mz_ore::instrument(level = "debug")]
     fn observe_response(&mut self, response: &ComputeResponse<T>) {
+        if let ComputeResponse::PeekResponse(_, _, otel_ctx) = response {
+            otel_ctx.attach_as_parent();
+        }
+
         trace!(
             replica = ?self.replica_id,
             response = ?response,
             "received response from replica",
         );
-
-        self.metrics.inner.response_queue_size.inc();
     }
 }

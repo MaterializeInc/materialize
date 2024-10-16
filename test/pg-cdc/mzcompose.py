@@ -11,11 +11,13 @@
 Native Postgres source tests, functional.
 """
 
+import glob
 import time
 
 import psycopg
 from psycopg import Connection
 
+from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service, ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
@@ -112,7 +114,7 @@ def get_targeted_pg_version(parser: WorkflowArgumentParser) -> str | None:
     return pg_version
 
 
-# TODO: redesign ceased status materialize#25768
+# TODO: redesign ceased status database-issues#7687
 # Test that how subsource statuses work across a variety of scenarios
 # def workflow_statuses(c: Composition, parser: WorkflowArgumentParser) -> None:
 #     c.up("materialized", "postgres", "toxiproxy")
@@ -284,6 +286,14 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
+    matching_files = []
+    for filter in args.filter:
+        matching_files.extend(glob.glob(filter, root_dir="test/pg-cdc"))
+    sharded_files: list[str] = sorted(
+        buildkite.shard_list(matching_files, lambda file: file)
+    )
+    print(f"Files: {sharded_files}")
+
     ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
     ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
     ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout
@@ -305,7 +315,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"--var=ssl-wrong-key={ssl_wrong_key}",
             f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-            *args.filter,
+            *sharded_files,
         )
 
 
@@ -316,24 +326,32 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if remaining_args:
         workflow_cdc(c, parser)
     else:
+        workflows_with_internal_sharding = ["cdc"]
         # Otherwise we are running all workflows
-        for name in c.workflows:
+        sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
+            [w for w in c.workflows if w not in workflows_with_internal_sharding],
+            lambda w: w,
+        )
+        print(
+            f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
+        )
+        for name in sharded_workflows:
+            if name == "default":
+                continue
+
+            # TODO: Flaky, reenable when database-issues#7611 is fixed
+            if name == "statuses":
+                continue
+
+            # TODO: Flaky, reenable when database-issues#8447 is fixed
+            if name == "silent-connection-drop":
+                continue
+
             # clear postgres and materialized to avoid issues with special arguments conflicting with existing state
             c.kill("postgres")
             c.rm("postgres")
             c.kill("materialized")
             c.rm("materialized")
-
-            if name == "default":
-                continue
-
-            # TODO: Flaky, reenable when materialize#25479 is fixed
-            if name == "statuses":
-                continue
-
-            # TODO: Flaky, reenable when materialize#28989 is fixed
-            if name == "silent-connection-drop":
-                continue
 
             with c.test_case(name):
                 c.workflow(name)

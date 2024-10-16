@@ -1284,8 +1284,8 @@ where
                 let diffs = realloc_array(do_filter(records.diffs()).as_primitive(), metrics);
                 let records = ColumnarRecords::new(keys, values, timestamps, diffs);
                 let ext = ext.map(|ext| ColumnarRecordsStructuredExt {
-                    key: realloc_any(&do_filter(&ext.key), metrics),
-                    val: realloc_any(&do_filter(&ext.val), metrics),
+                    key: realloc_any(do_filter(&ext.key), metrics),
+                    val: realloc_any(do_filter(&ext.val), metrics),
                 });
                 (records, ext)
             }

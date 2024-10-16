@@ -10,6 +10,10 @@
 # Deploys are fast, do them quickly
 priority: 30
 
+env:
+  CI_BAZEL_BUILD: 1
+  CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
+
 steps:
   - command: bin/ci-builder run nightly ci/deploy/devsite.sh
     branches: main

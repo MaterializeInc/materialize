@@ -1340,7 +1340,7 @@ SELECT EXTRACT(epoch FROM INTERVAL '-2147483648 months -2147483648 days -2147483
 -5840726025531599.999999
 
 # Interval comparison is done on a field by field basis, without combining the fields. This is due to a limitation in
-# Materialize (See: https://github.com/MaterializeInc/materialize/issues/10566)
+# Materialize (See: https://github.com/MaterializeInc/database-issues/issues/3130)
 
 query T
 SELECT INTERVAL '1 month' > INTERVAL '9999999 days';

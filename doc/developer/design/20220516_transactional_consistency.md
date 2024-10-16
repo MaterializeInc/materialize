@@ -5,7 +5,7 @@
 A description of Materialize’s consistency guarantees with respect to the operations that occur inside of Materialize.
 Operations include: `SELECT`, `INSERT`, `UPDATE`, and `DELETE` statements (but not `TAIL`)
 
-This design document is in service of [Epic #11631](https://github.com/MaterializeInc/materialize/issues/11631)
+This design document is in service of [Epic #11631](https://github.com/MaterializeInc/database-issues/issues/3393)
 and [Correctness Property #1](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/ux.md#correctness)
 (copied below).
 
@@ -168,7 +168,7 @@ places a bounds on how much faster the global timestamp can advance compared to 
 NOTE: If the client had multiple writes to a single table known ahead of time, then grouping them in a single
 multi-statement write transaction would increase throughput. There may be some user education needed for this.
 
-NOTE: This would also fix the problem discussed in [#12198](https://github.com/MaterializeInc/materialize/issues/12198).
+NOTE: This would also fix the problem discussed in [#12198](https://github.com/MaterializeInc/database-issues/issues/3532).
 
 ### Read Capabilities on Global Timestamp
 

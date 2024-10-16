@@ -60,15 +60,20 @@ pub mod peek;
 pub mod subscribe;
 pub mod view;
 
+use std::fmt::Debug;
 use std::panic::AssertUnwindSafe;
 
+use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::memory::objects::{CatalogEntry, Index};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
+use mz_controller_types::ClusterId;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::GlobalId;
+use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
 use mz_transform::{TransformCtx, TransformError};
@@ -252,6 +257,26 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
                 .enable_value_window_function_fusion,
         }
     }
+}
+
+// OptimizerCatalog
+// ===============
+
+pub trait OptimizerCatalog: Debug + Send + Sync {
+    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry;
+    fn resolve_full_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: Option<&ConnectionId>,
+    ) -> FullItemName;
+
+    /// Returns all indexes on the given object and cluster known in the
+    /// catalog.
+    fn get_indexes_on(
+        &self,
+        id: GlobalId,
+        cluster: ClusterId,
+    ) -> Box<dyn Iterator<Item = (GlobalId, &Index)> + '_>;
 }
 
 // OptimizerError

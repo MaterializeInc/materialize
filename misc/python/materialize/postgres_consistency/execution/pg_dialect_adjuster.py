@@ -42,7 +42,7 @@ class PgSqlDialectAdjuster(SqlDialectAdjuster):
 
         if type_name.startswith("INT") and string_value.startswith("-"):
             # wrap negative numbers in parentheses
-            # see: https://github.com/MaterializeInc/materialize/issues/21993
+            # see: https://github.com/MaterializeInc/database-issues/issues/6611
             string_value = f"({string_value})"
 
         return string_value

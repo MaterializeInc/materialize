@@ -233,6 +233,8 @@ ignore = [
     "RUSTSEC-2024-0370",
     # lexical-core: Multiple soundness issues, depends on arrow upgrading
     "RUSTSEC-2023-0086",
+    # Use standard library's IsTerminal trait instead of `atty` (unmaintained)
+    "RUSTSEC-2024-0375",
 ]
 
 # Must be manually kept in sync with about.toml.

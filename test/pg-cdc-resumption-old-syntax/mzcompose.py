@@ -32,12 +32,12 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     for name in c.workflows:
+        if name == "default":
+            continue
+
         # clear to avoid issues
         c.kill("postgres")
         c.rm("postgres")
-
-        if name == "default":
-            continue
 
         with c.test_case(name):
             c.workflow(name)
@@ -86,14 +86,20 @@ def workflow_disruptions(c: Composition) -> None:
 
 
 def workflow_backup_restore(c: Composition) -> None:
+    scenarios = [
+        backup_restore_pg,
+    ]
+    scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
+    print(
+        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
+    )
+
     with c.override(
         Materialized(sanity_restart=False),
         Alpine(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
         Postgres(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
     ):
-        for scenario in [
-            backup_restore_pg,
-        ]:
+        for scenario in scenarios:
             print(f"--- Running scenario {scenario.__name__}")
             initialize(c)
             scenario(c)

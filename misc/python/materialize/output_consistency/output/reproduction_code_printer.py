@@ -210,13 +210,21 @@ class ReproductionCodePrinter(BaseOutputPrinter):
 
             leaf_expressions = expression.collect_leaves()
             for leaf_expression in leaf_expressions:
-                column_tuples.add(leaf_expression.get_source_column_identifier())
+                source_column_identifier = (
+                    leaf_expression.get_source_column_identifier()
+                )
+                if source_column_identifier is not None:
+                    column_tuples.add(source_column_identifier)
 
         for further_expression in query_template.get_all_expressions(
             include_select_expressions=False, include_join_constraints=True
         ):
             leaf_expressions = further_expression.collect_leaves()
             for leaf_expression in leaf_expressions:
-                column_tuples.add(leaf_expression.get_source_column_identifier())
+                source_column_identifier = (
+                    leaf_expression.get_source_column_identifier()
+                )
+                if source_column_identifier is not None:
+                    column_tuples.add(source_column_identifier)
 
         return column_tuples

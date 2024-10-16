@@ -231,7 +231,8 @@ impl AdapterNotice {
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
             AdapterNotice::ClusterReplicaStatusChanged { status, .. } => {
                 match status {
-                    ServiceStatus::Offline(None) => Some("The cluster replica may be restarting or going offline.".into()),
+                    ServiceStatus::Offline(None)
+                    | ServiceStatus::Offline(Some(OfflineReason::Initializing)) => Some("The cluster replica may be restarting or going offline.".into()),
                     ServiceStatus::Offline(Some(OfflineReason::OomKilled)) => Some("The cluster replica may have run out of memory and been killed.".into()),
                     ServiceStatus::Online => None,
                 }

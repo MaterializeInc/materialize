@@ -345,6 +345,10 @@ mz_compute_operator_hydration_statuses_per_worker
 SOURCE
 materialize
 mz_internal
+mz_continual_tasks
+BASE TABLE
+materialize
+mz_internal
 mz_frontiers
 SOURCE
 materialize
@@ -494,6 +498,10 @@ VIEW
 materialize
 mz_internal
 mz_show_connections
+VIEW
+materialize
+mz_internal
+mz_show_continual_tasks
 VIEW
 materialize
 mz_internal
