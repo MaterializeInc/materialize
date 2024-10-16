@@ -205,6 +205,11 @@ so it is executed.""",
             if step.get("sanitizer") == "only":
                 step["skip"] = True
 
+            # Skip the Cargo driven builds if the Sanitizers aren't specified since everything
+            # relies on the Bazel builds.
+            if step.get("id") in ("rust-build-x86_64", "rust-build-aarch64"):
+                step["skip"] = True
+
         for step in pipeline["steps"]:
             visit(step)
             if "group" in step:
