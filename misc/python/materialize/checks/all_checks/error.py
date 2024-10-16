@@ -289,9 +289,8 @@ class DecodeErrorUpsertValue(Check):
                 key2:
                 key3:
 
-                # TODO: database-issues#8605
-                # > SELECT f1 FROM decode_error_upsert_value
-                # 1
+                > SELECT f1 FROM decode_error_upsert_value
+                1
                 """
             )
         )
