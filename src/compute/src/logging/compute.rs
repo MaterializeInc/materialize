@@ -132,11 +132,13 @@ pub enum ComputeEvent {
     /// A dataflow export was hydrated.
     Hydration { export_id: GlobalId },
     /// An LIR operator was mapped to some particular dataflow operator.
-    LirAddress {
+    LirMapping {
         /// Identifier of the dataflow in which the LIR operator is running.
         id: GlobalId,
         /// The LIR identifier (local to `export_id`).
         lir_id: LirId,
+        /// The LIR operator, as a string (see `FlatPlanNode::humanize`).
+        operator: String,
         /// Operator address.
         address: Rc<[usize]>,
     },
@@ -405,7 +407,11 @@ pub(super) fn construct<A: Allocate + 'static>(
                         packer.push(make_string_datum(datum.id, &mut scratch))
                     }
                     1 => packer.push(Datum::UInt64(datum.lir_id)),
-                    2 => packer.push_list(
+                    2 => {
+                        let mut scratch = String::new();
+                        packer.push(make_string_datum(&datum.operator, &mut scratch))
+                    }
+                    3 => packer.push_list(
                         datum
                             .address
                             .iter()
@@ -486,7 +492,7 @@ struct DemuxState<A: Allocate> {
     /// Arrangement size stash
     arrangement_size: BTreeMap<usize, ArrangementSizeState>,
     /// LIR -> address mapping
-    lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, Vec<usize>>>,
+    lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, (String, Vec<usize>)>>,
 }
 
 impl<A: Allocate> DemuxState<A> {
@@ -614,6 +620,7 @@ struct ErrorCountDatum {
 struct LirMappingDatum {
     id: GlobalId,
     lir_id: LirId,
+    operator: String,
     address: Vec<usize>,
 }
 
@@ -686,11 +693,12 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             DataflowShutdown { dataflow_index } => self.handle_dataflow_shutdown(dataflow_index),
             ErrorCount { export_id, diff } => self.handle_error_count(export_id, diff),
             Hydration { export_id } => self.handle_hydration(export_id),
-            LirAddress {
+            LirMapping {
                 id,
                 lir_id,
+                operator,
                 address,
-            } => self.handle_lir_address(id, lir_id, address),
+            } => self.handle_lir_mapping(id, lir_id, operator, address),
         }
     }
 
@@ -760,10 +768,11 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
         // Remove LIR mapping for this export.
         if let Some(mappings) = self.state.lir_mapping.remove(&id) {
-            for (lir_id, address) in mappings {
+            for (lir_id, (operator, address)) in mappings {
                 let datum = LirMappingDatum {
                     id,
                     lir_id,
+                    operator,
                     address,
                 };
                 self.output.lir_mapping.give((datum, ts, -1));
@@ -1017,7 +1026,13 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 
     /// Indicate that a new LIR operator exists; record the dataflow address it maps to.
-    fn handle_lir_address(&mut self, id: GlobalId, lir_id: LirId, address: Rc<[usize]>) {
+    fn handle_lir_mapping(
+        &mut self,
+        id: GlobalId,
+        lir_id: LirId,
+        operator: String,
+        address: Rc<[usize]>,
+    ) {
         let address = address.to_vec();
 
         // record the state (for the later drop)
@@ -1025,18 +1040,19 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             .lir_mapping
             .entry(id)
             .and_modify(|id_mapping| {
-                let existing = id_mapping.insert(lir_id, address.clone());
+                let existing = id_mapping.insert(lir_id, (operator.clone(), address.clone()));
                 if let Some(old_address) = existing {
                     error!(%id, %lir_id, "lir mapping to {address:?} already registered as {old_address:?}");
                 }
             })
-            .or_insert_with(|| BTreeMap::from([(lir_id, address.clone())]));
+            .or_insert_with(|| BTreeMap::from([(lir_id, (operator.clone(), address.clone()))]));
 
         // send the datum out
         let ts = self.ts();
         let datum = LirMappingDatum {
             id,
             lir_id,
+            operator,
             address,
         };
         self.output.lir_mapping.give((datum, ts, 1));

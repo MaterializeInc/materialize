@@ -123,6 +123,7 @@ use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
 use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
+use mz_repr::explain::DummyHumanizer;
 use mz_repr::{Datum, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
@@ -870,9 +871,13 @@ where
 
         for lir_id in topological_order {
             let node = nodes.remove(&lir_id).unwrap();
+
+            // TODO(mgree) need ExprHumanizer in DataflowDescription (ActiveComputeState doesn't have a catalog reference)
+            let operator = node.humanize(&DummyHumanizer);
+
             let mut bundle = self.render_plan_node(node, &collections);
 
-            self.log_lir_address_mapping(object_id, lir_id, bundle.scope().addr());
+            self.log_lir_mapping(object_id, lir_id, operator, bundle.scope().addr());
             self.log_operator_hydration(&mut bundle, lir_id);
 
             collections.insert(lir_id, bundle);
@@ -1081,11 +1086,12 @@ where
         }
     }
 
-    fn log_lir_address_mapping(&self, id: GlobalId, lir_id: LirId, address: Rc<[usize]>) {
+    fn log_lir_mapping(&self, id: GlobalId, lir_id: LirId, operator: String, address: Rc<[usize]>) {
         if let Some(logger) = &self.compute_logger {
-            logger.log(ComputeEvent::LirAddress {
+            logger.log(ComputeEvent::LirMapping {
                 id,
                 lir_id,
+                operator,
                 address,
             });
         }
