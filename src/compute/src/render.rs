@@ -370,7 +370,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         sink_id,
                         &sink,
                         start_signal.clone(),
-                        ct_ctx.input_times(),
+                        ct_ctx.input_times(&context.scope.parent),
                     );
                 }
             });
@@ -439,7 +439,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         sink_id,
                         &sink,
                         start_signal.clone(),
-                        ct_ctx.input_times(),
+                        ct_ctx.input_times(&context.scope.parent),
                     );
                 }
             });

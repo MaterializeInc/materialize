@@ -32,9 +32,3 @@ statement error CONTINUAL TASK query columns did not match
 CREATE CONTINUAL TASK nope (key STRING) ON INPUT foo AS (
     INSERT INTO nope SELECT * FROM foo;
 )
-
-# TODO(ct2): Make this error (or work!) instead of panic
-# statement error something
-# CREATE CONTINUAL TASK nope (key INT) ON INPUT foo AS (
-#    INSERT INTO nope SELECT null::INT
-# )

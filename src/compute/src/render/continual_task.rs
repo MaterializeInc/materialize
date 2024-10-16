@@ -189,12 +189,17 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
         Some(inserts_source_fn)
     }
 
-    pub fn input_times(&self) -> Option<Collection<G, (), Diff>> {
-        let (Some(name), Some(first)) = (self.name.as_ref(), self.ct_times.first()) else {
+    pub fn input_times(&self, scope: &G) -> Option<Collection<G, (), Diff>> {
+        // We have a name iff this is a CT dataflow.
+        assert_eq!(self.is_ct_dataflow(), self.name.is_some());
+        let Some(name) = self.name.as_ref() else {
             return None;
         };
+        // Note that self.ct_times might be empty (if the user didn't reference
+        // the input), but this still does the correct, though maybe useless,
+        // thing: no diffs coming into the input means no times to write at.
         let ct_times = differential_dataflow::collection::concatenate(
-            &mut first.scope(),
+            &mut scope.clone(),
             self.ct_times.iter().cloned(),
         );
         // Reduce this down to one update per-time-per-worker before exchanging
