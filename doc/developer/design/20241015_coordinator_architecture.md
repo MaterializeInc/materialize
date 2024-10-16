@@ -29,6 +29,10 @@ fulfillment, with only some parts offloaded to worker threads. This
 architecture is a bottleneck for high QPS workloads, as the coordinator main
 thread can become a bottleneck.
 
+We observe both high average latency and long tail latency. We need to address
+both, the first to achieve a meaningful QPS target, and the latter to offer QPS
+guarantees.
+
 In this document, we analyze what functions we need to perform on the
 coordinator main thread to uphold the guarantees of the system, and in the
 process determine parts that can be handled asynchronously by different
@@ -59,6 +63,21 @@ responsible for planning, sequencing, and executing a query, and while
 individual parts can be offloaded, it needs to advance the state machine for
 handling queries.
 
+This is inefficient for several reasons:
+* Not all statements require exclusive access to the coordinator state, but by
+  forcing a common interface, we cannot separate DML statements and such that
+  don't require transactions from more complicated ones.
+* Tracing requires somewhere 5-20us per invocation, e.g., constructing spans or
+  instrumenting function calls and closures. The coordinator creates a span for
+  each message it processes.
+* For some of its tasks, the coordinator blocks on I/O, specifically to
+  communicate with durable catalog. This can block the coordinator for tens of
+  milliseconds at a time, spiking to hundreds of milliseconds. During this
+  time, no other request can be processed.
+* We're limited by the lack of CPU. Offloading parts of the query processing
+  pipeline only improves overall latency as long as there are space CPU
+  resources to handle the offload.
+
 ## Success Criteria
 
 <!--
@@ -70,6 +89,16 @@ our problem without naming a specific solution. Instead, focus on the
 outcomes we hope result from this work. Feel free to list both qualitative
 and quantitative measurements.
 -->
+
+Success should be scoped narrowly: We're able to handle a `SELECT`-only
+workload with little interaction with the coordinator, which frees the
+coordinator to do what it absolutely needs to do. It should result in a lower
+average latency by improving the hot code path, and a lower tail latency by
+reducing interference with other tasks handled by the coordinator.
+
+A straw man's proposal would be to handle 10k QPS at a 10^-3 latency (p99.9) of
+50ms and 10^-4 latency (p99.99) of 200ms. I made these numbers up, and they
+should merely be used as a guiding principle.
 
 ## Out of Scope
 
