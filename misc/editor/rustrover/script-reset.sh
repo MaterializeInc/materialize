@@ -16,22 +16,10 @@ if [[ ! -f "./Cargo.lock" ]]; then
   exit 1
 fi
 
-echo "Killing stray clusterd instances..."
-killall clusterd &> /dev/null || true
+cmd="bin/environmentd --build-and-reset-only"
+[[ "$(uname -s)" == "Darwin" ]] && cmd="$cmd --enable-mac-codesigning"
+echo "Running $cmd..."
+$cmd
 
-echo "Resetting db..."
-psql -AtX postgres://root@localhost:26257/materialize -c \
-  'CREATE DATABASE IF NOT EXISTS materialize;
-  DROP SCHEMA IF EXISTS consensus CASCADE;
-  CREATE SCHEMA IF NOT EXISTS consensus;
-  DROP SCHEMA IF EXISTS tsoracle CASCADE;
-  CREATE SCHEMA IF NOT EXISTS tsoracle;
-  DROP SCHEMA IF EXISTS storage CASCADE;
-  CREATE SCHEMA IF NOT EXISTS storage;'
-
-echo "Resetting mzdata..."
-rm -rfv ./mzdata/persist
-mkdir -p ./mzdata/
-
-echo "Storing environment-id..."
-echo local-az1-a1e5718e-9753-483c-9cb0-fe8f9e715f24-0 > ./mzdata/environment-id
+echo "Reset environment-id to the value in the run configuration..."
+echo local-az1-d205081d-4387-4daa-9f29-b70b1fc496e0-0 > ./mzdata/environment-id
