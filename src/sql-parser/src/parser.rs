@@ -1890,8 +1890,13 @@ impl<'a> Parser<'a> {
             self.parse_create_materialized_view()
                 .map_parser_err(StatementKind::CreateMaterializedView)
         } else if self.peek_keywords(&[CONTINUAL, TASK]) {
-            self.parse_create_continual_task()
-                .map_parser_err(StatementKind::CreateContinualTask)
+            if self.peek_keywords_lookahead(&[FROM, TRANSFORM]) {
+                self.parse_create_continual_task_from_transform()
+                    .map_parser_err(StatementKind::CreateContinualTask)
+            } else {
+                self.parse_create_continual_task()
+                    .map_parser_err(StatementKind::CreateContinualTask)
+            }
         } else if self.peek_keywords(&[USER]) {
             parser_err!(
                 self,
@@ -3585,14 +3590,19 @@ impl<'a> Parser<'a> {
 
         // TODO(ct3): Multiple outputs.
         let name = RawItemName::Name(self.parse_item_name()?);
-        self.expect_token(&Token::LParen)?;
-        let columns = self.parse_comma_separated(|parser| {
-            Ok(CteMutRecColumnDef {
-                name: parser.parse_identifier()?,
-                data_type: parser.parse_data_type()?,
-            })
-        })?;
-        self.expect_token(&Token::RParen)?;
+        let columns = match self.consume_token(&Token::LParen) {
+            true => {
+                let columns = self.parse_comma_separated(|parser| {
+                    Ok(CteMutRecColumnDef {
+                        name: parser.parse_identifier()?,
+                        data_type: parser.parse_data_type()?,
+                    })
+                })?;
+                self.expect_token(&Token::RParen)?;
+                Some(columns)
+            }
+            false => None,
+        };
         let in_cluster = self.parse_optional_in_cluster()?;
 
         // TODO(ct3): Multiple inputs.
@@ -3644,6 +3654,44 @@ impl<'a> Parser<'a> {
                 input: input_table,
                 stmts,
                 as_of,
+                sugar: None,
+            },
+        ))
+    }
+
+    fn parse_create_continual_task_from_transform(
+        &mut self,
+    ) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[CONTINUAL, TASK])?;
+        let name = RawItemName::Name(self.parse_item_name()?);
+
+        self.expect_keywords(&[FROM, TRANSFORM])?;
+        let input = self.parse_raw_name()?;
+
+        self.expect_keyword(USING)?;
+        self.expect_token(&Token::LParen)?;
+        let transform = self.parse_query()?;
+        self.expect_token(&Token::RParen)?;
+
+        let as_of = self.parse_optional_internal_as_of()?;
+
+        // Desugar into a normal CT body.
+        let stmts = vec![ContinualTaskStmt::Insert(InsertStatement {
+            table_name: name.clone(),
+            columns: Vec::new(),
+            source: InsertSource::Query(transform.clone()),
+            returning: Vec::new(),
+        })];
+
+        Ok(Statement::CreateContinualTask(
+            CreateContinualTaskStatement {
+                name,
+                columns: None,
+                in_cluster: None,
+                input,
+                stmts,
+                as_of,
+                sugar: Some(CreateContinualTaskSugar::Transform { transform }),
             },
         ))
     }

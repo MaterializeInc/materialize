@@ -24,7 +24,7 @@ SELECT * FROM anomalies
 1
 
 statement ok
-CREATE CONTINUAL TASK audit_log (count INT) ON INPUT anomalies AS (
+CREATE CONTINUAL TASK audit_log ON INPUT anomalies AS (
     INSERT INTO audit_log SELECT * FROM anomalies WHERE sum > 1;
 )
 

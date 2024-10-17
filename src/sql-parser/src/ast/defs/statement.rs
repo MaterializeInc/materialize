@@ -1399,7 +1399,7 @@ impl_display_t!(CreateMaterializedViewStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateContinualTaskStatement<T: AstInfo> {
     pub name: T::ItemName,
-    pub columns: Vec<CteMutRecColumnDef<T>>,
+    pub columns: Option<Vec<CteMutRecColumnDef<T>>>,
     pub in_cluster: Option<T::ClusterName>,
     pub as_of: Option<u64>,
 
@@ -1408,6 +1408,8 @@ pub struct CreateContinualTaskStatement<T: AstInfo> {
 
     // The txn to execute on each set of diffs
     pub stmts: Vec<ContinualTaskStmt<T>>,
+
+    pub sugar: Option<CreateContinualTaskSugar<T>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1416,13 +1418,40 @@ pub enum ContinualTaskStmt<T: AstInfo> {
     Insert(InsertStatement<T>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateContinualTaskSugar<T: AstInfo> {
+    Transform { transform: Query<T> },
+}
+
 impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match &self.sugar {
+            Some(CreateContinualTaskSugar::Transform { transform }) => {
+                f.write_str("CREATE CONTINUAL TASK ");
+                f.write_node(&self.name);
+                f.write_str(" FROM TRANSFORM ");
+                f.write_node(&self.input);
+                f.write_str(" USING ");
+                f.write_str("(");
+                f.write_node(transform);
+                f.write_str(")");
+
+                if let Some(time) = &self.as_of {
+                    f.write_str(" AS OF ");
+                    f.write_str(time);
+                }
+                return;
+            }
+            None => {} // Fall-through
+        }
+
         f.write_str("CREATE CONTINUAL TASK ");
         f.write_node(&self.name);
-        f.write_str(" (");
-        f.write_node(&display::comma_separated(&self.columns));
-        f.write_str(")");
+        if let Some(columns) = &self.columns {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(columns));
+            f.write_str(")");
+        }
 
         if let Some(cluster) = &self.in_cluster {
             f.write_str(" IN CLUSTER ");

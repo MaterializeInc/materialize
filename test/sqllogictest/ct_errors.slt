@@ -13,7 +13,7 @@ statement ok
 CREATE TABLE foo (key INT)
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_create_continual_task = false
+ALTER SYSTEM SET enable_continual_task_create = false
 ----
 COMPLETE 0
 
@@ -23,7 +23,7 @@ CREATE CONTINUAL TASK nope (key INT) ON INPUT foo AS (
 )
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_create_continual_task = true
+ALTER SYSTEM SET enable_continual_task_create = true
 ----
 COMPLETE 0
 
@@ -31,6 +31,15 @@ COMPLETE 0
 statement error CONTINUAL TASK query columns did not match
 CREATE CONTINUAL TASK nope (key STRING) ON INPUT foo AS (
     INSERT INTO nope SELECT * FROM foo;
+)
+
+# Must provide columns for recursive CTs
+#
+# TODO(ct3): Better error message.
+statement error CONTINUAL TASK query columns did not match
+CREATE CONTINUAL TASK nope ON INPUT foo AS (
+    DELETE FROM nope;
+    INSERT INTO nope SELECT *, 'bar' FROM foo;
 )
 
 # TODO(ct2): Make this error (or work!) instead of panic
