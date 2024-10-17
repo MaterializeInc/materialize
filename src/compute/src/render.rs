@@ -345,6 +345,12 @@ pub fn build_compute_dataflow<A: Allocate>(
                                 .leave_region()
                         },
                     );
+                    let global_id = object.id;
+                    if let Some(id) = bundle.scope().addr().first() {
+                        context.log_dataflow_global_id(*id, global_id);
+                    } else {
+                        tracing::error!(%global_id, "could not find dataflow, bundle address was empty");
+                    }
                     context.insert_id(Id::Global(object.id), bundle);
                 }
 
@@ -420,6 +426,12 @@ pub fn build_compute_dataflow<A: Allocate>(
                                 .leave_region()
                         },
                     );
+                    let global_id = object.id;
+                    if let Some(id) = bundle.scope().addr().first() {
+                        context.log_dataflow_global_id(*id, global_id);
+                    } else {
+                        tracing::error!(%global_id, "could not find dataflow, bundle address was empty");
+                    }
                     context.insert_id(Id::Global(object.id), bundle);
                 }
 
@@ -1061,10 +1073,22 @@ where
         }
     }
 
-    fn log_lir_mapping(&self, id: GlobalId, lir_id: LirId, operator: String, address: Rc<[usize]>) {
+    fn log_dataflow_global_id(&self, id: usize, global_id: GlobalId) {
+        if let Some(logger) = &self.compute_logger {
+            logger.log(ComputeEvent::DataflowGlobal { id, global_id });
+        }
+    }
+
+    fn log_lir_mapping(
+        &self,
+        global_id: GlobalId,
+        lir_id: LirId,
+        operator: String,
+        address: Rc<[usize]>,
+    ) {
         if let Some(logger) = &self.compute_logger {
             logger.log(ComputeEvent::LirMapping {
-                id,
+                global_id,
                 lir_id,
                 operator,
                 address,
