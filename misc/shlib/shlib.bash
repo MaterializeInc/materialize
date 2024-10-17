@@ -76,9 +76,11 @@ try() {
 
     # Try the command.
     if "$@"; then
+        result=$?
         try_last_failed=false
         ((++ci_try_passed))
     else
+        result=$?
         try_last_failed=true
         # The command failed. Tell Buildkite to uncollapse this log section, so
         # that the errors are immediately visible.
@@ -86,6 +88,7 @@ try() {
         echo "^^^ 🚨 Failed: $*"
     fi
     ((++ci_try_total))
+    return $result
 }
 try_last_failed=false
 
