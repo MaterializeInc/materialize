@@ -1196,7 +1196,7 @@ where
                                     tracing::info!(?event_time, ?resume_upper, ?output_cap, "allowing partial drain");
                                     partial_drain_time = Some(event_time.clone());
                                 } else {
-                                    tracing::info!(%prevent_snapshot_buffering, ?event_time, ?resume_upper, ?output_cap, "not allowing partial drain");
+                                    tracing::debug!(%prevent_snapshot_buffering, ?event_time, ?resume_upper, ?output_cap, "not allowing partial drain");
                                 }
                             }
                             AsyncEvent::Progress(upper) => {
