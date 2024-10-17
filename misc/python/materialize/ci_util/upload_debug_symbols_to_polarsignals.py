@@ -53,6 +53,7 @@ def collect_and_upload_debug_data_to_polarsignals(
     ui.section("Collecting and uploading debug data to PolarSignals...")
 
     relevant_images_by_name = get_build_images(repo, debuginfo_bins)
+    print(f"Considered images are: {relevant_images_by_name.keys()}")
 
     for image_name, image in relevant_images_by_name.items():
         container_name = create_docker_container(image_name, image)
