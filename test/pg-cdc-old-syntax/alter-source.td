@@ -375,7 +375,7 @@ INSERT INTO table_f VALUES (3, 'var1');
 <null>
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_e WITH (TEXT COLUMNS (table_z.a));
-contains:invalid TEXT COLUMNS option value: reference to table_z not found in source
+contains:reference to table_z not found in source
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_e WITH (TEXT COLUMNS [table_f.f2]);
 contains:TEXT COLUMNS refers to table not currently being added

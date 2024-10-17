@@ -43,7 +43,7 @@ contains:No tables found
 ! CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR TABLES (mysql.timezone);
-contains:No tables found
+contains:reference to mysql.timezone not found in source
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
