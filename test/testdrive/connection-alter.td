@@ -34,12 +34,14 @@ conn   kafka
     SECURITY PROTOCOL PLAINTEXT
   )
 
-> CREATE SOURCE mz_source (first, second)
+> CREATE SOURCE mz_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION conn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
+
+> CREATE TABLE mz_source_tbl (first, second) FROM SOURCE mz_source (REFERENCE "testdrive-connection_test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
 
-> SELECT * FROM mz_source
+> SELECT * FROM mz_source_tbl
 first second
 ------------
 1     2
@@ -65,7 +67,7 @@ $ kafka-ingest format=bytes topic=connection_test
 
 > ALTER CONNECTION conn SET (broker = '${testdrive.kafka-addr}') WITH (validate = true);
 
-> SELECT * FROM mz_source
+> SELECT * FROM mz_source_tbl
 first second
 ------------
 1     2

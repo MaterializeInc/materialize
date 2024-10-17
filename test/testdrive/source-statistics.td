@@ -58,9 +58,11 @@ goofus,gallant
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SOURCE metrics_test_source (a, b)
+> CREATE SOURCE metrics_test_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-metrics-test-${testdrive.seed}')
+
+> CREATE TABLE metrics_test_source_tbl (a, b) FROM SOURCE metrics_test_source (REFERENCE "testdrive-metrics-test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
 
@@ -109,7 +111,7 @@ $ set-sql-timeout duration=2minutes
   WHERE s.name IN ('metrics_test_source')
   GROUP BY s.name
   ORDER BY s.name
-metrics_test_source true 2 2 2 true true
+metrics_test_source true 4 2 2 true true
 
 > DROP SOURCE metrics_test_source CASCADE
 

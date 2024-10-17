@@ -23,14 +23,17 @@ $ kafka-create-topic topic=test
 > CREATE SOURCE kafka_src
   IN CLUSTER audit_log_kafka_src
   FROM KAFKA CONNECTION kafka_conn
-  (TOPIC 'testdrive-test-${testdrive.seed}')
+  (TOPIC 'testdrive-test-${testdrive.seed}');
+
+> CREATE TABLE kafka_src_tbl
+  FROM SOURCE kafka_src (REFERENCE "testdrive-test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS;
 
 > SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 4
 create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"type\":\"kafka\"}" materialize
 create source "{\"cluster_id\":null,\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src_progress\",\"schema\":\"public\",\"type\":\"progress\"}" materialize
 create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_kafka_src\",\"disk\":true,\"logical_size\":\"${arg.default-storage-size}\",\"reason\":\"manual\",\"replica_name\":\"r1\"}" materialize
-create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_kafka_src\"}" materialize
+create table "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src_tbl\",\"schema\":\"public\"}" materialize
 
 > CREATE CLUSTER audit_log_counter_src SIZE = '${arg.default-storage-size}';
 

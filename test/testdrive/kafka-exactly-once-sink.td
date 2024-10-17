@@ -208,6 +208,9 @@ New York,NY,10004
 > CREATE SOURCE input_csv
   IN CLUSTER input_csv_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-static-${testdrive.seed}')
+
+> CREATE TABLE input_csv_tbl
+  FROM SOURCE input_csv (REFERENCE "testdrive-static-${testdrive.seed}")
   FORMAT CSV WITH 3 COLUMNS
 
 > CREATE CLUSTER output1_cluster SIZE '${arg.default-storage-size}';
@@ -301,7 +304,7 @@ contains:input_values_view is a view, which cannot be exported as a sink
 > CREATE CLUSTER output13_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK output13
   IN CLUSTER output13_cluster
-  FROM input_csv
+  FROM input_csv_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output13-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
