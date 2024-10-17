@@ -280,7 +280,7 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 45
     inputs: [test/testdrive]
-    parallelism: 8
+    parallelism: 10
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
