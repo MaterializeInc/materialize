@@ -25,6 +25,13 @@ from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_test_analytics_config,
+)
+from materialize.test_analytics.data.bounded_memory.bounded_memory_minimal_search_storage import (
+    BoundedMemoryMinimalSearchEntry,
+)
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 
 # Those defaults have been carefully chosen to avoid known OOMs
 # such as materialize#15093 and database-issues#4297 while hopefully catching any further
@@ -33,6 +40,8 @@ PAD_LEN = 1024
 STRING_PAD = "x" * PAD_LEN
 REPEAT = 16 * 1024
 ITERATIONS = 128
+
+BOUNDED_MEMORY_FRAMEWORK_VERSION = "1.0.0"
 
 SERVICES = [
     Materialized(),  # overridden below
@@ -1084,6 +1093,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--clusterd-memory-search-step", default=0.2, type=float)
     args = parser.parse_args()
 
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    find_minimal_memory_mode = args.find_minimal_memory
+
+    if find_minimal_memory_mode:
+        # will be updated to True at the end
+        test_analytics.builds.add_build_job(was_successful=False)
+
     for scenario in shard_list(SCENARIOS, lambda scenario: scenario.name):
         if (
             args.scenarios is not None
@@ -1098,7 +1114,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.override_current_testcase_name(f"Scenario '{scenario.name}'")
 
-        if args.find_minimal_memory:
+        if find_minimal_memory_mode:
             print(f"+++ Starting memory search for scenario {scenario.name}")
 
             run_memory_search(
@@ -1106,6 +1122,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 scenario,
                 args.materialized_memory_search_step,
                 args.clusterd_memory_search_step,
+                test_analytics,
             )
         else:
             print(
@@ -1118,6 +1135,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 materialized_memory=scenario.materialized_memory,
                 clusterd_memory=scenario.clusterd_memory,
             )
+
+    if find_minimal_memory_mode:
+        try:
+            test_analytics.builds.update_build_job_success(True)
+            test_analytics.submit_updates()
+            print("Uploaded results.")
+        except Exception as e:
+            # An error during an upload must never cause the build to fail
+            test_analytics.on_upload_failed(e)
 
 
 def run_scenario(
@@ -1175,6 +1201,7 @@ def run_memory_search(
     scenario: Scenario,
     materialized_search_step_in_gb: float,
     clusterd_search_step_in_gb: float,
+    test_analytics: TestAnalyticsDb,
 ) -> None:
     assert materialized_search_step_in_gb > 0 or clusterd_search_step_in_gb > 0
     materialized_memory = scenario.materialized_memory
@@ -1207,6 +1234,17 @@ def run_memory_search(
         f"* clusterd_memory={clusterd_memory} (specified was: {scenario.clusterd_memory})"
     )
     print("Consider adding some buffer to avoid flakiness.")
+
+    search_result = BoundedMemoryMinimalSearchEntry(
+        scenario_name=scenario.name,
+        configured_memory_mz_in_gb=_get_memory_in_gb(scenario.materialized_memory),
+        configured_memory_clusterd_in_gb=_get_memory_in_gb(scenario.clusterd_memory),
+        found_memory_mz_in_gb=_get_memory_in_gb(materialized_memory),
+        found_memory_clusterd_in_gb=_get_memory_in_gb(clusterd_memory),
+    )
+    test_analytics.bounded_memory_search.add_entry(
+        BOUNDED_MEMORY_FRAMEWORK_VERSION, search_result
+    )
 
 
 def find_minimal_memory(
@@ -1318,14 +1356,11 @@ def _validate_new_memory_configuration(
 def _reduce_memory(
     memory_spec: str, reduce_by_gb: float, lower_bound_in_gb: float
 ) -> str | None:
-    if not memory_spec.endswith("Gb"):
-        raise RuntimeError(f"Unsupported memory specification: {memory_spec}")
-
     if math.isclose(reduce_by_gb, 0.0, abs_tol=0.01):
         # allow staying at the same value
         return memory_spec
 
-    current_gb = float(memory_spec.removesuffix("Gb"))
+    current_gb = _get_memory_in_gb(memory_spec)
 
     if math.isclose(current_gb, lower_bound_in_gb, abs_tol=0.01):
         # lower bound already reached
@@ -1337,3 +1372,10 @@ def _reduce_memory(
         new_gb = lower_bound_in_gb
 
     return f"{new_gb}Gb"
+
+
+def _get_memory_in_gb(memory_spec: str) -> float:
+    if not memory_spec.endswith("Gb"):
+        raise RuntimeError(f"Unsupported memory specification: {memory_spec}")
+
+    return float(memory_spec.removesuffix("Gb"))
