@@ -69,10 +69,12 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE SOURCE doin_upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+
+> CREATE TABLE doin_upsert_tbl FROM SOURCE doin_upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM doin_upsert
+> SELECT * FROM doin_upsert_tbl
 a data b
 -----------
 1 fish2 bdata
@@ -80,7 +82,7 @@ a data b
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"b": "bdata", "a": 1} {"before": {"row": {"a": 1, "data": "fish2", "b": "bdata"}}, "after": {"row": {"a": 1, "data": "fish3", "b": "bdata"}}}
 
-> SELECT * FROM doin_upsert
+> SELECT * FROM doin_upsert_tbl
 a data b
 -----------
 1 fish3 bdata

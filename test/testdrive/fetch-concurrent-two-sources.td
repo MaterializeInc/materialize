@@ -29,20 +29,24 @@ $ kafka-create-topic topic=fetch-concurrent-two-sources
 > CREATE SOURCE fetch_concurrent_two_sources1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}')
+  WITH (TIMESTAMP INTERVAL '100ms')
+
+> CREATE TABLE fetch_concurrent_two_sources1_tbl FROM SOURCE fetch_concurrent_two_sources1 (REFERENCE "testdrive-fetch-concurrent-two-sources-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
-  WITH (TIMESTAMP INTERVAL '100ms')
 
 > CREATE SOURCE fetch_concurrent_two_sources2
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-two-sources-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${int}'
-  ENVELOPE NONE
   WITH (TIMESTAMP INTERVAL '100ms')
 
-> CREATE MATERIALIZED VIEW fetch_concurrent_two_sources1_view AS SELECT * FROM fetch_concurrent_two_sources1 ORDER BY f1;
+> CREATE TABLE fetch_concurrent_two_sources2_tbl FROM SOURCE fetch_concurrent_two_sources2 (REFERENCE "testdrive-fetch-concurrent-two-sources-${testdrive.seed}")
+  FORMAT AVRO USING SCHEMA '${int}'
+  ENVELOPE NONE
 
-> CREATE MATERIALIZED VIEW fetch_concurrent_two_sources2_view AS SELECT * FROM fetch_concurrent_two_sources2 ORDER BY f1;
+> CREATE MATERIALIZED VIEW fetch_concurrent_two_sources1_view AS SELECT * FROM fetch_concurrent_two_sources1_tbl ORDER BY f1;
+
+> CREATE MATERIALIZED VIEW fetch_concurrent_two_sources2_view AS SELECT * FROM fetch_concurrent_two_sources2_tbl ORDER BY f1;
 
 
 $ kafka-ingest format=avro topic=fetch-concurrent-two-sources schema=${int} timestamp=1

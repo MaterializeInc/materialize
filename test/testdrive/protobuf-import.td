@@ -64,9 +64,11 @@ $ kafka-ingest topic=import format=protobuf descriptor-file=import.pb message=Im
 > CREATE SOURCE import
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-${testdrive.seed}')
+
+> CREATE TABLE import_tbl FROM SOURCE import (REFERENCE "testdrive-import-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.Importer' USING SCHEMA '${import-schema}'
 
-> SELECT importee1::text, importee2::text FROM import
+> SELECT importee1::text, importee2::text FROM import_tbl
 importee1  importee2
 ------------------------------
 (f)        "(\"(1234,5678)\")"
@@ -112,9 +114,11 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
 > CREATE SOURCE import_csr
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
+
+> CREATE TABLE import_csr_tbl FROM SOURCE import_csr (REFERENCE "testdrive-import-csr-${testdrive.seed}")
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
-> SELECT importee1::text, importee2::text FROM import_csr
+> SELECT importee1::text, importee2::text FROM import_csr_tbl
 importee1  importee2
 -------------------------------
 (f)        "(\"(1234,5678)\")"
@@ -123,5 +127,5 @@ importee1  importee2
 $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=Importer confluent-wire-format=true schema-message-id=123
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
-! SELECT importee1::text, importee2::text FROM import_csr
+! SELECT importee1::text, importee2::text FROM import_csr_tbl
 contains:Decode error: protobuf deserialization error: unsupported Confluent-style protobuf message descriptor id: expected 0, but found: 123

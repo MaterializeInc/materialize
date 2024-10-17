@@ -24,16 +24,18 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
 > CREATE SOURCE data
   IN CLUSTER data_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bytes-${testdrive.seed}')
+
+> CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-bytes-${testdrive.seed}")
   FORMAT BYTES
   INCLUDE OFFSET
 
-> SHOW COLUMNS FROM data
+> SHOW COLUMNS FROM data_tbl
 name       nullable  type    comment
 ------------------------------------
 data       false     bytea   ""
 offset     false     uint8   ""
 
-> SELECT * FROM data
+> SELECT * FROM data_tbl
 data           offset
 ------------------------
 "\\xc2\\xa91"  0
@@ -42,12 +44,14 @@ data           offset
 # Test that CREATE SOURCE can specify a custom name for the column.
 
 > CREATE CLUSTER data_named_col_cluster SIZE '${arg.default-storage-size}';
-> CREATE SOURCE data_named_col (named_col)
+> CREATE SOURCE data_named_col
   IN CLUSTER data_named_col_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bytes-${testdrive.seed}')
+
+> CREATE TABLE data_named_col_tbl (named_col) FROM SOURCE data_named_col (REFERENCE "testdrive-bytes-${testdrive.seed}")
   FORMAT BYTES
 
-> SHOW COLUMNS FROM data_named_col
+> SHOW COLUMNS FROM data_named_col_tbl
 name       nullable  type   comment
 -----------------------------------
 named_col  false     bytea  ""
@@ -56,10 +60,12 @@ named_col  false     bytea  ""
 > CREATE SOURCE data_offset
   IN CLUSTER data_offset_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-bytes-${testdrive.seed}')
+
+> CREATE TABLE data_offset_tbl FROM SOURCE data_offset (REFERENCE "testdrive-bytes-${testdrive.seed}")
   FORMAT BYTES
   INCLUDE OFFSET
 
-> SELECT * FROM data_offset
+> SELECT * FROM data_offset_tbl
 data           offset
 ------------------------
 "\\xc2\\xa92"  1
@@ -76,10 +82,12 @@ $ kafka-ingest format=bytes topic=bytes-partitions timestamp=1 partition=1
 > CREATE SOURCE data_offset_2
   IN CLUSTER data_offset_2_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[0,1], TOPIC 'testdrive-bytes-partitions-${testdrive.seed}')
+
+> CREATE TABLE data_offset_2_tbl FROM SOURCE data_offset_2 (REFERENCE "testdrive-bytes-partitions-${testdrive.seed}")
   FORMAT BYTES
   INCLUDE OFFSET
 
-> SELECT * FROM data_offset_2
+> SELECT * FROM data_offset_2_tbl
 data           offset
 ------------------------
 "\\xc2\\xa91"  0

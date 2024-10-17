@@ -45,7 +45,9 @@ $ kafka-wait-topic topic=testdrive-supplier-${testdrive.seed} partitions=1
 > CREATE SOURCE progress_check
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-fixed-${testdrive.seed}')
+
+> CREATE TABLE progress_check_tbl FROM SOURCE progress_check (REFERENCE "testdrive-progress-fixed-${testdrive.seed}")
   FORMAT JSON ENVELOPE NONE
 
-> SELECT COUNT(*) FROM progress_check WHERE data->'frontier' = '[]'::jsonb;
+> SELECT COUNT(*) FROM progress_check_tbl WHERE data->'frontier' = '[]'::jsonb;
 1

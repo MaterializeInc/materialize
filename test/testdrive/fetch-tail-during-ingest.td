@@ -31,13 +31,15 @@ $ kafka-create-topic topic=tail-fetch-during-ingest
 > CREATE SOURCE fetch_during_ingest
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-tail-fetch-during-ingest-${testdrive.seed}')
+  WITH (TIMESTAMP INTERVAL '100ms')
+
+> CREATE TABLE fetch_during_ingest_tbl FROM SOURCE fetch_during_ingest (REFERENCE "testdrive-tail-fetch-during-ingest-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
-  WITH (TIMESTAMP INTERVAL '100ms')
 
 > BEGIN
 
-> DECLARE c CURSOR FOR SUBSCRIBE fetch_during_ingest;
+> DECLARE c CURSOR FOR SUBSCRIBE fetch_during_ingest_tbl;
 
 $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestamp=1
 {"f1": 123}
