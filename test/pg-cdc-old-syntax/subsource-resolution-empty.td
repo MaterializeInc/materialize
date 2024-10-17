@@ -59,8 +59,7 @@ ALTER SYSTEM SET enable_create_table_from_source = true
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION mz_source)
   FOR SCHEMAS (dne);
-contains:database postgres missing referenced schemas
-detail:missing schemas: dne
+contains:no tables found in referenced schemas: "dne"
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA other CASCADE;
