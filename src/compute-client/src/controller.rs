@@ -40,6 +40,7 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
 use mz_compute_types::ComputeInstanceId;
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
@@ -721,6 +722,8 @@ where
             None => (false, Duration::from_secs(1)),
         };
 
+        let expiration_offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.dyncfg);
+
         let replica_config = ReplicaConfig {
             location,
             logging: LoggingConfig {
@@ -731,6 +734,7 @@ where
             },
             arrangement_exert_proportionality: self.arrangement_exert_proportionality,
             grpc_client: self.config.grpc_client.clone(),
+            expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
         };
 
         let instance = self.instance_mut(instance_id).expect("validated");
