@@ -1581,7 +1581,7 @@ SERVICES = [
     # We create all sources, sinks and dataflows by default with SIZE '1'
     # The workflow_instance_size workflow is testing multi-process clusters
     Testdrive(
-        default_timeout="120s",
+        default_timeout="60s",
         materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
         materialize_use_https=True,
         no_reset=True,
@@ -1645,6 +1645,69 @@ for cluster_id in range(1, MAX_CLUSTERS + 1):
             )
 
 
+service_names = [
+    "zookeeper",
+    "kafka",
+    "schema-registry",
+    "postgres",
+    "mysql",
+    "materialized",
+    "balancerd",
+    "frontegg-mock",
+    "clusterd_1_1_1",
+    "clusterd_1_2_1",
+    "clusterd_2_1_1",
+    "clusterd_2_2_1",
+    "clusterd_3_1_1",
+    "clusterd_3_2_1",
+]
+
+
+def setup(c: Composition, workers: int) -> None:
+    c.up(*service_names)
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        f"""
+        DROP CLUSTER quickstart cascade;
+        CREATE CLUSTER quickstart REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd_1_1_1:2100', 'clusterd_1_2_1:2100'],
+                STORAGE ADDRESSES ['clusterd_1_1_1:2103', 'clusterd_1_2_1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_1_1_1:2101', 'clusterd_1_2_1:2101'],
+                COMPUTE ADDRESSES ['clusterd_1_1_1:2102', 'clusterd_1_2_1:2102'],
+                WORKERS {workers}
+            ),
+            replica2 (
+                STORAGECTL ADDRESSES ['clusterd_2_1_1:2100', 'clusterd_2_2_1:2100'],
+                STORAGE ADDRESSES ['clusterd_2_1_1:2103', 'clusterd_2_2_1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_2_1_1:2101', 'clusterd_2_2_1:2101'],
+                COMPUTE ADDRESSES ['clusterd_2_1_1:2102', 'clusterd_2_2_1:2102'],
+                WORKERS {workers}
+            )
+        );
+        DROP CLUSTER IF EXISTS single_replica_cluster CASCADE;
+        CREATE CLUSTER single_replica_cluster REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd_3_1_1:2100', 'clusterd_3_2_1:2100'],
+                STORAGE ADDRESSES ['clusterd_3_1_1:2103', 'clusterd_3_2_1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_3_1_1:2101', 'clusterd_3_2_1:2101'],
+                COMPUTE ADDRESSES ['clusterd_3_1_1:2102', 'clusterd_3_2_1:2102'],
+                WORKERS {workers}
+            )
+        );
+        GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
+    """,
+        port=6877,
+        user="mz_system",
+    )
+
+
 def workflow_default(c: Composition) -> None:
     for name in c.workflows:
         if name == "default":
@@ -1668,67 +1731,13 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=2,
         help="set the default number of workers",
     )
+
+    parser.add_argument(
+        "--find-limit",
+        action="store_true",
+        help="Increase limit until the test fails, record higehst limit that works",
+    )
     args = parser.parse_args()
-
-    c.up(
-        "zookeeper",
-        "kafka",
-        "schema-registry",
-        "postgres",
-        "mysql",
-        "materialized",
-        "balancerd",
-        "frontegg-mock",
-        "clusterd_1_1_1",
-        "clusterd_1_2_1",
-        "clusterd_2_1_1",
-        "clusterd_2_2_1",
-        "clusterd_3_1_1",
-        "clusterd_3_2_1",
-    )
-
-    c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
-    c.sql(
-        f"""
-        DROP CLUSTER quickstart cascade;
-        CREATE CLUSTER quickstart REPLICAS (
-            replica1 (
-                STORAGECTL ADDRESSES ['clusterd_1_1_1:2100', 'clusterd_1_2_1:2100'],
-                STORAGE ADDRESSES ['clusterd_1_1_1:2103', 'clusterd_1_2_1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_1_1_1:2101', 'clusterd_1_2_1:2101'],
-                COMPUTE ADDRESSES ['clusterd_1_1_1:2102', 'clusterd_1_2_1:2102'],
-                WORKERS {args.workers}
-            ),
-            replica2 (
-                STORAGECTL ADDRESSES ['clusterd_2_1_1:2100', 'clusterd_2_2_1:2100'],
-                STORAGE ADDRESSES ['clusterd_2_1_1:2103', 'clusterd_2_2_1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_2_1_1:2101', 'clusterd_2_2_1:2101'],
-                COMPUTE ADDRESSES ['clusterd_2_1_1:2102', 'clusterd_2_2_1:2102'],
-                WORKERS {args.workers}
-            )
-        );
-        DROP CLUSTER IF EXISTS single_replica_cluster CASCADE;
-        CREATE CLUSTER single_replica_cluster REPLICAS (
-            replica1 (
-                STORAGECTL ADDRESSES ['clusterd_3_1_1:2100', 'clusterd_3_2_1:2100'],
-                STORAGE ADDRESSES ['clusterd_3_1_1:2103', 'clusterd_3_2_1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_3_1_1:2101', 'clusterd_3_2_1:2101'],
-                COMPUTE ADDRESSES ['clusterd_3_1_1:2102', 'clusterd_3_2_1:2102'],
-                WORKERS {args.workers}
-            )
-        );
-        GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
-    """,
-        port=6877,
-        user="mz_system",
-    )
-
-    c.up("testdrive", persistent=True)
 
     scenarios = buildkite.shard_list(
         (
@@ -1742,13 +1751,59 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {scenarios}"
     )
 
+    if not scenarios:
+        return
+
+    setup(c, args.workers)
+
+    c.up("testdrive", persistent=True)
+
     for scenario in scenarios:
-        print(f"--- Running scenario {scenario.__name__}")
-        f = StringIO()
-        with contextlib.redirect_stdout(f):
-            scenario.generate()
-            sys.stdout.flush()
-        c.testdrive(f.getvalue())
+        if args.find_limit:
+            good_count = None
+            bad_count = None
+            while True:
+                print(
+                    f"--- Running scenario {scenario.__name__} with count {scenario.COUNT}"
+                )
+                f = StringIO()
+                with contextlib.redirect_stdout(f):
+                    scenario.generate()
+                    sys.stdout.flush()
+                try:
+                    c.testdrive(f.getvalue(), quiet=True)
+                except Exception as e:
+                    print(f"Failed with count {scenario.COUNT}: {e}")
+                    c.kill(*service_names)
+                    c.rm(*service_names)
+                    c.rm_volumes("mzdata")
+                    setup(c, args.workers)
+
+                    bad_count = scenario.COUNT
+                    scenario.COUNT = (
+                        scenario.COUNT // 2
+                        if good_count is None
+                        else (good_count + bad_count) // 2
+                    )
+                    if scenario.COUNT >= bad_count:
+                        break
+                    continue
+                good_count = scenario.COUNT
+                scenario.COUNT = (
+                    scenario.COUNT * 2
+                    if bad_count is None
+                    else (good_count + bad_count) // 2
+                )
+                if scenario.COUNT <= good_count:
+                    break
+            print(f"Final good count: {good_count}")
+        else:
+            print(f"--- Running scenario {scenario.__name__}")
+            f = StringIO()
+            with contextlib.redirect_stdout(f):
+                scenario.generate()
+                sys.stdout.flush()
+            c.testdrive(f.getvalue())
 
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:

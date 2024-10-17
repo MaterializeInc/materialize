@@ -379,17 +379,22 @@ class Composition:
                     while running:
                         running = False
                         for key, val in sel.select():
-                            c = key.fileobj.read(1024)  # type: ignore
-                            if not c:
+                            output = ""
+                            while True:
+                                new_output = key.fileobj.read(1024)  # type: ignore
+                                if not new_output:
+                                    break
+                                output += new_output
+                            if not output:
                                 continue
                             # Keep running as long as stdout or stderr have any content
                             running = True
                             if key.fileobj is p.stdout:
-                                print(c, end="", flush=True)
-                                stdout_result += c
+                                print(output, end="", flush=True)
+                                stdout_result += output
                             else:
-                                print(c, end="", file=sys.stderr, flush=True)
-                                stderr_result += c
+                                print(output, end="", file=sys.stderr, flush=True)
+                                stderr_result += output
                     p.wait()
                     retcode = p.poll()
                     assert retcode is not None
@@ -1319,7 +1324,7 @@ class Composition:
         caller: Traceback | None = None,
         mz_service: str | None = None,
         quiet: bool = False,
-    ) -> None:
+    ) -> subprocess.CompletedProcess:
         """Run a string as a testdrive script.
 
         Args:
@@ -1342,7 +1347,7 @@ class Composition:
             ]
 
         if persistent:
-            self.exec(
+            return self.exec(
                 service,
                 *args,
                 stdin=input,
@@ -1354,7 +1359,7 @@ class Composition:
             assert (
                 mz_service is None
             ), "testdrive(mz_service = ...) can only be used with persistent Testdrive containers."
-            self.run(
+            return self.run(
                 service,
                 *args,
                 stdin=input,
