@@ -32,12 +32,12 @@ CREATE CONTINUAL TASK upsert (key INT, val STRING) ON INPUT append_only AS (
 )
 
 statement ok
-INSERT INTO append_only VALUES (1, now()::STRING);
+INSERT INTO append_only VALUES (1, 'A');
 
-query I
-SELECT COUNT(*) FROM upsert
+query IT
+SELECT * FROM upsert
 ----
-1
+1 A
 
 # The upsert CT and restarting the dataflow repeatedly turns out to be a great
 # way to shake out liveness issues without the full overhead of testdrive.
@@ -49,12 +49,12 @@ statement ok
 ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
 
 statement ok
-INSERT INTO append_only VALUES (1, now()::STRING);
+INSERT INTO append_only VALUES (1, 'B');
 
-query I
-SELECT COUNT(*) FROM upsert
+query IT
+SELECT * FROM upsert
 ----
-1
+1 B
 
 
 statement ok
@@ -64,12 +64,12 @@ statement ok
 ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
 
 statement ok
-INSERT INTO append_only VALUES (1, now()::STRING);
+INSERT INTO append_only VALUES (1, 'C');
 
-query I
-SELECT COUNT(*) FROM upsert
+query IT
+SELECT * FROM upsert
 ----
-1
+1 C
 
 
 statement ok
@@ -79,12 +79,12 @@ statement ok
 ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
 
 statement ok
-INSERT INTO append_only VALUES (1, now()::STRING);
+INSERT INTO append_only VALUES (1, 'D');
 
-query I
-SELECT COUNT(*) FROM upsert
+query IT
+SELECT * FROM upsert
 ----
-1
+1 D
 
 
 statement ok
@@ -94,12 +94,12 @@ statement ok
 ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
 
 statement ok
-INSERT INTO append_only VALUES (1, now()::STRING);
+INSERT INTO append_only VALUES (1, 'E');
 
-query I
-SELECT COUNT(*) FROM upsert
+query IT
+SELECT * FROM upsert
 ----
-1
+1 E
 
 
 statement ok
@@ -109,12 +109,12 @@ statement ok
 ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
 
 statement ok
-INSERT INTO append_only VALUES (1, now()::STRING);
+INSERT INTO append_only VALUES (1, 'F');
 
-query I
-SELECT COUNT(*) FROM upsert
+query IT
+SELECT * FROM upsert
 ----
-1
+1 F
 
 
 statement ok
@@ -124,12 +124,12 @@ statement ok
 ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
 
 statement ok
-INSERT INTO append_only VALUES (1, now()::STRING);
+INSERT INTO append_only VALUES (1, 'G');
 
-query I
-SELECT COUNT(*) FROM upsert
+query IT
+SELECT * FROM upsert
 ----
-1
+1 G
 
 
 statement ok
@@ -139,12 +139,12 @@ statement ok
 ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
 
 statement ok
-INSERT INTO append_only VALUES (1, now()::STRING);
+INSERT INTO append_only VALUES (1, 'H');
 
-query I
-SELECT COUNT(*) FROM upsert
+query IT
+SELECT * FROM upsert
 ----
-1
+1 H
 
 
 statement ok
@@ -154,9 +154,9 @@ statement ok
 ALTER CLUSTER quickstart SET (REPLICATION FACTOR = 1);
 
 statement ok
-INSERT INTO append_only VALUES (1, now()::STRING);
+INSERT INTO append_only VALUES (1, 'I');
 
-query I
-SELECT COUNT(*) FROM upsert
+query IT
+SELECT * FROM upsert
 ----
-1
+1 I
