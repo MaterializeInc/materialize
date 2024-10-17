@@ -28,8 +28,8 @@ one
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 true 1 1 1
-remote2 true 1 1 1
+remote1 true 2 1 1
+remote2 true 2 1 1
 
 > SELECT s.name,
   SUM(u.updates_committed)
@@ -63,8 +63,8 @@ two
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 true 2 2 2
-remote2 true 2 2 2
+remote1 true 4 2 2
+remote2 true 4 2 2
 
 > SELECT s.name,
   SUM(u.updates_committed)

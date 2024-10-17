@@ -27,11 +27,13 @@ abc:abc
 
 > CREATE SOURCE redpanda_bytes
   IN CLUSTER canary_sources
-  FROM KAFKA CONNECTION redpanda_conn (TOPIC 'testdrive-bytes-${testdrive.seed}')
+  FROM KAFKA CONNECTION redpanda_conn (TOPIC 'testdrive-bytes-${testdrive.seed}');
+
+> CREATE TABLE redpanda_bytes_tbl FROM SOURCE redpanda_bytes (REFERENCE "testdrive-bytes-${testdrive.seed}")
   FORMAT BYTES
   ENVELOPE NONE;
 
-> CREATE MATERIALIZED VIEW redpanda_bytes_view AS SELECT COUNT(*) AS cnt FROM redpanda_bytes;
+> CREATE MATERIALIZED VIEW redpanda_bytes_view AS SELECT COUNT(*) AS cnt FROM redpanda_bytes_tbl;
 
 > CREATE DEFAULT INDEX ON redpanda_bytes_view;
 

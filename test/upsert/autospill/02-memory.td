@@ -17,6 +17,8 @@ $ kafka-create-topic topic=autospill
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-autospill-${testdrive.seed}'
   )
+
+> CREATE TABLE autospill_tbl FROM SOURCE autospill (REFERENCE "testdrive-autospill-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
@@ -25,7 +27,7 @@ $ kafka-ingest format=bytes topic=autospill key-format=bytes key-terminator=:
 bird:goose
 animal:whale
 
-> SELECT count(*) from autospill;
+> SELECT count(*) from autospill_tbl;
 2
 
 > SELECT

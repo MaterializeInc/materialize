@@ -12,13 +12,9 @@
 > SELECT COUNT(*) FROM a_view;
 10
 
-# Verify that we cannot create multiple materializations of a persisted source, even after restart.
-#! CREATE MATERIALIZED VIEW a_view_second_materialization AS SELECT * FROM re_created;
-#contains:Cannot re-materialize source re_created
-
 > DROP VIEW a_view;
 
-> CREATE VIEW a_view AS SELECT * FROM re_created;
+> CREATE VIEW a_view AS SELECT * FROM re_created_tbl;
 > CREATE DEFAULT INDEX ON a_view;
 
 > SELECT COUNT(*) FROM a_view;

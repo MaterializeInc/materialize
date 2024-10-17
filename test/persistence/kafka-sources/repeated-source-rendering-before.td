@@ -31,23 +31,21 @@ $ kafka-ingest format=avro topic=re-created schema=${schema} repeat=10
 
 > CREATE SOURCE re_created
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-re-created-${testdrive.seed}')
+
+> CREATE TABLE re_created_tbl FROM SOURCE re_created (REFERENCE "testdrive-re-created-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
 
-> CREATE VIEW a_view AS SELECT * FROM re_created;
+> CREATE VIEW a_view AS SELECT * FROM re_created_tbl;
 > CREATE DEFAULT INDEX ON a_view;
 
 > SELECT COUNT(*) FROM a_view;
 10
 
-# Verify that we cannot create multiple materializations of a persisted source.
-#! CREATE MATERIALIZED VIEW a_view_second_materialization AS SELECT * FROM re_created;
-# contains:Cannot re-materialize source re_created
-
 > DROP VIEW a_view;
 
-> CREATE VIEW a_view AS SELECT * FROM re_created;
+> CREATE VIEW a_view AS SELECT * FROM re_created_tbl;
 > CREATE DEFAULT INDEX ON a_view;
 
 > SELECT COUNT(*) FROM a_view;

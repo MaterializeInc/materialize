@@ -98,20 +98,20 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 1} {"before": {"row": {"id": 1, "creature": "mudskipper"}}, "after": {"row": {"id": 1, "creature": "salamander"}}, "op": "u", "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 {"id": 1} {"before": {"row": {"id": 1, "creature": "salamander"}}, "after": {"row": {"id": 1, "creature": "lizard"}}, "op": "u", "source": {"file": "binlog3", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-! CREATE SOURCE doin_upsert
+> CREATE SOURCE doin_upsert
   IN CLUSTER test_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+
+! CREATE TABLE doin_upsert_tbl FROM SOURCE doin_upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 contains:ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified
 
-> CREATE SOURCE doin_upsert
-  IN CLUSTER test_cluster
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+> CREATE TABLE doin_upsert_tbl FROM SOURCE doin_upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM doin_upsert
+> SELECT * FROM doin_upsert_tbl
 id creature
 -----------
 1  lizard
@@ -119,7 +119,7 @@ id creature
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=2
 {"id": 1} {"before": {"row": {"id": 1, "creature": "lizard"}}, "after": {"row": {"id": 1, "creature": "dino"}}, "op": "u", "source": {"file": "binlog4", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT * FROM doin_upsert
+> SELECT * FROM doin_upsert_tbl
 id creature
 -----------
 1  dino
@@ -128,7 +128,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 2} {"before": null, "after": {"row": {"id": 2, "creature": "archeopteryx"}}, "op": "c", "source": {"file": "binlog5", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 {"id": 2} {"before": {"row": {"id": 2, "creature": "archeopteryx"}}, "after": {"row": {"id": 2, "creature": "velociraptor"}}, "op": "u", "source": {"file": "binlog6", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT * FROM doin_upsert ORDER BY creature
+> SELECT * FROM doin_upsert_tbl ORDER BY creature
 id creature
 ------------
 1  dino
@@ -139,7 +139,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 3} {"before": {"row": {"id": 3, "creature": "protoceratops"}}, "after": {"row": {"id": 3, "creature": "triceratops"}}, "op": "u", "source": {"file": "binlog7", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 {"id": 3} {"before": {"row": {"id": 3, "creature": "protoceratops"}}, "after": {"row": {"id": 3, "creature": "triceratops"}}, "op": "u", "source": {"file": "binlog8", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT * FROM doin_upsert WHERE id = 3
+> SELECT * FROM doin_upsert_tbl WHERE id = 3
 id creature
 -----------
 3  triceratops
@@ -148,14 +148,16 @@ id creature
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=5
 {"id": 4} {"before": null, "after": {"row": {"id": 4, "creature": "moros"}}, "op": "c", "source": {"file": "binlog9", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT creature FROM doin_upsert WHERE id = 4
+> SELECT creature FROM doin_upsert_tbl WHERE id = 4
 creature
 --------
 moros
 
 # [btv] uncomment if we bring back classic debezium mode
-# ! CREATE SOURCE doin_upsert_metadata
+# > CREATE SOURCE doin_upsert_metadata
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+#
+# ! CREATE TABLE doin_upsert_metadata_tbl FROM SOURCE doin_upsert_metadata (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   INCLUDE OFFSET
 #   ENVELOPE DEBEZIUM
@@ -164,11 +166,13 @@ moros
 > CREATE SOURCE doin_upsert_metadata
   IN CLUSTER test_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+
+> CREATE TABLE doin_upsert_metadata_tbl FROM SOURCE doin_upsert_metadata (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET AS test_kafka_offset
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM doin_upsert_metadata WHERE id = 4
+> SELECT * FROM doin_upsert_metadata_tbl WHERE id = 4
 id creature partition test_kafka_offset
 ---------------------------------------
 4  moros    0         8
@@ -176,19 +180,19 @@ id creature partition test_kafka_offset
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=6
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": null, "op": "d", "source": {"file": "binlog10", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT creature FROM doin_upsert WHERE id = 4
+> SELECT creature FROM doin_upsert_tbl WHERE id = 4
 creature
 --------
 
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=7
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": {"row": {"id": 4, "creature": "chicken"}}, "op": "u", "source": {"file": "binlog11", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT creature FROM doin_upsert WHERE id = 4
+> SELECT creature FROM doin_upsert_tbl WHERE id = 4
 creature
 --------
 chicken
 
-> SELECT * FROM doin_upsert WHERE id = 3
+> SELECT * FROM doin_upsert_tbl WHERE id = 3
 id creature
 -----------
 3  triceratops
@@ -197,10 +201,12 @@ id creature
 > CREATE SOURCE upsert_fast_forward
   IN CLUSTER test_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET = [6], TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+
+> CREATE TABLE upsert_fast_forward_tbl FROM SOURCE upsert_fast_forward (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM upsert_fast_forward WHERE id = 3
+> SELECT * FROM upsert_fast_forward_tbl WHERE id = 3
 id creature
 -----------
 3  triceratops
@@ -209,11 +215,13 @@ id creature
 > CREATE SOURCE upsert_metadata
   IN CLUSTER test_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+
+> CREATE TABLE upsert_metadata_tbl FROM SOURCE upsert_metadata (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET, PARTITION
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM upsert_metadata
+> SELECT * FROM upsert_metadata_tbl
 id   creature      offset  partition
 ------------------------------------
 1    dino          3       0
@@ -225,11 +233,13 @@ id   creature      offset  partition
 > CREATE SOURCE upsert_metadata_reordered
   IN CLUSTER test_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+
+> CREATE TABLE upsert_metadata_reordered_tbl FROM SOURCE upsert_metadata_reordered (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET
   ENVELOPE DEBEZIUM
 
-> SELECT * FROM upsert_metadata_reordered
+> SELECT * FROM upsert_metadata_reordered_tbl
 id   creature      partition  offset
 ------------------------------------
 1    dino          0          3
@@ -241,7 +251,7 @@ id   creature      partition  offset
 
 > ALTER CONNECTION kafka_conn SET (broker = '${testdrive.kafka-addr}') WITH (validate = true);
 
-> SELECT * FROM doin_upsert WHERE id = 3
+> SELECT * FROM doin_upsert_tbl WHERE id = 3
 id creature
 -----------
 3  triceratops
@@ -249,7 +259,7 @@ id creature
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=7
 {"id": 3} {"before": {"row": {"id": 3, "creature": "triceratops"}}, "after": {"row": {"id": 3, "creature": "altered"}}, "op": "u", "source": {"file": "binlog11", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> SELECT * FROM doin_upsert WHERE id = 3
+> SELECT * FROM doin_upsert_tbl WHERE id = 3
 id creature
 -----------
 3  altered

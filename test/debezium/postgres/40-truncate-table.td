@@ -26,11 +26,13 @@ $ schema-registry-wait topic=postgres.public.truncate_table
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE truncate_table
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.truncate_table')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.truncate_table');
+
+> CREATE TABLE truncate_table_tbl FROM SOURCE truncate_table (REFERENCE "postgres.public.truncate_table")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM truncate_table;
+> SELECT * FROM truncate_table_tbl;
 1
 2
 3
@@ -40,5 +42,5 @@ TRUNCATE TABLE truncate_table;
 INSERT INTO truncate_table VALUES (2),(3),(4);
 
 # TODO: database-issues#8602
-# ! SELECT * FROM truncate_table;
+# ! SELECT * FROM truncate_table_tbl;
 # contains:table was truncated

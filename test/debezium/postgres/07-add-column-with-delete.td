@@ -27,11 +27,13 @@ $ schema-registry-wait topic=postgres.public.alter_add_column_with_delete
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE alter_add_column_with_delete
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_add_column_with_delete')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_add_column_with_delete');
+
+> CREATE TABLE alter_add_column_with_delete_tbl FROM SOURCE alter_add_column_with_delete (REFERENCE "postgres.public.alter_add_column_with_delete")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT f1 FROM alter_add_column_with_delete;
+> SELECT f1 FROM alter_add_column_with_delete_tbl;
 123
 123
 123
@@ -46,7 +48,7 @@ DELETE FROM alter_add_column_with_delete WHERE new_column = 2;
 # Even though we do not have new_column in our source, we expect that the
 # updates above have landed on the appropriate distinct rows
 
-> SELECT f1 FROM alter_add_column_with_delete;
+> SELECT f1 FROM alter_add_column_with_delete_tbl;
 123
 123
 123
@@ -55,5 +57,5 @@ DELETE FROM alter_add_column_with_delete WHERE new_column = 2;
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DELETE FROM alter_add_column_with_delete WHERE new_column = 1;
 
-> SELECT COUNT(*) FROM alter_add_column_with_delete;
+> SELECT COUNT(*) FROM alter_add_column_with_delete_tbl;
 0
