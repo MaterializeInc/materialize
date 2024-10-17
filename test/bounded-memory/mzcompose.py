@@ -587,8 +587,6 @@ SCENARIOS = [
         name="table-insert-delete",
         pre_restart=dedent(
             """
-            > SET statement_timeout = '600 s';
-
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET max_result_size = 2147483648;
@@ -1149,15 +1147,20 @@ def run_scenario(
         )
 
         testdrive_timeout_arg = "--default-timeout=5m"
+        statement_timeout = "> SET statement_timeout = '600s';\n"
 
         c.up("testdrive", persistent=True)
-        c.testdrive(scenario.pre_restart, args=[testdrive_timeout_arg])
+        c.testdrive(
+            statement_timeout + scenario.pre_restart, args=[testdrive_timeout_arg]
+        )
 
         # Restart Mz to confirm that re-hydration is also bounded memory
         c.kill("materialized", "clusterd")
         c.up("materialized", "clusterd")
 
-        c.testdrive(scenario.post_restart, args=[testdrive_timeout_arg])
+        c.testdrive(
+            statement_timeout + scenario.post_restart, args=[testdrive_timeout_arg]
+        )
 
 
 def try_run_scenario(
