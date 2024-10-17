@@ -52,8 +52,7 @@ GRANT ALL ON public.* TO priv;
 ! CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR SCHEMAS (public, other);
-contains:No tables found in referenced schemas
-detail:missing schemas: other
+contains:no tables found in referenced schemas: "other"
 
 #
 # SELECT errors
@@ -67,8 +66,7 @@ GRANT ALL ON other TO priv;
 ! CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR SCHEMAS (public, other);
-contains:No tables found in referenced schemas
-detail:missing schemas: other
+contains:no tables found in referenced schemas: "other"
 
 $ mysql-execute name=mysql
 CREATE TABLE other.u (a int);

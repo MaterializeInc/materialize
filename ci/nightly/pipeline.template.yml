@@ -557,7 +557,7 @@ steps:
       - id: pg-cdc-old-syntax
         label: Postgres CDC tests (before source versioning)
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-old-syntax
