@@ -65,8 +65,14 @@ class SinkUpsert(Check):
                 $ kafka-ingest format=avro key-format=avro topic=sink-source key-schema=${keyschema} schema=${schema} repeat=1000
                 {"key1": "D3${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
-                > CREATE SOURCE sink_source
+                >[version<11900] CREATE SOURCE sink_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-source-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE UPSERT
+
+                >[version>=11900] CREATE SOURCE sink_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-source-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE sink_source FROM SOURCE sink_source_src (REFERENCE "testdrive-sink-source-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -142,18 +148,36 @@ class SinkUpsert(Check):
 
                 # We check the contents of the sink topics by re-ingesting them.
 
-                > CREATE SOURCE sink_view1
+                >[version<11900] CREATE SOURCE sink_view1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink1')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
-                > CREATE SOURCE sink_view2
+                >[version>=11900] CREATE SOURCE sink_view1_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink1')
+                >[version>=11900] CREATE TABLE sink_view1 FROM SOURCE sink_view1_src (REFERENCE "sink-sink1")
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version<11900] CREATE SOURCE sink_view2
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink2')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
-                > CREATE SOURCE sink_view3
+                >[version>=11900] CREATE SOURCE sink_view2_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink2')
+                >[version>=11900] CREATE TABLE sink_view2 FROM SOURCE sink_view2_src (REFERENCE "sink-sink2")
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version<11900] CREATE SOURCE sink_view3
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink3')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version>=11900] CREATE SOURCE sink_view3_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink3')
+                >[version>=11900] CREATE TABLE sink_view3 FROM SOURCE sink_view3_src (REFERENCE "sink-sink3")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -194,11 +218,13 @@ class SinkUpsert(Check):
                 C I3 1000
                 C U3 1000
 
-                > DROP SOURCE sink_view1 CASCADE;
+                >[version<11900] DROP SOURCE sink_view1 CASCADE;
+                >[version<11900] DROP SOURCE sink_view2 CASCADE;
+                >[version<11900] DROP SOURCE sink_view3 CASCADE;
 
-                > DROP SOURCE sink_view2 CASCADE;
-
-                > DROP SOURCE sink_view3 CASCADE;
+                >[version>=11900] DROP SOURCE sink_view1_src CASCADE;
+                >[version>=11900] DROP SOURCE sink_view2_src CASCADE;
+                >[version>=11900] DROP SOURCE sink_view3_src CASCADE;
             """
             )
         )
@@ -255,8 +281,14 @@ class SinkTables(Check):
                 {"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"f1","type":"int"},{"name":"f2","type":["null","string"]}]}]},{"name":"after","type":["null","row"]}]}
 
                 # We check the contents of the sink topics by re-ingesting them.
-                > CREATE SOURCE sink_large_transaction_source
+                >[version<11900] CREATE SOURCE sink_large_transaction_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version>=11900] CREATE SOURCE sink_large_transaction_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE sink_large_transaction_source FROM SOURCE sink_large_transaction_source_src (REFERENCE "testdrive-sink-large-transaction-sink-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -296,7 +328,9 @@ class SinkTables(Check):
                 y 0
                 z 100000
 
-                > DROP SOURCE sink_large_transaction_source CASCADE;
+                >[version<11900] DROP SOURCE sink_large_transaction_source CASCADE;
+
+                >[version>=11900] DROP SOURCE sink_large_transaction_source_src CASCADE;
             """
             )
         )
@@ -328,8 +362,14 @@ class SinkNullDefaults(Check):
                 $ kafka-ingest format=avro key-format=avro topic=sink-source-null key-schema=${keyschema} schema=${schema} repeat=1000
                 {"key1": "D3${kafka-ingest.iteration}"} {"f1": null, "f2": {"long": ${kafka-ingest.iteration}}}
 
-                > CREATE SOURCE sink_source_null
+                >[version<11900] CREATE SOURCE sink_source_null
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-source-null-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE UPSERT
+
+                >[version>=11900] CREATE SOURCE sink_source_null_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-source-null-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE sink_source_null FROM SOURCE sink_source_null_src (REFERENCE "testdrive-sink-source-null-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -435,18 +475,36 @@ class SinkNullDefaults(Check):
 
                 # We check the contents of the sink topics by re-ingesting them.
 
-                > CREATE SOURCE sink_view_null1
+                >[version<11900] CREATE SOURCE sink_view_null1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-null1')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
-                > CREATE SOURCE sink_view_null2
+                >[version>=11900] CREATE SOURCE sink_view_null1_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-null1')
+                >[version>=11900] CREATE TABLE sink_view_null1 FROM SOURCE sink_view_null1_src (REFERENCE "sink-sink-null1")
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version<11900] CREATE SOURCE sink_view_null2
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-null2')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
-                > CREATE SOURCE sink_view_null3
+                >[version>=11900] CREATE SOURCE sink_view_null2_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-null2')
+                >[version>=11900] CREATE TABLE sink_view_null2 FROM SOURCE sink_view_null2_src (REFERENCE "sink-sink-null2")
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version<11900] CREATE SOURCE sink_view_null3
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-null3')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version>=11900] CREATE SOURCE sink_view_null3_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-null3')
+                >[version>=11900] CREATE TABLE sink_view_null3 FROM SOURCE sink_view_null3_src (REFERENCE "sink-sink-null3")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -541,11 +599,13 @@ class SinkNullDefaults(Check):
                 A <null> U3 1000
                 B <null> I2 1000
 
-                > DROP SOURCE sink_view_null1 CASCADE;
+                >[version<11900] DROP SOURCE sink_view_null1 CASCADE;
+                >[version<11900] DROP SOURCE sink_view_null2 CASCADE;
+                >[version<11900] DROP SOURCE sink_view_null3 CASCADE;
 
-                > DROP SOURCE sink_view_null2 CASCADE;
-
-                > DROP SOURCE sink_view_null3 CASCADE;
+                >[version>=11900] DROP SOURCE sink_view_null1_src CASCADE;
+                >[version>=11900] DROP SOURCE sink_view_null2_src CASCADE;
+                >[version>=11900] DROP SOURCE sink_view_null3_src CASCADE;
             """
             )
         )
@@ -577,8 +637,14 @@ class SinkComments(Check):
                 $ kafka-ingest format=avro key-format=avro topic=sink-source-comments key-schema=${keyschema} schema=${schema} repeat=1000
                 {"key1": "D3${kafka-ingest.iteration}"} {"f1": null, "f2": {"long": ${kafka-ingest.iteration}}}
 
-                > CREATE SOURCE sink_source_comments
+                >[version<11900] CREATE SOURCE sink_source_comments
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-source-comments-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE UPSERT
+
+                >[version>=11900] CREATE SOURCE sink_source_comments_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-source-comments-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE sink_source_comments FROM SOURCE sink_source_comments_src (REFERENCE "testdrive-sink-source-comments-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -710,18 +776,36 @@ class SinkComments(Check):
 
                 # We check the contents of the sink topics by re-ingesting them.
 
-                > CREATE SOURCE sink_view_comments1
+                >[version<11900] CREATE SOURCE sink_view_comments1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-comments1')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
-                > CREATE SOURCE sink_view_comments2
+                >[version>=11900] CREATE SOURCE sink_view_comments1_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-comments1')
+                >[version>=11900] CREATE TABLE sink_view_comments1 FROM SOURCE sink_view_comments1_src (REFERENCE "sink-sink-comments1")
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version<11900] CREATE SOURCE sink_view_comments2
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-comments2')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
-                > CREATE SOURCE sink_view_comments3
+                >[version>=11900] CREATE SOURCE sink_view_comments2_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-comments2')
+                >[version>=11900] CREATE TABLE sink_view_comments2 FROM SOURCE sink_view_comments2_src (REFERENCE "sink-sink-comments2")
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version<11900] CREATE SOURCE sink_view_comments3
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-comments3')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version>=11900] CREATE SOURCE sink_view_comments3_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-comments3')
+                >[version>=11900] CREATE TABLE sink_view_comments3 FROM SOURCE sink_view_comments3_src (REFERENCE "sink-sink-comments3")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -816,11 +900,13 @@ class SinkComments(Check):
                 A <null> U3 1000
                 B <null> I2 1000
 
-                > DROP SOURCE sink_view_comments1 CASCADE;
+                >[version<11900] DROP SOURCE sink_view_comments1 CASCADE;
+                >[version<11900] DROP SOURCE sink_view_comments2 CASCADE;
+                >[version<11900] DROP SOURCE sink_view_comments3 CASCADE;
 
-                > DROP SOURCE sink_view_comments2 CASCADE;
-
-                > DROP SOURCE sink_view_comments3 CASCADE;
+                >[version>=11900] DROP SOURCE sink_view_comments1_src CASCADE;
+                >[version>=11900] DROP SOURCE sink_view_comments2_src CASCADE;
+                >[version>=11900] DROP SOURCE sink_view_comments3_src CASCADE;
             """
             )
         )
@@ -971,8 +1057,14 @@ class AlterSink(Check):
                 """
                 # We check the contents of the sink topics by re-ingesting them.
 
-                > CREATE SOURCE sink_alter_source
+                >[version<11900] CREATE SOURCE sink_alter_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'alter-sink')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version>=11900] CREATE SOURCE sink_alter_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'alter-sink')
+                >[version>=11900] CREATE TABLE sink_alter_source FROM SOURCE sink_alter_source_src (REFERENCE "alter-sink")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -981,7 +1073,9 @@ class AlterSink(Check):
                 true 11 bb
                 true 102 ccc
 
-                > DROP SOURCE sink_alter_source CASCADE;
+                >[version<11900] DROP SOURCE sink_alter_source CASCADE;
+
+                >[version>=11900] DROP SOURCE sink_alter_source_src CASCADE;
             """
             )
         )
@@ -1047,8 +1141,14 @@ class AlterSinkOrder(Check):
                 """
                 # We check the contents of the sink topics by re-ingesting them.
 
-                > CREATE SOURCE sink_alter_order_source
+                >[version<11900] CREATE SOURCE sink_alter_order_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'alter-sink-order')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version>=11900] CREATE SOURCE sink_alter_order_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'alter-sink-order')
+                >[version>=11900] CREATE TABLE sink_alter_order_source FROM SOURCE sink_alter_order_source_src (REFERENCE "alter-sink-order")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -1060,7 +1160,9 @@ class AlterSinkOrder(Check):
                 true 12 cc
                 true 102 ccc
 
-                > DROP SOURCE sink_alter_order_source CASCADE;
+                >[version<11900] DROP SOURCE sink_alter_order_source CASCADE;
+
+                >[version>=11900] DROP SOURCE sink_alter_order_source_src CASCADE;
             """
             )
         )
@@ -1113,8 +1215,15 @@ class SinkFormat(Check):
             dedent(
                 """
                 # We check the contents of the sink topics by re-ingesting them.
-                > CREATE SOURCE sink_format_source
+                >[version<11900] CREATE SOURCE sink_format_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-format-sink-${testdrive.seed}')
+                  KEY FORMAT TEXT
+                  VALUE FORMAT JSON
+                  ENVELOPE UPSERT
+
+                >[version>=11900] CREATE SOURCE sink_format_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-format-sink-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE sink_format_source FROM SOURCE sink_format_source_src (REFERENCE "testdrive-sink-format-sink-${testdrive.seed}")
                   KEY FORMAT TEXT
                   VALUE FORMAT JSON
                   ENVELOPE UPSERT
@@ -1124,7 +1233,9 @@ class SinkFormat(Check):
                 2 B 20
                 3 C 30
 
-                > DROP SOURCE sink_format_source CASCADE;
+                >[version<11900] DROP SOURCE sink_format_source CASCADE;
+
+                >[version>=11900] DROP SOURCE sink_format_source_src CASCADE;
             """
             )
         )
@@ -1189,8 +1300,15 @@ class SinkPartitionByDebezium(Check):
                 {"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"f1","type":"int"},{"name":"f2","type":["null","string"]}]}]},{"name":"after","type":["null","row"]}]}
 
                 # We check the contents of the sink topics by re-ingesting them.
-                > CREATE SOURCE sink_partition_by_debezium_source
+                >[version<11900] CREATE SOURCE sink_partition_by_debezium_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-partition-by-debezium-sink-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version>=11900] CREATE SOURCE sink_partition_by_debezium_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-partition-by-debezium-sink-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE sink_partition_by_debezium_source
+                  FROM SOURCE sink_partition_by_debezium_source_src (REFERENCE "testdrive-sink-partition-by-debezium-sink-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -1230,7 +1348,8 @@ class SinkPartitionByDebezium(Check):
                 y 0
                 z 100000
 
-                > DROP SOURCE sink_partition_by_debezium_source CASCADE;
+                >[version<11900] DROP SOURCE sink_partition_by_debezium_source CASCADE;
+                >[version>=11900] DROP SOURCE sink_partition_by_debezium_source_src CASCADE;
 
                 # TODO: kafka-verify-data when it can deal with being run twice, to check the actual partitioning
             """

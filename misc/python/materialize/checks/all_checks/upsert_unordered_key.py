@@ -79,8 +79,15 @@ class UpsertUnorderedKey(Check):
                 $ kafka-ingest format=avro topic=upsert-unordered-key key-format=avro key-schema=${keyschema} schema=${schema}
                 {"b": "bdata", "a": 1} {"before": {"row": {"a": 1, "data": "fish", "b": "bdata"}}, "after": {"row": {"a": 1, "data": "fish2", "b": "bdata"}}}
 
-                > CREATE SOURCE upsert_unordered_key
+                >[version<11900] CREATE SOURCE upsert_unordered_key
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-unordered-key-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+
+                >[version>=11900] CREATE SOURCE upsert_unordered_key_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-unordered-key-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE upsert_unordered_key
+                  FROM SOURCE upsert_unordered_key_src (REFERENCE "testdrive-upsert-unordered-key-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
                 """
