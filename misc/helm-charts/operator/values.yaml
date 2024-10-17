@@ -9,22 +9,41 @@
 
 operator:
   image:
-    repository: materialized/operator
-    tag: latest
+    repository: materialize/orchestratord
+    tag: v0.121.0-dev.0--main.g0c02fecf8c5a05f697925366a1c2baae20472b81
     pullPolicy: IfNotPresent
+  args:
+    startupLogFilter: "INFO,mz_orchestratord=TRACE"
+    cloudProvider: "local"
+    region: "kind"
+    manageCockroachDatabase: true
+    localDevelopment: true
+    environmentdTargetArch: "amd64"
   resources:
     requests:
-      cpu: 1000m
-      memory: 1024Mi
+      cpu: 100m
+      memory: 128Mi
     limits:
-      memory: 2056Mi
+      cpu: 500m
+      memory: 512Mi
+
+# TODO: Change with Postgres
+metadatadb:
+  endpoint: "cockroachdb-public.cockroachdb.svc.cluster.local"
+  port: 26257
+  username: "environment-controller"
+  password: "password"
+  caCert: |
+    -----BEGIN CERTIFICATE-----
+    TODO
+    -----END CERTIFICATE-----
 
 rbac:
   create: true
 
 serviceAccount:
   create: true
-  name: ""
+  name: "orchestratord"
 
 observability:
   enabled: false
@@ -34,3 +53,13 @@ observability:
 networkPolicies:
   enabled: false
   useNativeKubernetesPolicy: true
+
+# Users can add environment configurations here:
+# materializeEnvironments:
+#   - name: default-environment
+#     environmentdImageRef: materialize/environmentd:v0.119.2
+#     environmentdCpuAllocation: "500m"
+#     environmentdMemoryAllocation: "1Gi"
+#     requestRollout: 22222222-2222-2222-2222-222222222222
+#     forceRollout: 33333333-3333-3333-3333-333333333333
+#     inPlaceRollout: false
