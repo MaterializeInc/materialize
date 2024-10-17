@@ -18,7 +18,15 @@ cd "$(dirname "$0")/../../../.."
 . misc/shlib/shlib.bash
 
 if [[ ! "${MZDEV_NO_BAZEL_CHECK:-}" ]]; then
-  try bin/bazel gen
+  if try bin/bazel gen; then
+      :
+  else
+      if [ $? -eq 32 ]; then
+          # Network problems, retry in a bit
+          sleep 20
+          try bin/bazel gen
+      fi
+  fi
 
   # Make sure we didn't generate any changes.
   try git diff --compact-summary --exit-code -- '*/BUILD.bazel'
