@@ -75,8 +75,9 @@ message ClusterIntrospectionSourceIndexKey {
 }
 
 message ClusterIntrospectionSourceIndexValue {
-  uint64 index_id = 1;
-  uint32 oid = 2;
+  uint64 item_id = 1;
+  uint64 index_id = 2;
+  uint32 oid = 3;
 }
 
 message ClusterReplicaKey {

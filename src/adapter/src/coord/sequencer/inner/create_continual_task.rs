@@ -57,8 +57,8 @@ impl Coordinator {
         // Put a placeholder in the catalog so the optimizer can find something
         // for the sink_id.
         let item_id = self.catalog_mut().allocate_user_id().await?;
-        // TODO(alter_table): Allocate a unique GlobalId
-        let collection_id = item_id.to_global_id();
+        let collection_id = self.catalog_mut().allocate_user_global_id().await?;
+
         let collections = [(RelationVersion::root(), collection_id)]
             .into_iter()
             .collect();

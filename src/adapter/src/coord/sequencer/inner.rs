@@ -374,8 +374,8 @@ impl Coordinator {
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
         let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
         let item_id = self.catalog_mut().allocate_user_id().await?;
-        // TODO(alter_table): Allocate a unique GlobalId.
-        let collection_id = item_id.to_global_id();
+        let collection_id = self.catalog_mut().allocate_user_global_id().await?;
+
         let plan = self.plan_statement(
             session,
             Statement::CreateSubsource(subsource_stmt),
@@ -411,7 +411,16 @@ impl Coordinator {
         let pcx = plan::PlanContext::zero();
         let scx = StatementContext::new(Some(&pcx), &conn_catalog);
 
-        let source = self.catalog().get_entry(source_name.item_id());
+        let entry = self.catalog().get_entry(source_name.item_id());
+        let source = entry.source().ok_or_else(|| {
+            AdapterError::internal(
+                "plan alter source",
+                format!("expected Source found {entry:?}"),
+            )
+        })?;
+
+        let item_id = entry.item_id();
+        let ingestion_id = source.global_id();
         let subsource_stmts = generate_subsource_statements(&scx, source_name, subsources)?;
 
         for subsource_stmt in subsource_stmts {
@@ -428,8 +437,8 @@ impl Coordinator {
 
         Ok((
             Plan::AlterSource(mz_sql::plan::AlterSourcePlan {
-                item_id: source_id,
-                ingestion_id: source_id.to_global_id(),
+                item_id,
+                ingestion_id,
                 action,
             }),
             ResolvedIds(BTreeSet::new()),
@@ -489,8 +498,8 @@ impl Coordinator {
         };
 
         let item_id = self.catalog_mut().allocate_user_id().await?;
-        // TODO(alter_table): Allocate a unique GlobalId.
-        let collection_id = item_id.to_global_id();
+        let collection_id = self.catalog_mut().allocate_user_global_id().await?;
+
         let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
         let of_source = ResolvedItemName::Item {
             id: item_id,
@@ -914,8 +923,8 @@ impl Coordinator {
             None
         };
         let table_id = self.catalog_mut().allocate_user_id().await?;
-        // TODO(alter_table): Allocate a unique GlobalId.
-        let collection_id = table_id.to_global_id();
+        let collection_id = self.catalog_mut().allocate_user_global_id().await?;
+
         let collections = [(RelationVersion::root(), collection_id)]
             .into_iter()
             .collect();
@@ -1105,8 +1114,7 @@ impl Coordinator {
 
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
-        // TODO(alter_table): Allocate a unique GlobalId.
-        let export_id = id.to_global_id();
+        let export_id = return_if_err!(self.catalog_mut().allocate_user_global_id().await, ctx);
 
         if let Some(cluster) = self.catalog().try_get_cluster(in_cluster) {
             mz_ore::soft_assert_or_log!(
@@ -1176,7 +1184,7 @@ impl Coordinator {
             }
         };
 
-        self.create_storage_export(id.to_global_id(), &catalog_sink)
+        self.create_storage_export(export_id, &catalog_sink)
             .await
             .unwrap_or_terminate("cannot fail to create exports");
 

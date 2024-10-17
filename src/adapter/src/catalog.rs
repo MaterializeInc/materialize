@@ -37,6 +37,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
+use mz_ore::cast::CastInto;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::option::FallibleMapExt;
@@ -624,6 +625,15 @@ impl Catalog {
             .await
             .get_next_user_item_id()
             .await
+            .err_into()
+    }
+
+    pub async fn allocate_user_global_id(&self) -> Result<GlobalId, Error> {
+        self.storage()
+            .await
+            .allocate_user_global_id()
+            .await
+            .maybe_terminate("allocating user global ids")
             .err_into()
     }
 
@@ -1386,27 +1396,18 @@ impl ConnCatalog<'_> {
 
 impl ExprHumanizer for ConnCatalog<'_> {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        self.state
-            .entry_by_id
-            .get(&id.to_item_id())
-            .map(|entry| entry.name())
-            .map(|name| self.resolve_full_name(name).to_string())
+        let entry = self.state.resolve_global_id(&id);
+        Some(self.resolve_full_name(entry.name()).to_string())
     }
 
     fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
-        self.state
-            .entry_by_id
-            .get(&id.to_item_id())
-            .map(|entry| entry.name())
-            .map(|name| name.item.clone())
+        let entry = self.state.resolve_global_id(&id);
+        Some(entry.name().item.clone())
     }
 
     fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>> {
-        self.state
-            .entry_by_id
-            .get(&id.to_item_id())
-            .map(|entry| entry.name())
-            .map(|name| self.resolve_full_name(name).into_parts())
+        let entry = self.state.resolve_global_id(&id);
+        Some(self.resolve_full_name(entry.name()).into_parts())
     }
 
     fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
@@ -1422,7 +1423,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 custom_id: Some(global_id),
                 ..
             } => {
-                let item = self.get_item(&global_id.to_item_id());
+                let item = self.resolve_global_id(&global_id);
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
@@ -1437,7 +1438,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 custom_id: Some(id),
                 ..
             } => {
-                let item = self.get_item(&id.to_item_id());
+                let item = self.resolve_global_id(&id);
                 self.minimal_qualification(item.name()).to_string()
             }
             Record { fields, .. } => format!(

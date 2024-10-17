@@ -400,6 +400,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
 {
     fn into_proto(&self) -> proto::ClusterIntrospectionSourceIndexValue {
         proto::ClusterIntrospectionSourceIndexValue {
+            item_id: self.item_id,
             index_id: self.index_id,
             oid: self.oid,
         }
@@ -409,6 +410,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
         proto: proto::ClusterIntrospectionSourceIndexValue,
     ) -> Result<Self, TryFromProtoError> {
         Ok(ClusterIntrospectionSourceIndexValue {
+            item_id: proto.item_id,
             index_id: proto.index_id,
             oid: proto.oid,
         })

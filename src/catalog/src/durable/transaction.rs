@@ -364,7 +364,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, CatalogItemId, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -386,7 +386,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, CatalogItemId, GlobalId)>,
         privileges: Vec<MzAclItem>,
         owner_id: RoleId,
         config: ClusterConfig,
@@ -407,7 +407,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, CatalogItemId, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -431,12 +431,13 @@ impl<'a> Transaction<'a> {
         let introspection_source_indexes: Vec<_> = introspection_source_indexes
             .into_iter()
             .zip(oids)
-            .map(|((builtin, index_id), oid)| (builtin, index_id, oid))
+            .map(|((builtin, item_id, index_id), oid)| (builtin, item_id, index_id, oid))
             .collect();
-        for (builtin, index_id, oid) in introspection_source_indexes {
+        for (builtin, item_id, index_id, oid) in introspection_source_indexes {
             let introspection_source_index = IntrospectionSourceIndex {
                 cluster_id,
                 name: builtin.name.to_string(),
+                item_id,
                 index_id,
                 oid,
             };
@@ -567,6 +568,7 @@ impl<'a> Transaction<'a> {
                 let introspection_source_index = IntrospectionSourceIndex {
                     cluster_id,
                     name,
+                    item_id: index_id.to_item_id(),
                     index_id,
                     oid,
                 };
@@ -673,6 +675,18 @@ impl<'a> Transaction<'a> {
             .collect())
     }
 
+    pub fn allocate_system_global_ids(
+        &mut self,
+        amount: u64,
+    ) -> Result<Vec<GlobalId>, CatalogError> {
+        // TODO(alter_table): Use a new GlobalId allocator.
+        Ok(self
+            .get_and_increment_id_by(SYSTEM_ITEM_ALLOC_KEY.to_string(), amount)?
+            .into_iter()
+            .map(GlobalId::System)
+            .collect())
+    }
+
     pub fn allocate_user_item_ids(
         &mut self,
         amount: u64,
@@ -681,6 +695,15 @@ impl<'a> Transaction<'a> {
             .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), amount)?
             .into_iter()
             .map(CatalogItemId::User)
+            .collect())
+    }
+
+    pub fn allocate_user_global_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
+        // TODO(alter_table): Use a new GlobalId allocator.
+        Ok(self
+            .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), amount)?
+            .into_iter()
+            .map(GlobalId::User)
             .collect())
     }
 
@@ -1549,6 +1572,7 @@ impl<'a> Transaction<'a> {
                 |((cluster_id, name, index_id), oid)| IntrospectionSourceIndex {
                     cluster_id,
                     name,
+                    item_id: index_id.to_item_id(),
                     index_id,
                     oid,
                 },

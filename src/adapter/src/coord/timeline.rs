@@ -332,7 +332,7 @@ impl Coordinator {
         let mut id_bundle = CollectionIdBundle::default();
         for entry in self.catalog().entries() {
             if let TimelineContext::TimelineDependent(entry_timeline) =
-                self.get_timeline_context(entry.id())
+                self.get_timeline_context(entry.latest_global_id())
             {
                 if timeline == &entry_timeline {
                     match entry.item() {

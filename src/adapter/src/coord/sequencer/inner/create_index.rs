@@ -313,12 +313,15 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let item_id = if let ExplainContext::None = explain_ctx {
-            self.catalog_mut().allocate_user_id().await?
+        let (item_id, collection_id) = if let ExplainContext::None = explain_ctx {
+            let item_id = self.catalog_mut().allocate_user_id().await?;
+            let collection_id = self.catalog_mut().allocate_user_global_id().await?;
+            (item_id, collection_id)
         } else {
-            self.allocate_transient_item_id()
+            let item_id = self.allocate_transient_item_id();
+            let collection_id = self.allocate_transient_id();
+            (item_id, collection_id)
         };
-        let collection_id = item_id.to_global_id();
 
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())

@@ -78,7 +78,7 @@ pub struct BuiltinMigrationMetadata {
     // Used to update persisted on disk catalog state
     pub migrated_system_object_mappings: BTreeMap<CatalogItemId, SystemObjectMapping>,
     pub introspection_source_index_updates:
-        BTreeMap<ClusterId, Vec<(LogVariant, String, GlobalId, u32)>>,
+        BTreeMap<ClusterId, Vec<(LogVariant, String, CatalogItemId, GlobalId, u32)>>,
     pub user_item_drop_ops: Vec<CatalogItemId>,
     pub user_item_create_ops: Vec<CreateOp>,
 }
@@ -639,13 +639,19 @@ impl Catalog {
         for entry in sorted_entries {
             let id = entry.item_id();
 
-            let new_item_id = match id {
-                CatalogItemId::System(_) => txn.allocate_system_item_ids(1)?.into_element(),
-                CatalogItemId::User(_) => txn.allocate_user_item_ids(1)?.into_element(),
+            let (new_item_id, new_collection_id) = match id {
+                CatalogItemId::System(_) => {
+                    let item_id = txn.allocate_system_item_ids(1)?.into_element();
+                    let gid = txn.allocate_system_global_ids(1)?.into_element();
+                    (item_id, gid)
+                }
+                CatalogItemId::User(_) => {
+                    let item_id = txn.allocate_user_item_ids(1)?.into_element();
+                    let gid = txn.allocate_user_global_ids(1)?.into_element();
+                    (item_id, gid)
+                }
                 _ => unreachable!("can't migrate id: {id}"),
             };
-            // TODO(alter_table): Allocate a unique GlobalId.
-            let new_collection_id = new_item_id.to_global_id();
 
             let name = state.resolve_full_name(entry.name(), None);
             info!("migrating {name} from {id} to {new_item_id}");
@@ -709,6 +715,7 @@ impl Catalog {
                                         .get(variant)
                                         .expect("all variants have a name")
                                         .to_string(),
+                                    new_item_id,
                                     new_collection_id,
                                     entry.oid(),
                                 ));

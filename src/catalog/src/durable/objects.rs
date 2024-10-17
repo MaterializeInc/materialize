@@ -276,6 +276,7 @@ pub struct ClusterVariantManaged {
 pub struct IntrospectionSourceIndex {
     pub cluster_id: ClusterId,
     pub name: String,
+    pub item_id: CatalogItemId,
     pub index_id: GlobalId,
     pub oid: u32,
 }
@@ -285,6 +286,15 @@ impl DurableType for IntrospectionSourceIndex {
     type Value = ClusterIntrospectionSourceIndexValue;
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
+        let item_id = match self.item_id {
+            CatalogItemId::System(id) => id,
+            CatalogItemId::User(_) => {
+                unreachable!("cluster introspection source index mapping cannot use a User ID")
+            }
+            CatalogItemId::Transient(_) => {
+                unreachable!("cluster introspection source index mapping cannot use a Transient ID")
+            }
+        };
         let index_id = match self.index_id {
             GlobalId::System(id) => id,
             GlobalId::User(_) => {
@@ -303,6 +313,7 @@ impl DurableType for IntrospectionSourceIndex {
                 name: self.name,
             },
             ClusterIntrospectionSourceIndexValue {
+                item_id,
                 index_id,
                 oid: self.oid,
             },
@@ -313,6 +324,7 @@ impl DurableType for IntrospectionSourceIndex {
         Self {
             cluster_id: key.cluster_id,
             name: key.name,
+            item_id: CatalogItemId::System(value.item_id),
             index_id: GlobalId::System(value.index_id),
             oid: value.oid,
         }
@@ -1077,6 +1089,7 @@ pub struct ClusterIntrospectionSourceIndexKey {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterIntrospectionSourceIndexValue {
+    pub(crate) item_id: u64,
     pub(crate) index_id: u64,
     pub(crate) oid: u32,
 }
