@@ -342,7 +342,9 @@ class MySqlExecutor(Executor):
 
         self.mysql_conn.autocommit(True)
         with self.mysql_conn.cursor() as cur:
-            self.execute(cur, f"DROP TABLE IF EXISTS `{self.table}`;")
+            self.execute(cur, "DROP DATABSE IF EXISTS public")
+            self.execute(cur, "CREATE DATABASE public")
+            self.execute(cur, "USE public")
             primary_key = (
                 f", PRIMARY KEY ({', '.join([f'`{key}`' for key in keys])})"
                 if keys
