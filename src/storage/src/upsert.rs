@@ -952,30 +952,28 @@ where
             tokio::select! {
                 Some(persist_event) = persist_input.next() => {
                     tracing::trace!(?persist_event, "persist input");
-                    match persist_event {
-                        AsyncEvent::Data(_ts, data) => {
-                            persist_stash.extend(data.into_iter().map(|((key, value), ts, diff)| {
-                                (key, value, ts, diff)
-                            }))
-                        }
-                        AsyncEvent::Progress(upper) => persist_upper = upper,
-                    };
+
+                    // Buffer as many events as possible. This should be
+                    // bounded, as new data can't be produced in this worker
+                    // until we yield to timely.
+                    let persist_events = [persist_event]
+                        .into_iter()
+                        .chain(std::iter::from_fn(|| persist_input.next().now_or_never().flatten()));
 
                     // Read away as much input as we can.
-                    while let Some(event) = persist_input.next().now_or_never() {
-                        match event {
-                            Some(AsyncEvent::Data(_cap, data)) => {
+                    for persist_event in persist_events {
+                        tracing::trace!(?persist_event, "persist input");
+
+                        match persist_event {
+                            AsyncEvent::Data(_cap, data) => {
                                 persist_stash.extend(data.into_iter().map(|((key, value), ts, diff)| {
                                     (key, value, ts, diff)
                                 }))
                             }
-                            Some(AsyncEvent::Progress(upper)) => persist_upper = upper,
-                            None => {
-                                persist_upper = Antichain::new();
-                                break;
-                            }
+                            AsyncEvent::Progress(upper) => persist_upper = upper,
                         }
                     }
+
                     for (_, value, _ts, diff) in persist_stash.iter_mut() {
                         if let Err(UpsertError::Value(ref mut err)) = value {
                             // If we receive a legacy error in the snapshot we will keep a note of it but
