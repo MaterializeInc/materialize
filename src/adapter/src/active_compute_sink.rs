@@ -429,7 +429,7 @@ impl ActiveCopyTo {
             ActiveComputeSinkRetireReason::Finished => return,
             ActiveComputeSinkRetireReason::Canceled => Err(AdapterError::Canceled),
             ActiveComputeSinkRetireReason::DependencyDropped(d) => Err(AdapterError::Unstructured(
-                anyhow!("copy has been terminated because underlying {d} was dropped"),
+                anyhow!("copy has been terminated because underlying {d} was dropped!$!!"),
             )),
         };
         let _ = self.tx.send(message);

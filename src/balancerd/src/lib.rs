@@ -298,7 +298,7 @@ impl BalancerService {
                         }),
                     })
                     .await;
-                    warn!("pgwire server exited");
+                    warn!("pgwire server exited!!");
                 }
             });
         }
