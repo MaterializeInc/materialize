@@ -434,7 +434,7 @@ where
         next: N,
         read_only: bool,
     ) -> Self {
-        info!("opening PostgresTimestampOracle");
+        info!(config = ?config, "opening PostgresTimestampOracle");
 
         let fallible = || async {
             let metrics = Arc::clone(&config.metrics);
