@@ -979,11 +979,10 @@ async fn purify_create_source(
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
-            let reference_client = SourceReferenceClient::MySql { conn: &mut conn };
-            // This retrieves all tables in the MySQL database outside of the built-in schemas
-            // (mysql, information_schema, etc.)
-            // TODO(database-issues#8624): If a user specifies a table/schema that is in one of the
-            // built-in schemas we need to handle that case.
+            let reference_client = SourceReferenceClient::MySql {
+                conn: &mut conn,
+                include_system_schemas: mysql::references_system_schemas(external_references),
+            };
             retrieved_source_references = reference_client.get_source_references().await?;
 
             let mysql::PurifiedSourceExports {
@@ -1353,7 +1352,12 @@ async fn purify_alter_source(
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
-            let reference_client = SourceReferenceClient::MySql { conn: &mut conn };
+            let requested_references = Some(ExternalReferences::SubsetTables(external_references));
+
+            let reference_client = SourceReferenceClient::MySql {
+                conn: &mut conn,
+                include_system_schemas: mysql::references_system_schemas(&requested_references),
+            };
             let retrieved_source_references = reference_client.get_source_references().await?;
 
             let mysql::PurifiedSourceExports {
@@ -1363,7 +1367,7 @@ async fn purify_alter_source(
             } = mysql::purify_source_exports(
                 &mut conn,
                 &retrieved_source_references,
-                &Some(ExternalReferences::SubsetTables(external_references)),
+                &requested_references,
                 text_columns,
                 exclude_columns,
                 &unresolved_source_name,
@@ -1578,11 +1582,10 @@ async fn purify_create_table_from_source(
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
-            let reference_client = SourceReferenceClient::MySql { conn: &mut conn };
-            // This retrieves all tables in the MySQL database outside of the built-in schemas
-            // (mysql, information_schema, etc.)
-            // TODO(database-issues#8624): If a user specifies a table/schema that is in one of the
-            // built-in schemas we need to handle that case.
+            let reference_client = SourceReferenceClient::MySql {
+                conn: &mut conn,
+                include_system_schemas: mysql::references_system_schemas(&requested_references),
+            };
             retrieved_source_references = reference_client.get_source_references().await?;
 
             let mysql::PurifiedSourceExports {

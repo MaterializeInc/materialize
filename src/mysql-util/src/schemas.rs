@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use itertools::Itertools;
+use maplit::btreeset;
 use regex::Regex;
 
 use mysql_async::prelude::{FromRow, Queryable};
@@ -26,6 +27,17 @@ use crate::desc::{
     MySqlColumnDesc, MySqlColumnMeta, MySqlColumnMetaEnum, MySqlKeyDesc, MySqlTableDesc,
 };
 use crate::{MySqlError, UnsupportedDataType};
+
+/// Built-in system schemas that should be ignored when querying for user-defined tables
+/// since they contain dozens of built-in system tables that are likely not needed.
+pub static SYSTEM_SCHEMAS: LazyLock<BTreeSet<&str>> = LazyLock::new(|| {
+    btreeset! {
+        "information_schema",
+        "performance_schema",
+        "mysql",
+        "sys",
+    }
+});
 
 /// Helper for querying information_schema.columns
 // NOTE: The order of these names *must* match the order of fields of the [`InfoSchema`] struct.
@@ -180,8 +192,12 @@ impl MySqlTableSchema {
 
 /// Request for table schemas from MySQL
 pub enum SchemaRequest<'a> {
-    /// Request schemas for all tables in the database
+    /// Request schemas for all tables in the database, excluding tables in
+    /// the built-in system schemas.
     All,
+    /// Request schemas for all tables in the database, including tables from
+    /// the built-in system schemas.
+    AllWithSystemSchemas,
     /// Request schemas for all tables in the specified schemas/databases
     Schemas(Vec<&'a str>),
     /// Request schemas for all specified tables, specified as (schema_name, table_name)
@@ -205,14 +221,19 @@ where
 {
     let table_rows: Vec<(String, String)> = match schema_request {
         SchemaRequest::All => {
-            // Get all tables in non-system schemas.
-            // TODO(roshan): Many users create user-defined tables in the `mysql` system schema, since mysql doesn't
-            // prevent this. We may want to consider adding a warning for this in the docs, since that schema
-            // contains dozens of built-in system tables that we need to filter out.
-            let table_q = "SELECT table_name, table_schema
+            let table_q = format!(
+                "SELECT table_name, table_schema
                 FROM information_schema.tables
                 WHERE table_type = 'BASE TABLE'
-                AND table_schema NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')";
+                AND table_schema NOT IN ({})",
+                SYSTEM_SCHEMAS.iter().map(|s| format!("'{}'", s)).join(", ")
+            );
+            conn.exec(table_q, ()).await?
+        }
+        SchemaRequest::AllWithSystemSchemas => {
+            let table_q = "SELECT table_name, table_schema
+                FROM information_schema.tables
+                WHERE table_type = 'BASE TABLE'";
             conn.exec(table_q, ()).await?
         }
         SchemaRequest::Schemas(schemas) => {

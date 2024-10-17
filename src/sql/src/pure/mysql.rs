@@ -11,7 +11,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_mysql_util::{validate_source_privileges, MySqlError, MySqlTableDesc, QualifiedTableRef};
+use mz_mysql_util::{
+    validate_source_privileges, MySqlError, MySqlTableDesc, QualifiedTableRef, SYSTEM_SCHEMAS,
+};
 use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -480,4 +482,26 @@ pub(super) async fn purify_source_exports(
         normalized_text_columns,
         normalized_exclude_columns,
     })
+}
+
+/// Checks if the requested external references contain any explicit references
+/// to system schemas, since these are otherwise default excluded when retrieving
+/// tables from MySQL.
+pub(super) fn references_system_schemas(requested_references: &Option<ExternalReferences>) -> bool {
+    match requested_references {
+        Some(requested) => match requested {
+            ExternalReferences::All => false,
+            ExternalReferences::SubsetSchemas(schemas) => schemas
+                .iter()
+                .any(|schema| SYSTEM_SCHEMAS.contains(&schema.as_str())),
+            ExternalReferences::SubsetTables(tables) => tables.iter().any(|table| {
+                SYSTEM_SCHEMAS.contains(
+                    &external_reference_to_table(&table.reference)
+                        .map(|t| t.schema_name)
+                        .unwrap_or_default(),
+                )
+            }),
+        },
+        None => false,
+    }
 }

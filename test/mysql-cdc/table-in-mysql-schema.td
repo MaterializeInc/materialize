@@ -28,33 +28,34 @@ $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 DROP DATABASE IF EXISTS another_schema;
 USE mysql;
-
-# Insert data pre-snapshot
 CREATE TABLE t_in_mysql (f1 INT);
 INSERT INTO t_in_mysql VALUES (1), (2);
+CREATE DATABASE public;
+USE public;
+CREATE TABLE time_zone (f1 INT);
 
 > DROP SOURCE IF EXISTS mz_source;
 
-# TODO(database-issues#8624): Uncomment when addressed
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
-! CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
-contains:No tables found
+! CREATE TABLE timezone FROM SOURCE mz_source (REFERENCE public.timezone);
+contains:reference to public.timezone not found in source
 
-# ! CREATE TABLE timezone FROM SOURCE mz_source (REFERENCE public.timezone);
-# contains:No tables found
+> CREATE TABLE t_in_mysql FROM SOURCE mz_source (REFERENCE mysql.t_in_mysql);
 
-# > CREATE TABLE t_in_mysql FROM SOURCE mz_source (REFERENCE mysql.t_in_mysql);
+> SELECT * FROM t_in_mysql;
+1
+2
 
-# > SELECT * FROM t_in_mysql;
-# 1
-# 2
+> DROP SOURCE mz_source CASCADE;
 
-# > DROP SOURCE mz_source CASCADE;
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
-# > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
-
-# ! CREATE TABLE t_in_mysql FROM SOURCE mz_source (REFERENCE mysql.time_zone);
-# contains:referenced tables use unsupported types
+! CREATE TABLE t_in_mysql FROM SOURCE mz_source (REFERENCE mysql.time_zone);
+contains:referenced tables use unsupported types
 
 $ mysql-execute name=mysql
+USE mysql;
 DROP TABLE t_in_mysql;
+USE public;
+DROP TABLE time_zone;

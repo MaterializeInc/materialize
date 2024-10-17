@@ -34,6 +34,9 @@ pub(super) enum SourceReferenceClient<'a> {
     },
     MySql {
         conn: &'a mut mz_mysql_util::MySqlConn,
+        /// Sets whether to include tables from the built-in system schemas in the
+        /// retrieved references.
+        include_system_schemas: bool,
     },
     Kafka {
         topic: &'a str,
@@ -188,15 +191,19 @@ impl<'a> SourceReferenceClient<'a> {
                     })
                     .collect()
             }
-            SourceReferenceClient::MySql { ref mut conn } => {
+            SourceReferenceClient::MySql {
+                ref mut conn,
+                include_system_schemas,
+            } => {
                 // NOTE: mysql will only expose the schemas of tables we have at least one privilege on
                 // and we can't tell if a table exists without a privilege, so in some cases we may
                 // return an EmptyDatabase error in the case of privilege issues.
-                let tables = mz_mysql_util::schema_info(
-                    (*conn).deref_mut(),
-                    &mz_mysql_util::SchemaRequest::All,
-                )
-                .await?;
+                let request = if include_system_schemas {
+                    mz_mysql_util::SchemaRequest::AllWithSystemSchemas
+                } else {
+                    mz_mysql_util::SchemaRequest::All
+                };
+                let tables = mz_mysql_util::schema_info((*conn).deref_mut(), &request).await?;
 
                 if tables.is_empty() {
                     Err(MySqlSourcePurificationError::EmptyDatabase)?;
