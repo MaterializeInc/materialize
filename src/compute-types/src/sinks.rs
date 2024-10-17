@@ -118,13 +118,9 @@ pub enum ComputeSinkConnection<S: 'static = ()> {
     /// TODO(database-issues#7533): Add documentation.
     Subscribe(SubscribeSinkConnection),
     /// TODO(database-issues#7533): Add documentation.
-    Persist(PersistSinkConnection<S>),
+    MaterializedView(MaterializedViewSinkConnection<S>),
     /// ContinualTask-specific information necessary for rendering a
     /// ContinualTask sink.
-    ///
-    /// TODO(ct2): This also writes to persist, but with different behavior
-    /// (conflict resolution, only at input times, etc). It might be time to
-    /// rename PersistSink to something that reflects the differences.
     ContinualTask(ContinualTaskConnection<S>),
     /// A compute sink to do a oneshot copy to s3.
     CopyToS3Oneshot(CopyToS3OneshotSinkConnection),
@@ -135,7 +131,7 @@ impl<S> ComputeSinkConnection<S> {
     pub fn name(&self) -> &'static str {
         match self {
             ComputeSinkConnection::Subscribe(_) => "subscribe",
-            ComputeSinkConnection::Persist(_) => "persist",
+            ComputeSinkConnection::MaterializedView(_) => "materialized_view",
             ComputeSinkConnection::ContinualTask(_) => "continual_task",
             ComputeSinkConnection::CopyToS3Oneshot(_) => "copy_to_s3_oneshot",
         }
@@ -157,7 +153,9 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
         ProtoComputeSinkConnection {
             kind: Some(match self {
                 ComputeSinkConnection::Subscribe(_) => Kind::Subscribe(()),
-                ComputeSinkConnection::Persist(persist) => Kind::Persist(persist.into_proto()),
+                ComputeSinkConnection::MaterializedView(materialized_view) => {
+                    Kind::MaterializedView(materialized_view.into_proto())
+                }
                 ComputeSinkConnection::ContinualTask(continual_task) => {
                     Kind::ContinualTask(continual_task.into_proto())
                 }
@@ -175,7 +173,9 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoComputeSinkConnection::kind"))?;
         Ok(match kind {
             Kind::Subscribe(_) => ComputeSinkConnection::Subscribe(SubscribeSinkConnection {}),
-            Kind::Persist(persist) => ComputeSinkConnection::Persist(persist.into_rust()?),
+            Kind::MaterializedView(materialized_view) => {
+                ComputeSinkConnection::MaterializedView(materialized_view.into_rust()?)
+            }
             Kind::ContinualTask(continual_task) => {
                 ComputeSinkConnection::ContinualTask(continual_task.into_rust()?)
             }
@@ -231,29 +231,31 @@ impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnect
 
 /// TODO(database-issues#7533): Add documentation.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PersistSinkConnection<S> {
+pub struct MaterializedViewSinkConnection<S> {
     /// TODO(database-issues#7533): Add documentation.
     pub value_desc: RelationDesc,
     /// TODO(database-issues#7533): Add documentation.
     pub storage_metadata: S,
 }
 
-impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMetadata> {
-    fn into_proto(&self) -> ProtoPersistSinkConnection {
-        ProtoPersistSinkConnection {
+impl RustType<ProtoMaterializedViewSinkConnection>
+    for MaterializedViewSinkConnection<CollectionMetadata>
+{
+    fn into_proto(&self) -> ProtoMaterializedViewSinkConnection {
+        ProtoMaterializedViewSinkConnection {
             value_desc: Some(self.value_desc.into_proto()),
             storage_metadata: Some(self.storage_metadata.into_proto()),
         }
     }
 
-    fn from_proto(proto: ProtoPersistSinkConnection) -> Result<Self, TryFromProtoError> {
-        Ok(PersistSinkConnection {
+    fn from_proto(proto: ProtoMaterializedViewSinkConnection) -> Result<Self, TryFromProtoError> {
+        Ok(MaterializedViewSinkConnection {
             value_desc: proto
                 .value_desc
-                .into_rust_if_some("ProtoPersistSinkConnection::value_desc")?,
+                .into_rust_if_some("ProtoMaterializedViewSinkConnection::value_desc")?,
             storage_metadata: proto
                 .storage_metadata
-                .into_rust_if_some("ProtoPersistSinkConnection::storage_metadata")?,
+                .into_rust_if_some("ProtoMaterializedViewSinkConnection::storage_metadata")?,
         })
     }
 }

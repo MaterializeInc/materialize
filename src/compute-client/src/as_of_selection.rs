@@ -747,7 +747,7 @@ mod tests {
     use mz_compute_types::dataflows::{DataflowExpirationDesc, IndexDesc};
     use mz_compute_types::sinks::ComputeSinkConnection;
     use mz_compute_types::sinks::ComputeSinkDesc;
-    use mz_compute_types::sinks::PersistSinkConnection;
+    use mz_compute_types::sinks::MaterializedViewSinkConnection;
     use mz_compute_types::sources::SourceInstanceArguments;
     use mz_compute_types::sources::SourceInstanceDesc;
     use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -981,10 +981,12 @@ mod tests {
                 let desc = ComputeSinkDesc {
                     from: GlobalId::Transient(0),
                     from_desc: RelationDesc::empty(),
-                    connection: ComputeSinkConnection::Persist(PersistSinkConnection {
-                        value_desc: RelationDesc::empty(),
-                        storage_metadata: Default::default(),
-                    }),
+                    connection: ComputeSinkConnection::MaterializedView(
+                        MaterializedViewSinkConnection {
+                            value_desc: RelationDesc::empty(),
+                            storage_metadata: Default::default(),
+                        },
+                    ),
                     with_snapshot: Default::default(),
                     up_to: Default::default(),
                     non_null_assertions: Default::default(),
