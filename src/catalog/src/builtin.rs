@@ -3760,7 +3760,7 @@ pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECTS_ID_NAMESPACE_TYPES_OID,
     column_defs: Some("object_type"),
-    sql: "SELECT * 
+    sql: r#"SELECT *
     FROM (
         VALUES
             ('table'),
@@ -3774,7 +3774,7 @@ pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(
             ('function'),
             ('secret')
     )
-    AS _ (object_type);",
+    AS _ (object_type)"#,
     access: vec![PUBLIC_SELECT],
 });
 
@@ -3871,19 +3871,18 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_HISTORY_OID,
     column_defs: Some("id, cluster_id, object_type, created_at, dropped_at"),
-    sql: "
+    sql: r#"
     WITH
         creates AS
         (
             SELECT
                 details ->> 'id' AS id,
-                -- We need to backfill cluster_id since older object create events don't include the cluster ID in the audit log 
+                -- We need to backfill cluster_id since older object create events don't include the cluster ID in the audit log
                 COALESCE(details ->> 'cluster_id', objects.cluster_id) AS cluster_id,
                 object_type,
                 occurred_at
@@ -3922,9 +3921,8 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| {
             FROM mz_catalog.mz_objects AS objects
             WHERE objects.id LIKE 's%'
         )
-    SELECT * FROM user_object_history UNION ALL (SELECT * FROM built_in_objects);",
+    SELECT * FROM user_object_history UNION ALL (SELECT * FROM built_in_objects)"#,
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_DATAFLOWS_PER_WORKER: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -7576,27 +7574,27 @@ pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> = Lazy
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_OID,
         column_defs: Some(
-            r#"bucket_start, 
+            r#"bucket_start,
             replica_id,
-            memory_percent, 
-            max_memory_at, 
-            disk_percent, 
-            max_disk_at, 
-            memory_and_disk_percent, 
-            max_memory_and_disk_memory_percent, 
-            max_memory_and_disk_disk_percent, 
-            max_memory_and_disk_at, 
-            max_cpu_percent, 
-            max_cpu_at, 
-            offline_events, 
-            bucket_end, 
-            name, 
-            cluster_id, 
+            memory_percent,
+            max_memory_at,
+            disk_percent,
+            max_disk_at,
+            memory_and_disk_percent,
+            max_memory_and_disk_memory_percent,
+            max_memory_and_disk_disk_percent,
+            max_memory_and_disk_at,
+            max_cpu_percent,
+            max_cpu_at,
+            offline_events,
+            bucket_end,
+            name,
+            cluster_id,
             size"#,
         ),
         sql: r#"WITH replica_history AS (
   SELECT replica_id,
-    size, 
+    size,
     cluster_id
   FROM mz_internal.mz_cluster_replica_history
   UNION
@@ -7728,8 +7726,7 @@ replica_offline_event_history AS (
         rsh.reason
       )
     ) AS offline_events
-  FROM mz_internal.mz_cluster_replica_status_history AS rsh
-  -- We assume the statuses for process 0 are the same as all processes
+  FROM mz_internal.mz_cluster_replica_status_history AS rsh -- We assume the statuses for process 0 are the same as all processes
   WHERE process_id = '0'
     AND status = 'offline'
     AND mz_now() <= date_bin(
@@ -7768,9 +7765,11 @@ FROM max_memory
   LATERAL (
     SELECT new_name
     FROM mz_internal.mz_cluster_replica_name_history as replica_name_history
-    WHERE max_memory.replica_id = replica_name_history.id
-    -- We treat NULLs as the beginning of time
-      AND max_memory.bucket_start + INTERVAL '8 HOURS' >= COALESCE(replica_name_history.occurred_at, '1970-01-01'::timestamp)
+    WHERE max_memory.replica_id = replica_name_history.id -- We treat NULLs as the beginning of time
+      AND max_memory.bucket_start + INTERVAL '8 HOURS' >= COALESCE(
+        replica_name_history.occurred_at,
+        '1970-01-01'::timestamp
+      )
     ORDER BY replica_name_history.occurred_at DESC
     LIMIT '1'
   ) AS replica_name_history

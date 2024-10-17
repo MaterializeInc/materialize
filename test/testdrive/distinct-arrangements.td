@@ -710,13 +710,15 @@ ReduceMinsMaxes
   WHERE mdod.dataflow_name NOT LIKE '%introspection-subscribe%'
   GROUP BY mdod.name
   ORDER BY mdod.name;
-"AccumulableErrorCheck"                       9
-"Arrange export iterative err"                1
-"Arrange export iterative"                    1
-"Arrange recursive err"                       1
-"Arrange ReduceCollation"                     1
-"Arrange ReduceMinsMaxes"                     3
-"ArrangeAccumulable [val: empty]"             9
+"AccumulableErrorCheck" 9
+"Arrange ReduceCollation" 1
+"Arrange ReduceMinsMaxes" 3
+"Arrange export iterative" 1
+"Arrange export iterative err" 1
+"Arrange recursive err" 1
+"ArrangeAccumulable [val: empty]" 9
+"ArrangeBy[[CallBinary { func: JsonbGetString { stringify: true }, expr1: Column(1), expr2: Literal(Ok(Row{[String(\"id\")]}), ColumnType { scalar_type: String, nullable: false }) }]]" 2
+"ArrangeBy[[CallBinary { func: JsonbGetString { stringify: true }, expr1: Column(2), expr2: Literal(Ok(Row{[String(\"id\")]}), ColumnType { scalar_type: String, nullable: false }) }]]" 1
 "ArrangeBy[[CallVariadic { func: Coalesce, exprs: [Column(2), Column(3)] }]]" 2
 "ArrangeBy[[Column(0), CallUnary { func: CastInt32ToNumeric(CastInt32ToNumeric(None)), expr: Column(1) }]]" 1
 "ArrangeBy[[Column(0), CallUnary { func: CastUint64ToNumeric(CastUint64ToNumeric(None)), expr: Column(2) }]]" 1
@@ -729,46 +731,50 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5)]]-errors" 1
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4)]]" 1
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4)]]-errors" 1
-"ArrangeBy[[Column(0), Column(1)]]"           1
-"ArrangeBy[[Column(0), Column(2)]]"           3
-"ArrangeBy[[Column(1), Column(2)]]"           1
-"ArrangeBy[[Column(0)]]-errors"              40
-"ArrangeBy[[Column(0)]]"                    144
-"ArrangeBy[[Column(1), Column(3)]]"           1
-"ArrangeBy[[Column(1)]]-errors"               6
-ArrangeBy[[Column(13)]]                       1
-"ArrangeBy[[Column(1)]]"                     21
-"ArrangeBy[[Column(2)]]"                     19
-"ArrangeBy[[Column(2)]]-errors"               7
-"ArrangeBy[[Column(3)]]"                      6
-"ArrangeBy[[Column(3)]]-errors"               2
-"ArrangeBy[[Column(4)]]"                      5
-"ArrangeBy[[Column(4)]]-errors"               2
-"ArrangeBy[[Column(5)]]-errors"               1
-"ArrangeBy[[Column(5)]]"                      3
-"ArrangeBy[[Column(6)]]"                      2
-"ArrangeBy[[Column(6)]]-errors"               1
-"ArrangeBy[[Column(9)]]"                      1
-"ArrangeBy[[Column(20)]]"                     1
-"ArrangeBy[[Column(20)]]-errors"              1
-"ArrangeBy[[]]"                               9
-"Arranged DistinctBy"                         42
-"Arranged MinsMaxesHierarchical input"        14
-"Arranged ReduceInaccumulable"                2
-"Arranged TopK input"                        24
-"Distinct recursive err"                      1
-"DistinctBy"                                  42
-"DistinctByErrorCheck"                        42
-"ReduceAccumulable"                           9
-"ReduceCollation Errors"                      1
-"ReduceCollation"                             1
-"Reduced Fallibly MinsMaxesHierarchical"     14
-"Reduced TopK input"                         24
-"ReduceInaccumulable Error Check"             2
-"ReduceInaccumulable"                         2
-"ReduceMinsMaxes Error Check"                 1
-"ReduceMinsMaxes"                             3
-"Threshold local"                            10
+"ArrangeBy[[Column(0), Column(1)]]" 2
+"ArrangeBy[[Column(0), Column(2)]]" 3
+"ArrangeBy[[Column(0), Column(3)]]" 4
+"ArrangeBy[[Column(0), Column(4)]]" 1
+"ArrangeBy[[Column(0)]]" 150
+"ArrangeBy[[Column(0)]]-errors" 41
+"ArrangeBy[[Column(1), Column(0)]]" 1
+"ArrangeBy[[Column(1), Column(2)]]" 1
+"ArrangeBy[[Column(1), Column(3)]]" 1
+"ArrangeBy[[Column(1)]]" 25
+"ArrangeBy[[Column(1)]]-errors" 7
+"ArrangeBy[[Column(13)]]" 1
+"ArrangeBy[[Column(15)]]" 1
+"ArrangeBy[[Column(15)]]-errors" 1
+"ArrangeBy[[Column(2)]]" 20
+"ArrangeBy[[Column(2)]]-errors" 7
+"ArrangeBy[[Column(20)]]" 1
+"ArrangeBy[[Column(20)]]-errors" 1
+"ArrangeBy[[Column(3)]]" 6
+"ArrangeBy[[Column(3)]]-errors" 2
+"ArrangeBy[[Column(4)]]" 5
+"ArrangeBy[[Column(4)]]-errors" 2
+"ArrangeBy[[Column(5)]]" 2
+"ArrangeBy[[Column(6)]]" 3
+"ArrangeBy[[Column(6)]]-errors" 2
+"ArrangeBy[[Column(9)]]" 1
+"ArrangeBy[[]]" 9
+"Arranged DistinctBy" 46
+"Arranged MinsMaxesHierarchical input" 14
+"Arranged ReduceInaccumulable" 3
+"Arranged TopK input" 52
+"Distinct recursive err" 1
+"DistinctBy" 46
+"DistinctByErrorCheck" 46
+"ReduceAccumulable" 9
+"ReduceCollation" 1
+"ReduceCollation Errors" 1
+"ReduceInaccumulable" 3
+"ReduceInaccumulable Error Check" 3
+"ReduceMinsMaxes" 3
+"ReduceMinsMaxes Error Check" 1
+"Reduced Fallibly MinsMaxesHierarchical" 14
+"Reduced TopK input" 52
+"Threshold local" 10
 
 > SET cluster TO distinct_arrangements
 
