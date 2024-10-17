@@ -249,6 +249,7 @@ each replica, including the times at which it was created and dropped
 |-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
 | `replica_id`          | [`text`]                     | The ID of a cluster replica.                                                                                                              |
 | `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](../mz_catalog#mz_cluster_replica_sizes).                             |
+| `cluster_id`        | [`text`]                     | The ID of the cluster associated with the replica.                                                                                      |
 | `cluster_name`        | [`text`]                     | The name of the cluster associated with the replica.                                                                                      |
 | `replica_name`        | [`text`]                     | The name of the replica.                                                                                                                  |
 | `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
@@ -266,7 +267,6 @@ The `mz_cluster_replica_name_history` view contains historical information about
 | `id`          | [`text`]                     | The ID of the cluster replica.                                                                                                              |
 | `previous_name`                | [`text`]                     | The previous name of the cluster replica. `NULL` if there was no previous name.   |
 | `new_name`        | [`text`]                     | The new name of the cluster replica.                                                                                     |
-| `cluster_id`        | [`text`]                     | The ID of the cluster the replica belongs to.                                                             |
 
 ## `mz_internal_cluster_replicas`
 
