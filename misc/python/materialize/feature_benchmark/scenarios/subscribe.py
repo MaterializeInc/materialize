@@ -122,9 +122,11 @@ class SubscribeParallelKafka(SubscribeParallel):
 
              > DROP SOURCE IF EXISTS s1 CASCADE;
 
-             > CREATE SOURCE s1
+             > CREATE SOURCE s1_source
                IN CLUSTER source_cluster
-               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-subscribe-kafka-{self._unique_topic_id}-${{testdrive.seed}}')
+               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-subscribe-kafka-{self._unique_topic_id}-${{testdrive.seed}}');
+
+             > CREATE TABLE s1 FROM SOURCE s1_source (REFERENCE "testdrive-subscribe-kafka-{self._unique_topic_id}-${{testdrive.seed}}")
                FORMAT BYTES ENVELOPE NONE;
 
              > CREATE DEFAULT INDEX ON s1;

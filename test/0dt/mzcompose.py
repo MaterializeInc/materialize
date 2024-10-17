@@ -189,10 +189,12 @@ def workflow_read_only(c: Composition) -> None:
         > CREATE SOURCE kafka_sink_source
           IN CLUSTER cluster
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
+
+        > CREATE TABLE kafka_sink_source_tbl FROM SOURCE kafka_sink_source (REFERENCE "testdrive-kafka-sink-${{testdrive.seed}}")
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE NONE
 
-        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
         <null> <null> 1 2
 
         > CREATE SOURCE webhook_source
@@ -271,7 +273,7 @@ def workflow_read_only(c: Composition) -> None:
             A 0
             > SELECT * FROM mysql_source_table;
             A 0
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
             <null> <null> 1 2
             > SELECT * FROM webhook_source
             AAA
@@ -328,7 +330,7 @@ def workflow_read_only(c: Composition) -> None:
             > SELECT * FROM mysql_source_table;
             A 0
             B 1
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
             <null> <null> 1 2
             <null> <null> 7 8
 
@@ -471,10 +473,12 @@ def workflow_basic(c: Composition) -> None:
         > CREATE SOURCE kafka_sink_source
           IN CLUSTER cluster
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
+
+        > CREATE TABLE kafka_sink_source_tbl FROM SOURCE kafka_sink_source (REFERENCE "testdrive-kafka-sink-${{testdrive.seed}}")
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE NONE
 
-        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
         <null> <null> 1 2
 
         > CREATE SOURCE webhook_source
@@ -569,7 +573,7 @@ def workflow_basic(c: Composition) -> None:
             > SELECT * FROM mysql_source_table;
             A 0
             B 1
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
             <null> <null> 1 2
 
             > SELECT * FROM webhook_source
@@ -643,7 +647,7 @@ def workflow_basic(c: Composition) -> None:
         A 0
         B 1
         C 2
-        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
+        > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
         <null> <null> 1 2
         <null> <null> 3 4
         <null> <null> 5 6
@@ -706,7 +710,7 @@ def workflow_basic(c: Composition) -> None:
             A 0
             B 1
             C 2
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
             <null> <null> 1 2
             <null> <null> 3 4
             <null> <null> 5 6
@@ -827,7 +831,7 @@ def workflow_basic(c: Composition) -> None:
             B 1
             C 2
             D 3
-            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source
+            > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
             <null> <null> 1 2
             <null> <null> 3 4
             <null> <null> 5 6

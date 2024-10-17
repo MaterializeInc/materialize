@@ -40,21 +40,23 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
             $ kafka-create-topic topic=shared-fate partitions={CLUSTER_SIZE}
 
             > CREATE SOURCE s1
-              FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-shared-fate-${{testdrive.seed}}')
+              FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-shared-fate-${{testdrive.seed}}');
+
+            > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-shared-fate-${{testdrive.seed}}")
               FORMAT BYTES
               ENVELOPE NONE;
 
             $ kafka-ingest format=bytes topic=shared-fate repeat=1000
             CDE${{kafka-ingest.iteration}}
 
-            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1 UNION ALL SELECT COUNT(*) FROM s1;
+            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1 UNION ALL SELECT COUNT(*) FROM s1_tbl;
 
             $ kafka-ingest format=bytes topic=shared-fate repeat=1000
             DEF${{kafka-ingest.iteration}}
 
             > CREATE DEFAULT INDEX ON v1;
 
-            > SELECT COUNT(*) > 0 FROM s1;
+            > SELECT COUNT(*) > 0 FROM s1_tbl;
             true
             """
         ),
@@ -76,7 +78,7 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
             > SELECT COUNT(*) FROM t1;
             3000
 
-            > SELECT COUNT(*) FROM s1;
+            > SELECT COUNT(*) FROM s1_tbl;
             3000
 
             > SELECT * FROM v1;
