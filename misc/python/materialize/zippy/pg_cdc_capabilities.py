@@ -8,12 +8,12 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.zippy.framework import Capability
 from materialize.zippy.postgres_capabilities import PostgresTableExists
+from materialize.zippy.watermarked_object_capabilities import WatermarkedObjectExists
 from materialize.zippy.watermarks import Watermarks
 
 
-class PostgresCdcTableExists(Capability):
+class PostgresCdcTableExists(WatermarkedObjectExists):
     """A Postgres CDC table exists in Materialize."""
 
     def __init__(
@@ -25,3 +25,6 @@ class PostgresCdcTableExists(Capability):
     def get_watermarks(self) -> Watermarks:
         assert self.postgres_table is not None
         return self.postgres_table.watermarks
+
+    def get_name_for_query(self) -> str:
+        return self.name
