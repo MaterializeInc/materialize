@@ -575,11 +575,10 @@ impl Coordinator {
 
         // Collect properties for `DataflowExpirationDesc`.
         let transitive_upper = self.least_valid_write(&id_bundle);
-        let has_transitive_refresh_schedule = refresh_schedule.is_some()
-            || raw_expr
-                .depends_on()
-                .into_iter()
-                .any(|id| self.catalog.item_has_transitive_refresh_schedule(id));
+        let mut refresh_deps = Vec::new();
+        let refresh_deps_index = self
+            .catalog
+            .get_refresh_dependencies(raw_expr.depends_on().into_iter(), &mut refresh_deps);
 
         let read_holds_owned;
         let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
@@ -675,9 +674,8 @@ impl Coordinator {
                 df_desc.until = until;
 
                 df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
-                df_desc
-                    .dataflow_expiration_desc
-                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
+                df_desc.dataflow_expiration_desc.refresh_deps = refresh_deps;
+                df_desc.dataflow_expiration_desc.refresh_deps_index = refresh_deps_index;
 
                 let storage_metadata = coord.catalog.state().storage_metadata();
 
