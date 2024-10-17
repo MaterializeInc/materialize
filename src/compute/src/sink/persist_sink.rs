@@ -295,10 +295,10 @@ where
     let mut mint_op =
         AsyncOperatorBuilder::new(format!("{} mint_batch_descriptions", operator_name), scope);
 
-    let (mut output, output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
-    let (mut desired_oks_output, desired_oks_output_stream) =
+    let (output, output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
+    let (desired_oks_output, desired_oks_output_stream) =
         mint_op.new_output::<CapacityContainerBuilder<_>>();
-    let (mut desired_errs_output, desired_errs_output_stream) =
+    let (desired_errs_output, desired_errs_output_stream) =
         mint_op.new_output::<CapacityContainerBuilder<_>>();
 
     // The `desired` inputs drive both the description output and their respective passthrough
@@ -605,7 +605,7 @@ where
 
     let mut write_op = AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope);
 
-    let (mut output, output_stream) = write_op.new_output();
+    let (output, output_stream) = write_op.new_output();
 
     let mut descriptions_input =
         write_op.new_input_for(&batch_descriptions.broadcast(), Pipeline, &output);

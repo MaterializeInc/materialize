@@ -159,7 +159,7 @@ where
     let mut builder =
         AsyncOperatorBuilder::new("CopyToS3-initialization".to_string(), scope.clone());
 
-    let (mut start_handle, start_stream) = builder.new_output();
+    let (start_handle, start_stream) = builder.new_output();
 
     // Push all errors to the leader worker, so it early exits before doing any initialization work
     // This should be at-most 1 incoming error per-worker due to the filtering of this stream
@@ -394,7 +394,7 @@ where
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-uploader".to_string(), scope.clone());
 
     let mut input_handle = builder.new_disconnected_input(&input_collection.inner, Pipeline);
-    let (mut completion_handle, completion_stream) = builder.new_output();
+    let (completion_handle, completion_stream) = builder.new_output();
     let mut start_handle = builder.new_input_for(&start_stream, Pipeline, &completion_handle);
 
     builder.build(move |caps| async move {

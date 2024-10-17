@@ -795,7 +795,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     /// Report operator hydration events.
-    pub fn report_operator_hydration(&mut self) {
+    pub fn report_operator_hydration(&self) {
         let worker_id = self.timely_worker.index();
         for event in self.compute_state.hydration_rx.try_iter() {
             // The compute protocol forbids reporting `Status` about collections that have advanced
@@ -924,7 +924,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     /// Scan the shared copy to response buffer, and forward results along.
-    pub fn process_copy_tos(&mut self) {
+    pub fn process_copy_tos(&self) {
         let mut responses = self.compute_state.copy_to_response_buffer.borrow_mut();
         for (sink_id, response) in responses.drain(..) {
             self.send_compute_response(ComputeResponse::CopyToResponse(sink_id, response));
@@ -993,7 +993,7 @@ impl PendingPeek {
         persist_clients: Arc<PersistClientCache>,
         metadata: CollectionMetadata,
         max_result_size: usize,
-        timely_worker: &mut TimelyWorker<A>,
+        timely_worker: &TimelyWorker<A>,
     ) -> Self {
         let active_worker = {
             // Choose the worker that does the actual peek arbitrarily but consistently.

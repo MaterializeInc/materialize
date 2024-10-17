@@ -217,7 +217,7 @@ impl Coordinator {
     }
 
     fn handle_spawn<C, T, F>(
-        &mut self,
+        &self,
         ctx: C,
         handle: JoinHandle<Result<T, AdapterError>>,
         cancel_enabled: bool,
@@ -263,7 +263,7 @@ impl Coordinator {
     }
 
     async fn create_source_inner(
-        &mut self,
+        &self,
         session: &Session,
         plans: Vec<plan::CreateSourcePlanBundle>,
     ) -> Result<CreateSourceInner, AdapterError> {
@@ -1727,7 +1727,7 @@ impl Coordinator {
     }
 
     pub(super) fn sequence_explain_schema(
-        &mut self,
+        &self,
         ExplainSinkSchemaPlan { json_schema, .. }: ExplainSinkSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let json_value: serde_json::Value = serde_json::from_str(&json_schema).map_err(|e| {
@@ -1740,7 +1740,7 @@ impl Coordinator {
     }
 
     pub(super) fn sequence_show_all_variables(
-        &mut self,
+        &self,
         session: &Session,
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut rows = viewable_variables(self.catalog().state(), session)
@@ -1763,7 +1763,7 @@ impl Coordinator {
     }
 
     pub(super) fn sequence_show_variable(
-        &mut self,
+        &self,
         session: &Session,
         plan: plan::ShowVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -4581,7 +4581,7 @@ where
 
 impl Coordinator {
     /// Forward notices that we got from the optimizer.
-    fn emit_optimizer_notices(&mut self, session: &Session, notices: &Vec<RawOptimizerNotice>) {
+    fn emit_optimizer_notices(&self, session: &Session, notices: &Vec<RawOptimizerNotice>) {
         // `for_session` below is expensive, so return early if there's nothing to do.
         if notices.is_empty() {
             return;

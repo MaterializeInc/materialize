@@ -65,7 +65,7 @@ where
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
     pub fn render_reduce(
-        &mut self,
+        &self,
         input: CollectionBundle<G, T>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,

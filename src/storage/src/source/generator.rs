@@ -238,9 +238,9 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 ) {
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (mut data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
-    let (mut stats_output, stats_stream) = builder.new_output();
-    let (mut probe_output, probe_stream) = builder.new_output();
+    let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (stats_output, stats_stream) = builder.new_output();
+    let (probe_output, probe_stream) = builder.new_output();
 
     let busy_signal = Arc::clone(&config.busy_signal);
     let button = builder.build(move |caps| {

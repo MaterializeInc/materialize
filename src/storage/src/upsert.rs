@@ -656,7 +656,7 @@ where
         };
         Some((UpsertKey::from_value(value.as_ref(), &key_indices), value))
     });
-    let (mut output_handle, output) = builder.new_output();
+    let (output_handle, output) = builder.new_output();
 
     // An output that just reports progress of the snapshot consolidation process upstream to the
     // persist source to ensure that backpressure is applied
@@ -963,7 +963,7 @@ impl<G: Scope> UpsertErrorEmitter<G>
 async fn process_upsert_state_error<G: Scope>(
     context: String,
     e: anyhow::Error,
-    health_output: &mut AsyncOutputHandle<
+    health_output: &AsyncOutputHandle<
         <G as ScopeParent>::Timestamp,
         CapacityContainerBuilder<Vec<(OutputIndex, HealthStatusUpdate)>>,
         Tee<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,

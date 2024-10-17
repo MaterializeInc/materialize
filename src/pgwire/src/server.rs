@@ -99,7 +99,7 @@ impl Server {
         &self,
         conn: Connection,
     ) -> impl Future<Output = Result<(), anyhow::Error>> + 'static + Send {
-        let mut adapter_client = self.adapter_client.clone();
+        let adapter_client = self.adapter_client.clone();
         let frontegg = self.frontegg.clone();
         let tls = self.tls.clone();
         let internal = self.internal;

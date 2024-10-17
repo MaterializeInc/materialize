@@ -208,7 +208,7 @@ mod tests {
                             "blob-scan-batches" => {
                                 machine_dd::blob_scan_batches(&state, args).await
                             }
-                            "clear-blob" => machine_dd::clear_blob(&mut state, args).await,
+                            "clear-blob" => machine_dd::clear_blob(&state, args).await,
                             "compact" => machine_dd::compact(&mut state, args).await,
                             "compare-and-append" => {
                                 machine_dd::compare_and_append(&mut state, args).await
@@ -226,7 +226,7 @@ mod tests {
                             "downgrade-since" => {
                                 machine_dd::downgrade_since(&mut state, args).await
                             }
-                            "dyncfg" => machine_dd::dyncfg(&mut state, args).await,
+                            "dyncfg" => machine_dd::dyncfg(&state, args).await,
                             "expire-critical-reader" => {
                                 machine_dd::expire_critical_reader(&mut state, args).await
                             }
@@ -238,9 +238,9 @@ mod tests {
                             "finalize" => machine_dd::finalize(&mut state, args).await,
                             "gc" => machine_dd::gc(&mut state, args).await,
                             "heartbeat-leased-reader" => {
-                                machine_dd::heartbeat_leased_reader(&mut state, args).await
+                                machine_dd::heartbeat_leased_reader(&state, args).await
                             }
-                            "is-finalized" => machine_dd::is_finalized(&mut state, args),
+                            "is-finalized" => machine_dd::is_finalized(&state, args),
                             "listen-through" => machine_dd::listen_through(&mut state, args).await,
                             "perform-maintenance" => {
                                 machine_dd::perform_maintenance(&mut state, args).await
@@ -254,13 +254,13 @@ mod tests {
                             "register-leased-reader" => {
                                 machine_dd::register_leased_reader(&mut state, args).await
                             }
-                            "restore-blob" => machine_dd::restore_blob(&mut state, args).await,
+                            "restore-blob" => machine_dd::restore_blob(&state, args).await,
                             "rewrite-ts" => machine_dd::rewrite_ts(&mut state, args).await,
                             "set-batch-parts-size" => {
                                 machine_dd::set_batch_parts_size(&mut state, args).await
                             }
                             "shard-desc" => machine_dd::shard_desc(&state, args).await,
-                            "snapshot" => machine_dd::snapshot(&mut state, args).await,
+                            "snapshot" => machine_dd::snapshot(&state, args).await,
                             "truncate-batch-desc" => {
                                 machine_dd::truncate_batch_desc(&mut state, args).await
                             }

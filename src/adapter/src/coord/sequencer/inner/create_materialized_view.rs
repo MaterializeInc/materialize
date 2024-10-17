@@ -875,7 +875,7 @@ impl Coordinator {
     }
 
     pub(crate) async fn explain_pushdown_materialized_view(
-        &mut self,
+        &self,
         ctx: ExecuteContext,
         gid: GlobalId,
     ) {

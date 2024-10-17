@@ -127,7 +127,7 @@ where
 
         self.epoch.bump_replica();
         let metrics = self.metrics.for_replica(id);
-        let mut replica = Replica::new(id, config, self.epoch, metrics, self.response_tx.clone());
+        let replica = Replica::new(id, config, self.epoch, metrics, self.response_tx.clone());
 
         // Replay the commands at the new replica.
         for command in self.history.iter() {
@@ -301,7 +301,7 @@ where
     }
 
     /// Sends a command to the replica.
-    fn send(&mut self, command: StorageCommand<T>) {
+    fn send(&self, command: StorageCommand<T>) {
         // Send failures ignored, we'll check for failed replicas separately.
         let _ = self.command_tx.send(command);
     }

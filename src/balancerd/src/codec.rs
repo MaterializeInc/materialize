@@ -100,7 +100,7 @@ impl<A> FramedConn<A>
 where
     A: AsyncRead + AsyncWrite + Unpin,
 {
-    pub fn inner(&mut self) -> &Conn<A> {
+    pub fn inner(&self) -> &Conn<A> {
         self.inner.get_ref().get_ref()
     }
     pub fn inner_mut(&mut self) -> &mut Conn<A> {

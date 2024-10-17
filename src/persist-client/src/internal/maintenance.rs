@@ -116,7 +116,7 @@ impl RoutineMaintenance {
         }
 
         if let Some(rollup_seqno) = self.write_rollup {
-            let mut machine = machine.clone();
+            let machine = machine.clone();
             let isolated_runtime = Arc::clone(&machine.isolated_runtime);
             futures.push(
                 isolated_runtime

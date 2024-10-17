@@ -16,7 +16,7 @@ use crate::parser::BuiltinCommand;
 
 pub async fn run_delete_records(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let partition = cmd.args.parse("partition")?;

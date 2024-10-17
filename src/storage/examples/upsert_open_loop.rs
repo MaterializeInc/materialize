@@ -795,7 +795,7 @@ where
 
     let mut source_op = AsyncOperatorBuilder::new(format!("source-{source_id}"), scope);
 
-    let (mut output, output_stream) = source_op.new_output::<CapacityContainerBuilder<_>>();
+    let (output, output_stream) = source_op.new_output::<CapacityContainerBuilder<_>>();
 
     let _shutdown_button = source_op.build(move |mut capabilities| async move {
         if !active_worker {
@@ -918,8 +918,7 @@ where
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (mut output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
-        upsert_op.new_output();
+    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) = upsert_op.new_output();
     let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
@@ -1017,8 +1016,7 @@ where
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (mut output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
-        upsert_op.new_output();
+    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) = upsert_op.new_output();
     let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
@@ -1211,7 +1209,7 @@ impl IoThreadRocksDB {
         Self { tx }
     }
 
-    async fn ingest_inner(&mut self, batches: Vec<Batch>) -> Batch<KVAndPrevious> {
+    async fn ingest_inner(&self, batches: Vec<Batch>) -> Batch<KVAndPrevious> {
         let (tx, rx) = channel();
 
         // We assume the rocksdb thread doesnt shutdown before timely

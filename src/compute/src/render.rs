@@ -520,7 +520,7 @@ where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     pub(crate) fn export_index(
-        &mut self,
+        &self,
         compute_state: &mut ComputeState,
         tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         dependency_ids: BTreeSet<GlobalId>,
@@ -593,7 +593,7 @@ where
     T: RenderTimestamp,
 {
     pub(crate) fn export_index_iterative(
-        &mut self,
+        &self,
         compute_state: &mut ComputeState,
         tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         dependency_ids: BTreeSet<GlobalId>,
@@ -1252,11 +1252,11 @@ impl StartSignal {
         (signal, token)
     }
 
-    pub fn has_fired(&mut self) -> bool {
+    pub fn has_fired(&self) -> bool {
         self.token_ref.strong_count() == 0
     }
 
-    pub fn drop_on_fire(&mut self, to_drop: Box<dyn Any>) {
+    pub fn drop_on_fire(&self, to_drop: Box<dyn Any>) {
         if let Some(token) = self.token_ref.upgrade() {
             let mut token = token.borrow_mut();
             let inner = std::mem::replace(&mut *token, Box::new(()));
@@ -1315,7 +1315,7 @@ where
     S: Scope,
     D: timely::Data,
 {
-    fn with_start_signal(self, mut signal: StartSignal) -> Self {
+    fn with_start_signal(self, signal: StartSignal) -> Self {
         self.unary(Pipeline, "StartSignal", |_cap, info| {
             let token = Box::new(ActivateOnDrop::new(
                 (),

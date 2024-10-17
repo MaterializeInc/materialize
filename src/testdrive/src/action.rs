@@ -410,7 +410,7 @@ impl State {
         std::mem::replace(&mut self.consistency_checks_adhoc_skip, false)
     }
 
-    pub async fn reset_materialize(&mut self) -> Result<(), anyhow::Error> {
+    pub async fn reset_materialize(&self) -> Result<(), anyhow::Error> {
         let (inner_client, _) = postgres_client(
             &format!(
                 "postgres://mz_system:materialize@{}",
@@ -580,7 +580,7 @@ impl State {
     }
 
     /// Delete Kafka topics + CCSR subjects that were created in this run
-    pub async fn reset_kafka(&mut self) -> Result<(), anyhow::Error> {
+    pub async fn reset_kafka(&self) -> Result<(), anyhow::Error> {
         let mut errors: Vec<anyhow::Error> = Vec::new();
 
         let metadata = self.kafka_producer.client().fetch_metadata(

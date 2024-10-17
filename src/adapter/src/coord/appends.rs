@@ -371,8 +371,8 @@ impl Coordinator {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let apply_write_fut = self.apply_local_write(timestamp);
 
-        let mut span = debug_span!(parent: None, "group_commit_apply");
-        OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
+        let span = debug_span!(parent: None, "group_commit_apply");
+        OpenTelemetryContext::obtain().attach_as_parent_to(&span);
         task::spawn(
             || "group_commit_apply",
             async move {

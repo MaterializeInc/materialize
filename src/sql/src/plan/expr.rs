@@ -467,7 +467,7 @@ impl ScalarWindowExpr {
     }
 
     #[deprecated = "Implement `VisitChildren<HirScalarExpr>` if needed."]
-    pub fn visit_expressions_mut<'a, F, E>(&'a mut self, _f: &mut F) -> Result<(), E>
+    pub fn visit_expressions_mut<'a, F, E>(&'a self, _f: &mut F) -> Result<(), E>
     where
         F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
     {

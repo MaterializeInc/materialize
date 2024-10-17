@@ -478,7 +478,7 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
 
     let mut builder = AsyncOperatorBuilder::new(op_name, input.scope());
 
-    let (mut output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut input = builder.new_input_for(&input.inner, Exchange::new(dist), &output_handle);
 
     let (_, transient_errors) = builder.build_fallible(move |caps| {

@@ -107,7 +107,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
 /// not accept default overrides, or if there is a value
 /// parsing error..
 pub(crate) fn set_defaults(
-    config_set: &mut ConfigSet,
+    config_set: &ConfigSet,
     default_config: Vec<(String, String)>,
 ) -> Result<(), anyhow::Error> {
     let mut config_updates = ConfigUpdates::default();

@@ -52,7 +52,7 @@ where
     /// The join is followed by the application of `map_filter_project`, whose
     /// implementation will be pushed in to the join pipeline if at all possible.
     pub fn render_delta_join(
-        &mut self,
+        &self,
         inputs: Vec<CollectionBundle<G>>,
         join_plan: DeltaJoinPlan,
     ) -> CollectionBundle<G> {

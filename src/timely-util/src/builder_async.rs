@@ -172,7 +172,7 @@ impl<T: Timestamp, D: Container, C: InputConnection<T>> AsyncInputHandle<T, D, C
         std::future::poll_fn(|cx| self.poll_ready(cx)).await
     }
 
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll_ready(&self, cx: &Context<'_>) -> Poll<()> {
         if self.queue.borrow().is_empty() {
             self.waker.set(Some(cx.waker().clone()));
             Poll::Pending
@@ -226,7 +226,7 @@ where
     P: Push<Bundle<T, C>> + 'static,
 {
     #[inline]
-    pub fn give_container(&mut self, cap: &Capability<T>, container: &mut C) {
+    pub fn give_container(&self, cap: &Capability<T>, container: &mut C) {
         let mut handle = self.handle.borrow_mut();
         handle.session_with_builder(cap).give_container(container);
     }
@@ -264,7 +264,7 @@ where
         }
     }
 
-    fn cease(&mut self) {
+    fn cease(&self) {
         self.handle.borrow_mut().cease()
     }
 }
@@ -275,7 +275,7 @@ where
     C: Container,
     P: Push<Bundle<T, C>> + 'static,
 {
-    pub fn give<D>(&mut self, cap: &Capability<T>, data: D)
+    pub fn give<D>(&self, cap: &Capability<T>, data: D)
     where
         CapacityContainerBuilder<C>: PushInto<D>,
     {
@@ -295,7 +295,7 @@ where
 
     /// Provides one record at the time specified by the capability. This method will automatically
     /// yield back to timely after [Self::MAX_OUTSTANDING_BYTES] have been produced.
-    pub async fn give_fueled<D2>(&mut self, cap: &Capability<T>, data: D2)
+    pub async fn give_fueled<D2>(&self, cap: &Capability<T>, data: D2)
     where
         StackWrapper<D>: PushInto<D2>,
     {
@@ -528,7 +528,7 @@ impl<G: Scope> OperatorBuilder<G> {
 
         let handle = AsyncOutputHandle::new(wrapper, index);
 
-        let mut flush_handle = handle.clone();
+        let flush_handle = handle.clone();
         self.output_flushes
             .push(Box::new(move || flush_handle.cease()));
 
@@ -664,7 +664,7 @@ impl<G: Scope> OperatorBuilder<G> {
             + 'static,
     {
         // Create a new completely disconnected output
-        let (mut error_output, error_stream) = self.new_output();
+        let (error_output, error_stream) = self.new_output();
         let button = self.build(|mut caps| async move {
             let error_cap = caps.pop().unwrap();
             let mut caps = caps
@@ -725,7 +725,7 @@ pub struct ButtonHandle {
 
 impl ButtonHandle {
     /// Returns whether this worker has pressed its button.
-    pub fn local_pressed(&mut self) -> bool {
+    pub fn local_pressed(&self) -> bool {
         self.local_pressed.get()
     }
 
@@ -784,7 +784,7 @@ mod test {
             let input = (0..10).to_stream(scope);
 
             let mut op = OperatorBuilder::new("async_passthru".to_string(), input.scope());
-            let (mut output, output_stream) = op.new_output();
+            let (output, output_stream) = op.new_output();
             let mut input_handle = op.new_input_for(&input, Pipeline, &output);
 
             op.build(move |_capabilities| async move {

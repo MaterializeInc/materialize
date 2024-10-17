@@ -1343,7 +1343,7 @@ impl SystemVars {
             .map(|var| (var.name, SystemVar::new(var)))
             .collect();
 
-        let mut vars = SystemVars {
+        let vars = SystemVars {
             vars,
             active_connection_count,
             allow_unsafe: false,
@@ -1593,7 +1593,7 @@ impl SystemVars {
     }
 
     /// Propagate a change to the parameter named `name` to our state.
-    fn propagate_var_change(&mut self, name: &str) {
+    fn propagate_var_change(&self, name: &str) {
         if name == MAX_CONNECTIONS.name || name == SUPERUSER_RESERVED_CONNECTIONS.name {
             let limit = *self.expect_value::<u32>(&MAX_CONNECTIONS);
             let superuser_reserved = *self.expect_value::<u32>(&SUPERUSER_RESERVED_CONNECTIONS);
@@ -1611,7 +1611,7 @@ impl SystemVars {
     /// only needed when initializing, `set`, `set_default`, and `reset`
     /// are responsible for keeping the internal state in sync with
     /// the affected SystemVars.
-    fn refresh_internal_state(&mut self) {
+    fn refresh_internal_state(&self) {
         self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
         self.propagate_var_change(SUPERUSER_RESERVED_CONNECTIONS.name.as_str());
     }

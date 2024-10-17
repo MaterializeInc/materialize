@@ -158,12 +158,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope.clone());
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
-    let (mut data_output, data_stream) = builder.new_output();
+    let (data_output, data_stream) = builder.new_output();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (mut definite_error_handle, definite_errors) = builder.new_output();
+    let (definite_error_handle, definite_errors) = builder.new_output();
 
-    let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (mut probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut rewind_input = builder.new_input_for(
         rewind_stream,
@@ -361,9 +361,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 &connection.publication,
                 *data_cap_set[0].time(),
                 committed_uppers.as_mut(),
-                &mut stats_output,
+                &stats_output,
                 &stats_cap[0],
-                &mut probe_output,
+                &probe_output,
                 &probe_cap[0],
             )
             .await?;
@@ -565,13 +565,13 @@ async fn raw_stream<'a>(
     publication: &'a str,
     resume_lsn: MzOffset,
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
-    stats_output: &'a mut AsyncOutputHandle<
+    stats_output: &'a AsyncOutputHandle<
         MzOffset,
         CapacityContainerBuilder<Vec<ProgressStatisticsUpdate>>,
         Tee<MzOffset, Vec<ProgressStatisticsUpdate>>,
     >,
     stats_cap: &'a Capability<MzOffset>,
-    probe_output: &'a mut AsyncOutputHandle<
+    probe_output: &'a AsyncOutputHandle<
         MzOffset,
         CapacityContainerBuilder<Vec<Probe<MzOffset>>>,
         Tee<MzOffset, Vec<Probe<MzOffset>>>,

@@ -337,7 +337,7 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let mut machine = self.make_machine(shard_id, diagnostics.clone()).await?;
+        let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let reader_id = LeasedReaderId::new();
@@ -469,7 +469,7 @@ impl PersistClient {
         D: Semigroup + Codec64 + Send + Sync,
         O: Opaque + Codec64,
     {
-        let mut machine = self.make_machine(shard_id, diagnostics.clone()).await?;
+        let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let (state, maintenance) = machine
@@ -509,7 +509,7 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
-        let mut machine = self.make_machine(shard_id, diagnostics.clone()).await?;
+        let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         // TODO: Because schemas are ordered, as part of the persist schema
@@ -614,7 +614,7 @@ impl PersistClient {
             panic!("tried to evolve the schema of a Persist shard without the feature enabled");
         }
 
-        let mut machine = self
+        let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
             .await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
@@ -667,7 +667,7 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let mut machine = self
+        let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
             .await?;
 
@@ -1668,7 +1668,7 @@ mod tests {
 
             let client1 = client.clone();
             let handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
-                let (mut write, _) = client1.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
+                let (write, _) = client1.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
                 let mut current_upper = 0;
                 for batch in data.batches() {
                     let new_upper = match batch.get(batch.len() - 1) {

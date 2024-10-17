@@ -606,7 +606,7 @@ where
     /// updates is very large. Individual records, however, should be small
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
-    pub fn builder(&mut self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
+    pub fn builder(&self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
         let builder = BatchBuilderInternal::new(
             BatchBuilderConfig::new(&self.cfg, self.shard_id(), false),
             Arc::clone(&self.metrics),
@@ -692,7 +692,7 @@ where
     }
 
     fn expire_fn(
-        mut machine: Machine<K, V, T, D>,
+        machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
         writer_id: WriterId,
     ) -> ExpireFn {

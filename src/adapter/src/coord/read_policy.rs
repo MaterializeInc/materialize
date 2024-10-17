@@ -291,7 +291,7 @@ impl crate::coord::Coordinator {
     }
 
     pub(crate) fn update_compute_read_policies(
-        &mut self,
+        &self,
         mut policies: Vec<(ComputeInstanceId, GlobalId, ReadPolicy<Timestamp>)>,
     ) {
         policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
@@ -308,7 +308,7 @@ impl crate::coord::Coordinator {
     }
 
     pub(crate) fn update_compute_read_policy(
-        &mut self,
+        &self,
         compute_instance: ComputeInstanceId,
         id: GlobalId,
         base_policy: ReadPolicy<Timestamp>,

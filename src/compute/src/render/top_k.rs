@@ -52,7 +52,7 @@ where
     G::Timestamp: crate::render::RenderTimestamp,
 {
     pub(crate) fn render_topk(
-        &mut self,
+        &self,
         input: CollectionBundle<G>,
         top_k_plan: TopKPlan,
     ) -> CollectionBundle<G> {

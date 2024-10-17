@@ -128,7 +128,7 @@ pub(super) fn construct<A: Allocate>(
         });
 
         let stream_to_collection = |input: Stream<_, ((usize, ()), Timestamp, Diff)>, log, name| {
-            let mut packer = PermutedRowPacker::new(log);
+            let packer = PermutedRowPacker::new(log);
             input
                 .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(
                     Pipeline,

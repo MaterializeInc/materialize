@@ -1051,7 +1051,7 @@ impl Coordinator {
         &mut self,
         cmvs: &CreateMaterializedViewStatement<Aug>,
         resolved_ids: &ResolvedIds,
-        session: &mut Session,
+        session: &Session,
         acquire_read_holds: bool,
     ) -> Result<Option<Timestamp>, AdapterError> {
         if cmvs

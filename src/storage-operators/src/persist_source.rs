@@ -751,7 +751,7 @@ where
         format!("persist_source_backpressure({})", name),
         scope.clone(),
     );
-    let (mut data_output, data_stream) = builder.new_output();
+    let (data_output, data_stream) = builder.new_output();
 
     let mut data_input = builder.new_disconnected_input(data, Pipeline);
     let mut flow_control_input = builder.new_disconnected_input(&summaried_flow, Pipeline);
@@ -1406,8 +1406,7 @@ mod tests {
     ) -> (Stream<G, Part>, oneshot::Sender<()>) {
         let (finalizer_tx, finalizer_rx) = oneshot::channel();
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope);
-        let (mut output_handle, output) =
-            iterator.new_output::<CapacityContainerBuilder<Vec<Part>>>();
+        let (output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<Part>>>();
 
         iterator.build(|mut caps| async move {
             let mut capability = Some(caps.pop().unwrap());

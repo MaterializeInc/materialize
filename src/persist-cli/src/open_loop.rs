@@ -552,7 +552,7 @@ mod raw_persist_benchmark {
             let (records_tx, mut records_rx) = tokio::sync::mpsc::channel::<ColumnarRecords>(2);
             let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(10);
 
-            let mut write = persist
+            let write = persist
                 .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(
                     id,
                     Arc::new(VecU8Schema),

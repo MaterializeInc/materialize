@@ -753,7 +753,7 @@ where
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn clone(&self, purpose: &str) -> Self {
         let new_reader_id = LeasedReaderId::new();
-        let mut machine = self.machine.clone();
+        let machine = self.machine.clone();
         let gc = self.gc.clone();
         let heartbeat_ts = (self.cfg.now)();
         let (reader_state, maintenance) = machine
@@ -871,7 +871,7 @@ where
     }
 
     fn expire_fn(
-        mut machine: Machine<K, V, T, D>,
+        machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
         reader_id: LeasedReaderId,
     ) -> ExpireFn {
@@ -1135,7 +1135,7 @@ where
         &self,
         as_of: Option<Antichain<T>>,
     ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static {
-        let mut machine = self.machine.clone();
+        let machine = self.machine.clone();
         async move {
             let batches = match as_of {
                 Some(as_of) => machine.snapshot(&as_of).await?,
@@ -1160,7 +1160,7 @@ where
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
     pub async fn snapshot_parts_stats(
-        &mut self,
+        &self,
         as_of: Antichain<T>,
     ) -> Result<SnapshotPartsStats, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;

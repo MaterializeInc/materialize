@@ -1177,7 +1177,7 @@ mod tests {
         mut input: UnboundedReceiver<TestUpdate>,
     ) -> Stream<G, HealthStatusMessage> {
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope.clone());
-        let (mut output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<_>>>();
+        let (output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
         let index = scope.index();
         iterator.build(|mut caps| async move {

@@ -159,7 +159,7 @@ impl ActiveSubscribe {
     /// Processes a subscribe response from the controller.
     ///
     /// Returns `true` if the subscribe is finished.
-    pub fn process_response(&mut self, batch: SubscribeBatch) -> bool {
+    pub fn process_response(&self, batch: SubscribeBatch) -> bool {
         let mut rows = match batch.updates {
             Ok(rows) => rows,
             Err(s) => {

@@ -385,7 +385,7 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
 
 impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// Increment the version in the catalog upgrade shard to the code's current version.
-    async fn increment_catalog_upgrade_shard_version(&mut self, organization_id: Uuid) {
+    async fn increment_catalog_upgrade_shard_version(&self, organization_id: Uuid) {
         let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
         let mut write_handle: WriteHandle<(), (), Timestamp, Diff> = self
             .persist_client
@@ -699,7 +699,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     }
 
     /// Open a read handle to the catalog.
-    async fn read_handle(&mut self) -> ReadHandle<SourceData, (), Timestamp, Diff> {
+    async fn read_handle(&self) -> ReadHandle<SourceData, (), Timestamp, Diff> {
         self.persist_client
             .open_leased_reader(
                 self.shard_id,

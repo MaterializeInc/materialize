@@ -157,15 +157,16 @@ where
 
                 let txn_batches_updates = FuturesUnordered::new();
                 while let Some((data_id, updates)) = self.writes.pop_first() {
-                    let mut data_write = handle
-                        .datas
-                        .take_write_for_commit(&data_id)
-                        .unwrap_or_else(|| {
-                            panic!(
+                    let data_write =
+                        handle
+                            .datas
+                            .take_write_for_commit(&data_id)
+                            .unwrap_or_else(|| {
+                                panic!(
                                 "data shard {} must be registered with this Txn handle to commit",
                                 data_id
                             )
-                        });
+                            });
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
                         let mut batches = updates

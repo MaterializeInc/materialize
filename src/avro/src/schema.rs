@@ -1077,7 +1077,7 @@ impl SchemaParser {
 
     /// Parse a `serde_json::Value` representing a Avro enum type into a
     /// `Schema`.
-    fn parse_enum(&mut self, complex: &Map<String, Value>) -> Result<SchemaPiece, AvroError> {
+    fn parse_enum(&self, complex: &Map<String, Value>) -> Result<SchemaPiece, AvroError> {
         let symbols: Vec<String> = complex
             .get("symbols")
             .and_then(|v| v.as_array())
@@ -1316,7 +1316,7 @@ impl SchemaParser {
     /// Parse a `serde_json::Value` representing a Avro fixed type into a
     /// `Schema`.
     fn parse_fixed(
-        &mut self,
+        &self,
         _default_namespace: &str,
         complex: &Map<String, Value>,
     ) -> Result<SchemaPiece, AvroError> {

@@ -1227,8 +1227,8 @@ impl CatalogState {
                 while let Some(id) = ready.pop_front() {
                     let view = views.get(&id).expect("must exist");
                     let create_sql = view.create_sql();
-                    let mut span = info_span!(parent: None, "parse builtin view", name = view.name);
-                    OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
+                    let span = info_span!(parent: None, "parse builtin view", name = view.name);
+                    OpenTelemetryContext::obtain().attach_as_parent_to(&span);
                     let task_state = Arc::clone(&spawn_state);
                     let handle = mz_ore::task::spawn(
                         || "parse view",

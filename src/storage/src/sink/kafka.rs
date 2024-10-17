@@ -410,7 +410,7 @@ impl TransactionalProducer {
             .check_ssh_status(self.producer.context())
     }
 
-    async fn begin_transaction(&mut self) -> Result<(), ContextCreationError> {
+    async fn begin_transaction(&self) -> Result<(), ContextCreationError> {
         self.spawn_blocking(|p| p.begin_transaction()).await
     }
 
@@ -1251,7 +1251,7 @@ fn encode_collection<G: Scope>(
 ) {
     let mut builder = AsyncOperatorBuilder::new(name, input.inner.scope());
 
-    let (mut output, stream) = builder.new_output();
+    let (output, stream) = builder.new_output();
     let mut input = builder.new_input_for(&input.inner, Pipeline, &output);
 
     let (button, errors) = builder.build_fallible(move |caps| {

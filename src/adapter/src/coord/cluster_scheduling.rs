@@ -102,7 +102,7 @@ impl Coordinator {
     /// decisions based on REFRESH materialized view write frontiers and the current time (the local
     /// oracle read ts), and sends `Message::SchedulingDecisions` with these decisions.
     /// (Queries the timestamp oracle on a background task.)
-    fn check_refresh_policy(&mut self) {
+    fn check_refresh_policy(&self) {
         let start_time = Instant::now();
 
         // Collect the smallest REFRESH MV write frontiers per cluster.

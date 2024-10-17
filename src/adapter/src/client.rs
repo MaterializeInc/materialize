@@ -343,7 +343,7 @@ Issue a SQL query to get started. Need help?
     }
 
     /// Cancels the query currently running on the specified connection.
-    pub fn cancel_request(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
+    pub fn cancel_request(&self, conn_id: ConnectionIdType, secret_key: u32) {
         self.send(Command::CancelRequest {
             conn_id,
             secret_key,
@@ -676,7 +676,7 @@ impl SessionClient {
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
+    pub async fn dump_catalog(&self) -> Result<CatalogDump, AdapterError> {
         let catalog = self.catalog_snapshot().await;
         catalog.dump().map_err(AdapterError::from)
     }
@@ -686,7 +686,7 @@ impl SessionClient {
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn check_catalog(&mut self) -> Result<(), serde_json::Value> {
+    pub async fn check_catalog(&self) -> Result<(), serde_json::Value> {
         let catalog = self.catalog_snapshot().await;
         catalog.check_consistency()
     }
@@ -696,7 +696,7 @@ impl SessionClient {
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn check_coordinator(&mut self) -> Result<(), serde_json::Value> {
+    pub async fn check_coordinator(&self) -> Result<(), serde_json::Value> {
         self.send_without_session(|tx| Command::CheckConsistency { tx })
             .await
             .map_err(|inconsistencies| {
@@ -706,17 +706,13 @@ impl SessionClient {
             })
     }
 
-    pub async fn dump_coordinator_state(&mut self) -> Result<serde_json::Value, anyhow::Error> {
+    pub async fn dump_coordinator_state(&self) -> Result<serde_json::Value, anyhow::Error> {
         self.send_without_session(|tx| Command::Dump { tx }).await
     }
 
     /// Tells the coordinator a statement has finished execution, in the cases
     /// where we have no other reason to communicate with the coordinator.
-    pub fn retire_execute(
-        &mut self,
-        data: ExecuteContextExtra,
-        reason: StatementEndedExecutionReason,
-    ) {
+    pub fn retire_execute(&self, data: ExecuteContextExtra, reason: StatementEndedExecutionReason) {
         if !data.is_trivial() {
             let cmd = Command::RetireExecute { data, reason };
             self.inner().send(cmd);

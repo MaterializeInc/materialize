@@ -140,7 +140,7 @@ struct CommandReceiverQueue {
 }
 
 impl CommandReceiverQueue {
-    fn try_recv(&mut self) -> Result<ComputeCommand, TryRecvError> {
+    fn try_recv(&self) -> Result<ComputeCommand, TryRecvError> {
         match self.queue.borrow_mut().pop_front() {
             Some(Ok(cmd)) => Ok(cmd),
             Some(Err(e)) => Err(e),
@@ -151,7 +151,7 @@ impl CommandReceiverQueue {
     /// Block until a command is available.
     /// This method takes the worker as an argument such that it can step timely while no result
     /// is available.
-    fn recv<A: Allocate>(&mut self, worker: &mut Worker<A>) -> Result<ComputeCommand, RecvError> {
+    fn recv<A: Allocate>(&self, worker: &mut Worker<A>) -> Result<ComputeCommand, RecvError> {
         while self.is_empty() {
             let start = Instant::now();
             worker.timely_worker.step_or_park(None);
@@ -437,12 +437,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     }
 
     /// Draws commands from a single client until disconnected.
-    fn run_client(
-        &mut self,
-        mut command_rx: CommandReceiverQueue,
-        mut response_tx: ResponseSender,
-    ) {
-        if let Err(_) = self.reconcile(&mut command_rx, &mut response_tx) {
+    fn run_client(&mut self, command_rx: CommandReceiverQueue, mut response_tx: ResponseSender) {
+        if let Err(_) = self.reconcile(&command_rx, &mut response_tx) {
             return;
         }
 
@@ -569,7 +565,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     /// line up changes there with clean resets here.
     fn reconcile(
         &mut self,
-        command_rx: &mut CommandReceiverQueue,
+        command_rx: &CommandReceiverQueue,
         response_tx: &mut ResponseSender,
     ) -> Result<(), RecvError> {
         let worker_id = self.timely_worker.index();

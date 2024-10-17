@@ -182,7 +182,7 @@ where
     let name = format!("txns_progress_source({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
     let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
-    let (mut remap_output, remap_stream) = builder.new_output();
+    let (remap_output, remap_stream) = builder.new_output();
 
     let shutdown_button = builder.build(move |capabilities| async move {
         if worker_idx != chosen_worker {
@@ -298,7 +298,7 @@ where
     let name = format!("txns_progress_source({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
     let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
-    let (mut remap_output, remap_stream) = builder.new_output();
+    let (remap_output, remap_stream) = builder.new_output();
 
     let shutdown_button = builder.build(move |capabilities| async move {
         if worker_idx != chosen_worker {
@@ -375,7 +375,7 @@ where
         passthrough.scope().peers(),
         data_id.to_string(),
     );
-    let (mut passthrough_output, passthrough_stream) =
+    let (passthrough_output, passthrough_stream) =
         builder.new_output::<CapacityContainerBuilder<_>>();
     let mut remap_input = builder.new_disconnected_input(&remap, Pipeline);
     let mut passthrough_input = builder.new_disconnected_input(&passthrough, Pipeline);

@@ -194,18 +194,18 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
-    let (mut raw_handle, raw_data) = builder.new_output();
-    let (mut rewinds_handle, rewinds) = builder.new_output();
+    let (raw_handle, raw_data) = builder.new_output();
+    let (rewinds_handle, rewinds) = builder.new_output();
     // This output is used to signal to the replication operator that the replication slot has been
     // created. With the current state of execution serialization there isn't a lot of benefit
     // of splitting the snapshot and replication phases into two operators.
     // TODO(petrosagg): merge the two operators in one (while still maintaining separation as
     // functions/modules)
     let (_, slot_ready) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (mut snapshot_handle, snapshot) = builder.new_output();
-    let (mut definite_error_handle, definite_errors) = builder.new_output();
+    let (snapshot_handle, snapshot) = builder.new_output();
+    let (definite_error_handle, definite_errors) = builder.new_output();
 
-    let (mut stats_output, stats_stream) = builder.new_output();
+    let (stats_output, stats_stream) = builder.new_output();
 
     // This operator needs to broadcast data to itself in order to synchronize the transaction
     // snapshot. However, none of the feedback capabilities result in output messages and for the

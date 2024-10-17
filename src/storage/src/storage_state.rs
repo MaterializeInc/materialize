@@ -497,7 +497,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
     /// Entry point for applying a response from the async storage worker.
     pub fn handle_async_worker_response(
-        &mut self,
+        &self,
         async_response: AsyncStorageWorkerResponse<mz_repr::Timestamp>,
     ) {
         match async_response {
