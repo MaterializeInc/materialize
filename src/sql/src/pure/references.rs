@@ -19,10 +19,7 @@ use mz_storage_types::sources::{ExternalReferenceResolutionError, SourceReferenc
 use crate::names::{FullItemName, RawDatabaseSpecifier};
 use crate::plan::{PlanError, SourceReference, SourceReferences};
 
-use super::{
-    error::{MySqlSourcePurificationError, PgSourcePurificationError},
-    RequestedSourceExport,
-};
+use super::{error::PgSourcePurificationError, RequestedSourceExport};
 
 /// A client that allows determining all available source references and resolving
 /// them to a user-specified source reference during purification.
@@ -195,19 +192,14 @@ impl<'a> SourceReferenceClient<'a> {
                 ref mut conn,
                 include_system_schemas,
             } => {
-                // NOTE: mysql will only expose the schemas of tables we have at least one privilege on
-                // and we can't tell if a table exists without a privilege, so in some cases we may
-                // return an EmptyDatabase error in the case of privilege issues.
                 let request = if include_system_schemas {
                     mz_mysql_util::SchemaRequest::AllWithSystemSchemas
                 } else {
                     mz_mysql_util::SchemaRequest::All
                 };
+                // NOTE: mysql will only expose the schemas of tables we have at least one privilege on
+                // and we can't tell if a table exists without a privilege
                 let tables = mz_mysql_util::schema_info((*conn).deref_mut(), &request).await?;
-
-                if tables.is_empty() {
-                    Err(MySqlSourcePurificationError::EmptyDatabase)?;
-                }
 
                 tables.into_iter().map(ReferenceMetadata::MySql).collect()
             }

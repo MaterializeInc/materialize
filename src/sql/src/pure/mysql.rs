@@ -375,7 +375,7 @@ pub(super) async fn purify_source_exports(
 
     if requested_exports.is_empty() {
         sql_bail!(
-            "[internal error]: MySQL source must ingest at least one table, but {} matched none",
+            "MySQL source must ingest at least one table, but {} matched none",
             requested_references.as_ref().unwrap().to_ast_string()
         );
     }
