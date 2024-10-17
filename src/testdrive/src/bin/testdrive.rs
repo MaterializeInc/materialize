@@ -351,20 +351,16 @@ async fn main() {
         arg_vars.insert(name.to_string(), val.to_string());
     }
 
-    let materialize_catalog_config = if args.validate_catalog_store {
-        Some(CatalogConfig {
-            persist_consensus_url: args
-                .persist_consensus_url
-                .clone()
-                .expect("required for persist catalog"),
-            persist_blob_url: args
-                .persist_blob_url
-                .clone()
-                .expect("required for persist catalog"),
-        })
-    } else {
-        None
-    };
+    let materialize_catalog_config = Some(CatalogConfig {
+        persist_consensus_url: args
+            .persist_consensus_url
+            .clone()
+            .expect("required for persist catalog"),
+        persist_blob_url: args
+            .persist_blob_url
+            .clone()
+            .expect("required for persist catalog"),
+    });
     let config = Config {
         // === Testdrive options. ===
         arg_vars,

@@ -60,7 +60,7 @@ SERVICES = [
     Testdrive(
         external_cockroach=True,
         validate_catalog_store=False,
-        volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
+        volumes_extra=["secrets:/share/secrets"],
     ),
 ]
 

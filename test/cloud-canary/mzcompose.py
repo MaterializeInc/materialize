@@ -363,7 +363,7 @@ def td(
         seed=1,  # Required for predictable Kafka topic names
         kafka_url=KAFKA_BOOTSTRAP_SERVER,
         schema_registry_url=SCHEMA_REGISTRY_ENDPOINT,
-        no_consistency_checks=True,
+        consistency_checks=False,
         environment=[
             "KAFKA_OPTION="
             + ",".join(
@@ -389,7 +389,7 @@ def td(
             seed=1,  # Required for predictable Kafka topic names
             kafka_url=redpanda.cluster_info["kafka_api"]["seed_brokers"][0],
             schema_registry_url=redpanda.cluster_info["schema_registry"]["url"],
-            no_consistency_checks=True,
+            consistency_checks=False,
             environment=[
                 "KAFKA_OPTION="
                 + ",".join(

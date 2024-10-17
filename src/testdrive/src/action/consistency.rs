@@ -172,9 +172,7 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
     let dump: CatalogDump = serde_json::from_str(&memory_catalog).context("decoding catalog")?;
 
     let Some(system_parameter_defaults) = dump.system_parameter_defaults else {
-        // TODO(parkmycar, def-): Ideally this could be an error, but a lot of test suites fail. We
-        // should explicitly disable consistency check in these test suites.
-        tracing::warn!(
+        tracing::error!(
             "Missing system_parameter_defaults in memory catalog state, skipping consistency check"
         );
         return Ok(());
@@ -204,9 +202,7 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
                 .expect("state must be dumpable")
         });
     let Some(disk_catalog) = maybe_disk_catalog else {
-        // TODO(parkmycar, def-): Ideally this could be an error, but a lot of test suites fail. We
-        // should explicitly disable consistency check in these test suites.
-        tracing::warn!("No Catalog state on disk, skipping consistency check");
+        tracing::error!("No Catalog state on disk, skipping consistency check");
         return Ok(());
     };
 
