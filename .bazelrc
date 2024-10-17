@@ -2,6 +2,12 @@
 # `build:[ linux | macos | windows | freebsd | openbsd ]`
 common --enable_platform_specific_config
 
+# TODO(parkmycar): Migrate to Bzlmod.
+#
+# Note: We are not yet using Bzlmod because there are parts of the ecosystem
+# that haven't yet migrated to it.
+common --noenable_bzlmod
+
 # Required for remote caching to be effective.
 #
 # Otherwise Bazel will passthrough the current system's PATH in the execution
