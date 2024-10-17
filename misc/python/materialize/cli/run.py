@@ -505,8 +505,6 @@ def _macos_codesign(path: str) -> None:
 def _connect_sql(urlstr: str) -> pg8000.native.Connection:
     url = urlparse(urlstr)
     database = url.path.removeprefix("/")
-    if not database:
-        raise UIError(f"database name is missing in the postgres URL: {urlstr}")
     try:
         dbconn = pg8000.native.Connection(
             host=url.hostname or "localhost",
@@ -534,6 +532,11 @@ For PostgreSQL:
     # PostgreSQL, the database must exist for us to connect to it at all--we
     # declare it to be the user's problem to create this database.
     if "crdb_version" in dbconn.parameter_statuses:
+        if not database:
+            raise UIError(
+                f"database name is missing in the postgres URL: {urlstr}",
+                hint="When connecting to CockroachDB, the database name is required.",
+            )
         _run_sql(dbconn, f"CREATE DATABASE IF NOT EXISTS {database}")
 
     return dbconn
