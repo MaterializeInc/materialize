@@ -14,10 +14,10 @@ A,B,0
 > SELECT mz_unsafe.mz_sleep(60);
 <null>
 
-> SELECT count(*) FROM largeinput
+> SELECT count(*) FROM largeinput_tbl
 11000001
 
-> CREATE SINK output FROM largeinput
+> CREATE SINK output FROM largeinput_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-byo-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
