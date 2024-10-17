@@ -619,10 +619,12 @@ name                                     comment
 ------------------------------------------------
 mz_activity_log_thinned                  ""
 mz_cluster_replica_history               ""
+mz_cluster_replica_name_history          ""
 mz_cluster_replica_utilization           ""
 mz_cluster_replica_utilization_history   ""
 mz_compute_hydration_statuses            ""
 mz_compute_operator_hydration_statuses   ""
+mz_console_cluster_utilization_overview  ""
 mz_show_continual_tasks                  ""
 mz_global_frontiers                      ""
 mz_hydration_statuses                    ""
@@ -631,9 +633,11 @@ mz_materialization_lag                   ""
 mz_notices                               ""
 mz_notices_redacted                      ""
 mz_object_fully_qualified_names          ""
+mz_object_history                        ""
 mz_object_lifetimes                      ""
 mz_object_oid_alias                      ""
 mz_object_transitive_dependencies        ""
+mz_objects_id_namespace_types            ""
 mz_recent_activity_log                   ""
 mz_recent_activity_log_thinned           ""
 mz_recent_activity_log_redacted          ""
@@ -783,7 +787,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-238
+241
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

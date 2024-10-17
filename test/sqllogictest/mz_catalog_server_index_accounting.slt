@@ -40,6 +40,7 @@ mz_arrangement_sharing_raw_s2_primary_idx  CREATE␠INDEX␠"mz_arrangement_shar
 mz_cluster_replica_history_ind  CREATE␠INDEX␠"mz_cluster_replica_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_history"␠("dropped_at")
 mz_cluster_replica_metrics_history_ind  CREATE␠INDEX␠"mz_cluster_replica_metrics_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_metrics_history"␠("replica_id")
 mz_cluster_replica_metrics_ind  CREATE␠INDEX␠"mz_cluster_replica_metrics_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_metrics"␠("replica_id")
+mz_cluster_replica_name_history_ind  CREATE␠INDEX␠"mz_cluster_replica_name_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_name_history"␠("id")
 mz_cluster_replica_sizes_ind  CREATE␠INDEX␠"mz_cluster_replica_sizes_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_cluster_replica_sizes"␠("size")
 mz_cluster_replica_status_history_ind  CREATE␠INDEX␠"mz_cluster_replica_status_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_status_history"␠("replica_id")
 mz_cluster_replica_statuses_ind  CREATE␠INDEX␠"mz_cluster_replica_statuses_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_statuses"␠("replica_id")
@@ -55,6 +56,7 @@ mz_compute_hydration_times_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compu
 mz_compute_import_frontiers_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_import_frontiers_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_import_frontiers_per_worker"␠("export_id",␠"import_id",␠"worker_id")
 mz_compute_operator_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_compute_operator_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_operator_durations_histogram_raw"␠("id",␠"worker_id",␠"duration_ns")
 mz_connections_ind  CREATE␠INDEX␠"mz_connections_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_connections"␠("schema_id")
+mz_console_cluster_utilization_overview_ind  CREATE␠INDEX␠"mz_console_cluster_utilization_overview_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_console_cluster_utilization_overview"␠("cluster_id")
 mz_databases_ind  CREATE␠INDEX␠"mz_databases_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_databases"␠("name")
 mz_dataflow_addresses_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_addresses_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_dataflow_addresses_per_worker"␠("id",␠"worker_id")
 mz_dataflow_channels_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_channels_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_dataflow_channels_per_worker"␠("id",␠"worker_id")
@@ -71,6 +73,7 @@ mz_message_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_coun
 mz_message_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_notices"␠("id")
 mz_object_dependencies_ind  CREATE␠INDEX␠"mz_object_dependencies_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_object_dependencies"␠("object_id")
+mz_object_history_ind  CREATE␠INDEX␠"mz_object_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_object_history"␠("id")
 mz_object_lifetimes_ind  CREATE␠INDEX␠"mz_object_lifetimes_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_object_lifetimes"␠("id")
 mz_object_transitive_dependencies_ind  CREATE␠INDEX␠"mz_object_transitive_dependencies_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_object_transitive_dependencies"␠("object_id")
 mz_objects_ind  CREATE␠INDEX␠"mz_objects_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_objects"␠("schema_id")
@@ -199,6 +202,7 @@ mz_base_types  id
 mz_cluster_replica_frontiers  object_id
 mz_cluster_replica_frontiers  replica_id
 mz_cluster_replica_frontiers  write_frontier
+mz_cluster_replica_history  cluster_id
 mz_cluster_replica_history  cluster_name
 mz_cluster_replica_history  created_at
 mz_cluster_replica_history  credits_per_hour
@@ -217,6 +221,10 @@ mz_cluster_replica_metrics_history  memory_bytes
 mz_cluster_replica_metrics_history  occurred_at
 mz_cluster_replica_metrics_history  process_id
 mz_cluster_replica_metrics_history  replica_id
+mz_cluster_replica_name_history  id
+mz_cluster_replica_name_history  new_name
+mz_cluster_replica_name_history  occurred_at
+mz_cluster_replica_name_history  previous_name
 mz_cluster_replica_sizes  cpu_nano_cores
 mz_cluster_replica_sizes  credits_per_hour
 mz_cluster_replica_sizes  disk_bytes
@@ -301,6 +309,23 @@ mz_connections  privileges
 mz_connections  redacted_create_sql
 mz_connections  schema_id
 mz_connections  type
+mz_console_cluster_utilization_overview  bucket_end
+mz_console_cluster_utilization_overview  bucket_start
+mz_console_cluster_utilization_overview  cluster_id
+mz_console_cluster_utilization_overview  disk_percent
+mz_console_cluster_utilization_overview  max_cpu_at
+mz_console_cluster_utilization_overview  max_cpu_percent
+mz_console_cluster_utilization_overview  max_disk_at
+mz_console_cluster_utilization_overview  max_memory_and_disk_at
+mz_console_cluster_utilization_overview  max_memory_and_disk_disk_percent
+mz_console_cluster_utilization_overview  max_memory_and_disk_memory_percent
+mz_console_cluster_utilization_overview  max_memory_at
+mz_console_cluster_utilization_overview  memory_and_disk_percent
+mz_console_cluster_utilization_overview  memory_percent
+mz_console_cluster_utilization_overview  name
+mz_console_cluster_utilization_overview  offline_events
+mz_console_cluster_utilization_overview  replica_id
+mz_console_cluster_utilization_overview  size
 mz_databases  id
 mz_databases  name
 mz_databases  oid
@@ -399,6 +424,11 @@ mz_notices  redacted_hint
 mz_notices  redacted_message
 mz_object_dependencies  object_id
 mz_object_dependencies  referenced_object_id
+mz_object_history  cluster_id
+mz_object_history  created_at
+mz_object_history  dropped_at
+mz_object_history  id
+mz_object_history  object_type
 mz_object_lifetimes  event_type
 mz_object_lifetimes  id
 mz_object_lifetimes  object_type
@@ -414,6 +444,7 @@ mz_objects  owner_id
 mz_objects  privileges
 mz_objects  schema_id
 mz_objects  type
+mz_objects_id_namespace_types  object_type
 mz_optimizer_notices  action
 mz_optimizer_notices  action_type
 mz_optimizer_notices  created_at
