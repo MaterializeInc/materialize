@@ -14,8 +14,10 @@ A,B,0
 # The test intentionally does not go through toxiproxy.
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE SOURCE largeinput (city, state, zip)
+> CREATE SOURCE largeinput
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-largeinput-${testdrive.seed}')
+
+> CREATE TABLE largeinput_tbl (city, state, zip) FROM SOURCE largeinput (REFERENCE "testdrive-largeinput-${testdrive.seed}")
   FORMAT CSV WITH 3 COLUMNS
   INCLUDE OFFSET
 

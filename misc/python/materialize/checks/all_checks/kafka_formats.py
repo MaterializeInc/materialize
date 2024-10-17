@@ -68,23 +68,51 @@ class KafkaFormats(Check):
                   VALUE FORMAT TEXT
                   ENVELOPE UPSERT
 
-                > CREATE SOURCE format_csv1 (key1, key2, value1, value2)
+                >[version<11700] CREATE SOURCE format_csv1 (key1, key2, value1, value2)
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
                   KEY FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
                   VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
                   ENVELOPE UPSERT
 
-                > CREATE SOURCE format_regex1 (key1, key2, value1, value2)
+                >[version>=11700] CREATE SOURCE format_csv1_src
+                  IN CLUSTER kafka_formats
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
+                >[version>=11700] CREATE TABLE format_csv1 (key1, key2, value1, value2)
+                  FROM SOURCE format_csv1_src (REFERENCE "testdrive-format-bytes-${testdrive.seed}")
+                  KEY FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+                  VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+                  ENVELOPE UPSERT
+
+                >[version<11700] CREATE SOURCE format_regex1 (key1, key2, value1, value2)
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
                   KEY FORMAT REGEX '(?P<key1>[^,]+),(?P<key2>\\w+)'
                   VALUE FORMAT REGEX '(?P<value1>[^,]+),(?P<value2>\\w+)'
                   ENVELOPE UPSERT
 
-                > CREATE SOURCE format_protobuf1
+                >[version>=11700] CREATE SOURCE format_regex1_src
+                  IN CLUSTER kafka_formats
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
+                >[version>=11700] CREATE TABLE format_regex1 (key1, key2, value1, value2)
+                  FROM SOURCE format_regex1_src (TOPIC "testdrive-format-bytes-${testdrive.seed}")
+                  KEY FORMAT REGEX '(?P<key1>[^,]+),(?P<key2>\\w+)'
+                  VALUE FORMAT REGEX '(?P<value1>[^,]+),(?P<value2>\\w+)'
+                  ENVELOPE UPSERT
+
+                >[version<11700] CREATE SOURCE format_protobuf1
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-protobuf-${testdrive.seed}')
+                  KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
+                  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
+                  INCLUDE KEY
+                  ENVELOPE UPSERT
+
+                >[version>=11700] CREATE SOURCE format_protobuf1_src
+                  IN CLUSTER kafka_formats
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-protobuf-${testdrive.seed}')
+                >[version>=11700] CREATE SOURCE format_protobuf1
+                  FROM SOURCE format_protobuf1_src (REFERENCE "testdrive-format-protobuf-${testdrive.seed}")
                   KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
                   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
                   INCLUDE KEY
@@ -114,23 +142,51 @@ class KafkaFormats(Check):
                   VALUE FORMAT TEXT
                   ENVELOPE UPSERT
 
-                > CREATE SOURCE format_csv2 (key1, key2, value1, value2)
+                >[version<11700] CREATE SOURCE format_csv2 (key1, key2, value1, value2)
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
                   KEY FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
                   VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
                   ENVELOPE UPSERT
 
-                > CREATE SOURCE format_regex2 (key1, key2, value1, value2)
+                >[version>=11700] CREATE SOURCE format_csv2_src
+                  IN CLUSTER kafka_formats
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
+                >[version>=11700] CREATE TABLE format_csv2 (key1, key2, value1, value2)
+                  FROM SOURCE format_csv2_src (REFERENCE "testdrive-format-bytes-${testdrive.seed}")
+                  KEY FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+                  VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+                  ENVELOPE UPSERT
+
+                >[version<11700] CREATE SOURCE format_regex2 (key1, key2, value1, value2)
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
                   KEY FORMAT REGEX '(?P<key1>[^,]+),(?P<key2>\\w+)'
                   VALUE FORMAT REGEX '(?P<value1>[^,]+),(?P<value2>\\w+)'
                   ENVELOPE UPSERT
 
-                > CREATE SOURCE format_protobuf2
+                >[version>=11700] CREATE SOURCE format_regex2_src
+                  IN CLUSTER kafka_formats
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
+                >[version>=11700] CREATE TABLE format_regex2
+                  FROM SOURCE format_regex2_src (REFERENCE "testdrive-format-bytes-${testdrive.seed}")
+                  KEY FORMAT REGEX '(?P<key1>[^,]+),(?P<key2>\\w+)'
+                  VALUE FORMAT REGEX '(?P<value1>[^,]+),(?P<value2>\\w+)'
+                  ENVELOPE UPSERT
+
+                >[version<11700] CREATE SOURCE format_protobuf2
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-protobuf-${testdrive.seed}')
+                  KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
+                  VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
+                  INCLUDE KEY
+                  ENVELOPE UPSERT
+
+                >[version>=11700] CREATE SOURCE format_protobuf2_src
+                  IN CLUSTER kafka_formats
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-protobuf-${testdrive.seed}')
+                >[version>=11700] CREATE SOURCE format_protobuf2
+                  FROM TABLE format_protobuf2_src (TOPIC "testdrive-format-protobuf-${testdrive.seed}")
                   KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
                   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
                   INCLUDE KEY

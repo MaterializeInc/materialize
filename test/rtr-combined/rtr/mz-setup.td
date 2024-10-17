@@ -63,8 +63,10 @@ $ kafka-ingest topic=input format=bytes repeat=1
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE SOURCE input_kafka (a)
+> CREATE SOURCE input_kafka
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
+
+> CREATE TABLE input_kafka_tbl (a) FROM SOURCE input_kafka (REFERENCE "testdrive-input-${testdrive.seed}")
   FORMAT CSV WITH 1 COLUMNS
 
 > CREATE MATERIALIZED VIEW sum AS
@@ -72,7 +74,7 @@ $ kafka-ingest topic=input format=bytes repeat=1
   FROM (
       SELECT count(*) FROM table_mysql
       UNION ALL SELECT count(*) FROM table_pg
-      UNION ALL SELECT count(*) FROM input_kafka
+      UNION ALL SELECT count(*) FROM input_kafka_tbl
   ) AS x;
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
