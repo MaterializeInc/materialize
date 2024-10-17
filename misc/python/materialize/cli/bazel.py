@@ -81,8 +81,9 @@ def output_path_cmd(args: list[str]):
 
 
 def bazel_cmd(args: list[str]):
-    """Forwards all arguments to Bazel."""
-    subprocess.run(["bazel"] + args, check=True)
+    """Forwards all arguments to Bazel, possibly with extra configuration."""
+    remote_cache = remote_cache_arg()
+    subprocess.run(["bazel", *remote_cache] + args, check=True)
 
 
 def gen(path, check):
@@ -99,10 +100,12 @@ def gen(path, check):
     check_arg = []
     if check:
         check_arg += ["--check"]
+    remote_cache = remote_cache_arg()
 
     cmd_args = [
         "bazel",
         "run",
+        *remote_cache,
         # TODO(parkmycar): Once bin/bazel gen is more stable in CI, enable this
         # config to make the output less noisy.
         # "--config=script",
@@ -128,6 +131,8 @@ def fmt(path):
         ui.warn("couldn't find 'bazel' skipping formatting of BUILD files")
         return
 
+    # Note: No remote cache is needed here since we're just running an already
+    # built binary.
     cmd_args = [
         "bazel",
         "run",
@@ -148,6 +153,18 @@ def output_path(target) -> list[pathlib.Path]:
         cmd_args, text=True, stderr=subprocess.DEVNULL
     ).splitlines()
     return [pathlib.Path(path) for path in paths]
+
+
+def remote_cache_arg() -> list[str]:
+    """List of arguments that could possibly enable use of a remote cache."""
+
+    # TODO(parkmycar): Setup access to the remote cache for developers with Teleport.
+    ci_remote = os.getenv("CI_BAZEL_REMOTE_CACHE")
+
+    if ci_remote:
+        return [f"--remote_cache={ci_remote}"]
+    else:
+        return []
 
 
 if __name__ == "__main__":
