@@ -255,6 +255,19 @@ each replica, including the times at which it was created and dropped
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
 | `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](../mz_catalog#mz_cluster_replica_sizes). |
 
+## `mz_cluster_replica_name_history`
+
+The `mz_cluster_replica_name_history` view contains historical information about names of each cluster replica.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_replica_name_history -->
+| Field                 | Type                         | Meaning                                                                                                                                   |
+|-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `occurred_at`          | [`timestamp with time zone`]                     |  The time at which the cluster replica was created or renamed. `NULL` if it's a built in system cluster replica.                                                                                                              |
+| `id`          | [`text`]                     | The ID of the cluster replica.                                                                                                              |
+| `previous_name`                | [`text`]                     | The previous name of the cluster replica. `NULL` if there was no previous name.   |
+| `new_name`        | [`text`]                     | The new name of the cluster replica.                                                                                     |
+| `cluster_id`        | [`text`]                     | The ID of the cluster the replica belongs to.                                                             |
+
 ## `mz_internal_cluster_replicas`
 
 The `mz_internal_cluster_replicas` table lists the replicas that are created and maintained by Materialize support.

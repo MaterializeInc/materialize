@@ -7340,6 +7340,52 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_cluster_replica_name_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_CLUSTER_REPLICA_NAME_HISTORY_OID,
+    column_defs: Some("occurred_at, id, previous_name, new_name"),
+    sql: r#"WITH user_replica_alter_history AS (
+  SELECT occurred_at,
+    audit_events.details->>'replica_id' AS id,
+    audit_events.details->>'old_name' AS previous_name,
+    audit_events.details->>'new_name' AS new_name
+  FROM mz_catalog.mz_audit_events AS audit_events
+  WHERE object_type = 'cluster-replica'
+    AND audit_events.event_type = 'alter'
+    AND audit_events.details->>'replica_id' like 'u%'
+),
+user_replica_create_history AS (
+  SELECT occurred_at,
+    audit_events.details->>'replica_id' AS id,
+    NULL AS previous_name,
+    audit_events.details->>'replica_name' AS new_name
+  FROM mz_catalog.mz_audit_events AS audit_events
+  WHERE object_type = 'cluster-replica'
+    AND audit_events.event_type = 'create'
+    AND audit_events.details->>'replica_id' like 'u%'
+),
+-- Because built in system cluster replicas don't have audit events, we need to manually add them
+system_replicas AS (
+  -- We assume that the system cluster replicas were created at the beginning of time
+  SELECT NULL::timestamptz AS occurred_at,
+    id,
+    NULL AS previous_name,
+    name AS new_name
+  FROM mz_catalog.mz_cluster_replicas
+  WHERE id LIKE 's%'
+)
+SELECT *
+FROM user_replica_alter_history
+UNION ALL
+SELECT *
+FROM user_replica_create_history
+UNION ALL
+SELECT *
+FROM system_replicas"#,
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -8008,6 +8054,15 @@ ON mz_internal.mz_cluster_replica_history (dropped_at)",
     is_retained_metrics_object: true,
 };
 
+pub const MZ_CLUSTER_REPLICA_NAME_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_name_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_REPLICA_NAME_HISTORY_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_cluster_replica_name_history (id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_OBJECT_LIFETIMES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_lifetimes_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -8524,6 +8579,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_SHOW_INDEXES),
         Builtin::View(&MZ_SHOW_CONTINUAL_TASKS),
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
+        Builtin::View(&MZ_CLUSTER_REPLICA_NAME_HISTORY),
         Builtin::View(&MZ_TIMEZONE_NAMES),
         Builtin::View(&MZ_TIMEZONE_ABBREVIATIONS),
         Builtin::View(&PG_NAMESPACE_ALL_DATABASES),
@@ -8689,6 +8745,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_HISTORY_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_HISTORY_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_NAME_HISTORY_IND),
         Builtin::Index(&MZ_OBJECT_LIFETIMES_IND),
         Builtin::Index(&MZ_OBJECT_HISTORY_IND),
         Builtin::Index(&MZ_OBJECT_DEPENDENCIES_IND),
