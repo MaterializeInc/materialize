@@ -899,7 +899,8 @@ where
             if !logged_at_info && start.elapsed() >= Duration::from_millis(1024) {
                 logged_at_info = true;
                 info!(
-                    "snapshot {} as of {:?} not yet available for {} upper {:?}",
+                    "snapshot {} {} as of {:?} not yet available for {} upper {:?}",
+                    self.applier.shard_metrics.name,
                     self.shard_id(),
                     as_of.elements(),
                     seqno,
@@ -907,7 +908,8 @@ where
                 );
             } else {
                 debug!(
-                    "snapshot {} as of {:?} not yet available for {} upper {:?}",
+                    "snapshot {} {} as of {:?} not yet available for {} upper {:?}",
+                    self.applier.shard_metrics.name,
                     self.shard_id(),
                     as_of.elements(),
                     seqno,
@@ -932,7 +934,8 @@ where
                 Ok(x) => {
                     if logged_at_info {
                         info!(
-                            "snapshot {} as of {:?} now available",
+                            "snapshot {} {} as of {:?} now available",
+                            self.applier.shard_metrics.name,
                             self.shard_id(),
                             as_of.elements(),
                         );
@@ -957,7 +960,8 @@ where
                 )),
                 Wake::Sleep(sleeps) => {
                     debug!(
-                        "snapshot {} sleeping for {:?}",
+                        "snapshot {} {} sleeping for {:?}",
+                        self.applier.shard_metrics.name,
                         self.shard_id(),
                         sleeps.next_sleep()
                     );
@@ -1080,8 +1084,10 @@ where
                 )),
                 Wake::Sleep(sleeps) => {
                     debug!(
-                        "{:?}: next_listen_batch didn't find new data, retrying in {:?}",
+                        "{:?}: {} {} next_listen_batch didn't find new data, retrying in {:?}",
                         reader_id,
+                        self.applier.shard_metrics.name,
+                        self.shard_id(),
                         sleeps.next_sleep()
                     );
                     wakes.push(Box::pin(
