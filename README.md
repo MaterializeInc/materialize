@@ -147,8 +147,8 @@ Developers can find docs at [doc/developer](doc/developer), and Rust API documen
 
 Contributions are welcome. Prospective code contributors might find the [D-good
 for external
-contributors](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue+label%3A%22D-good+for+external+contributors%22+)
-label useful. See
+contributors](https://github.com/MaterializeInc/materialize/discussions/categories/contribute-to-materialize?discussions_q=is%3Aopen+category%3A%22Contribute+to+Materialize%22+label%3A%22D-good+for+external+contributors%22)
+discussion label useful. See
 [CONTRIBUTING.md](https://github.com/MaterializeInc/materialize/blob/main/CONTRIBUTING.md)
 for additional guidance.
 
