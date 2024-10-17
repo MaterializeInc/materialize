@@ -12,10 +12,10 @@ ALTER SYSTEM SET allowed_cluster_replica_sizes = "1";
 ALTER SYSTEM SET disk_cluster_replicas_default = false;
 
 # Cannot create clusters with cc cluster size naming schemes
-! CREATE CLUSTER c SIZE '1cc';
+! CREATE CLUSTER c SIZE '1cc', REPLICATION FACTOR = 2;
 contains:unknown cluster replica size 1cc
 
-! CREATE CLUSTER c SIZE '512C';
+! CREATE CLUSTER c SIZE '512C', REPLICATION FACTOR = 2;
 contains:unknown cluster replica size 512C
 
 # Nor can we create an unmanaged replica directly
@@ -26,7 +26,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 contains:unknown cluster replica size 1cc
 
 # The existing cluster names are fine
-> CREATE CLUSTER c SIZE '1';
+> CREATE CLUSTER c SIZE '1', REPLICATION FACTOR = 2;
 
 # But ensure we cannot ALTER our way to a cc name either
 ! ALTER CLUSTER c SET (SIZE '1cc');
@@ -39,12 +39,12 @@ contains:unknown cluster replica size 1cc
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM RESET allowed_cluster_replica_sizes;
 
-> CREATE CLUSTER c SIZE '1cc';
+> CREATE CLUSTER c SIZE '1cc', REPLICATION FACTOR = 2;
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 true
 > DROP CLUSTER c
 
-> CREATE CLUSTER c SIZE '1C';
+> CREATE CLUSTER c SIZE '1C', REPLICATION FACTOR = 2;
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 true
 > DROP CLUSTER c

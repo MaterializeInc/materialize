@@ -169,7 +169,7 @@ $ kafka-ingest format=avro topic=avro-data schema=${reader-schema} timestamp=1
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE CLUSTER avro_data_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_data_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_data
   IN CLUSTER avro_data_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
@@ -194,7 +194,7 @@ $ kafka-create-topic topic=avro-data-no-registry
 $ kafka-ingest format=avro topic=avro-data-no-registry schema=${reader-schema} confluent-wire-format=false timestamp=1
 { "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]}, "f6": {"key": 8372} }
 
-> CREATE CLUSTER avro_data_no_registry_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_data_no_registry_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_data_no_registry
   IN CLUSTER avro_data_no_registry_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-no-registry-${testdrive.seed}')
@@ -210,7 +210,7 @@ $ kafka-create-topic topic=avro-corrupted-values
 $ kafka-ingest format=bytes topic=avro-corrupted-values timestamp=1
 garbage
 
-> CREATE CLUSTER avro_corrupted_values_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_corrupted_values_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_corrupted_values
   IN CLUSTER avro_corrupted_values_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-corrupted-values-${testdrive.seed}')
@@ -225,7 +225,7 @@ $ kafka-create-topic topic=avro-corrupted-values2
 $ kafka-ingest format=bytes topic=avro-corrupted-values2 timestamp=1
 garbage
 
-> CREATE CLUSTER avro_corrupted_values2_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_corrupted_values2_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_corrupted_values2
   IN CLUSTER avro_corrupted_values2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-corrupted-values2-${testdrive.seed}')

@@ -51,7 +51,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 {"key": "mammal1"}
 {"key": "mammalmore"} {"f1":"moose", "f2": 2}
 
-> CREATE CLUSTER avroavro_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avroavro_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avroavro
   IN CLUSTER avroavro_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}')
@@ -73,7 +73,7 @@ bìrd1: {"f1":"goose", "f2": 1}
 birdmore: {"f1":"geese", "f2": 2}
 mammal1: {"f1": "moose", "f2": 1}
 
-> CREATE CLUSTER bytesavro_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER bytesavro_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE bytesavro
   IN CLUSTER bytesavro_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textavro-${testdrive.seed}')
@@ -81,7 +81,7 @@ mammal1: {"f1": "moose", "f2": 1}
   VALUE FORMAT AVRO USING SCHEMA  '${schema}'
   ENVELOPE UPSERT
 
-> CREATE CLUSTER textavro_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER textavro_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE textavro
   IN CLUSTER textavro_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textavro-${testdrive.seed}')
@@ -119,14 +119,14 @@ bírdmore:geese
 mammal1:moose
 bìrd1:
 
-> CREATE CLUSTER texttext_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER texttext_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE texttext
   IN CLUSTER texttext_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
-> CREATE CLUSTER textbytes_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER textbytes_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE textbytes
   IN CLUSTER textbytes_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
@@ -134,7 +134,7 @@ bìrd1:
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
 
-> CREATE CLUSTER bytesbytes_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER bytesbytes_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE bytesbytes
   IN CLUSTER bytesbytes_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
@@ -142,7 +142,7 @@ bìrd1:
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
 
-> CREATE CLUSTER bytestext_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER bytestext_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE bytestext
   IN CLUSTER bytestext_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
@@ -204,7 +204,7 @@ $ protobuf-compile-descriptors inputs=test.proto output=test.pb set-var=test-sch
 
 $ kafka-create-topic topic=textproto partitions=1
 
-> CREATE CLUSTER textproto_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER textproto_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE textproto
   IN CLUSTER textproto_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textproto-${testdrive.seed}')
@@ -212,7 +212,7 @@ $ kafka-create-topic topic=textproto partitions=1
   VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA '${test-schema}'
   ENVELOPE UPSERT
 
-> CREATE CLUSTER bytesproto_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER bytesproto_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE bytesproto
   IN CLUSTER bytesproto_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textproto-${testdrive.seed}')
@@ -274,7 +274,7 @@ birdmore:geese
 mammalmore:moose
 mammal1:
 
-> CREATE CLUSTER nullkey_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER nullkey_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE nullkey
   IN CLUSTER nullkey_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nullkey-${testdrive.seed}')
@@ -321,7 +321,7 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 {"f3": {"string": "water"}, "f4": null} {"f1": "crocodile", "f2": 7}
 {"f3": {"string": "earth"}, "f4":{"string": "dao"}}
 
-> CREATE CLUSTER realtimeavroavro_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER realtimeavroavro_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE realtimeavroavro (f3, f4, f1, f2)
   IN CLUSTER realtimeavroavro_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
@@ -339,7 +339,7 @@ fire      yang    dog            42
 water     <null>  crocodile      7
 
 # Ensure that Upsert sources work with START OFFSET
-> CREATE CLUSTER realtimeavroavro_ff_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER realtimeavroavro_ff_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE realtimeavroavro_ff
   IN CLUSTER realtimeavroavro_ff_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
@@ -402,7 +402,7 @@ $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=$
 {"k1": {"string": "boulangerie"}, "k2": null} {"f1":null, "f2": {"long": 10}}
 {"k1": {"string": "boucherie"}, "k2": {"long": 5}} {"f1": {"string": "apple"}, "f2": {"long": 3}}
 
-> CREATE CLUSTER realtimefilteravro_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER realtimefilteravro_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE realtimefilteravro
   IN CLUSTER realtimefilteravro_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-realtimefilteravro-${testdrive.seed}')
@@ -548,7 +548,7 @@ k1        k2
 -----------
 librairie 10
 
-> CREATE CLUSTER include_metadata_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER include_metadata_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE include_metadata
   IN CLUSTER include_metadata_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
@@ -564,7 +564,7 @@ f3        f4        f1           f2   partition  offset
 air       qi        chicken      47    0         12
 earth     dao       rhinoceros   211   0         11
 
-> CREATE CLUSTER include_metadata_ts_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER include_metadata_ts_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE include_metadata_ts
   IN CLUSTER include_metadata_ts_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
@@ -597,7 +597,7 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json-
 "float":1.23
 "str":"hello"
 
-> CREATE CLUSTER format_json_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER format_json_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE format_json
   IN CLUSTER format_json_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-bytes-${testdrive.seed}')
@@ -637,7 +637,7 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=inline-value
 val1:{"a":,"c":"d"}
 val2:[1,2,
 
-> CREATE CLUSTER inline_error_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER inline_error_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 
 # should error without the feature flag enabled
 ! CREATE SOURCE value_decode_error
@@ -700,7 +700,7 @@ $ kafka-ingest format=avro topic=inline-value-errors-2 key-format=avro key-schem
 {"key": "mammal1"} {"f1": "moose", "f2": 1}
 {"key": "bird1"}
 
-> CREATE CLUSTER inline_error_cluster_avro SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER inline_error_cluster_avro SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_envelope_upsert_inline_errors = true

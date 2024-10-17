@@ -80,7 +80,7 @@ false
 
 # Regression test for https://github.com/MaterializeInc/database-issues/issues/4712
 
-> CREATE CLUSTER lgtpch_cluster_cleanup SIZE '1';
+> CREATE CLUSTER lgtpch_cluster_cleanup SIZE '1', REPLICATION FACTOR = 2;
 
 > CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_cleanup FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1, UP TO 100);
 
