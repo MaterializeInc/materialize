@@ -1911,6 +1911,15 @@ pub static MZ_COMPUTE_EXPORTS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_COMPUTE_DATAFLOW_GLOBALIDS_PER_WORKER: LazyLock<BuiltinLog> =
+    LazyLock::new(|| BuiltinLog {
+        name: "mz_compute_dataflow_globalids_per_worker",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::LOG_MZ_COMPUTE_DATAFLOW_GLOBALIDS_PER_WORKER_OID,
+        variant: LogVariant::Compute(ComputeLog::DataflowGlobal),
+        access: vec![PUBLIC_SELECT],
+    });
+
 pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_compute_frontiers_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -1953,10 +1962,10 @@ pub static MZ_ACTIVE_PEEKS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| B
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_COMPUTE_LIR_MAPPING: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
-    name: "mz_lir_mapping_per_worker",
+pub static MZ_COMPUTE_LIR_MAPPING_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
+    name: "mz_compute_lir_mapping_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
-    oid: oid::LOG_MZ_COMPUTE_LIR_MAPPING_OID,
+    oid: oid::LOG_MZ_COMPUTE_LIR_MAPPING_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::LirMapping),
     access: vec![PUBLIC_SELECT],
 });
@@ -4058,6 +4067,30 @@ pub static MZ_DATAFLOW_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(|| Built
     sql: "
 SELECT id, name
 FROM mz_introspection.mz_dataflow_operators_per_worker
+WHERE worker_id = 0",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_DATAFLOW_GLOBAL_IDS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_dataflow_globalids",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_GLOBALIDS_OID,
+    column_defs: None,
+    sql: "
+SELECT id, global_id
+FROM mz_internal.mz_compute_dataflow_globalids_per_worker
+WHERE worker_id = 0",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_lir_mapping",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_LIR_MAPPING_OID,
+    column_defs: None,
+    sql: "
+SELECT global_id, lir_id, operator, address
+FROM mz_internal.mz_compute_lir_mapping_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
@@ -9103,6 +9136,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_DATAFLOW_ADDRESSES_PER_WORKER),
         Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW),
         Builtin::Log(&MZ_COMPUTE_EXPORTS_PER_WORKER),
+        Builtin::Log(&MZ_COMPUTE_DATAFLOW_GLOBALIDS_PER_WORKER),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW),
@@ -9198,6 +9232,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_DATAFLOW_ADDRESSES),
         Builtin::View(&MZ_DATAFLOW_CHANNELS),
         Builtin::View(&MZ_DATAFLOW_OPERATORS),
+        Builtin::View(&MZ_DATAFLOW_GLOBAL_IDS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
         Builtin::View(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES),
@@ -9377,7 +9412,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
         Builtin::Source(&MZ_COMPUTE_HYDRATION_TIMES),
-        Builtin::Log(&MZ_COMPUTE_LIR_MAPPING),
+        Builtin::Log(&MZ_COMPUTE_LIR_MAPPING_PER_WORKER),
+        Builtin::View(&MZ_LIR_MAPPING),
         Builtin::View(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::View(&MZ_COMPUTE_HYDRATION_STATUSES),

@@ -1,0 +1,112 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Ensure attribution sources function (are created, dropped appropriately)
+
+mode cockroach
+
+# VIEW + INDEX
+
+statement ok
+CREATE TABLE t(x INT NOT NULL, y INT, z TEXT);
+
+statement ok
+CREATE VIEW v AS
+  SELECT t1.x AS x, t1.z AS z1, t2.z AS z2
+  FROM t AS t1, t AS t2
+  WHERE t1.x = t2.y;
+
+statement ok
+CREATE INDEX v_idx_x ON v(x);
+
+# let the introspection sources update
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query IT
+SELECT id, global_id FROM mz_introspection.mz_dataflow_globalids ORDER BY id, global_id;
+----
+8 u2
+8 u3
+
+query TI
+SELECT global_id, lir_id FROM mz_introspection.mz_lir_mapping ORDER BY global_id, lir_id DESC;
+----
+u2 4
+u2 3
+u2 2
+u2 1
+u2 0
+u3 6
+u3 5
+
+statement ok
+DROP TABLE t CASCADE;
+
+# we need the dataflow to actually drop to see the updates
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query I
+SELECT COUNT(*) FROM mz_introspection.mz_dataflow_globalids;
+----
+0
+
+query I
+SELECT COUNT(*) FROM mz_introspection.mz_lir_mapping;
+----
+0
+
+# MATERIALIZED VIEW
+
+statement ok
+CREATE TABLE u(x INT NOT NULL, y INT, z TEXT);
+
+statement ok
+CREATE MATERIALIZED VIEW w AS
+  SELECT t1.x AS x, t1.z AS z1, t2.z AS z2
+  FROM u AS t1, u AS t2
+  WHERE t1.x = t2.y;
+
+# let the introspection sources update
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query IT
+SELECT id, global_id FROM mz_introspection.mz_dataflow_globalids ORDER BY id, global_id;
+----
+11  t49
+
+
+query TI
+SELECT global_id, lir_id FROM mz_introspection.mz_lir_mapping ORDER BY global_id, lir_id DESC;
+----
+t49  4
+t49  3
+t49  2
+t49  1
+t49  0
+
+
+statement ok
+DROP TABLE u CASCADE;
+
+# we need the dataflow to actually drop to see the updates
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query I
+SELECT COUNT(*) FROM mz_introspection.mz_dataflow_globalids;
+----
+0
+
+query I
+SELECT COUNT(*) FROM mz_introspection.mz_lir_mapping;
+----
+0
