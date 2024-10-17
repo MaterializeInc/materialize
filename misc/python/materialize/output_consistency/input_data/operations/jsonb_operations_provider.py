@@ -217,13 +217,14 @@ JSONB_OPERATION_TYPES.append(
 JSONB_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "jsonb_object_agg",
-        {5: "jsonb_object_agg($, $ ORDER BY $, $, $)"},
+        {6: "jsonb_object_agg($, $ ORDER BY $, $, $, $)"},
         [
             # key
             AnyOperationParam(),
             # value
             AnyOperationParam(include_record_type=False),
             RowIndicesParam(index_of_param_to_share_data_source=0),
+            RowIndicesParam(index_of_param_to_share_data_source=1),
             SameOperationParam(index_of_previous_param=0),
             SameOperationParam(index_of_previous_param=1),
         ],
@@ -238,14 +239,16 @@ JSONB_OPERATION_TYPES.append(
 JSONB_OPERATION_TYPES.append(
     DbFunctionWithCustomPattern(
         "jsonb_object_agg",
-        {4: "jsonb_object_agg($, $ ORDER BY $, $)"},
+        {6: "jsonb_object_agg($, $ ORDER BY $, $, $, $)"},
         [
             # key
             AnyOperationParam(),
             # value
             RecordOperationParam(),
             RowIndicesParam(index_of_param_to_share_data_source=0),
+            RowIndicesParam(index_of_param_to_share_data_source=1),
             SameOperationParam(index_of_previous_param=0),
+            SameOperationParam(index_of_previous_param=1),
         ],
         JsonbReturnTypeSpec(),
         is_aggregation=True,
