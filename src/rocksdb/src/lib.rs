@@ -731,6 +731,15 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                         }
                     });
 
+                // Abundance of caution: ensure state is cleared.
+                let cf_handle = db.cf_handle("upsert").expect("missing column family");
+                let mut iterator = db.iterator_cf(cf_handle, rocksdb::IteratorMode::Start);
+                let next_entry = iterator.next();
+                assert!(
+                    next_entry.is_none(),
+                    "column family must be empty after clearing"
+                );
+
                 let _ = match add_result {
                     Ok(()) => {
                         let _ = done_sender.send(());
@@ -916,7 +925,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                             match value {
                                 KeyUpdate::Put(update) => writes.put_cf(cf_handle, key, update),
                                 KeyUpdate::Merge(update) => writes.merge_cf(cf_handle, key, update),
-                                KeyUpdate::Delete => writes.delete(key),
+                                KeyUpdate::Delete => writes.delete_cf(cf_handle, key),
                             }
                         }
 

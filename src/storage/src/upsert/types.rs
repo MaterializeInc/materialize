@@ -1187,6 +1187,7 @@ where
             Err(anyhow::anyhow!("Error clearing state"))
         });
 
+        self.stats.clear();
         self.inner.clear().await
     }
 }
