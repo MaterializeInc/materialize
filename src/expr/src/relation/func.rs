@@ -154,6 +154,25 @@ where
     }
 }
 
+fn sum_interval<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let mut sum = Interval::default();
+    let mut empty = true;
+    for d in datums {
+        if !d.is_null() {
+            empty = false;
+            // TODO: raise EvalError::IntervalOutOfRange(format!("{accum} + {other_accum}") instead of unwrap?
+            sum = *(&sum.checked_add(&d.unwrap_interval()).unwrap());
+        }
+    }
+    match empty {
+        true => Datum::Null,
+        false => Datum::from(sum),
+    }
+}
+
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn count<'a, I>(datums: I) -> Datum<'a>
@@ -1732,6 +1751,7 @@ pub enum AggregateFunc {
     SumFloat32,
     SumFloat64,
     SumNumeric,
+    SumInterval,
     Count,
     Any,
     All,
@@ -1872,6 +1892,7 @@ impl Arbitrary for AggregateFunc {
             Just(AggregateFunc::SumFloat32).boxed(),
             Just(AggregateFunc::SumFloat64).boxed(),
             Just(AggregateFunc::SumNumeric).boxed(),
+            Just(AggregateFunc::SumInterval).boxed(),
             Just(AggregateFunc::Count).boxed(),
             Just(AggregateFunc::Any).boxed(),
             Just(AggregateFunc::All).boxed(),
@@ -2001,6 +2022,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                 AggregateFunc::SumFloat32 => Kind::SumFloat32(()),
                 AggregateFunc::SumFloat64 => Kind::SumFloat64(()),
                 AggregateFunc::SumNumeric => Kind::SumNumeric(()),
+                AggregateFunc::SumInterval => Kind::SumInterval(()),
                 AggregateFunc::Count => Kind::Count(()),
                 AggregateFunc::Any => Kind::Any(()),
                 AggregateFunc::All => Kind::All(()),
@@ -2118,6 +2140,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
             Kind::SumFloat32(()) => AggregateFunc::SumFloat32,
             Kind::SumFloat64(()) => AggregateFunc::SumFloat64,
             Kind::SumNumeric(()) => AggregateFunc::SumNumeric,
+            Kind::SumInterval(()) => AggregateFunc::SumInterval,
             Kind::Count(()) => AggregateFunc::Count,
             Kind::Any(()) => AggregateFunc::Any,
             Kind::All(()) => AggregateFunc::All,
@@ -2267,6 +2290,7 @@ impl AggregateFunc {
             AggregateFunc::SumFloat32 => sum_datum::<'a, I, f32, f32>(datums),
             AggregateFunc::SumFloat64 => sum_datum::<'a, I, f64, f64>(datums),
             AggregateFunc::SumNumeric => sum_numeric(datums),
+            AggregateFunc::SumInterval => sum_interval(datums),
             AggregateFunc::Count => count(datums),
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
@@ -2868,6 +2892,7 @@ impl AggregateFunc {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
+            | AggregateFunc::SumInterval
             | AggregateFunc::StringAgg { .. } => true,
             // Count is never null
             AggregateFunc::Count => false,
@@ -3111,6 +3136,7 @@ impl AggregateFunc {
             Self::SumFloat32 => "sum",
             Self::SumFloat64 => "sum",
             Self::SumNumeric => "sum",
+            Self::SumInterval => "sum",
             Self::Count => "count",
             Self::Any => "any",
             Self::All => "all",
