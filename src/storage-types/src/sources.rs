@@ -1813,9 +1813,9 @@ pub enum SourceDataRowColumnarEncoder {
 }
 
 impl SourceDataRowColumnarEncoder {
-    pub(crate) fn goodput(&self) -> usize {
+    pub(crate) fn goodbytes(&self) -> usize {
         match self {
-            SourceDataRowColumnarEncoder::Row(e) => e.goodput(),
+            SourceDataRowColumnarEncoder::Row(e) => e.goodbytes(),
             SourceDataRowColumnarEncoder::EmptyRow => 0,
         }
     }
@@ -1867,8 +1867,8 @@ impl SourceDataColumnarEncoder {
 impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
     type FinishedColumn = StructArray;
 
-    fn goodput(&self) -> usize {
-        self.row_encoder.goodput() + self.err_encoder.values_slice().len()
+    fn goodbytes(&self) -> usize {
+        self.row_encoder.goodbytes() + self.err_encoder.values_slice().len()
     }
 
     #[inline]

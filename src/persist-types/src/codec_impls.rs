@@ -100,7 +100,7 @@ impl ColumnDecoder<()> for UnitColumnar {
 impl ColumnEncoder<()> for UnitColumnar {
     type FinishedColumn = NullArray;
 
-    fn goodput(&self) -> usize {
+    fn goodbytes(&self) -> usize {
         0
     }
 
@@ -141,7 +141,7 @@ pub trait SimpleColumnarData {
     type ArrowColumn: arrow::array::Array + Clone + 'static;
 
     /// The number of actual data bytes this item represents.
-    fn goodput(builder: &Self::ArrowBuilder) -> usize;
+    fn goodbytes(builder: &Self::ArrowBuilder) -> usize;
 
     /// Encode `self` into `builder`.
     fn push(&self, builder: &mut Self::ArrowBuilder);
@@ -156,7 +156,7 @@ impl SimpleColumnarData for String {
     type ArrowBuilder = StringBuilder;
     type ArrowColumn = StringArray;
 
-    fn goodput(builder: &Self::ArrowBuilder) -> usize {
+    fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
         builder.values_slice().len()
     }
 
@@ -176,7 +176,7 @@ impl SimpleColumnarData for Vec<u8> {
     type ArrowBuilder = BinaryBuilder;
     type ArrowColumn = BinaryArray;
 
-    fn goodput(builder: &Self::ArrowBuilder) -> usize {
+    fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
         builder.values_slice().len()
     }
 
@@ -196,7 +196,7 @@ impl SimpleColumnarData for ShardId {
     type ArrowBuilder = StringBuilder;
     type ArrowColumn = StringArray;
 
-    fn goodput(builder: &Self::ArrowBuilder) -> usize {
+    fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
         builder.values_slice().len()
     }
 
@@ -218,8 +218,8 @@ pub struct SimpleColumnarEncoder<T: SimpleColumnarData>(T::ArrowBuilder);
 impl<T: SimpleColumnarData> ColumnEncoder<T> for SimpleColumnarEncoder<T> {
     type FinishedColumn = T::ArrowColumn;
 
-    fn goodput(&self) -> usize {
-        T::goodput(&self.0)
+    fn goodbytes(&self) -> usize {
+        T::goodbytes(&self.0)
     }
 
     fn append(&mut self, val: &T) {
@@ -503,7 +503,7 @@ pub struct TodoColumnarEncoder<T>(PhantomData<T>);
 impl<T> ColumnEncoder<T> for TodoColumnarEncoder<T> {
     type FinishedColumn = StructArray;
 
-    fn goodput(&self) -> usize {
+    fn goodbytes(&self) -> usize {
         panic!("TODO")
     }
 

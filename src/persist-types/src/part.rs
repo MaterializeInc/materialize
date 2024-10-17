@@ -54,8 +54,8 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
     }
 
     /// Estimate the size of the part this builder will build.
-    pub fn goodput(&self) -> usize {
-        self.key.goodput() + self.val.goodput() + self.time.goodput() + self.diff.goodput()
+    pub fn goodbytes(&self) -> usize {
+        self.key.goodbytes() + self.val.goodbytes() + self.time.goodbytes() + self.diff.goodbytes()
     }
 
     /// Push a new row onto this [`PartBuilder2`].
@@ -95,7 +95,7 @@ pub struct Codec64Mut(Vec<i64>);
 
 impl Codec64Mut {
     /// Returns the overall size of the stored data in bytes.
-    pub fn goodput(&self) -> usize {
+    pub fn goodbytes(&self) -> usize {
         self.0.len() * size_of::<i64>()
     }
 

@@ -90,7 +90,7 @@ pub trait ColumnEncoder<T> {
     type FinishedColumn: arrow::array::Array + Debug + 'static;
 
     /// The amount of "actual data" encoded by this encoder so far.
-    fn goodput(&self) -> usize;
+    fn goodbytes(&self) -> usize;
 
     /// Appends `val` onto this encoder.
     fn append(&mut self, val: &T);

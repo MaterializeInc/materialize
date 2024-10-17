@@ -764,7 +764,7 @@ mod codec_impls {
         type ArrowBuilder = UInt64Builder;
         type ArrowColumn = UInt64Array;
 
-        fn goodput(builder: &Self::ArrowBuilder) -> usize {
+        fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
             builder.values_slice().to_byte_slice().len()
         }
 
@@ -835,7 +835,7 @@ mod codec_impls {
         type ArrowBuilder = BinaryBuilder;
         type ArrowColumn = BinaryArray;
 
-        fn goodput(builder: &Self::ArrowBuilder) -> usize {
+        fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
             builder.values_slice().to_byte_slice().len()
         }
 

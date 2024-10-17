@@ -540,7 +540,7 @@ mod tests {
     impl ColumnEncoder<Strings> for StringsEncoder {
         type FinishedColumn = StructArray;
 
-        fn goodput(&self) -> usize {
+        fn goodbytes(&self) -> usize {
             self.arrays.iter().map(|a| a.values_slice().len()).sum()
         }
 

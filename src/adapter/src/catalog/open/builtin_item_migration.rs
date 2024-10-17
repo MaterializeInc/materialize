@@ -577,7 +577,7 @@ mod persist_schema {
         type ArrowBuilder = StringBuilder;
         type ArrowColumn = StringArray;
 
-        fn goodput(builder: &Self::ArrowBuilder) -> usize {
+        fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
             builder.values_slice().len()
         }
 

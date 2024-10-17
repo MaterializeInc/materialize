@@ -92,8 +92,8 @@ struct DatumEncoder {
 }
 
 impl DatumEncoder {
-    fn goodput(&self) -> usize {
-        self.encoder.goodput()
+    fn goodbytes(&self) -> usize {
+        self.encoder.goodbytes()
     }
 
     fn push(&mut self, datum: Datum) {
@@ -208,7 +208,7 @@ enum DatumColumnEncoder {
 }
 
 impl DatumColumnEncoder {
-    fn goodput(&self) -> usize {
+    fn goodbytes(&self) -> usize {
         match self {
             DatumColumnEncoder::Bool(a) => a.len(),
             DatumColumnEncoder::U8(a) => a.values_slice().to_byte_slice().len(),
@@ -242,13 +242,13 @@ impl DatumColumnEncoder {
             DatumColumnEncoder::Range(a) => a.values_slice().len(),
             DatumColumnEncoder::Jsonb { buf, .. } => buf.len(),
             DatumColumnEncoder::Array { dims, vals, .. } => {
-                dims.len() * PackedArrayDimension::SIZE + vals.goodput()
+                dims.len() * PackedArrayDimension::SIZE + vals.goodbytes()
             }
-            DatumColumnEncoder::List { values, .. } => values.goodput(),
+            DatumColumnEncoder::List { values, .. } => values.goodbytes(),
             DatumColumnEncoder::Map { keys, vals, .. } => {
-                keys.values_slice().len() + vals.goodput()
+                keys.values_slice().len() + vals.goodbytes()
             }
-            DatumColumnEncoder::Record { fields, .. } => fields.iter().map(|f| f.goodput()).sum(),
+            DatumColumnEncoder::Record { fields, .. } => fields.iter().map(|f| f.goodbytes()).sum(),
             DatumColumnEncoder::RecordEmpty(a) => a.len(),
         }
     }
@@ -1325,8 +1325,8 @@ impl RowColumnarEncoder {
 impl ColumnEncoder<Row> for RowColumnarEncoder {
     type FinishedColumn = StructArray;
 
-    fn goodput(&self) -> usize {
-        self.encoders.iter().map(|e| e.goodput()).sum()
+    fn goodbytes(&self) -> usize {
+        self.encoders.iter().map(|e| e.goodbytes()).sum()
     }
 
     fn append(&mut self, val: &Row) {
