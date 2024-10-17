@@ -77,7 +77,7 @@ body.dark {
     --divider: var(--black-lighter);
     --divider-light: var(--black-lightest);
 
-    --link: #9e7cf7;
+    --link: var(--brand);
 
     --code-block: var(--card-light);
     --code-simple: #c2c2c2;
@@ -106,10 +106,11 @@ body.dark {
     // NOTE(benesch): please ensure these colors stay blueish. Public preview
     // requires a mild amount of caution. Importantly, green is not the right
     // color, as that implies encouragement rather than caution.
-    --public-preview: #e9f7fb;
-    --public-preview-border: #c0d3d8;
+    --public-preview: #393e514b;
+    --public-preview-text: var(--important);
+    --public-preview-border: #374e7c;
     --public-preview-after: #c0d3d8;
-    --public-preview-gutter: #186477;
+    --public-preview-gutter: #306dca;
 }
 
 body.light {
@@ -154,6 +155,7 @@ body.light {
     --public-preview-border: #c0d3d8;
     --public-preview-after: #c0d3d8;
     --public-preview-gutter: #186477;
+    --public-preview-text: var(--black);
 }
 
 *,
