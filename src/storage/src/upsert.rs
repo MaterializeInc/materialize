@@ -974,20 +974,6 @@ where
                         }
                     }
 
-                    for (_, value, _ts, diff) in persist_stash.iter_mut() {
-                        if let Err(UpsertError::Value(ref mut err)) = value {
-                            // If we receive a legacy error in the snapshot we will keep a note of it but
-                            // insert a non-legacy error in our state. This is so that if this error is
-                            // ever retracted we will correctly retract the non-legacy version because by
-                            // that time we will have emitted the error correction, which happens before
-                            // processing any of the new source input.
-                            if err.is_legacy_dont_touch_it {
-                                legacy_errors_to_correct.push((err.clone(), diff.clone()));
-                                err.is_legacy_dont_touch_it = false;
-                            }
-                        }
-                    }
-
                     if PartialOrder::less_than(&resume_upper, &persist_upper) || persist_stash.len() > 0 {
                         // We have received the first updates based on the
                         // source snapshot (back on the feedback edge), or we
@@ -1054,6 +1040,22 @@ where
                         });
 
                         tracing::debug!(persist_stash = %persist_stash.len(), %idx, %last_snapshot, ?resume_upper, ?persist_upper, "ingesting persist snapshot chunk");
+
+                        // Check for errors in the prefix that we will ingest.
+                        for (_, value, _ts, diff) in persist_stash.iter_mut().take(idx) {
+                            if let Err(UpsertError::Value(ref mut err)) = value {
+                                // If we receive a legacy error in the snapshot we will keep a note of it but
+                                // insert a non-legacy error in our state. This is so that if this error is
+                                // ever retracted we will correctly retract the non-legacy version because by
+                                // that time we will have emitted the error correction, which happens before
+                                // processing any of the new source input.
+                                if err.is_legacy_dont_touch_it {
+                                    legacy_errors_to_correct.push((err.clone(), diff.clone()));
+                                    err.is_legacy_dont_touch_it = false;
+                                }
+                            }
+                        }
+
 
                         snapshotting_persist = !last_snapshot;
 
