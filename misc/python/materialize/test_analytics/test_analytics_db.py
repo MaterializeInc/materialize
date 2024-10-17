@@ -13,6 +13,9 @@ from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.connector.test_analytics_connector import (
     DatabaseConnector,
 )
+from materialize.test_analytics.data.bounded_memory.bounded_memory_minimal_search_storage import (
+    BoundedMemoryMinimalSearchStorage,
+)
 from materialize.test_analytics.data.build.build_data_storage import BuildDataStorage
 from materialize.test_analytics.data.build.build_history_analysis import (
     BuildHistoryAnalysis,
@@ -60,6 +63,9 @@ class TestAnalyticsDb:
         self.output_consistency = OutputConsistencyStatsStorage(self.database_connector)
         self.known_issues = KnownIssuesStorage(self.database_connector)
         self.parallel_benchmark_results = ParallelBenchmarkResultStorage(
+            self.database_connector
+        )
+        self.bounded_memory_search = BoundedMemoryMinimalSearchStorage(
             self.database_connector
         )
 
