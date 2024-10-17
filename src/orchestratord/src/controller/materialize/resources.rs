@@ -24,7 +24,7 @@ use k8s_openapi::{
             NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule, NetworkPolicyPeer,
             NetworkPolicyPort, NetworkPolicySpec,
         },
-        rbac::v1::{ClusterRoleBinding, PolicyRule, Role, RoleBinding, RoleRef, Subject},
+        rbac::v1::{PolicyRule, Role, RoleBinding, RoleRef, Subject},
     },
     apimachinery::pkg::{
         api::resource::Quantity, apis::meta::v1::LabelSelector, util::intstr::IntOrString,
@@ -52,7 +52,6 @@ pub struct Resources {
     service_account: Box<ServiceAccount>,
     role: Box<Role>,
     role_binding: Box<RoleBinding>,
-    cluster_role_binding: Box<ClusterRoleBinding>,
     public_service: Box<Service>,
     generation_service: Box<Service>,
     persist_pubsub_service: Box<Service>,
@@ -72,7 +71,6 @@ impl Resources {
         let service_account = Box::new(create_service_account_object(config, mz));
         let role = Box::new(create_role_object(mz));
         let role_binding = Box::new(create_role_binding_object(mz));
-        let cluster_role_binding = Box::new(create_cluster_role_binding_object(mz));
         let public_service = Box::new(create_public_service_object(config, mz, generation));
         let generation_service = Box::new(create_generation_service_object(config, mz, generation));
         let persist_pubsub_service =
@@ -85,7 +83,6 @@ impl Resources {
             service_account,
             role,
             role_binding,
-            cluster_role_binding,
             public_service,
             generation_service,
             persist_pubsub_service,
@@ -106,7 +103,6 @@ impl Resources {
         let service_account_api: Api<ServiceAccount> = Api::namespaced(client.clone(), namespace);
         let role_api: Api<Role> = Api::namespaced(client.clone(), namespace);
         let role_binding_api: Api<RoleBinding> = Api::namespaced(client.clone(), namespace);
-        let cluster_role_binding_api: Api<ClusterRoleBinding> = Api::all(client.clone());
         let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
         let pod_api: Api<Pod> = Api::namespaced(client.clone(), namespace);
 
@@ -123,9 +119,6 @@ impl Resources {
 
         trace!("applying environmentd role binding");
         apply_resource(&role_binding_api, &*self.role_binding).await?;
-
-        trace!("applying environmentd cluster role binding");
-        apply_resource(&cluster_role_binding_api, &*self.cluster_role_binding).await?;
 
         trace!("applying environmentd per-generation service");
         apply_resource(&service_api, &*self.generation_service).await?;
@@ -477,23 +470,6 @@ fn create_role_binding_object(mz: &Materialize) -> RoleBinding {
             api_group: "".to_string(),
             kind: "Role".to_string(),
             name: mz.role_name(),
-        },
-        subjects: Some(vec![Subject {
-            api_group: Some("".to_string()),
-            kind: "ServiceAccount".to_string(),
-            name: mz.service_account_name(),
-            namespace: Some(mz.namespace()),
-        }]),
-    }
-}
-
-fn create_cluster_role_binding_object(mz: &Materialize) -> ClusterRoleBinding {
-    ClusterRoleBinding {
-        metadata: mz.managed_resource_meta(mz.cluster_role_binding_name()),
-        role_ref: RoleRef {
-            api_group: "".to_string(),
-            kind: "ClusterRole".to_string(),
-            name: Materialize::cluster_role_name(),
         },
         subjects: Some(vec![Subject {
             api_group: Some("".to_string()),

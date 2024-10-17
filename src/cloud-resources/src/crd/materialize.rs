@@ -117,14 +117,6 @@ pub mod v1alpha1 {
             self.name_unchecked()
         }
 
-        pub fn cluster_role_name() -> String {
-            "environmentd".to_string()
-        }
-
-        pub fn cluster_role_binding_name(&self) -> String {
-            self.name_unchecked()
-        }
-
         pub fn environmentd_statefulset_name(generation: u64) -> String {
             format!("environmentd-{generation}")
         }
