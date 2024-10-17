@@ -55,17 +55,22 @@ def collect_and_upload_debug_data_to_polarsignals(
     relevant_images_by_name = get_build_images(repo, debuginfo_bins)
 
     for image_name, image in relevant_images_by_name.items():
-        print(f"Copying binary from image {image_name} (spec: {image.spec()}")
-        path_to_binary = copy_binary_from_image(image_name, image)
+        container_name = create_docker_container(image_name, image)
+        print(
+            f"Created docker container from image {image_name} (spec: {image.spec()})"
+        )
+
+        path_to_binary = copy_binary_from_image(image_name, container_name)
+        print(f"Copied binary from image {image_name}")
 
         build_id = get_build_id(repo, path_to_binary)
         print(f"{image_name} has build_id {build_id}")
 
         bin_path, dbg_path = fetch_debug_symbols_from_s3(build_id)
-        print("Fetched debug symbols from S3")
+        print(f"Fetched debug symbols of {image_name} from S3")
 
         upload_debug_data_to_polarsignals(repo, build_id, bin_path, dbg_path)
-        print("Uploaded debug symbols to PolarSignals")
+        print(f"Uploaded debug symbols of {image_name} to PolarSignals")
 
 
 def get_build_images(
@@ -85,13 +90,22 @@ def get_build_images(
     return resolved_images
 
 
-def copy_binary_from_image(image_name: str, image: ResolvedImage) -> str:
+def create_docker_container(image_name: str, image: ResolvedImage) -> str:
     try:
         image_spec = image.spec()
         docker_container_name = image_name
         command = ["docker", "create", "--name", docker_container_name, image_spec]
         subprocess.run(command, check=True)
+        return docker_container_name
+    except subprocess.CalledProcessError as e:
+        if "manifest unknown" in str(e):
+            raise RuntimeError(f"Docker image not found: {image.spec()}")
+        print(f"Error creating docker container: {e}")
+        raise e
 
+
+def copy_binary_from_image(image_name: str, docker_container_name: str) -> str:
+    try:
         source_path = f"/usr/local/bin/{image_name}"
         target_path = f"./{image_name}"
         command = [
