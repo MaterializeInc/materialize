@@ -23,8 +23,10 @@ New York,NY,10004
 > CREATE CONNECTION IF NOT EXISTS kafka_conn2 TO KAFKA (BROKER 'toxiproxy:9093', SECURITY PROTOCOL PLAINTEXT);
 
 # The source intentionally does not go through toxiproxy.
-> CREATE SOURCE input (city, state, zip)
+> CREATE SOURCE input
   FROM KAFKA CONNECTION kafka_conn1 (TOPIC 'testdrive-input-${testdrive.seed}')
+
+> CREATE TABLE input_tbl (city, state, zip) FROM SOURCE input (REFERENCE "testdrive-input-${testdrive.seed}")
   FORMAT CSV WITH 3 COLUMNS
   INCLUDE OFFSET
 
@@ -32,7 +34,7 @@ New York,NY,10004
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SINK output FROM input
+> CREATE SINK output FROM input_tbl
   INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output-byo-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
