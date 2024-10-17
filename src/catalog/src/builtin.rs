@@ -3755,6 +3755,29 @@ UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, cluste
     }
 });
 
+pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_objects_id_namespace_types",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECTS_ID_NAMESPACE_TYPES_OID,
+    column_defs: Some("object_type"),
+    sql: "SELECT * 
+    FROM (
+        VALUES
+            ('table'),
+            ('view'),
+            ('materialized-view'),
+            ('source'),
+            ('sink'),
+            ('index'),
+            ('connection'),
+            ('type'),
+            ('function'),
+            ('secret')
+    )
+    AS _ (object_type);",
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_OBJECT_OID_ALIAS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_oid_alias",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3827,6 +3850,7 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
     access: vec![PUBLIC_SELECT],
 });
 
+// TODO (SangJunBak): Remove once mz_object_history is released and used in the Console https://github.com/MaterializeInc/console/issues/3342
 pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_lifetimes",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3845,6 +3869,62 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     FROM mz_catalog.mz_audit_events a
     WHERE a.event_type = 'create' OR a.event_type = 'drop'",
     access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+    name: "mz_object_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECT_HISTORY_OID,
+    column_defs: Some("id, cluster_id, object_type, created_at, dropped_at"),
+    sql: "
+    WITH
+        creates AS
+        (
+            SELECT
+                details ->> 'id' AS id,
+                -- We need to backfill cluster_id since older object create events don't include the cluster ID in the audit log 
+                COALESCE(details ->> 'cluster_id', objects.cluster_id) AS cluster_id,
+                object_type,
+                occurred_at
+            FROM
+                mz_catalog.mz_audit_events AS events
+                    LEFT JOIN mz_catalog.mz_objects AS objects ON details ->> 'id' = objects.id
+            WHERE event_type = 'create' AND object_type IN ( SELECT object_type FROM mz_internal.mz_objects_id_namespace_types )
+        ),
+        drops AS
+        (
+            SELECT details ->> 'id' AS id, occurred_at
+            FROM mz_catalog.mz_audit_events
+            WHERE event_type = 'drop' AND object_type IN ( SELECT object_type FROM mz_internal.mz_objects_id_namespace_types )
+        ),
+        user_object_history AS
+        (
+            SELECT
+                creates.id,
+                creates.cluster_id,
+                creates.object_type,
+                creates.occurred_at AS created_at,
+                drops.occurred_at AS dropped_at
+            FROM creates LEFT JOIN drops ON creates.id = drops.id
+            WHERE creates.id LIKE 'u%'
+        ),
+        -- We need to union built in objects since they aren't in the audit log
+        built_in_objects AS
+        (
+            -- Functions that accept different arguments have different oids but the same id. We deduplicate in this case.
+            SELECT DISTINCT ON (objects.id)
+                objects.id,
+                objects.cluster_id,
+                objects.type AS object_type,
+                NULL::timestamptz AS created_at,
+                NULL::timestamptz AS dropped_at
+            FROM mz_catalog.mz_objects AS objects
+            WHERE objects.id LIKE 's%'
+        )
+    SELECT * FROM user_object_history UNION ALL (SELECT * FROM built_in_objects);",
+    access: vec![PUBLIC_SELECT],
+}
 });
 
 pub static MZ_DATAFLOWS_PER_WORKER: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -7937,6 +8017,15 @@ ON mz_internal.mz_object_lifetimes (id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_OBJECT_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_object_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_OBJECT_HISTORY_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_object_history (id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_OBJECT_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_dependencies_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -8373,6 +8462,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_OBJECT_FULLY_QUALIFIED_NAMES),
+        Builtin::View(&MZ_OBJECTS_ID_NAMESPACE_TYPES),
+        Builtin::View(&MZ_OBJECT_HISTORY),
         Builtin::View(&MZ_OBJECT_LIFETIMES),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
@@ -8599,6 +8690,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_HISTORY_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_HISTORY_IND),
         Builtin::Index(&MZ_OBJECT_LIFETIMES_IND),
+        Builtin::Index(&MZ_OBJECT_HISTORY_IND),
         Builtin::Index(&MZ_OBJECT_DEPENDENCIES_IND),
         Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),

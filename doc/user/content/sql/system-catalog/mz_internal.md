@@ -476,6 +476,19 @@ The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/syste
 | `event_type`    | [`text`]                       | The lifetime event, either `create` or `drop`.                                                                                                 |
 | `occurred_at`   | [`timestamp with time zone`]   | Wall-clock timestamp of when the event occurred.                                                                                               |
 
+## `mz_object_history`
+
+The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with historical information about each object in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_object_history -->
+| Field           | Type                           | Meaning                                                                                                                                        |
+| --------------- | ------------------------------ | -------------------------------------------------                                                                                              |
+| `id`            | [`text`]                       | Materialize's unique ID for the object.                                                                                                        |
+| `cluster_id`   | [`text`]                       | The object's cluster ID. `NULL` if the object has no associated cluster.                                                                                                       |
+| `object_type`   | [`text`]                       | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
+| `created_at`    | [`timestamp with time zone`]                       | Wall-clock timestamp of when the object was created. `NULL` for built in system objects.                                                                                                |
+| `dropped_at`   | [`timestamp with time zone`]   | Wall-clock timestamp of when the object was dropped. `NULL` for built in system objects or if the object hasn't been dropped.                                              |
+
 ## `mz_object_transitive_dependencies`
 
 The `mz_object_transitive_dependencies` view describes the transitive dependency structure between
@@ -1177,6 +1190,8 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_type_pg_metadata -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_oid_alias -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_objects_id_namespace_types -->
+
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_class_all_databases -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_type_all_databases -->
