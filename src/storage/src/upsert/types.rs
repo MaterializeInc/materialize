@@ -1187,7 +1187,12 @@ where
             Err(anyhow::anyhow!("Error clearing state"))
         });
 
-        self.stats.clear();
+        // Manually reset these back to zero, because we're clearing out our
+        // state.
+        self.stats.set_records_indexed(0);
+        self.stats.set_bytes_indexed(0);
+        self.stats.set_envelope_state_tombstones(0);
+
         self.inner.clear().await
     }
 }
