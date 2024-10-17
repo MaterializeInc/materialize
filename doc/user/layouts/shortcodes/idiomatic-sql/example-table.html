@@ -1,0 +1,159 @@
+
+<!--
+  To render properly, keep the left-hand alignment of the table
+-->
+
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Idiomatic Materialize SQL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Top-K over partition<br>(K >= 1)</td>
+<td class="copyableCode">
+
+```mzsql
+SELECT order_id, item, subtotal
+FROM (SELECT DISTINCT order_id FROM orders_view) grp,
+        LATERAL (SELECT item, subtotal FROM orders_view
+        WHERE order_id = grp.order_id
+        ORDER BY subtotal DESC LIMIT 3) -- For Top 3
+ORDER BY order_id, subtotal DESC;
+```
+
+</td>
+</tr>
+<tr>
+<td>Top-K over partition<br>(K = 1)</td>
+<td class="copyableCode">
+
+```mzsql
+SELECT DISTINCT ON(order_id) order_id, item, subtotal
+FROM orders_view
+ORDER BY order_id, subtotal DESC;  -- For Top 1
+```
+
+</td>
+</tr>
+
+<tr>
+<td>First value over partition<br>order by ...</td>
+<td class="copyableCode">
+
+```mzsql
+SELECT o.order_id, minmax.lowest_price, minmax.highest_price,
+    o.item,
+    o.price,
+    o.price - minmax.lowest_price AS diff_lowest_price,
+    o.price - minmax.highest_price AS diff_highest_price
+FROM orders_view o,
+        (SELECT order_id,
+            MIN(price) AS lowest_price,
+            MAX(price) AS highest_price
+        FROM orders_view
+        GROUP BY order_id) minmax
+WHERE o.order_id = minmax.order_id
+ORDER BY o.order_id, o.item;
+```
+
+</td>
+</tr>
+
+<tr>
+<td>Last value over partition<br>order by...<br>range between unbounded preceding<br>and unbounded following</td>
+<td class="copyableCode">
+
+```mzsql
+SELECT o.order_id, minmax.lowest_price, minmax.highest_price,
+    o.item,
+    o.price,
+    o.price - minmax.lowest_price AS diff_lowest_price,
+    o.price - minmax.highest_price AS diff_highest_price
+FROM orders_view o,
+        (SELECT order_id,
+            MIN(price) AS lowest_price,
+            MAX(price) AS highest_price
+        FROM orders_view
+        GROUP BY order_id) minmax
+WHERE o.order_id = minmax.order_id
+ORDER BY o.order_id, o.item;
+```
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+Lag over (order by) whose ordering can be represented by some equality
+condition.
+
+</td>
+<td class="copyableCode">
+
+***If suppressing the first row since it has no previous row***
+
+```mzsql
+SELECT o1.order_date, o1.daily_total,
+    o2.daily_total as previous_daily_total
+FROM orders_daily_totals o1, orders_daily_totals o2
+WHERE o1.order_date = o2.order_date + INTERVAL '1' DAY
+ORDER BY order_date;
+```
+
+***To include the first row***
+
+```mzsql
+SELECT o1.order_date, o1.daily_total,
+    o2.daily_total as previous_daily_total
+FROM orders_daily_totals o1
+LEFT JOIN orders_daily_totals o2
+ON o1.order_date = o2.order_date + INTERVAL '1' DAY
+ORDER BY order_date;
+```
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+Lead over (order by) whose ordering can be represented by some equality
+condition.
+
+</td>
+<td class="copyableCode">
+
+***To suppress the last row since it has no next row***
+
+  ```mzsql
+  SELECT o1.order_date, o1.daily_total,
+      o2.daily_total as previous_daily_total
+  FROM orders_daily_totals o1, orders_daily_totals o2
+  WHERE o1.order_date = o2.order_date - INTERVAL '1' DAY
+  ORDER BY order_date;
+  ```
+
+  ***To include the last row***
+
+  ```mzsql
+  SELECT o1.order_date, o1.daily_total,
+      o2.daily_total as previous_daily_total
+  FROM orders_daily_totals o1
+  LEFT JOIN orders_daily_totals o2
+  ON o1.order_date = o2.order_date - INTERVAL '1' DAY
+  ORDER BY order_date;
+  ```
+
+</td>
+</tr>
+
+</tbody>
+</table>
+
+<!--
+  To render properly, keep the left-hand alignment of table
+-->
