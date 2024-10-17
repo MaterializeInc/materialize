@@ -540,6 +540,10 @@ mod tests {
     impl ColumnEncoder<Strings> for StringsEncoder {
         type FinishedColumn = StructArray;
 
+        fn goodbytes(&self) -> usize {
+            self.arrays.iter().map(|a| a.values_slice().len()).sum()
+        }
+
         fn append(&mut self, val: &Strings) {
             for (idx, val) in val.0.iter().enumerate() {
                 if val.is_empty() {

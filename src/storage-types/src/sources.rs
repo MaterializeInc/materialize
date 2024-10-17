@@ -1813,6 +1813,13 @@ pub enum SourceDataRowColumnarEncoder {
 }
 
 impl SourceDataRowColumnarEncoder {
+    pub(crate) fn goodbytes(&self) -> usize {
+        match self {
+            SourceDataRowColumnarEncoder::Row(e) => e.goodbytes(),
+            SourceDataRowColumnarEncoder::EmptyRow => 0,
+        }
+    }
+
     pub fn append(&mut self, row: &Row) {
         match self {
             SourceDataRowColumnarEncoder::Row(encoder) => encoder.append(row),
@@ -1859,6 +1866,10 @@ impl SourceDataColumnarEncoder {
 
 impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
     type FinishedColumn = StructArray;
+
+    fn goodbytes(&self) -> usize {
+        self.row_encoder.goodbytes() + self.err_encoder.values_slice().len()
+    }
 
     #[inline]
     fn append(&mut self, val: &SourceData) {

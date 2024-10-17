@@ -100,6 +100,10 @@ impl ColumnDecoder<()> for UnitColumnar {
 impl ColumnEncoder<()> for UnitColumnar {
     type FinishedColumn = NullArray;
 
+    fn goodbytes(&self) -> usize {
+        0
+    }
+
     fn append(&mut self, _val: &()) {
         self.len += 1;
     }
@@ -136,6 +140,9 @@ pub trait SimpleColumnarData {
     /// Type of [`arrow`] array the we decode data from.
     type ArrowColumn: arrow::array::Array + Clone + 'static;
 
+    /// The number of actual data bytes this item represents.
+    fn goodbytes(builder: &Self::ArrowBuilder) -> usize;
+
     /// Encode `self` into `builder`.
     fn push(&self, builder: &mut Self::ArrowBuilder);
     /// Encode a null value into `builder`.
@@ -148,6 +155,10 @@ pub trait SimpleColumnarData {
 impl SimpleColumnarData for String {
     type ArrowBuilder = StringBuilder;
     type ArrowColumn = StringArray;
+
+    fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
+        builder.values_slice().len()
+    }
 
     fn push(&self, builder: &mut Self::ArrowBuilder) {
         builder.append_value(self.as_str())
@@ -165,6 +176,10 @@ impl SimpleColumnarData for Vec<u8> {
     type ArrowBuilder = BinaryBuilder;
     type ArrowColumn = BinaryArray;
 
+    fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
+        builder.values_slice().len()
+    }
+
     fn push(&self, builder: &mut Self::ArrowBuilder) {
         builder.append_value(self.as_slice())
     }
@@ -180,6 +195,10 @@ impl SimpleColumnarData for Vec<u8> {
 impl SimpleColumnarData for ShardId {
     type ArrowBuilder = StringBuilder;
     type ArrowColumn = StringArray;
+
+    fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
+        builder.values_slice().len()
+    }
 
     fn push(&self, builder: &mut Self::ArrowBuilder) {
         builder.append_value(&self.to_string());
@@ -198,6 +217,10 @@ pub struct SimpleColumnarEncoder<T: SimpleColumnarData>(T::ArrowBuilder);
 
 impl<T: SimpleColumnarData> ColumnEncoder<T> for SimpleColumnarEncoder<T> {
     type FinishedColumn = T::ArrowColumn;
+
+    fn goodbytes(&self) -> usize {
+        T::goodbytes(&self.0)
+    }
 
     fn append(&mut self, val: &T) {
         T::push(val, &mut self.0);
@@ -479,6 +502,10 @@ pub struct TodoColumnarEncoder<T>(PhantomData<T>);
 
 impl<T> ColumnEncoder<T> for TodoColumnarEncoder<T> {
     type FinishedColumn = StructArray;
+
+    fn goodbytes(&self) -> usize {
+        panic!("TODO")
+    }
 
     fn append(&mut self, _val: &T) {
         panic!("TODO")
