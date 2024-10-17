@@ -23,7 +23,10 @@ $ kafka-create-topic topic=test
 > CREATE SOURCE kafka_src
   IN CLUSTER audit_log_kafka_src
   FROM KAFKA CONNECTION kafka_conn
-  (TOPIC 'testdrive-test-${testdrive.seed}')
+  (TOPIC 'testdrive-test-${testdrive.seed}');
+
+> CREATE TABLE kafka_src_tbl
+  FROM SOURCE kafka_src (REFERENCE "testdrive-test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS;
 
 > SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 4

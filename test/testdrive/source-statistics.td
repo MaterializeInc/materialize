@@ -58,9 +58,11 @@ goofus,gallant
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SOURCE metrics_test_source (a, b)
+> CREATE SOURCE metrics_test_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-metrics-test-${testdrive.seed}')
+
+> CREATE TABLE metrics_test_source_tbl (a, b) FROM SOURCE metrics_test_source (REFERENCE "testdrive-metrics-test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
 

@@ -22,10 +22,13 @@ goofus,gallant
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-test-${testdrive.seed}')
+
+> CREATE TABLE src_tbl
+  FROM SOURCE src (REFERENCE "testdrive-test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
 
 > CREATE MATERIALIZED VIEW v AS
-  SELECT column1 || column2 AS c FROM src
+  SELECT column1 || column2 AS c FROM src_tbl
 
 > SELECT * FROM v
 jackjill
