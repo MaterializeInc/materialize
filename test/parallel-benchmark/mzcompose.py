@@ -130,23 +130,107 @@ class Statistics:
         elif isinstance(m, SQLiteStore):
             cursor = m.conn.cursor()
             cursor.execute(
-                f"SELECT count(*), count(*) / (max(timestamp) - {start_time}), max(duration) * 1000, min(duration) * 1000, avg(duration) * 1000 FROM measurements WHERE scenario = ? AND action = ?",
-                (m.scenario, action),
+                """
+            WITH RankedDurations AS (
+                SELECT
+                    duration,
+                    ROW_NUMBER() OVER (ORDER BY duration ASC) AS row_num,
+                    COUNT(*) OVER () AS total_rows
+                FROM measurements
+                WHERE scenario = ? AND action = ?
+            ),
+            Percentiles AS (
+                SELECT
+                    MAX(CASE WHEN row_num <= total_rows * 0.50 THEN duration END) AS p50,
+                    MAX(CASE WHEN row_num <= total_rows * 0.95 THEN duration END) AS p95,
+                    MAX(CASE WHEN row_num <= total_rows * 0.99 THEN duration END) AS p99,
+                    MAX(CASE WHEN row_num <= total_rows * 0.999 THEN duration END) AS p99_9,
+                    MAX(CASE WHEN row_num <= total_rows * 0.9999 THEN duration END) AS p99_99,
+                    MAX(CASE WHEN row_num <= total_rows * 0.99999 THEN duration END) AS p99_999,
+                    MAX(CASE WHEN row_num <= total_rows * 0.999999 THEN duration END) AS p99_9999,
+                    MAX(CASE WHEN row_num <= total_rows * 0.9999999 THEN duration END) AS p99_99999,
+                    MAX(CASE WHEN row_num <= total_rows * 0.99999999 THEN duration END) AS p99_999999
+                FROM RankedDurations
+            ),
+            Regression AS (
+                SELECT
+                    COUNT(*) AS n,
+                    SUM(timestamp * duration) AS sum_xy,
+                    SUM(timestamp) AS sum_x,
+                    SUM(duration) AS sum_y,
+                    SUM(timestamp * timestamp) AS sum_xx
+                FROM measurements
+                WHERE scenario = ? AND action = ?
+            ),
+            Stats AS (
+                SELECT
+                    avg(duration) AS avg_duration,
+                    COUNT(*) AS count_durations
+                FROM measurements
+                WHERE scenario = ? AND action = ?
+            ),
+            VarianceCalc AS (
+                SELECT
+                    SUM((duration - (SELECT avg_duration FROM Stats)) * (duration - (SELECT avg_duration FROM Stats))) AS variance
+                FROM measurements
+                WHERE scenario = ? AND action = ?
             )
-            self.queries, self.qps, self.max, self.min, self.avg = cursor.fetchone()
-            # TODO: Rest
-            self.median = 0.0
-            self.p50 = 0.0
-            self.p95 = 0.0
-            self.p99 = 0.0
-            self.p99_9 = 0.0
-            self.p99_99 = 0.0
-            self.p99_999 = 0.0
-            self.p99_9999 = 0.0
-            self.p99_99999 = 0.0
-            self.p99_999999 = 0.0
-            self.std = 0.0
-            self.slope = 0.0
+            SELECT
+                count(*),
+                count(*) / (max(timestamp) - ?),
+                max(duration),
+                min(duration),
+                avg(duration),
+                (sqrt(variance / count_durations)),
+                p50,
+                p95,
+                p99,
+                p99_9,
+                p99_99,
+                p99_999,
+                p99_9999,
+                p99_99999,
+                p99_999999,
+                (r.n * r.sum_xy - r.sum_x * r.sum_y) / (r.n * r.sum_xx - r.sum_x * r.sum_x)
+            FROM measurements
+            JOIN Percentiles ON true
+            JOIN Regression r ON true
+            JOIN Stats ON true
+            JOIN VarianceCalc ON true
+            WHERE scenario = ? AND action = ?
+            """,
+                (
+                    m.scenario,
+                    action,
+                    m.scenario,
+                    action,
+                    m.scenario,
+                    action,
+                    m.scenario,
+                    action,
+                    start_time,
+                    m.scenario,
+                    action,
+                ),
+            )
+            (
+                self.queries,
+                self.qps,
+                self.max,
+                self.min,
+                self.avg,
+                self.std,
+                self.p50,
+                self.p95,
+                self.p99,
+                self.p99_9,
+                self.p99_99,
+                self.p99_999,
+                self.p99_9999,
+                self.p99_99999,
+                self.p99_999999,
+                self.slope,
+            ) = cursor.fetchone()
         else:
             raise ValueError(
                 f"Unknown measurements store (for action {action}): {type(m)}"

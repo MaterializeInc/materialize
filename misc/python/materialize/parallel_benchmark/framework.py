@@ -93,7 +93,7 @@ class SQLiteStore(MeasurementsStore):
                     (
                         self.scenario,
                         action,
-                        measurement.duration,
+                        measurement.duration * 1000,
                         measurement.timestamp,
                     ),
                 )
