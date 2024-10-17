@@ -52,6 +52,7 @@ use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
+use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
@@ -68,7 +69,6 @@ use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
 use tracing::{error, info, info_span, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use url::Url;
 
 mod sys;
 
@@ -367,10 +367,10 @@ pub struct Args {
     // === Storage options. ===
     /// Where the persist library should store its blob data.
     #[clap(long, env = "PERSIST_BLOB_URL")]
-    persist_blob_url: Url,
+    persist_blob_url: SensitiveUrl,
     /// Where the persist library should perform consensus.
     #[clap(long, env = "PERSIST_CONSENSUS_URL")]
-    persist_consensus_url: Url,
+    persist_consensus_url: SensitiveUrl,
     /// The Persist PubSub URL.
     ///
     /// This URL is passed to `clusterd` for discovery of the Persist PubSub service.
@@ -402,7 +402,7 @@ pub struct Args {
     // === Adapter options. ===
     /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
     #[clap(long, env = "TIMESTAMP_ORACLE_URL", value_name = "POSTGRES_URL")]
-    timestamp_oracle_url: Option<String>,
+    timestamp_oracle_url: Option<SensitiveUrl>,
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     #[clap(long, env = "AVAILABILITY_ZONE", use_value_delimiter = true)]
@@ -907,8 +907,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         build_info: &mz_environmentd::BUILD_INFO,
         orchestrator,
         persist_location: PersistLocation {
-            blob_uri: args.persist_blob_url.to_string(),
-            consensus_uri: args.persist_consensus_url.to_string(),
+            blob_uri: args.persist_blob_url,
+            consensus_uri: args.persist_consensus_url,
         },
         persist_clients: Arc::clone(&persist_clients),
         clusterd_image: args.clusterd_image.expect("clap enforced"),

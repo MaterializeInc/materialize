@@ -22,6 +22,7 @@ use futures_util::{stream, StreamExt, TryStreamExt};
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::url::SensitiveUrl;
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64};
@@ -413,8 +414,8 @@ pub async fn force_compaction<K, V, T, D>(
     cfg: PersistConfig,
     metrics_registry: &MetricsRegistry,
     shard_id: ShardId,
-    consensus_uri: &str,
-    blob_uri: &str,
+    consensus_uri: &SensitiveUrl,
+    blob_uri: &SensitiveUrl,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     commit: bool,
@@ -636,8 +637,8 @@ async fn force_gc(
     cfg: PersistConfig,
     metrics_registry: &MetricsRegistry,
     shard_id: ShardId,
-    consensus_uri: &str,
-    blob_uri: &str,
+    consensus_uri: &SensitiveUrl,
+    blob_uri: &SensitiveUrl,
     commit: bool,
     expected_version: Option<Version>,
 ) -> anyhow::Result<Box<dyn Any>> {

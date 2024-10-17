@@ -40,6 +40,7 @@ use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
+use mz_ore::url::SensitiveUrl;
 use mz_ore::{instrument, task};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::StorageUsageClient;
@@ -126,7 +127,7 @@ pub struct Config {
     /// A map from size name to resource allocations for cluster replicas.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
-    pub timestamp_oracle_url: Option<String>,
+    pub timestamp_oracle_url: Option<SensitiveUrl>,
     /// An API key for Segment. Enables export of audit events to Segment.
     pub segment_api_key: Option<String>,
     /// Whether the Segment client is being used on the client side

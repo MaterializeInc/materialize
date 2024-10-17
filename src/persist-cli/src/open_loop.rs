@@ -21,6 +21,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::JoinHandle;
+use mz_ore::url::SensitiveUrl;
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
@@ -58,11 +59,11 @@ pub struct Args {
 
     /// Handle to the persist consensus system.
     #[clap(long, value_name = "CONSENSUS_URI")]
-    consensus_uri: String,
+    consensus_uri: SensitiveUrl,
 
     /// Handle to the persist blob storage.
     #[clap(long, value_name = "BLOB_URI")]
-    blob_uri: String,
+    blob_uri: SensitiveUrl,
 
     /// The type of benchmark to run
     #[clap(arg_enum, long, default_value_t = BenchmarkType::RawWriter)]

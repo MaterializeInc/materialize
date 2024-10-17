@@ -44,6 +44,7 @@ use mz_ore::collections::HashSet;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
@@ -55,7 +56,6 @@ use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
 use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
-use url::Url;
 use uuid::Uuid;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
@@ -70,10 +70,10 @@ pub struct Args {
     organization_id: Uuid,
     /// Where the persist library should store its blob data.
     #[clap(long, env = "PERSIST_BLOB_URL")]
-    persist_blob_url: Url,
+    persist_blob_url: SensitiveUrl,
     /// Where the persist library should perform consensus.
     #[clap(long, env = "PERSIST_CONSENSUS_URL")]
-    persist_consensus_url: Url,
+    persist_consensus_url: SensitiveUrl,
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
     ///
@@ -198,8 +198,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         PubSubClientConnection::noop()
     });
     let persist_location = PersistLocation {
-        blob_uri: args.persist_blob_url.to_string(),
-        consensus_uri: args.persist_consensus_url.to_string(),
+        blob_uri: args.persist_blob_url.clone(),
+        consensus_uri: args.persist_consensus_url.clone(),
     };
     let persist_client = persist_clients.open(persist_location).await?;
     let organization_id = args.organization_id;

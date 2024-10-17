@@ -17,6 +17,7 @@
 )]
 
 use bytes::{BufMut, Bytes};
+use mz_ore::url::SensitiveUrl;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -169,18 +170,18 @@ pub trait Codec64: Sized + Clone + 'static {
 #[derive(Arbitrary, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub struct PersistLocation {
     /// Uri string that identifies the blob store.
-    pub blob_uri: String,
+    pub blob_uri: SensitiveUrl,
 
     /// Uri string that identifies the consensus system.
-    pub consensus_uri: String,
+    pub consensus_uri: SensitiveUrl,
 }
 
 impl PersistLocation {
     /// Returns a PersistLocation indicating in-mem blob and consensus.
     pub fn new_in_mem() -> Self {
         PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
+            blob_uri: "mem://".parse().unwrap(),
+            consensus_uri: "mem://".parse().unwrap(),
         }
     }
 }
