@@ -30,6 +30,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
@@ -135,9 +136,9 @@ pub struct Config {
 
     // === Persist options. ===
     /// Handle to the persist consensus system.
-    pub persist_consensus_url: Option<String>,
+    pub persist_consensus_url: Option<SensitiveUrl>,
     /// Handle to the persist blob storage.
-    pub persist_blob_url: Option<String>,
+    pub persist_blob_url: Option<SensitiveUrl>,
 
     // === Confluent options. ===
     /// The address of the Kafka broker that testdrive will interact with.
@@ -210,8 +211,8 @@ pub struct State {
     materialize: MaterializeState,
 
     // === Persist state. ===
-    persist_consensus_url: Option<String>,
-    persist_blob_url: Option<String>,
+    persist_consensus_url: Option<SensitiveUrl>,
+    persist_blob_url: Option<SensitiveUrl>,
     build_info: &'static BuildInfo,
     persist_clients: PersistClientCache,
 
@@ -358,8 +359,8 @@ impl State {
         F: FnOnce(ConnCatalog) -> T,
     {
         async fn persist_client(
-            persist_consensus_url: String,
-            persist_blob_url: String,
+            persist_consensus_url: SensitiveUrl,
+            persist_blob_url: SensitiveUrl,
             persist_clients: &PersistClientCache,
         ) -> Result<PersistClient, anyhow::Error> {
             let persist_location = PersistLocation {
@@ -675,9 +676,9 @@ impl State {
 #[derive(Debug, Clone)]
 pub struct CatalogConfig {
     /// Handle to the persist consensus system.
-    pub persist_consensus_url: String,
+    pub persist_consensus_url: SensitiveUrl,
     /// Handle to the persist blob storage.
-    pub persist_blob_url: String,
+    pub persist_blob_url: SensitiveUrl,
 }
 
 pub enum ControlFlow {

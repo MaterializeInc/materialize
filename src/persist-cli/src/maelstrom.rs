@@ -9,7 +9,7 @@
 
 //! An adaptor to Jepsen Maelstrom's txn-list-append workload
 
-use mz_ore::task::RuntimeExt;
+use mz_ore::{task::RuntimeExt, url::SensitiveUrl};
 use tokio::runtime::Handle;
 use tracing::Span;
 
@@ -34,11 +34,11 @@ pub mod txn_list_append_single;
 pub struct Args {
     /// Blob to use, defaults to Maelstrom lin-kv service
     #[clap(long)]
-    blob_uri: Option<String>,
+    blob_uri: Option<SensitiveUrl>,
 
     /// Consensus to use, defaults to Maelstrom lin-kv service
     #[clap(long)]
-    consensus_uri: Option<String>,
+    consensus_uri: Option<SensitiveUrl>,
 
     /// How much unreliability to inject into Blob and Consensus usage
     ///

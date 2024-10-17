@@ -72,6 +72,7 @@ use ipnet::IpNet;
 use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
 use mz_compute_client::as_of_selection;
 use mz_ore::channel::trigger::Trigger;
+use mz_ore::url::SensitiveUrl;
 use mz_sql::names::{ResolvedIds, SchemaSpecifier};
 use mz_sql::session::user::User;
 use mz_storage_types::read_holds::ReadHold;
@@ -954,7 +955,7 @@ pub struct Config {
     pub controller_config: ControllerConfig,
     pub controller_envd_epoch: NonZeroI64,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
-    pub timestamp_oracle_url: Option<String>,
+    pub timestamp_oracle_url: Option<SensitiveUrl>,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,

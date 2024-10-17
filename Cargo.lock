@@ -5624,6 +5624,7 @@ dependencies = [
  "tracing-capture",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "url",
  "uuid",
  "workspace-hack",
  "yansi",

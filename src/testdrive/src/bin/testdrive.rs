@@ -21,6 +21,7 @@ use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
+use mz_ore::url::SensitiveUrl;
 use mz_testdrive::{CatalogConfig, Config, ConsistencyCheckLevel};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -166,14 +167,14 @@ struct Args {
         value_name = "PERSIST_CONSENSUS_URL",
         required_if_eq("validate-catalog-store", "true")
     )]
-    persist_consensus_url: Option<String>,
+    persist_consensus_url: Option<SensitiveUrl>,
     /// Handle to the persist blob storage.
     #[clap(
         long,
         value_name = "PERSIST_BLOB_URL",
         required_if_eq("validate-catalog-store", "true")
     )]
-    persist_blob_url: Option<String>,
+    persist_blob_url: Option<SensitiveUrl>,
 
     // === Confluent options. ===
     /// Address of the Kafka broker that testdrive will interact with.

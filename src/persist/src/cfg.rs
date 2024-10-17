@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use mz_dyncfg::ConfigSet;
+use mz_ore::url::SensitiveUrl;
 use tracing::warn;
-use url::Url;
 
 use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::PostgresClientKnobs;
@@ -78,13 +78,11 @@ impl BlobConfig {
 
     /// Parses a [Blob] config from a uri string.
     pub async fn try_from(
-        value: &str,
+        url: &SensitiveUrl,
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
         cfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
-        let url = Url::parse(value)
-            .map_err(|err| anyhow!("failed to parse blob location {} as a url: {}", &value, err))?;
         let mut query_params = url.query_pairs().collect::<BTreeMap<_, _>>();
 
         let config = match url.scheme() {
@@ -188,21 +186,13 @@ impl ConsensusConfig {
 
     /// Parses a [Consensus] config from a uri string.
     pub fn try_from(
-        value: &str,
+        url: &SensitiveUrl,
         knobs: Box<dyn PostgresClientKnobs>,
         metrics: PostgresClientMetrics,
     ) -> Result<Self, ExternalError> {
-        let url = Url::parse(value).map_err(|err| {
-            anyhow!(
-                "failed to parse consensus location {} as a url: {}",
-                &value,
-                err
-            )
-        })?;
-
         let config = match url.scheme() {
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
-                PostgresConsensusConfig::new(value, knobs, metrics)?,
+                PostgresConsensusConfig::new(url, knobs, metrics)?,
             )),
             "mem" => {
                 if !cfg!(debug_assertions) {

@@ -22,6 +22,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle};
+use mz_ore::url::SensitiveUrl;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
     Blob, Consensus, ExternalError, Tasked, VersionedData, BLOB_GET_LIVENESS_KEY,
@@ -56,8 +57,8 @@ pub struct PersistClientCache {
     /// The tunable knobs for persist.
     pub cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
-    blob_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Blob>)>>,
-    consensus_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Consensus>)>>,
+    blob_by_uri: Mutex<BTreeMap<SensitiveUrl, (RttLatencyTask, Arc<dyn Blob>)>>,
+    consensus_by_uri: Mutex<BTreeMap<SensitiveUrl, (RttLatencyTask, Arc<dyn Consensus>)>>,
     isolated_runtime: Arc<IsolatedRuntime>,
     pub(crate) state_cache: Arc<StateCache>,
     pubsub_sender: Arc<dyn PubSubSender>,
@@ -159,7 +160,7 @@ impl PersistClientCache {
 
     async fn open_consensus(
         &self,
-        consensus_uri: String,
+        consensus_uri: SensitiveUrl,
     ) -> Result<Arc<dyn Consensus>, ExternalError> {
         let mut consensus_by_uri = self.consensus_by_uri.lock().await;
         let consensus = match consensus_by_uri.entry(consensus_uri) {
@@ -195,7 +196,7 @@ impl PersistClientCache {
         Ok(consensus)
     }
 
-    async fn open_blob(&self, blob_uri: String) -> Result<Arc<dyn Blob>, ExternalError> {
+    async fn open_blob(&self, blob_uri: SensitiveUrl) -> Result<Arc<dyn Blob>, ExternalError> {
         let mut blob_by_uri = self.blob_by_uri.lock().await;
         let blob = match blob_by_uri.entry(blob_uri) {
             Entry::Occupied(x) => Arc::clone(&x.get().1),
@@ -689,6 +690,7 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
 #[cfg(test)]
 mod tests {
     use std::ops::Deref;
+    use std::str::FromStr;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use futures::stream::{FuturesUnordered, StreamExt};
@@ -712,8 +714,8 @@ mod tests {
         // Opening a location on an empty cache saves the results.
         let _ = cache
             .open(PersistLocation {
-                blob_uri: "mem://blob_zero".to_owned(),
-                consensus_uri: "mem://consensus_zero".to_owned(),
+                blob_uri: SensitiveUrl::from_str("mem://blob_zero").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://consensus_zero").expect("invalid URL"),
             })
             .await
             .expect("failed to open location");
@@ -724,8 +726,8 @@ mod tests {
         // if the blob is different.
         let _ = cache
             .open(PersistLocation {
-                blob_uri: "mem://blob_one".to_owned(),
-                consensus_uri: "mem://consensus_zero".to_owned(),
+                blob_uri: SensitiveUrl::from_str("mem://blob_one").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://consensus_zero").expect("invalid URL"),
             })
             .await
             .expect("failed to open location");
@@ -735,8 +737,8 @@ mod tests {
         // Ditto the other way.
         let _ = cache
             .open(PersistLocation {
-                blob_uri: "mem://blob_one".to_owned(),
-                consensus_uri: "mem://consensus_one".to_owned(),
+                blob_uri: SensitiveUrl::from_str("mem://blob_one").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://consensus_one").expect("invalid URL"),
             })
             .await
             .expect("failed to open location");
@@ -746,8 +748,9 @@ mod tests {
         // Query params and path matter, so we get new instances.
         let _ = cache
             .open(PersistLocation {
-                blob_uri: "mem://blob_one?foo".to_owned(),
-                consensus_uri: "mem://consensus_one/bar".to_owned(),
+                blob_uri: SensitiveUrl::from_str("mem://blob_one?foo").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://consensus_one/bar")
+                    .expect("invalid URL"),
             })
             .await
             .expect("failed to open location");
@@ -757,8 +760,9 @@ mod tests {
         // User info and port also matter, so we get new instances.
         let _ = cache
             .open(PersistLocation {
-                blob_uri: "mem://user@blob_one".to_owned(),
-                consensus_uri: "mem://@consensus_one:123".to_owned(),
+                blob_uri: SensitiveUrl::from_str("mem://user@blob_one").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://@consensus_one:123")
+                    .expect("invalid URL"),
             })
             .await
             .expect("failed to open location");

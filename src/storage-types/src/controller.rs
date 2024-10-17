@@ -9,9 +9,11 @@
 
 use std::error::Error;
 use std::fmt::{self, Debug, Display};
+use std::str::FromStr;
 
 use itertools::Itertools;
 use mz_ore::assert_none;
+use mz_ore::url::SensitiveUrl;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
@@ -98,8 +100,8 @@ impl crate::AlterCompatible for CollectionMetadata {
 impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     fn into_proto(&self) -> ProtoCollectionMetadata {
         ProtoCollectionMetadata {
-            blob_uri: self.persist_location.blob_uri.clone(),
-            consensus_uri: self.persist_location.consensus_uri.clone(),
+            blob_uri: self.persist_location.blob_uri.to_string_unredacted(),
+            consensus_uri: self.persist_location.consensus_uri.to_string_unredacted(),
             data_shard: self.data_shard.to_string(),
             remap_shard: self.remap_shard.map(|s| s.to_string()),
             status_shard: self.status_shard.map(|s| s.to_string()),
@@ -111,8 +113,8 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     fn from_proto(value: ProtoCollectionMetadata) -> Result<Self, TryFromProtoError> {
         Ok(CollectionMetadata {
             persist_location: PersistLocation {
-                blob_uri: value.blob_uri,
-                consensus_uri: value.consensus_uri,
+                blob_uri: SensitiveUrl::from_str(&value.blob_uri)?,
+                consensus_uri: SensitiveUrl::from_str(&value.consensus_uri)?,
             },
             remap_shard: value
                 .remap_shard

@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 humantime = "2.1.0"
-mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test"] }
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 mz-proto = { path = "../proto" }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"] }

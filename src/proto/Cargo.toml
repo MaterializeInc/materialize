@@ -17,7 +17,7 @@ chrono = { version = "0.4.35", default-features = false, features = ["serde", "s
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"], optional = true }
 globset = "0.4.14"
 http = "1.1.0"
-mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test"] }
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 num = "0.4.0"
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
