@@ -246,7 +246,8 @@ impl<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson> MigrationAction<V
 #[mz_ore::instrument(name = "persist::upgrade", level = "debug")]
 pub(crate) async fn upgrade(
     persist_handle: &mut UnopenedPersistCatalogState,
-) -> Result<(), CatalogError> {
+    mut commit_ts: Timestamp,
+) -> Result<Timestamp, CatalogError> {
     soft_assert_ne_or_log!(
         persist_handle.upper,
         Timestamp::minimum(),
@@ -261,11 +262,10 @@ pub(crate) async fn upgrade(
         .expect("initialized catalog must have a version");
     // Run migrations until we're up-to-date.
     while version < CATALOG_VERSION {
-        let new_version = run_upgrade(persist_handle, version).await?;
-        version = new_version;
+        (version, commit_ts) = run_upgrade(persist_handle, version, commit_ts).await?;
     }
 
-    Ok(())
+    Ok(commit_ts)
 }
 
 /// Determines which upgrade to run for the `version` and executes it.
@@ -274,7 +274,8 @@ pub(crate) async fn upgrade(
 async fn run_upgrade(
     unopened_catalog_state: &mut UnopenedPersistCatalogState,
     version: u64,
-) -> Result<u64, CatalogError> {
+    commit_ts: Timestamp,
+) -> Result<(u64, Timestamp), CatalogError> {
     let incompatible = DurableCatalogError::IncompatibleDataVersion {
         found_version: version,
         min_catalog_version: MIN_CATALOG_VERSION,
@@ -285,16 +286,72 @@ async fn run_upgrade(
     match version {
         ..=TOO_OLD_VERSION => Err(incompatible),
 
-        60 => run_versioned_upgrade(unopened_catalog_state, version, v60_to_v61::upgrade).await,
-        61 => run_versioned_upgrade(unopened_catalog_state, version, v61_to_v62::upgrade).await,
-        62 => run_versioned_upgrade(unopened_catalog_state, version, v62_to_v63::upgrade).await,
-        63 => run_versioned_upgrade(unopened_catalog_state, version, v63_to_v64::upgrade).await,
-        64 => run_versioned_upgrade(unopened_catalog_state, version, v64_to_v65::upgrade).await,
-        65 => run_versioned_upgrade(unopened_catalog_state, version, v65_to_v66::upgrade).await,
-        66 => run_versioned_upgrade(unopened_catalog_state, version, v66_to_v67::upgrade).await,
+        60 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v60_to_v61::upgrade,
+            )
+            .await
+        }
+        61 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v61_to_v62::upgrade,
+            )
+            .await
+        }
+        62 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v62_to_v63::upgrade,
+            )
+            .await
+        }
+        63 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v63_to_v64::upgrade,
+            )
+            .await
+        }
+        64 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v64_to_v65::upgrade,
+            )
+            .await
+        }
+        65 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v65_to_v66::upgrade,
+            )
+            .await
+        }
+        66 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v66_to_v67::upgrade,
+            )
+            .await
+        }
 
         // Up-to-date, no migration needed!
-        CATALOG_VERSION => Ok(CATALOG_VERSION),
+        CATALOG_VERSION => Ok((CATALOG_VERSION, commit_ts)),
         FUTURE_VERSION.. => Err(incompatible),
     }
 }
@@ -306,8 +363,9 @@ async fn run_upgrade(
 async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateKindJson>(
     unopened_catalog_state: &mut UnopenedPersistCatalogState,
     current_version: u64,
+    mut commit_ts: Timestamp,
     migration_logic: impl FnOnce(Vec<V1>) -> Vec<MigrationAction<V1, V2>>,
-) -> Result<u64, CatalogError> {
+) -> Result<(u64, Timestamp), CatalogError> {
     // 1. Use the V1 to deserialize the contents of the current snapshot.
     let snapshot: Vec<_> = unopened_catalog_state
         .snapshot
@@ -338,22 +396,23 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
 
     // 4. Apply migration to catalog.
     if matches!(unopened_catalog_state.mode, Mode::Writable) {
-        unopened_catalog_state
-            .compare_and_append(updates)
+        commit_ts = unopened_catalog_state
+            .compare_and_append(updates, commit_ts)
             .await
             .map_err(|e| e.unwrap_fence_error())?;
     } else {
-        let ts = unopened_catalog_state.upper;
+        let ts = commit_ts;
         let updates = updates
             .into_iter()
             .map(|(kind, diff)| StateUpdate { kind, ts, diff });
+        commit_ts = commit_ts.step_forward();
         unopened_catalog_state.apply_updates(updates)?;
     }
 
     // 5. Consolidate snapshot to remove old versions.
     unopened_catalog_state.consolidate();
 
-    Ok(next_version)
+    Ok((next_version, commit_ts))
 }
 
 /// Generates a [`proto::StateUpdateKind`] to update the user version.

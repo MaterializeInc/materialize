@@ -56,7 +56,8 @@ impl Coordinator {
 
         // Put a placeholder in the catalog so the optimizer can find something
         // for the sink_id.
-        let sink_id = self.catalog_mut().allocate_user_id().await?;
+        let id_ts = self.get_local_read_ts().await;
+        let sink_id = self.catalog_mut().allocate_user_id(id_ts).await?;
         let bootstrap_catalog = ContinualTaskCatalogBootstrap {
             delegate: self.owned_catalog().as_optimizer_catalog(),
             sink_id,
