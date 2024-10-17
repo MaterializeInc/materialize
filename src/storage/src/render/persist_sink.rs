@@ -97,11 +97,11 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use futures::StreamExt;
+use futures::{future, StreamExt};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
-use mz_persist_client::batch::{Batch, ProtoBatch};
+use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -179,7 +179,8 @@ where
     V: Codec,
     T: Timestamp + Lattice + Codec64,
 {
-    builder: mz_persist_client::batch::BatchBuilder<K, V, T, D>,
+    builder: BatchBuilder<K, V, T, D>,
+    data_ts: T,
     metrics: BatchMetrics,
 }
 
@@ -190,14 +191,30 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64,
 {
-    fn new(builder: mz_persist_client::batch::BatchBuilder<K, V, T, D>) -> Self {
+    /// Creates a new batch.
+    ///
+    /// NOTE(benesch): temporary restriction: all updates added to the batch
+    /// must be at the specified timestamp `data_ts`.
+    fn new(builder: BatchBuilder<K, V, T, D>, data_ts: T) -> Self {
         BatchBuilderAndMetadata {
             builder,
+            data_ts,
             metrics: Default::default(),
         }
     }
 
+    /// Adds an update to the batch.
+    ///
+    /// NOTE(benesch): temporary restriction: all updates added to the batch
+    /// must be at the timestamp specified during creation.
     async fn add(&mut self, k: &K, v: &V, t: &T, d: &D) {
+        assert_eq!(
+            self.data_ts,
+            *t,
+            "BatchBuilderAndMetadata::add called with a timestamp {t:?} that does not match creation timestamp {:?}",
+            self.data_ts
+        );
+
         self.builder.add(k, v, t, d).await.expect("invalid usage");
     }
 
@@ -210,6 +227,7 @@ where
         HollowBatchAndMetadata {
             lower,
             upper,
+            data_ts: self.data_ts,
             batch: batch.into_transmittable_batch(),
             metrics: self.metrics,
         }
@@ -225,6 +243,7 @@ where
 struct HollowBatchAndMetadata<T> {
     lower: Antichain<T>,
     upper: Antichain<T>,
+    data_ts: T,
     batch: ProtoBatch,
     metrics: BatchMetrics,
 }
@@ -232,8 +251,14 @@ struct HollowBatchAndMetadata<T> {
 /// Holds finished batches for `append_batches`.
 #[derive(Debug, Default)]
 struct BatchSet {
-    finished: Vec<Batch<SourceData, (), mz_repr::Timestamp, Diff>>,
+    finished: Vec<FinishedBatch>,
     batch_metrics: BatchMetrics,
+}
+
+#[derive(Debug)]
+struct FinishedBatch {
+    batch: Batch<SourceData, (), mz_repr::Timestamp, Diff>,
+    data_ts: mz_repr::Timestamp,
 }
 
 /// Continuously writes the `desired_stream` into persist
@@ -686,6 +711,7 @@ where
                                 let builder = stashed_batches.entry(ts).or_insert_with(|| {
                                     BatchBuilderAndMetadata::new(
                                         write.builder(operator_batch_lower.clone()),
+                                        ts,
                                     )
                                 });
 
@@ -1045,14 +1071,16 @@ where
                     match event {
                         Event::Data(_cap, data) => {
                             for batch in data {
-                                let finished_batch = write.batch_from_transmittable_batch(batch.batch);
                                 let batch_description = (batch.lower.clone(), batch.upper.clone());
 
                                 let batches = in_flight_batches
                                     .entry(batch_description)
                                     .or_default();
 
-                                batches.finished.push(finished_batch);
+                                batches.finished.push(FinishedBatch {
+                                    batch: write.batch_from_transmittable_batch(batch.batch),
+                                    data_ts: batch.data_ts,
+                                });
                                 batches.batch_metrics += &batch.metrics;
                             }
                             continue;
@@ -1096,7 +1124,7 @@ where
             );
 
             // Append batches in order, to ensure that their `lower` and
-            // `upper` lign up.
+            // `upper` line up.
             done_batches.sort_by(|a, b| {
                 if PartialOrder::less_than(a, b) {
                     Ordering::Less
@@ -1107,7 +1135,10 @@ where
                 }
             });
 
-            for done_batch_metadata in done_batches {
+            // Reverse, as we'll pop batches off the end of the queue.
+            done_batches.reverse();
+
+            while let Some(done_batch_metadata) = done_batches.pop() {
                 in_flight_descriptions.remove(&done_batch_metadata);
 
                 let batch_set = in_flight_batches
@@ -1127,7 +1158,7 @@ where
 
                 let batch_metrics = batch_set.batch_metrics;
 
-                let mut to_append = batches.iter_mut().collect::<Vec<_>>();
+                let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
 
                 // We evaluate this above to avoid checking an environment variable
                 // in a hot loop. Note that we only pause before we emit
@@ -1184,21 +1215,67 @@ where
                         upper_cap_set.downgrade(current_upper.borrow().iter());
                     }
                     Err(mismatch) => {
-                        // _Best effort_ Clean up in case we didn't manage to append the
-                        // batches to persist.
-                        for batch in batches {
-                            batch.delete().await;
-                        }
+                        // We tried to to a non-contiguous append, that won't work.
+                        if PartialOrder::less_than(&mismatch.current, &batch_lower) {
+                            // Best-effort attempt to delete unneeded batches.
+                            future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
 
-                        tracing::warn!(
-                            "persist_sink({}): invalid upper! \
-                                Tried to append batch ({:?} -> {:?}) but upper \
-                                is {:?}. This is not a problem, it just means \
-                                someone else was faster than us. We will try \
-                                again with a new batch description.",
-                            collection_id, batch_lower, batch_upper, mismatch.current,
-                        );
-                        anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
+                            tracing::warn!(
+                                "persist_sink({}): invalid upper! \
+                                    Tried to append batch ({:?} -> {:?}) but upper \
+                                    is {:?}. This is surpising and likely indicates \
+                                    a bug in the persist sink, but we'll restart the \
+                                    dataflow and try again.",
+                                collection_id, batch_lower, batch_upper, mismatch.current,
+                            );
+                            anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
+                        } else if PartialOrder::less_than(&mismatch.current, &batch_upper) {
+                            // The shard's upper was ahead of our batch's lower
+                            // but not ahead of our upper. Cut down the
+                            // description by advancing its lower to the current
+                            // shard upper and try again. IMPORTANT: We can only
+                            // advance the lower, meaning we cut updates away,
+                            // we must not "extend" the batch by changing to a
+                            // lower that is not beyond the current lower. This
+                            // invariant is checked by the first if branch: if
+                            // `!(current_upper < lower)` then it holds that
+                            // `lower <= current_upper`.
+
+                            // First, construct a new batch description with the
+                            // lower advanced to the current shard upper.
+                            let new_batch_lower = mismatch.current;
+                            let new_done_batch_metadata = (new_batch_lower.clone(), batch_upper);
+
+                            // Re-add the new batch to the list of batches to
+                            // process.
+                            done_batches.push(new_done_batch_metadata.clone());
+
+                            // Retain any batches that are still in advance of
+                            // the new lower, and delete any batches that are
+                            // not.
+                            //
+                            // Temporary measure: this bookkeeping is made
+                            // possible by the fact that each batch only
+                            // contains data at a single timestamp, even though
+                            // it might declare a larger lower or upper. In the
+                            // future, we'll want to use persist's `append` API
+                            // and let persist handle the truncation internally.
+                            let new_batch_set = in_flight_batches.entry(new_done_batch_metadata).or_default();
+                            let mut batch_delete_futures = vec![];
+                            for batch in batches {
+                                if new_batch_lower.less_equal(&batch.data_ts) {
+                                    new_batch_set.finished.push(batch);
+                                } else {
+                                    batch_delete_futures.push(batch.batch.delete());
+                                }
+                            }
+
+                            // Best-effort attempt to delete unneeded batches.
+                            future::join_all(batch_delete_futures).await;
+                        } else {
+                            // Best-effort attempt to delete unneeded batches.
+                            future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
+                        }
                     }
                 }
             }
