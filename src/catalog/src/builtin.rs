@@ -7566,6 +7566,220 @@ JOIN root_times r USING (id)",
     access: vec![PUBLIC_SELECT],
 });
 
+/**
+ * This view is used to display the cluster utilization over 14 days bucketed by 8 hours.
+ * It's specifically for the Console's environment overview page to speed up load times
+ */
+pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+        name: "mz_console_cluster_utilization_overview",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_OID,
+        column_defs: Some(
+            r#"bucket_start, 
+            replica_id,
+            memory_percent, 
+            max_memory_at, 
+            disk_percent, 
+            max_disk_at, 
+            memory_and_disk_percent, 
+            max_memory_and_disk_memory_percent, 
+            max_memory_and_disk_disk_percent, 
+            max_memory_and_disk_at, 
+            max_cpu_percent, 
+            max_cpu_at, 
+            offline_events, 
+            bucket_end, 
+            name, 
+            cluster_id, 
+            size"#,
+        ),
+        sql: r#"WITH replica_history AS (
+  SELECT replica_id,
+    size, 
+    cluster_id
+  FROM mz_internal.mz_cluster_replica_history
+  UNION
+  -- We need to union the current set of cluster replicas since mz_cluster_replica_history doesn't include system clusters
+  SELECT id AS replica_id,
+    size,
+    cluster_id
+  FROM mz_catalog.mz_cluster_replicas
+),
+replica_utilization_history_binned AS (
+  SELECT m.occurred_at,
+    m.replica_id,
+    m.process_id,
+    (m.cpu_nano_cores::float8 / s.cpu_nano_cores) AS cpu_percent,
+    (m.memory_bytes::float8 / s.memory_bytes) AS memory_percent,
+    (m.disk_bytes::float8 / s.disk_bytes) AS disk_percent,
+    m.disk_bytes::float8 AS disk_bytes,
+    m.memory_bytes::float8 AS memory_bytes,
+    s.disk_bytes AS total_disk_bytes,
+    s.memory_bytes AS total_memory_bytes,
+    r.size,
+    date_bin(
+      '8 HOURS',
+      occurred_at,
+      '1970-01-01'::timestamp
+    ) AS bucket_start
+  FROM replica_history AS r
+    JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
+    JOIN mz_internal.mz_cluster_replica_metrics_history AS m ON m.replica_id = r.replica_id
+  WHERE mz_now() <= date_bin(
+      '8 HOURS',
+      occurred_at,
+      '1970-01-01'::timestamp
+    ) + INTERVAL '14 DAYS'
+),
+-- For each (replica, process_id, bucket), take the (replica, process_id, bucket) with the highest memory
+max_memory AS (
+  SELECT DISTINCT ON (bucket_start, replica_id, process_id) bucket_start,
+    replica_id,
+    process_id,
+    memory_percent,
+    occurred_at
+  FROM replica_utilization_history_binned
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
+  ORDER BY bucket_start,
+    replica_id,
+    process_id,
+    COALESCE(memory_bytes, 0) DESC
+),
+max_disk AS (
+  SELECT DISTINCT ON (bucket_start, replica_id, process_id) bucket_start,
+    replica_id,
+    process_id,
+    disk_percent,
+    occurred_at
+  FROM replica_utilization_history_binned
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
+  ORDER BY bucket_start,
+    replica_id,
+    process_id,
+    COALESCE(disk_bytes, 0) DESC
+),
+max_cpu AS (
+  SELECT DISTINCT ON (bucket_start, replica_id, process_id) bucket_start,
+    replica_id,
+    process_id,
+    cpu_percent,
+    occurred_at
+  FROM replica_utilization_history_binned
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
+  ORDER BY bucket_start,
+    replica_id,
+    process_id,
+    COALESCE(cpu_percent, 0) DESC
+),
+/*
+ This is different
+ from adding max_memory
+ and max_disk per bucket because both
+ values may not occur at the same time if the bucket interval is large.
+ */
+max_memory_and_disk AS (
+  SELECT DISTINCT ON (bucket_start, replica_id, process_id) bucket_start,
+    replica_id,
+    memory_percent,
+    disk_percent,
+    memory_and_disk_percent,
+    occurred_at
+  FROM (
+      SELECT *,
+        CASE
+          WHEN disk_bytes IS NULL
+          AND memory_bytes IS NULL THEN NULL
+          ELSE (
+            (
+              COALESCE(disk_bytes, 0) + COALESCE(memory_bytes, 0)
+            ) / total_memory_bytes
+          ) / (
+            (
+              total_disk_bytes::numeric + total_memory_bytes::numeric
+            ) / total_memory_bytes
+          )
+        END AS memory_and_disk_percent
+      FROM replica_utilization_history_binned
+    ) AS max_memory_and_disk_inner
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
+  ORDER BY bucket_start,
+    replica_id,
+    process_id,
+    COALESCE(memory_and_disk_percent, 0) DESC
+),
+-- For each (replica, process_id, bucket), get its offline events at that time
+replica_offline_event_history AS (
+  SELECT date_bin(
+      '8 HOURS',
+      occurred_at,
+      '1970-01-01'::timestamp
+    ) AS bucket_start,
+    replica_id,
+    jsonb_agg(
+      jsonb_build_object(
+        'replicaId',
+        rsh.replica_id,
+        'occurredAt',
+        rsh.occurred_at,
+        'status',
+        rsh.status,
+        'reason',
+        rsh.reason
+      )
+    ) AS offline_events
+  FROM mz_internal.mz_cluster_replica_status_history AS rsh
+  -- We assume the statuses for process 0 are the same as all processes
+  WHERE process_id = '0'
+    AND status = 'offline'
+    AND mz_now() <= date_bin(
+      '8 HOURS',
+      occurred_at,
+      '1970-01-01'::timestamp
+    ) + INTERVAL '14 DAYS'
+  GROUP BY bucket_start,
+    replica_id
+)
+SELECT max_memory.bucket_start,
+  max_memory.replica_id,
+  max_memory.memory_percent,
+  max_memory.occurred_at as max_memory_at,
+  max_disk.disk_percent,
+  max_disk.occurred_at as max_disk_at,
+  max_memory_and_disk.memory_and_disk_percent as max_memory_and_disk_combined_percent,
+  max_memory_and_disk.memory_percent as max_memory_and_disk_memory_percent,
+  max_memory_and_disk.disk_percent as max_memory_and_disk_disk_percent,
+  max_memory_and_disk.occurred_at as max_memory_and_disk_at,
+  max_cpu.cpu_percent as max_cpu_percent,
+  max_cpu.occurred_at as max_cpu_at,
+  replica_offline_event_history.offline_events,
+  max_memory.bucket_start + INTERVAL '8 HOURS' as bucket_end,
+  replica_name_history.new_name AS name,
+  replica_history.cluster_id,
+  replica_history.size
+FROM max_memory
+  JOIN max_disk ON max_memory.bucket_start = max_disk.bucket_start
+  AND max_memory.replica_id = max_disk.replica_id
+  JOIN max_cpu ON max_memory.bucket_start = max_cpu.bucket_start
+  AND max_memory.replica_id = max_cpu.replica_id
+  JOIN max_memory_and_disk ON max_memory.bucket_start = max_memory_and_disk.bucket_start
+  AND max_memory.replica_id = max_memory_and_disk.replica_id
+  JOIN replica_history ON max_memory.replica_id = replica_history.replica_id,
+  LATERAL (
+    SELECT new_name
+    FROM mz_internal.mz_cluster_replica_name_history as replica_name_history
+    WHERE max_memory.replica_id = replica_name_history.id
+    -- We treat NULLs as the beginning of time
+      AND max_memory.bucket_start + INTERVAL '8 HOURS' >= COALESCE(replica_name_history.occurred_at, '1970-01-01'::timestamp)
+    ORDER BY replica_name_history.occurred_at DESC
+    LIMIT '1'
+  ) AS replica_name_history
+  LEFT JOIN replica_offline_event_history ON max_memory.bucket_start = replica_offline_event_history.bucket_start
+  AND max_memory.replica_id = replica_offline_event_history.replica_id"#,
+        access: vec![PUBLIC_SELECT],
+    }
+});
+
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -7788,6 +8002,15 @@ pub const MZ_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     oid: oid::INDEX_MZ_VIEWS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_catalog.mz_views (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_console_cluster_utilization_overview_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_console_cluster_utilization_overview (cluster_id)",
     is_retained_metrics_object: false,
 };
 
@@ -8703,6 +8926,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
         Builtin::View(&MZ_MATERIALIZATION_DEPENDENCIES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
+        Builtin::View(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
@@ -8765,6 +8989,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_COLUMNS_IND),
         Builtin::Index(&MZ_SECRETS_IND),
         Builtin::Index(&MZ_VIEWS_IND),
+        Builtin::Index(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND),
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),
