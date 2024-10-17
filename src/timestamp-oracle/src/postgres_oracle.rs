@@ -11,6 +11,7 @@
 //! all oracle operations are self-sufficiently linearized, without requiring
 //! any external precautions/machinery.
 
+use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
@@ -27,6 +28,7 @@ use mz_adapter_types::timestamp_oracle::{
 use mz_ore::error::ErrorExt;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::url::SensitiveUrl;
 use mz_pgrepr::Numeric;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 use mz_repr::Timestamp;
@@ -87,7 +89,7 @@ where
 /// [`TimestampOracle`].
 #[derive(Clone, Debug)]
 pub struct PostgresTimestampOracleConfig {
-    url: String,
+    url: SensitiveUrl,
     pub metrics: Arc<Metrics>,
 
     /// Configurations that can be dynamically updated.
@@ -105,13 +107,13 @@ impl PostgresTimestampOracleConfig {
     pub(crate) const EXTERNAL_TESTS_POSTGRES_URL: &'static str = "COCKROACH_URL";
 
     /// Returns a new instance of [`PostgresTimestampOracleConfig`] with default tuning.
-    pub fn new(url: &str, metrics_registry: &MetricsRegistry) -> Self {
+    pub fn new(url: &SensitiveUrl, metrics_registry: &MetricsRegistry) -> Self {
         let metrics = Arc::new(Metrics::new(metrics_registry));
 
         let dynamic = DynamicConfig::default();
 
         PostgresTimestampOracleConfig {
-            url: url.to_string(),
+            url: url.clone(),
             metrics,
             dynamic: Arc::new(dynamic),
         }
@@ -127,7 +129,7 @@ impl PostgresTimestampOracleConfig {
     /// [1]: https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url
     pub fn new_for_test() -> Option<Self> {
         let url = match std::env::var(Self::EXTERNAL_TESTS_POSTGRES_URL) {
-            Ok(url) => url,
+            Ok(url) => SensitiveUrl::from_str(&url).expect("invalid Postgres URL"),
             Err(_) => {
                 if mz_ore::env::is_var_truthy("CI") {
                     panic!("CI is supposed to run this test but something has gone wrong!");
@@ -139,7 +141,7 @@ impl PostgresTimestampOracleConfig {
         let dynamic = DynamicConfig::default();
 
         let config = PostgresTimestampOracleConfig {
-            url: url.to_string(),
+            url,
             metrics: Arc::new(Metrics::new(&MetricsRegistry::new())),
             dynamic: Arc::new(dynamic),
         };

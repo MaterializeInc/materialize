@@ -98,6 +98,7 @@ pub mod time;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
 #[cfg(feature = "tracing_")]
 pub mod tracing;
+pub mod url;
 pub mod vec;
 
 pub use mz_ore_proc::{instrument, static_list, test};

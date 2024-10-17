@@ -599,6 +599,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::str::FromStr;
     use std::sync::Arc;
     use std::sync::LazyLock;
     use std::time::Duration;
@@ -607,6 +608,7 @@ mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
+    use mz_ore::url::SensitiveUrl;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
     use mz_persist_client::rpc::PubSubClientConnection;
@@ -661,8 +663,8 @@ mod tests {
     ) {
         let metadata = CollectionMetadata {
             persist_location: PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
+                blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
             },
             remap_shard: Some(shard),
             data_shard: ShardId::new(),
@@ -818,8 +820,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock_frontier() {
         let persist_location = PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
+            blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
         };
 
         let remap_shard = ShardId::new();
@@ -1226,8 +1228,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_compaction() {
         let persist_location = PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
+            blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
         };
 
         let remap_shard = ShardId::new();
@@ -1538,8 +1540,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_inversion() {
         let persist_location = PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
+            blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
         };
 
         let remap_shard = ShardId::new();
@@ -1788,8 +1790,8 @@ mod tests {
 
         // Also manually assert the since of the remap shard.
         let persist_location = PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
+            blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
         };
 
         let persist_client = PERSIST_CACHE

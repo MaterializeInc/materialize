@@ -18,15 +18,12 @@
 
 use num::traits::bounds::UpperBounded;
 use num::Signed;
-#[cfg(feature = "proptest")]
 use proptest::arbitrary::Arbitrary;
-#[cfg(feature = "proptest")]
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
 use std::ops::Deref;
-#[cfg(feature = "proptest")]
 use std::ops::Range;
 
 /// A wrapper type which ensures a signed number is non-negative.
@@ -99,7 +96,6 @@ impl crate::cast::CastFrom<NonNeg<i64>> for usize {
     }
 }
 
-#[cfg(feature = "proptest")]
 impl<T> Arbitrary for NonNeg<T>
 where
     T: Signed + UpperBounded + fmt::Display + fmt::Debug + Copy + 'static,

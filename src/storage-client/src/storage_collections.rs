@@ -2739,6 +2739,7 @@ pub(crate) enum SnapshotStatsAsOf<T: TimelyTimestamp + Lattice + Codec64> {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
     use std::sync::Arc;
 
     use mz_build_info::DUMMY_BUILD_INFO;
@@ -2746,6 +2747,7 @@ mod tests {
     use mz_ore::assert_err;
     use mz_ore::metrics::{MetricsRegistry, UIntGauge};
     use mz_ore::now::SYSTEM_TIME;
+    use mz_ore::url::SensitiveUrl;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
     use mz_persist_client::rpc::PubSubClientConnection;
@@ -2760,8 +2762,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr`
     async fn test_snapshot_stats(&self) {
         let persist_location = PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
+            blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
         };
         let persist_client = PersistClientCache::new(
             PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),

@@ -56,6 +56,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
+use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
@@ -926,7 +927,7 @@ impl<'a> RunnerInner<'a> {
         let temp_dir = tempfile::tempdir()?;
         let scratch_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
-        let (consensus_uri, timestamp_oracle_url) = {
+        let (consensus_uri, timestamp_oracle_url): (SensitiveUrl, SensitiveUrl) = {
             let postgres_url = &config.postgres_url;
             info!(%postgres_url, "starting server");
             let (client, conn) = Retry::default()
@@ -954,8 +955,12 @@ impl<'a> RunnerInner<'a> {
                 )
                 .await?;
             (
-                format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),
-                format!("{postgres_url}?options=--search_path=sqllogictest_tsoracle"),
+                format!("{postgres_url}?options=--search_path=sqllogictest_consensus")
+                    .parse()
+                    .expect("invalid consensus URI"),
+                format!("{postgres_url}?options=--search_path=sqllogictest_tsoracle")
+                    .parse()
+                    .expect("invalid timestamp oracle URI"),
             )
         };
 
@@ -1037,7 +1042,9 @@ impl<'a> RunnerInner<'a> {
                     blob_uri: format!(
                         "file://{}/persist/blob",
                         config.persist_dir.path().display()
-                    ),
+                    )
+                    .parse()
+                    .expect("invalid blob URI"),
                     consensus_uri,
                 },
                 persist_clients,

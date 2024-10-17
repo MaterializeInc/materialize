@@ -37,7 +37,7 @@ itertools = "0.10.5"
 md-5 = "0.10.5"
 murmur2 = "0.1.0"
 mz-lowertest = { path = "../lowertest" }
-mz-ore = { path = "../ore", features = ["network", "proptest", "id_gen"] }
+mz-ore = { path = "../ore", features = ["network", "id_gen"] }
 mz-persist-types = { path = "../persist-types" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgtz = { path = "../pgtz" }
