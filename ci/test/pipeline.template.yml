@@ -50,7 +50,7 @@ steps:
         command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.upload_debug_symbols_to_polarsignals
         inputs:
           - "*"
-        depends_on: [rust-build-x86_64]
+        depends_on: [build-x86_64]
         timeout_in_minutes: 10
         priority: 50
         if: build.tag != "" && build.branch =~ /^v.*\..*\$/
@@ -77,7 +77,7 @@ steps:
         command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.upload_debug_symbols_to_polarsignals
         inputs:
           - "*"
-        depends_on: [rust-build-aarch64]
+        depends_on: [build-aarch64]
         priority: 50
         timeout_in_minutes: 10
         if: build.tag != "" && build.branch =~ /^v.*\..*\$/
