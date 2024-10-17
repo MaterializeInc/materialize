@@ -44,6 +44,7 @@ mod acl;
 pub(crate) mod ddl;
 mod dml;
 mod raise;
+mod refresh;
 mod scl;
 pub(crate) mod show;
 mod tcl;
@@ -239,6 +240,9 @@ pub fn describe(
 
         // Other statements.
         Statement::Raise(stmt) => raise::describe_raise(&scx, stmt)?,
+        Statement::RefreshSourceReferences(stmt) => {
+            refresh::describe_refresh_source_references(&scx, stmt)?
+        }
         Statement::Show(ShowStatement::InspectShard(stmt)) => {
             scl::describe_inspect_shard(&scx, stmt)?
         }
@@ -414,6 +418,9 @@ pub fn plan(
 
         // Other statements.
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
+        Statement::RefreshSourceReferences(stmt) => {
+            refresh::plan_refresh_source_references(scx, stmt)
+        }
         Statement::Show(ShowStatement::InspectShard(stmt)) => scl::plan_inspect_shard(scx, stmt),
         Statement::ValidateConnection(stmt) => validate::plan_validate_connection(scx, stmt),
     };
@@ -1110,6 +1117,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
 
             // Other statements.
             Statement::Raise(_) => Other,
+            Statement::RefreshSourceReferences(_) => Other,
             Statement::Show(ShowStatement::InspectShard(_)) => Other,
             Statement::ValidateConnection(_) => Other,
         }

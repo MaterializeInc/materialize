@@ -49,7 +49,7 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::{ConnectionDetails, StatementContext};
+use mz_sql::plan::{ConnectionDetails, RefreshSourceReferencesPlanWrapper, StatementContext};
 use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
 use mz_storage_types::sinks::StorageSinkDesc;
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -428,6 +428,57 @@ impl Coordinator {
             }),
             ResolvedIds(BTreeSet::new()),
         ))
+    }
+
+    pub(crate) fn plan_purified_refresh_source_references(
+        &mut self,
+        session: &Session,
+        stmt: mz_sql::ast::RefreshSourceReferencesStatement<Aug>,
+        params: &Params,
+        available_source_references: plan::SourceReferences,
+    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
+
+        // Plan the statement itself, which validates the target of the refresh statement.
+        let stmt_plan = match self.plan_statement(
+            session,
+            Statement::RefreshSourceReferences(stmt),
+            params,
+            &resolved_ids,
+        )? {
+            Plan::RefreshSourceReferencesPlan(plan) => plan,
+            p => unreachable!("s must be RefreshSourceReferencesPlan but got {:?}", p),
+        };
+
+        Ok((
+            Plan::RefreshSourceReferencesPlanWrapper(RefreshSourceReferencesPlanWrapper {
+                plan: stmt_plan,
+                available_source_references,
+            }),
+            resolved_ids,
+        ))
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_refresh_source_references(
+        &mut self,
+        session: &mut Session,
+        plan: plan::RefreshSourceReferencesPlanWrapper,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let RefreshSourceReferencesPlanWrapper {
+            plan,
+            available_source_references,
+        } = plan;
+
+        self.catalog_transact(
+            Some(session),
+            vec![catalog::Op::UpdateSourceReferences {
+                source_id: plan.source_id,
+                references: available_source_references.clone().into(),
+            }],
+        )
+        .await?;
+        Ok(ExecuteResponse::Refreshed)
     }
 
     /// Prepares a `CREATE SOURCE` statement to create its progress subsource,

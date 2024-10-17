@@ -571,6 +571,15 @@ impl Coordinator {
                         .add_notice(AdapterNotice::UserRequested { severity });
                     ctx.retire(Ok(ExecuteResponse::Raised));
                 }
+                Plan::RefreshSourceReferencesPlan(_) => {
+                    ctx.retire(Ok(ExecuteResponse::Refreshed));
+                }
+                Plan::RefreshSourceReferencesPlanWrapper(plan) => {
+                    let result = self
+                        .sequence_refresh_source_references(ctx.session_mut(), plan)
+                        .await;
+                    ctx.retire(result);
+                }
                 Plan::GrantPrivileges(plan) => {
                     let result = self
                         .sequence_grant_privileges(ctx.session_mut(), plan)
