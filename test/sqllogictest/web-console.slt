@@ -106,5 +106,19 @@ SELECT id, cluster_id, object_type, created_at, dropped_at FROM mz_internal.mz_o
 ----
 u1  u1  materialized-view  1970-01-01␠00:00:00.666+00  1970-01-01␠00:00:00.666+00
 
-# Reset server to clear mz_object_history
-reset-server
+# ---- mz_cluster_replica_name_history
+
+statement ok
+CREATE CLUSTER foo REPLICAS ( weewoo1 (SIZE = '1') );
+
+statement ok
+ALTER CLUSTER REPLICA foo.weewoo1 RENAME TO weewoo2;
+
+query TTTT
+SELECT id, previous_name, new_name FROM mz_internal.mz_cluster_replica_name_history WHERE new_name = 'weewoo1' OR new_name = 'weewoo2';
+----
+u2  NULL  weewoo1
+u2  weewoo1  weewoo2
+
+statement ok
+DROP CLUSTER foo;
