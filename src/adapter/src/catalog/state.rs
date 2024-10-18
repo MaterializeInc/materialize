@@ -832,26 +832,30 @@ impl CatalogState {
                     mz_sql::plan::TableDataSource::TableWrites { defaults } => {
                         TableDataSource::TableWrites { defaults }
                     }
-                    mz_sql::plan::TableDataSource::DataSource(data_source_desc) => {
-                        match data_source_desc {
-                            mz_sql::plan::DataSourceDesc::IngestionExport {
+                    mz_sql::plan::TableDataSource::DataSource {
+                        desc: data_source_desc,
+                        timeline,
+                    } => match data_source_desc {
+                        mz_sql::plan::DataSourceDesc::IngestionExport {
+                            ingestion_id,
+                            external_reference,
+                            details,
+                            data_config,
+                        } => TableDataSource::DataSource {
+                            desc: DataSourceDesc::IngestionExport {
                                 ingestion_id,
                                 external_reference,
                                 details,
                                 data_config,
-                            } => TableDataSource::DataSource(DataSourceDesc::IngestionExport {
-                                ingestion_id,
-                                external_reference,
-                                details,
-                                data_config,
-                            }),
-                            _ => {
-                                return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                    "unsupported data source for table"
-                                )))
-                            }
+                            },
+                            timeline,
+                        },
+                        _ => {
+                            return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                                "unsupported data source for table"
+                            )))
                         }
-                    }
+                    },
                 },
             }),
             Plan::CreateSource(CreateSourcePlan {
@@ -2052,7 +2056,7 @@ impl CatalogState {
 
     /// For the Sources ids in `ids`, return the compaction windows for all `ids` and additional ids
     /// that propagate from them. Specifically, if `ids` contains a source, it and all of its
-    /// subsources will be added to the result.
+    /// source exports will be added to the result.
     pub fn source_compaction_windows(
         &self,
         ids: impl IntoIterator<Item = GlobalId>,
@@ -2065,33 +2069,54 @@ impl CatalogState {
                 continue;
             }
             let entry = self.get_entry(&id);
-            let Some(source) = entry.source() else {
-                // Views could depend on sources, so ignore them if added by used_by below.
-                continue;
-            };
-            let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
-            match source.data_source {
-                DataSourceDesc::Ingestion { .. } => {
-                    // For sources, look up each dependent subsource and propagate.
-                    cws.entry(source_cw).or_default().insert(id);
-                    ids.extend(entry.used_by());
+            match entry.item() {
+                CatalogItem::Source(source) => {
+                    let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
+                    match source.data_source {
+                        DataSourceDesc::Ingestion { .. } => {
+                            // For sources, look up each dependent source export and propagate.
+                            cws.entry(source_cw).or_default().insert(id);
+                            ids.extend(entry.used_by());
+                        }
+                        DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                            // For subsources, look up the parent source and propagate the compaction
+                            // window.
+                            let ingestion = self
+                                .get_entry(&ingestion_id)
+                                .source()
+                                .expect("must be source");
+                            let cw = ingestion
+                                .custom_logical_compaction_window
+                                .unwrap_or(source_cw);
+                            cws.entry(cw).or_default().insert(id);
+                        }
+                        DataSourceDesc::Introspection(_)
+                        | DataSourceDesc::Progress
+                        | DataSourceDesc::Webhook { .. } => {
+                            cws.entry(source_cw).or_default().insert(id);
+                        }
+                    }
                 }
-                DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                    // For subsources, look up the parent source and propagate the compaction
-                    // window.
-                    let ingestion = self
-                        .get_entry(&ingestion_id)
-                        .source()
-                        .expect("must be source");
-                    let cw = ingestion
-                        .custom_logical_compaction_window
-                        .unwrap_or(source_cw);
-                    cws.entry(cw).or_default().insert(id);
-                }
-                DataSourceDesc::Introspection(_)
-                | DataSourceDesc::Progress
-                | DataSourceDesc::Webhook { .. } => {
-                    cws.entry(source_cw).or_default().insert(id);
+                CatalogItem::Table(table) => match &table.data_source {
+                    TableDataSource::DataSource {
+                        desc: DataSourceDesc::IngestionExport { ingestion_id, .. },
+                        timeline: _,
+                    } => {
+                        let table_cw = table.custom_logical_compaction_window.unwrap_or_default();
+                        let ingestion = self
+                            .get_entry(ingestion_id)
+                            .source()
+                            .expect("must be source");
+                        let cw = ingestion
+                            .custom_logical_compaction_window
+                            .unwrap_or(table_cw);
+                        cws.entry(cw).or_default().insert(id);
+                    }
+                    _ => {}
+                },
+                _ => {
+                    // Views could depend on sources, so ignore them if added by used_by above.
+                    continue;
                 }
             }
         }
