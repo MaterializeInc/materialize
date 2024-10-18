@@ -619,21 +619,18 @@ fn create_statefulset_object(
     // When passing a secret, use a `SecretKeySelector` to forward a secret into
     // the pod. Do *not* hardcode a secret as the value directly, as doing so
     // will leak the secret to anyone with permission to describe the pod.
-    let mut env: Vec<_> = super::DATABASE_CONFIGS
-        .iter()
-        .map(|config| EnvVar {
-            name: config.mz_env_var.to_string(),
-            value_from: Some(EnvVarSource {
-                secret_key_ref: Some(SecretKeySelector {
-                    name: Some(Materialize::cockroach_secret_name()),
-                    key: config.secret_key.to_string(),
-                    optional: Some(false),
-                }),
-                ..Default::default()
+    let mut env = vec![EnvVar {
+        name: "MZ_METADATA_BACKEND_URL".to_string(),
+        value_from: Some(EnvVarSource {
+            secret_key_ref: Some(SecretKeySelector {
+                name: Some(Materialize::cockroach_secret_name()),
+                key: "MZ_METADATA_BACKEND_URL".to_string(),
+                optional: Some(false),
             }),
             ..Default::default()
-        })
-        .collect();
+        }),
+        ..Default::default()
+    }];
     env.push(EnvVar {
         name: "AWS_REGION".to_string(),
         value: Some(config.region.clone()),

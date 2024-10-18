@@ -69,6 +69,7 @@ use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
 use tracing::{error, info, info_span, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use url::Url;
 
 mod sys;
 
@@ -364,13 +365,25 @@ pub struct Args {
     #[clap(long, env = "DEPLOY_GENERATION", default_value = "0")]
     deploy_generation: u64,
 
+    /// Can be provided in place of both persist_consensus_url and
+    /// timestamp_oracle_url in order to point both at the same backend
+    #[clap(
+        long,
+        env = "METADATA_BACKEND_URL",
+        conflicts_with_all = &[
+            "persist-consensus-url",
+            "timestamp-oracle-url",
+        ],
+    )]
+    metadata_backend_url: Option<SensitiveUrl>,
+
     // === Storage options. ===
     /// Where the persist library should store its blob data.
     #[clap(long, env = "PERSIST_BLOB_URL")]
     persist_blob_url: SensitiveUrl,
     /// Where the persist library should perform consensus.
     #[clap(long, env = "PERSIST_CONSENSUS_URL")]
-    persist_consensus_url: SensitiveUrl,
+    persist_consensus_url: Option<SensitiveUrl>,
     /// The Persist PubSub URL.
     ///
     /// This URL is passed to `clusterd` for discovery of the Persist PubSub service.
@@ -893,6 +906,34 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         })
     };
 
+    let consensus_uri = args.persist_consensus_url.unwrap_or_else(|| {
+        args.metadata_backend_url
+            .as_ref()
+            .map(|metadata_backend_url| {
+                SensitiveUrl(
+                    Url::parse_with_params(
+                        metadata_backend_url.0.as_ref(),
+                        &[("options", "--search_path=consensus")],
+                    )
+                    .unwrap(),
+                )
+            })
+            .expect("either --persist-consensus-url or --metadata-backend-url must be provided")
+    });
+    let timestamp_oracle_url = args.timestamp_oracle_url.or_else(|| {
+        args.metadata_backend_url
+            .as_ref()
+            .map(|metadata_backend_url| {
+                SensitiveUrl(
+                    Url::parse_with_params(
+                        metadata_backend_url.0.as_ref(),
+                        &[("options", "--search_path=tsoracle")],
+                    )
+                    .unwrap(),
+                )
+            })
+    });
+
     let persist_clients = Arc::new(persist_clients);
     let connection_context = ConnectionContext::from_cli_args(
         args.environment_id.to_string(),
@@ -908,7 +949,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         orchestrator,
         persist_location: PersistLocation {
             blob_uri: args.persist_blob_url,
-            consensus_uri: args.persist_consensus_url,
+            consensus_uri,
         },
         persist_clients: Arc::clone(&persist_clients),
         clusterd_image: args.clusterd_image.expect("clap enforced"),
@@ -981,7 +1022,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 catalog_config,
                 availability_zones: args.availability_zone,
                 cluster_replica_sizes,
-                timestamp_oracle_url: args.timestamp_oracle_url,
+                timestamp_oracle_url,
                 segment_api_key: args.segment_api_key,
                 segment_client_side: args.segment_client_side,
                 launchdarkly_sdk_key: args.launchdarkly_sdk_key,

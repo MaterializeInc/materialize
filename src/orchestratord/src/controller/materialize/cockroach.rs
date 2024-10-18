@@ -182,16 +182,8 @@ fn create_secret(cockroach_info: &CockroachInfo, mz: &Materialize, pg_password: 
         encode(&cockroach_info.cockroach_ca_cert),
     );
 
-    let mut string_data = super::DATABASE_CONFIGS
-        .iter()
-        .map(|config| {
-            let database_url = format!(
-                "{}&options=--search_path={}",
-                pg_database_url, config.schema
-            );
-            (config.secret_key.to_string(), database_url)
-        })
-        .collect::<BTreeMap<_, _>>();
+    let mut string_data = BTreeMap::new();
+    string_data.insert("MZ_METADATA_BACKEND_URL".to_string(), pg_database_url);
     string_data.insert("PASSWORD".to_string(), pg_password.to_string());
 
     Secret {
