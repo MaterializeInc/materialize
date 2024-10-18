@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use deadpool_postgres::tokio_postgres::error::SqlState;
+use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::{Object, PoolError};
 use dec::Decimal;
 use mz_adapter_types::timestamp_oracle::{
@@ -441,14 +442,22 @@ where
         let fallible = || async {
             let metrics = Arc::clone(&config.metrics);
 
+            // don't need to unredact here because we're just pulling out the username
+            let pg_config: Config = config.url.to_string().parse()?;
+            let role = pg_config.get_user().unwrap();
+            let create_schema = format!(
+                r#"CREATE SCHEMA IF NOT EXISTS "{}" AUTHORIZATION "{}""#,
+                "tsoracle", role
+            );
+
             let postgres_client = PostgresClient::open(config.clone().into())?;
 
             let client = postgres_client.get_connection().await?;
 
             let crdb_mode = match client
                 .batch_execute(&format!(
-                    "{}{}; {}",
-                    SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
+                    "{}; {}{}; {}",
+                    create_schema, SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
                 ))
                 .await
             {
@@ -464,7 +473,9 @@ where
             };
 
             if !crdb_mode {
-                client.execute(SCHEMA, &[]).await?;
+                client
+                    .batch_execute(&format!("{}; {};", create_schema, SCHEMA))
+                    .await?;
             }
 
             let oracle = PostgresTimestampOracle {
