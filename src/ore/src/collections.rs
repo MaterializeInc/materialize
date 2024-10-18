@@ -87,6 +87,18 @@ pub trait AssociativeExt<K, V> {
     fn unwrap_insert(&mut self, k: K, v: V) {
         self.expect_insert(k, v, "called `unwrap_insert` for an already-existing key")
     }
+
+    /// Removes a key, panicking with
+    /// a given message if a true
+    /// removal (as opposed to a no-op) cannot be done
+    /// because the key does not exist in the collection.
+    fn expect_remove(&mut self, k: &K, msg: &str) -> V;
+    /// Removes a key, panicking if a true
+    /// removal (as opposed to a no-op) cannot be done
+    /// because the key does not exist in the collection.
+    fn unwrap_remove(&mut self, k: &K) -> V {
+        self.expect_remove(k, "called `unwrap_remove` for a non-existing key")
+    }
 }
 
 impl<K, V> AssociativeExt<K, V> for HashMap<K, V>
@@ -110,6 +122,13 @@ where
             }
         }
     }
+
+    fn expect_remove(&mut self, k: &K, msg: &str) -> V {
+        match self.remove(k) {
+            Some(v) => v,
+            None => panic!("{} (key: {:?})", msg, k),
+        }
+    }
 }
 
 impl<K, V> AssociativeExt<K, V> for BTreeMap<K, V>
@@ -131,6 +150,13 @@ where
                     v
                 )
             }
+        }
+    }
+
+    fn expect_remove(&mut self, k: &K, msg: &str) -> V {
+        match self.remove(k) {
+            Some(v) => v,
+            None => panic!("{} (key: {:?})", msg, k),
         }
     }
 }
