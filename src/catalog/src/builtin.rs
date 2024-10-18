@@ -2119,6 +2119,9 @@ pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     desc: RelationDesc::builder()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("topic", ScalarType::String.nullable(false))
+        .with_column("envelope_type", ScalarType::String.nullable(true))
+        .with_column("key_format", ScalarType::String.nullable(true))
+        .with_column("value_format", ScalarType::String.nullable(true))
         .finish(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],

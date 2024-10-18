@@ -346,6 +346,9 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 ----
 1  id  text
 2  topic  text
+3  envelope_type  text
+4  key_format  text
+5  value_format  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sessions' ORDER BY position
