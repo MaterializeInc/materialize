@@ -1134,3 +1134,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17025  mz_kafka_source_tables
 17026  mz_continual_tasks
 17027  mz_show_continual_tasks
+17030  mz_index_advice
