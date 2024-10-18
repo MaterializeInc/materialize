@@ -290,14 +290,19 @@ class CargoPreImage(PreImage):
             # *lot* of work.
             "Cargo.lock",
             ".cargo/config",
+            # Even though we are not always building with Bazel, consider its
+            # inputs so that developers with CI_BAZEL_BUILD=0 can still
+            # download the images from Dockerhub
+            ".bazelrc",
+            "WORKSPACE",
         }
-        if self.rd.bazel:
-            inputs |= {".bazelrc", "WORKSPACE"}
-            # Bazel has some rules and additive files that aren't directly
-            # associated with a crate, but can change how it's built.
-            additive_path = self.rd.root / "misc" / "bazel"
-            additive_files = ["BUILD.bazel", "*.bzl"]
-            inputs |= set(git.expand_globs(additive_path, *additive_files))
+
+        # Bazel has some rules and additive files that aren't directly
+        # associated with a crate, but can change how it's built.
+        additive_path = self.rd.root / "misc" / "bazel"
+        additive_files = ["BUILD.bazel", "*.bzl"]
+        inputs |= set(git.expand_globs(additive_path, *additive_files))
+
         return inputs
 
     def extra(self) -> str:
@@ -662,9 +667,10 @@ class CargoBuild(CargoPreImage):
                 crate, dev=True
             )
         inputs = super().inputs() | set(inp for dep in deps for inp in dep.inputs())
-
-        if self.rd.bazel:
-            inputs |= {"BUILD.bazel"}
+        # Even though we are not always building with Bazel, consider its
+        # inputs so that developers with CI_BAZEL_BUILD=0 can still
+        # download the images from Dockerhub
+        inputs |= {"BUILD.bazel"}
 
         return inputs
 
