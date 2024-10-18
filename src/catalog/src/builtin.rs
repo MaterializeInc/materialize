@@ -3780,7 +3780,8 @@ pub static MZ_RELATIONS: LazyLock<BuiltinView> = LazyLock::new(|| {
       SELECT id, oid, schema_id, name, 'table', owner_id, NULL::text, privileges FROM mz_catalog.mz_tables
 UNION ALL SELECT id, oid, schema_id, name, 'source', owner_id, cluster_id, privileges FROM mz_catalog.mz_sources
 UNION ALL SELECT id, oid, schema_id, name, 'view', owner_id, NULL::text, privileges FROM mz_catalog.mz_views
-UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, cluster_id, privileges FROM mz_catalog.mz_materialized_views",
+UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, cluster_id, privileges FROM mz_catalog.mz_materialized_views
+UNION ALL SELECT id, oid, schema_id, name, 'continual-task', owner_id, cluster_id, privileges FROM mz_internal.mz_continual_tasks",
         access: vec![PUBLIC_SELECT],
     }
 });
@@ -5345,10 +5346,23 @@ WITH
         FROM mz_materialized_views mv
         JOIN mz_catalog.mz_cluster_replica_frontiers f ON f.object_id = mv.id
         WHERE f.write_frontier IS NULL
+    ),
+    -- Ditto CTs
+    complete_cts AS (
+        SELECT
+            ct.id,
+            f.replica_id,
+            true AS hydrated,
+            NULL::interval AS hydration_time
+        FROM mz_internal.mz_continual_tasks ct
+        JOIN mz_catalog.mz_cluster_replica_frontiers f ON f.object_id = ct.id
+        WHERE f.write_frontier IS NULL
     )
 SELECT * FROM dataflows
 UNION ALL
-SELECT * FROM complete_mvs",
+SELECT * FROM complete_mvs
+UNION ALL
+SELECT * FROM complete_cts",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -7445,6 +7459,15 @@ materialized_views AS (
     LEFT JOIN mz_internal.mz_compute_hydration_statuses h
         ON (h.object_id = i.id)
 ),
+continual_tasks AS (
+    SELECT
+        i.id AS object_id,
+        h.replica_id,
+        COALESCE(h.hydrated, false) AS hydrated
+    FROM mz_internal.mz_continual_tasks i
+    LEFT JOIN mz_internal.mz_compute_hydration_statuses h
+        ON (h.object_id = i.id)
+),
 -- Hydration is a dataflow concept and not all sources are maintained by
 -- dataflows, so we need to find the ones that are. Generally, sources that
 -- have a cluster ID are maintained by a dataflow running on that cluster.
@@ -7483,6 +7506,8 @@ SELECT * FROM indexes
 UNION ALL
 SELECT * FROM materialized_views
 UNION ALL
+SELECT * FROM continual_tasks
+UNION ALL
 SELECT * FROM sources
 UNION ALL
 SELECT * FROM sinks"#,
@@ -7517,6 +7542,8 @@ WITH MUTUALLY RECURSIVE
         SELECT id FROM mz_catalog.mz_indexes
         UNION ALL
         SELECT id FROM mz_catalog.mz_materialized_views
+        UNION ALL
+        SELECT id FROM mz_internal.mz_continual_tasks
         UNION ALL
         SELECT id FROM mz_catalog.mz_sinks
     ),
@@ -8094,6 +8121,15 @@ pub const MZ_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     oid: oid::INDEX_MZ_MATERIALIZED_VIEWS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_catalog.mz_materialized_views (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_CONTINUAL_TASKS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_continual_tasks_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CONTINUAL_TASKS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_continual_tasks (id)",
     is_retained_metrics_object: false,
 };
 
@@ -8987,6 +9023,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_SOURCES_IND),
         Builtin::Index(&MZ_SINKS_IND),
         Builtin::Index(&MZ_MATERIALIZED_VIEWS_IND),
+        Builtin::Index(&MZ_CONTINUAL_TASKS_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_SINK_STATUSES_IND),

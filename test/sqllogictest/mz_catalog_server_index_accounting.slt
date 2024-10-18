@@ -57,6 +57,7 @@ mz_compute_import_frontiers_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_comp
 mz_compute_operator_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_compute_operator_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_operator_durations_histogram_raw"␠("id",␠"worker_id",␠"duration_ns")
 mz_connections_ind  CREATE␠INDEX␠"mz_connections_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s487␠AS␠"mz_catalog"."mz_connections"]␠("schema_id")
 mz_console_cluster_utilization_overview_ind  CREATE␠INDEX␠"mz_console_cluster_utilization_overview_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s700␠AS␠"mz_internal"."mz_console_cluster_utilization_overview"]␠("cluster_id")
+mz_continual_tasks_ind  CREATE␠INDEX␠"mz_continual_tasks_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s509␠AS␠"mz_internal"."mz_continual_tasks"]␠("id")
 mz_databases_ind  CREATE␠INDEX␠"mz_databases_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s454␠AS␠"mz_catalog"."mz_databases"]␠("name")
 mz_dataflow_addresses_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_addresses_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_dataflow_addresses_per_worker"␠("id",␠"worker_id")
 mz_dataflow_channels_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_channels_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_dataflow_channels_per_worker"␠("id",␠"worker_id")
@@ -71,7 +72,7 @@ mz_message_batch_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_messag
 mz_message_batch_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_batch_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_batch_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_received_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_counts_received_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
-mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s771␠AS␠"mz_internal"."mz_notices"]␠("id")
+mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s772␠AS␠"mz_internal"."mz_notices"]␠("id")
 mz_object_dependencies_ind  CREATE␠INDEX␠"mz_object_dependencies_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s453␠AS␠"mz_internal"."mz_object_dependencies"]␠("object_id")
 mz_object_history_ind  CREATE␠INDEX␠"mz_object_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s515␠AS␠"mz_internal"."mz_object_history"]␠("id")
 mz_object_lifetimes_ind  CREATE␠INDEX␠"mz_object_lifetimes_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s516␠AS␠"mz_internal"."mz_object_lifetimes"]␠("id")
@@ -80,7 +81,7 @@ mz_objects_ind  CREATE␠INDEX␠"mz_objects_ind"␠IN␠CLUSTER␠[s2]␠ON␠[
 mz_peek_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_peek_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_peek_durations_histogram_raw"␠("worker_id",␠"type",␠"duration_ns")
 mz_recent_activity_log_thinned_ind  CREATE␠INDEX␠"mz_recent_activity_log_thinned_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s674␠AS␠"mz_internal"."mz_recent_activity_log_thinned"]␠("sql_hash")
 mz_recent_sql_text_ind  CREATE␠INDEX␠"mz_recent_sql_text_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s670␠AS␠"mz_internal"."mz_recent_sql_text"]␠("sql_hash")
-mz_recent_storage_usage_ind  CREATE␠INDEX␠"mz_recent_storage_usage_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s764␠AS␠"mz_catalog"."mz_recent_storage_usage"]␠("object_id")
+mz_recent_storage_usage_ind  CREATE␠INDEX␠"mz_recent_storage_usage_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s765␠AS␠"mz_catalog"."mz_recent_storage_usage"]␠("object_id")
 mz_roles_ind  CREATE␠INDEX␠"mz_roles_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s476␠AS␠"mz_catalog"."mz_roles"]␠("id")
 mz_scheduling_elapsed_raw_s2_primary_idx  CREATE␠INDEX␠"mz_scheduling_elapsed_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_scheduling_elapsed_raw"␠("id",␠"worker_id")
 mz_scheduling_parks_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_scheduling_parks_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_scheduling_parks_histogram_raw"␠("worker_id",␠"slept_for_ns",␠"requested_ns")
@@ -326,6 +327,16 @@ mz_console_cluster_utilization_overview  name
 mz_console_cluster_utilization_overview  offline_events
 mz_console_cluster_utilization_overview  replica_id
 mz_console_cluster_utilization_overview  size
+mz_continual_tasks  cluster_id
+mz_continual_tasks  create_sql
+mz_continual_tasks  definition
+mz_continual_tasks  id
+mz_continual_tasks  name
+mz_continual_tasks  oid
+mz_continual_tasks  owner_id
+mz_continual_tasks  privileges
+mz_continual_tasks  redacted_create_sql
+mz_continual_tasks  schema_id
 mz_databases  id
 mz_databases  name
 mz_databases  oid
