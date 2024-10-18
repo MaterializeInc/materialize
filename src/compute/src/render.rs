@@ -226,11 +226,10 @@ pub fn build_compute_dataflow<A: Allocate>(
                     });
 
                     let ct_inserts_transformer = ct_ctx.get_ct_inserts_transformer(*source_id);
-                    let snapshot_mode = if ct_inserts_transformer.is_none() {
-                        SnapshotMode::Include
-                    } else {
-                        SnapshotMode::Exclude
-                    };
+                    let mut snapshot_mode = SnapshotMode::Include;
+                    if let Some(x) = ct_ctx.get_snapshot_mode(*source_id) {
+                        snapshot_mode = x;
+                    }
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.

@@ -216,6 +216,7 @@ impl Coordinator {
                     sink.connection =
                         ComputeSinkConnection::ContinualTask(ContinualTaskConnection {
                             input_id: ct.input_id,
+                            snapshot: ct.snapshot,
                             storage_metadata: *storage_metadata,
                         })
                 }

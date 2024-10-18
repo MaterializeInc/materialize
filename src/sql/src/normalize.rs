@@ -422,6 +422,7 @@ pub fn create_statement(
             name,
             columns: _,
             input,
+            with_options: _,
             stmts,
             in_cluster: _,
             as_of: _,

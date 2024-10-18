@@ -1061,6 +1061,7 @@ pub struct Connection {
 pub struct ContinualTask {
     pub create_sql: String,
     pub input_id: GlobalId,
+    pub snapshot: bool,
     /// ContinualTasks are self-referential. We make this work by using a
     /// placeholder `LocalId` for the CT itself through name resolution and
     /// planning. Then we fill in the real `GlobalId` before constructing this

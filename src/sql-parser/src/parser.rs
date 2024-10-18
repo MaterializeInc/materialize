@@ -3597,9 +3597,18 @@ impl<'a> Parser<'a> {
 
         // TODO(ct3): Multiple inputs.
         self.expect_keywords(&[ON, INPUT])?;
-        let input_table = self.parse_raw_name()?;
+        let input = self.parse_raw_name()?;
         // TODO(ct3): Allow renaming the inserts/deletes so that we can use
         // something as both an "input" and a "reference".
+
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_continual_task_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
 
         self.expect_keyword(AS)?;
 
@@ -3641,7 +3650,8 @@ impl<'a> Parser<'a> {
                 name,
                 columns,
                 in_cluster,
-                input: input_table,
+                with_options,
+                input,
                 stmts,
                 as_of,
             },
@@ -3729,6 +3739,21 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn parse_continual_task_option_name(&mut self) -> Result<ContinualTaskOptionName, ParserError> {
+        let option = self.expect_one_of_keywords(&[SNAPSHOT])?;
+        let name = match option {
+            SNAPSHOT => ContinualTaskOptionName::Snapshot,
+            _ => unreachable!(),
+        };
+        Ok(name)
+    }
+
+    fn parse_continual_task_option(&mut self) -> Result<ContinualTaskOption<Raw>, ParserError> {
+        let name = self.parse_continual_task_option_name()?;
+        let value = self.parse_optional_option_value()?;
+        Ok(ContinualTaskOption { name, value })
     }
 
     fn parse_create_index(&mut self) -> Result<Statement<Raw>, ParserError> {
