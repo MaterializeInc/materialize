@@ -38,12 +38,15 @@ use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_SCHEMA,
     MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA,
 };
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, CatalogTypePgMetadata, NameReference,
     ObjectType, RoleAttributes, SystemObjectType, TypeReference,
 };
+use mz_sql::plan::NetworkPolicyRuleAction;
+use mz_sql::plan::NetworkPolicyRuleDirection;
 use mz_sql::rbac;
 use mz_sql::session::user::{
     ANALYTICS_USER_NAME, MZ_ANALYTICS_ROLE_ID, MZ_MONITOR_REDACTED_ROLE_ID, MZ_MONITOR_ROLE_ID,
@@ -64,6 +67,8 @@ use crate::durable::objects::SystemObjectDescription;
 
 pub const BUILTIN_PREFIXES: &[&str] = &["mz_", "pg_", "external_"];
 const BUILTIN_CLUSTER_REPLICA_NAME: &str = "r1";
+
+pub const MZ_DEFAULT_NETWORK_POLICY_ID: NetworkPolicyId = NetworkPolicyId::System(1);
 
 /// A sentinel used in place of a fingerprint that indicates that a builtin
 /// object is runtime alterable. Runtime alterable objects don't have meaningful
@@ -273,6 +278,30 @@ pub struct BuiltinConnection {
     pub sql: &'static str,
     pub access: &'static [MzAclItem],
     pub owner_id: &'static RoleId,
+    /// Whether the object can be altered at runtime by its owner.
+    ///
+    /// Note that when `runtime_alterable` is true, changing the `sql` in future
+    /// versions does not trigger a migration.
+    pub runtime_alterable: bool,
+}
+
+#[derive(Clone, Debug, Hash)]
+pub struct BuiltinNetworkPolicy {
+    pub id: &'static NetworkPolicyId,
+    pub name: &'static str,
+    pub oid: u32,
+    pub privellages: &'static [MzAclItem],
+    pub owner_id: &'static RoleId,
+    // IpNet uses objects with private fields that cannot be constructed as
+    // static, as such, we can't use NetworkPolicyRule here. Instead, we
+    // will just construct the NetworkPolicyRule, and parse the IpNet from
+    // a string value.
+    pub rules: &'static [(
+        &'static str,
+        NetworkPolicyRuleAction,
+        NetworkPolicyRuleDirection,
+        &'static str,
+    )],
     /// Whether the object can be altered at runtime by its owner.
     ///
     /// Note that when `runtime_alterable` is true, changing the `sql` in future
@@ -2478,6 +2507,37 @@ pub static MZ_CONTINUAL_TASKS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
         .with_column("redacted_create_sql", ScalarType::String.nullable(false))
         .with_key(vec![0])
         .with_key(vec![1])
+        .finish(),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_network_policies",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_NETWORK_POLICIES_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        )
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .finish(),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+pub static MZ_NETWORK_POLICY_RULES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_network_policy_rules",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_NETWORK_POLICY_RULES_OID,
+    desc: RelationDesc::builder()
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("policy_id", ScalarType::String.nullable(false))
+        .with_column("action", ScalarType::String.nullable(false))
+        .with_column("address", ScalarType::String.nullable(false))
+        .with_column("direction", ScalarType::String.nullable(false))
         .finish(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -8131,6 +8191,24 @@ pub const MZ_ANALYTICS_CLUSTER: BuiltinCluster = BuiltinCluster {
     replication_factor: 0,
 };
 
+pub const MZ_DEFAULT_NETWORK_POLICY: BuiltinNetworkPolicy = BuiltinNetworkPolicy {
+    id: &MZ_DEFAULT_NETWORK_POLICY_ID,
+    name: "mz_default_policy",
+    owner_id: &MZ_SYSTEM_ROLE_ID,
+    oid: oid::NETWORK_POLICIES_DEFAULT_POLICY_OID,
+    privellages: &[rbac::owner_privilege(
+        ObjectType::NetworkPolicy,
+        MZ_SYSTEM_ROLE_ID,
+    )],
+    rules: &[(
+        "open_ingress",
+        mz_sql::plan::NetworkPolicyRuleAction::Allow,
+        mz_sql::plan::NetworkPolicyRuleDirection::Ingress,
+        "0.0.0.0/0",
+    )],
+    runtime_alterable: false,
+};
+
 /// List of all builtin objects sorted topologically by dependency.
 pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::new(|| {
     let mut builtins = vec![
@@ -8333,6 +8411,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
         Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::Table(&MZ_CONTINUAL_TASKS),
+        Builtin::Table(&MZ_NETWORK_POLICIES),
+        Builtin::Table(&MZ_NETWORK_POLICY_RULES),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),
@@ -8609,6 +8689,8 @@ pub const BUILTIN_CLUSTER_REPLICAS: &[&BuiltinClusterReplica] = &[
     &MZ_CATALOG_SERVER_CLUSTER_REPLICA,
     &MZ_PROBE_CLUSTER_REPLICA,
 ];
+
+pub const BUILTIN_NETWORK_POLICIES: &[&BuiltinNetworkPolicy] = &[&MZ_DEFAULT_NETWORK_POLICY];
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {
