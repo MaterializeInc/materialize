@@ -1320,26 +1320,6 @@ where
             dataflow_expiration_desc: dataflow.dataflow_expiration_desc,
         };
 
-        if augmented_dataflow.is_transient() {
-            tracing::debug!(
-                name = %augmented_dataflow.debug_name,
-                import_ids = %augmented_dataflow.display_import_ids(),
-                export_ids = %augmented_dataflow.display_export_ids(),
-                as_of = ?augmented_dataflow.as_of.as_ref().unwrap().elements(),
-                until = ?augmented_dataflow.until.elements(),
-                "creating dataflow",
-            );
-        } else {
-            tracing::info!(
-                name = %augmented_dataflow.debug_name,
-                import_ids = %augmented_dataflow.display_import_ids(),
-                export_ids = %augmented_dataflow.display_export_ids(),
-                as_of = ?augmented_dataflow.as_of.as_ref().unwrap().elements(),
-                until = ?augmented_dataflow.until.elements(),
-                "creating dataflow",
-            );
-        }
-
         // Skip the actual dataflow creation for an empty `as_of`. (Happens e.g. for the
         // bootstrapping of a REFRESH AT mat view that is past its last refresh.)
         if as_of.is_empty() {
