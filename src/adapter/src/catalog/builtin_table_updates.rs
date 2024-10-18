@@ -537,7 +537,17 @@ impl CatalogState {
                                 "kafka" => {
                                     mz_ore::soft_assert_eq_no_log!(external_reference.len(), 1);
                                     let topic = external_reference[0].to_ast_string();
-                                    self.pack_kafka_source_tables_update(id, &topic, diff)
+                                    let envelope = data_source.envelope();
+                                    let (key_format, value_format) = data_source.formats();
+
+                                    self.pack_kafka_source_tables_update(
+                                        id,
+                                        &topic,
+                                        envelope,
+                                        key_format,
+                                        value_format,
+                                        diff,
+                                    )
                                 }
                                 s => unreachable!("{s} sources do not have tables"),
                             }
@@ -551,7 +561,7 @@ impl CatalogState {
             CatalogItem::Source(source) => {
                 let source_type = source.source_type();
                 let connection_id = source.connection_id();
-                let envelope = source.envelope();
+                let envelope = source.data_source.envelope();
                 let cluster_entry = match source.data_source {
                     // Ingestion exports don't have their own cluster, but
                     // run on their ingestion's cluster.
@@ -563,7 +573,7 @@ impl CatalogState {
 
                 let cluster_id = cluster_entry.item().cluster_id().map(|id| id.to_string());
 
-                let (key_format, value_format) = source.formats();
+                let (key_format, value_format) = source.data_source.formats();
 
                 let mut updates = self.pack_source_update(
                     id,
@@ -975,11 +985,20 @@ impl CatalogState {
         &self,
         id: GlobalId,
         topic: &str,
+        envelope: Option<&str>,
+        key_format: Option<&str>,
+        value_format: Option<&str>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         vec![BuiltinTableUpdate {
             id: &*MZ_KAFKA_SOURCE_TABLES,
-            row: Row::pack_slice(&[Datum::String(&id.to_string()), Datum::String(topic)]),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::String(topic),
+                Datum::from(envelope),
+                Datum::from(key_format),
+                Datum::from(value_format),
+            ]),
             diff,
         }]
     }

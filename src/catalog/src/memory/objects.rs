@@ -706,6 +706,79 @@ pub enum DataSourceDesc {
     },
 }
 
+impl DataSourceDesc {
+    /// The key and value formats of the data source.
+    pub fn formats(&self) -> (Option<&str>, Option<&str>) {
+        match &self {
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                match &ingestion_desc.desc.primary_export.encoding.as_ref() {
+                    Some(encoding) => match &encoding.key {
+                        Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
+                        None => (None, Some(encoding.value.type_())),
+                    },
+                    None => (None, None),
+                }
+            }
+            DataSourceDesc::IngestionExport { data_config, .. } => match &data_config.encoding {
+                Some(encoding) => match &encoding.key {
+                    Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
+                    None => (None, Some(encoding.value.type_())),
+                },
+                None => (None, None),
+            },
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Webhook { .. }
+            | DataSourceDesc::Progress => (None, None),
+        }
+    }
+
+    /// Envelope of the data source.
+    pub fn envelope(&self) -> Option<&str> {
+        // Note how "none"/"append-only" is different from `None`. Source
+        // sources don't have an envelope (internal logs, for example), while
+        // other sources have an envelope that we call the "NONE"-envelope.
+
+        fn envelope_string(envelope: &SourceEnvelope) -> &str {
+            match envelope {
+                SourceEnvelope::None(_) => "none",
+                SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
+                    mz_storage_types::sources::envelope::UpsertStyle::Default(_) => "upsert",
+                    mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
+                        // NOTE(aljoscha): Should we somehow mark that this is
+                        // using upsert internally? See note above about
+                        // DEBEZIUM.
+                        "debezium"
+                    }
+                    mz_storage_types::sources::envelope::UpsertStyle::ValueErrInline { .. } => {
+                        "upsert-value-err-inline"
+                    }
+                },
+                SourceEnvelope::CdcV2 => {
+                    // TODO(aljoscha): Should we even report this? It's
+                    // currently not exposed.
+                    "materialize"
+                }
+            }
+        }
+
+        match self {
+            // NOTE(aljoscha): We could move the block for ingestions into
+            // `SourceEnvelope` itself, but that one feels more like an internal
+            // thing and adapter should own how we represent envelopes as a
+            // string? It would not be hard to convince me otherwise, though.
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => Some(envelope_string(
+                &ingestion_desc.desc.primary_export.envelope,
+            )),
+            DataSourceDesc::IngestionExport { data_config, .. } => {
+                Some(envelope_string(&data_config.envelope))
+            }
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Webhook { .. }
+            | DataSourceDesc::Progress => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: Option<String>,
@@ -806,77 +879,6 @@ impl Source {
             DataSourceDesc::IngestionExport { .. } => "subsource",
             DataSourceDesc::Introspection(_) => "source",
             DataSourceDesc::Webhook { .. } => "webhook",
-        }
-    }
-
-    /// The key and value formats of the source.
-    pub fn formats(&self) -> (Option<&str>, Option<&str>) {
-        match &self.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                match &ingestion_desc.desc.primary_export.encoding.as_ref() {
-                    Some(encoding) => match &encoding.key {
-                        Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
-                        None => (None, Some(encoding.value.type_())),
-                    },
-                    None => (None, None),
-                }
-            }
-            DataSourceDesc::IngestionExport { data_config, .. } => match &data_config.encoding {
-                Some(encoding) => match &encoding.key {
-                    Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
-                    None => (None, Some(encoding.value.type_())),
-                },
-                None => (None, None),
-            },
-            DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress => (None, None),
-        }
-    }
-
-    /// Envelope of the source.
-    pub fn envelope(&self) -> Option<&str> {
-        // Note how "none"/"append-only" is different from `None`. Source
-        // sources don't have an envelope (internal logs, for example), while
-        // other sources have an envelope that we call the "NONE"-envelope.
-
-        fn envelope_string(envelope: &SourceEnvelope) -> &str {
-            match envelope {
-                SourceEnvelope::None(_) => "none",
-                SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
-                    mz_storage_types::sources::envelope::UpsertStyle::Default(_) => "upsert",
-                    mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
-                        // NOTE(aljoscha): Should we somehow mark that this is
-                        // using upsert internally? See note above about
-                        // DEBEZIUM.
-                        "debezium"
-                    }
-                    mz_storage_types::sources::envelope::UpsertStyle::ValueErrInline { .. } => {
-                        "upsert-value-err-inline"
-                    }
-                },
-                SourceEnvelope::CdcV2 => {
-                    // TODO(aljoscha): Should we even report this? It's
-                    // currently not exposed.
-                    "materialize"
-                }
-            }
-        }
-
-        match &self.data_source {
-            // NOTE(aljoscha): We could move the block for ingestions into
-            // `SourceEnvelope` itself, but that one feels more like an internal
-            // thing and adapter should own how we represent envelopes as a
-            // string? It would not be hard to convince me otherwise, though.
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => Some(envelope_string(
-                &ingestion_desc.desc.primary_export.envelope,
-            )),
-            DataSourceDesc::IngestionExport { data_config, .. } => {
-                Some(envelope_string(&data_config.envelope))
-            }
-            DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Webhook { .. }
-            | DataSourceDesc::Progress => None,
         }
     }
 
