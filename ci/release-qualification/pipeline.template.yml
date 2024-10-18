@@ -58,8 +58,7 @@ steps:
       # 48h
       timeout_in_minutes: 2880
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -72,8 +71,7 @@ steps:
       # 24h
       timeout_in_minutes: 1440
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -85,8 +83,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -99,8 +96,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1440
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -111,8 +107,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -124,8 +119,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -136,8 +130,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1440
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -149,8 +142,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64
+        queue: hetzner-aarch64-8cpu-16gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -162,8 +154,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1440
       agents:
-        # TODO: Move back to Hetzner when agent lost issues are fixed
-        queue: linux-aarch64-medium
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -179,9 +170,7 @@ steps:
         timeout_in_minutes: 2880
         parallelism: 8
         agents:
-          # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
           queue: linux-aarch64-medium
-          # queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: feature-benchmark
@@ -192,9 +181,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 1200
         agents:
-          # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
           queue: linux-aarch64-medium
-          # queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-benchmark
@@ -262,10 +249,8 @@ steps:
         timeout_in_minutes: 30
         agents:
           # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
-          # TODO(def-) Switch back to Hetzner when we have increased server limit
           # Increased memory usage following new source syntax
-          queue: linux-x86_64
-          # queue: hetzner-x86-64-8cpu-16gb
+          queue: hetzner-x86-64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc

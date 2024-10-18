@@ -220,9 +220,7 @@ steps:
         timeout_in_minutes: 30
         agents:
           # hugo: command not found
-          # TODO(def-) Switch back to Hetzner when we have increased server limit
-          queue: linux-x86_64-small
-          # queue: hetzner-x86-64-4cpu-8gb
+          queue: hetzner-x86-64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 
@@ -297,9 +295,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster
     agents:
-      # TODO(def-): Investigate timeout in `SELECT * from remote1`
-      # queue: hetzner-aarch64-8cpu-16gb
-      queue: linux-aarch64
+      queue: hetzner-aarch64-8cpu-16gb
 
   - id: sqllogictest-fast
     label: "Fast SQL logic tests %N"
@@ -362,9 +358,7 @@ steps:
               run: sql-server
         agents:
           # too slow to run emulated on aarch64, SQL Server's docker image is not yet available for aarch64 natively yet: https://github.com/microsoft/mssql-docker/issues/802
-          # TODO(def-) Switch back to Hetzner when we have increased server limit
-          queue: linux-x86_64-small
-          # queue: hetzner-x86-64-4cpu-8gb
+          queue: hetzner-x86-64-4cpu-8gb
 
       - id: debezium-mysql
         label: "Debezium MySQL tests"
@@ -626,9 +620,7 @@ steps:
             ]
     coverage: skip
     agents:
-      # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
       queue: linux-aarch64-small
-      # queue: hetzner-aarch64-4cpu-8gb
 
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
@@ -686,9 +678,7 @@ steps:
           composition: metabase
     agents:
       # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
-      # TODO(def-) Switch back to Hetzner when we have increased server limit
-      queue: linux-x86_64-small
-      # queue: hetzner-x86-64-4cpu-8gb
+      queue: hetzner-x86-64-4cpu-8gb
 
   - id: dbt-materialize
     label: dbt-materialize tests

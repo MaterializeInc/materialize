@@ -86,9 +86,7 @@ steps:
         timeout_in_minutes: 720
         parallelism: 8
         agents:
-          # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
           queue: linux-aarch64-medium
-          # queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: feature-benchmark
@@ -101,9 +99,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 240
         agents:
-          # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
           queue: linux-aarch64
-          # queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -123,9 +119,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 1200
         agents:
-          # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
           queue: linux-aarch64
-          # queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -149,9 +143,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         agents:
-          # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
           queue: linux-aarch64-medium
-          # queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -173,9 +165,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 120
         agents:
-          # TODO(def-) Switch back to Hetzner? Might not have as consistent performance
           queue: linux-aarch64-medium
-          # queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-benchmark
