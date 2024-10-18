@@ -3716,7 +3716,8 @@ pub static MZ_RELATIONS: LazyLock<BuiltinView> = LazyLock::new(|| {
       SELECT id, oid, schema_id, name, 'table', owner_id, NULL::text, privileges FROM mz_catalog.mz_tables
 UNION ALL SELECT id, oid, schema_id, name, 'source', owner_id, cluster_id, privileges FROM mz_catalog.mz_sources
 UNION ALL SELECT id, oid, schema_id, name, 'view', owner_id, NULL::text, privileges FROM mz_catalog.mz_views
-UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, cluster_id, privileges FROM mz_catalog.mz_materialized_views",
+UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, cluster_id, privileges FROM mz_catalog.mz_materialized_views
+UNION ALL SELECT id, oid, schema_id, name, 'continual-task', owner_id, cluster_id, privileges FROM mz_internal.mz_continual_tasks",
         access: vec![PUBLIC_SELECT],
     }
 });
@@ -7255,6 +7256,15 @@ materialized_views AS (
     LEFT JOIN mz_internal.mz_compute_hydration_statuses h
         ON (h.object_id = i.id)
 ),
+continual_tasks AS (
+    SELECT
+        i.id AS object_id,
+        h.replica_id,
+        COALESCE(h.hydrated, false) AS hydrated
+    FROM mz_internal.mz_continual_tasks i
+    LEFT JOIN mz_internal.mz_compute_hydration_statuses h
+        ON (h.object_id = i.id)
+),
 -- Hydration is a dataflow concept and not all sources are maintained by
 -- dataflows, so we need to find the ones that are. Generally, sources that
 -- have a cluster ID are maintained by a dataflow running on that cluster.
@@ -7293,6 +7303,8 @@ SELECT * FROM indexes
 UNION ALL
 SELECT * FROM materialized_views
 UNION ALL
+SELECT * FROM continual_tasks
+UNION ALL
 SELECT * FROM sources
 UNION ALL
 SELECT * FROM sinks"#,
@@ -7327,6 +7339,8 @@ WITH MUTUALLY RECURSIVE
         SELECT id FROM mz_catalog.mz_indexes
         UNION ALL
         SELECT id FROM mz_catalog.mz_materialized_views
+        UNION ALL
+        SELECT id FROM mz_internal.mz_continual_tasks
         UNION ALL
         SELECT id FROM mz_catalog.mz_sinks
     ),
