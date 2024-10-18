@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::{Capability, InputCapability, Operator};
+use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
@@ -858,7 +858,8 @@ where
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
 
     let shutdown_button = builder.build(move |caps| async move {
-        let [mut output_cap, mut snapshot_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
+        let [mut output_cap, snapshot_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
+        let mut snapshot_cap = CapabilitySet::from_elem(snapshot_cap);
 
         // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
         // (as required for `consolidate_snapshot_chunk`), with slightly more efficient serialization
@@ -1000,9 +1001,7 @@ where
                             .await
                         {
                             Ok(_) => {
-                                if let Some(ts) = persist_upper.clone().into_option() {
-                                    let _ = snapshot_cap.try_downgrade(&ts);
-                                }
+                                let _ = snapshot_cap.downgrade(persist_upper.iter());
                             }
                             Err(e) => {
                                 // Make sure our persist source can shut down.
@@ -1050,6 +1049,8 @@ where
                                 source_config.worker_id,
                                 source_config.id
                             );
+
+                            let _ = snapshot_cap.downgrade(&[]);
                         }
 
                     }
