@@ -112,6 +112,7 @@ impl Coordinator {
         let read_holds = self.acquire_read_holds(&id_bundle);
         let as_of = read_holds.least_valid_read();
         physical_plan.set_as_of(as_of.clone());
+        physical_plan.set_initial_as_of(as_of.clone());
 
         // Rewrite `create_sql` to reference self with the fully qualified name.
         // This is normally done when `create_sql` is created at plan time, but
@@ -215,6 +216,7 @@ impl Coordinator {
                     storage_metadata,
                     ..
                 }) => {
+                    sink.with_snapshot = ct.with_snapshot;
                     sink.connection =
                         ComputeSinkConnection::ContinualTask(ContinualTaskConnection {
                             input_id: ct.input_id,

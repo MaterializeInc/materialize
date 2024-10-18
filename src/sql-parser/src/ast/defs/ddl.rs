@@ -69,6 +69,40 @@ pub struct MaterializedViewOption<T: AstInfo> {
 }
 impl_display_for_with_option!(MaterializedViewOption);
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ContinualTaskOptionName {
+    /// The `SNAPSHOT [=] ...` option.
+    Snapshot,
+}
+
+impl AstDisplay for ContinualTaskOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ContinualTaskOptionName::Snapshot => f.write_str("SNAPSHOT"),
+        }
+    }
+}
+
+impl WithOptionName for ContinualTaskOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            ContinualTaskOptionName::Snapshot => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ContinualTaskOption<T: AstInfo> {
+    pub name: ContinualTaskOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(ContinualTaskOption);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Schema {
     pub schema: String,

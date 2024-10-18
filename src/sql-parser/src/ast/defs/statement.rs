@@ -27,13 +27,13 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
 use crate::ast::{
-    AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, CreateConnectionOption,
-    CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceOption,
-    CreateSourceOptionName, CteMutRecColumnDef, DeferredItemName, Expr, Format, FormatSpecifier,
-    Ident, IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope,
-    SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, ContinualTaskOption,
+    CreateConnectionOption, CreateConnectionType, CreateSinkConnection, CreateSourceConnection,
+    CreateSourceOption, CreateSourceOptionName, CteMutRecColumnDef, DeferredItemName, Expr, Format,
+    FormatSpecifier, Ident, IntervalValue, KeyConstraint, MaterializedViewOption, Query,
+    SelectItem, SinkEnvelope, SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -1402,6 +1402,7 @@ pub struct CreateContinualTaskStatement<T: AstInfo> {
     pub columns: Option<Vec<CteMutRecColumnDef<T>>>,
     pub in_cluster: Option<T::ClusterName>,
     pub as_of: Option<u64>,
+    pub with_options: Vec<ContinualTaskOption<T>>,
 
     // The thing we get input diffs from
     pub input: T::ItemName,
@@ -1460,6 +1461,12 @@ impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
 
         f.write_str(" ON INPUT ");
         f.write_node(&self.input);
+
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
 
         f.write_str(" AS (");
         for (idx, stmt) in self.stmts.iter().enumerate() {
