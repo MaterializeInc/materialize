@@ -74,6 +74,15 @@ where
         }
     }
 
+    async fn clear(&mut self) -> Result<(), anyhow::Error> {
+        let res = match &mut self.backend_type {
+            BackendType::InMemory(backend) => backend.clear().await,
+            BackendType::RocksDb(backend) => backend.clear().await,
+        };
+
+        Ok(res?)
+    }
+
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,

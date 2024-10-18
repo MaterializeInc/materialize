@@ -767,6 +767,22 @@ impl SourceStatistics {
         }
     }
 
+    /// Set the `envelope_state_tombstones` stat to the given value
+    pub fn set_envelope_state_tombstones(&self, value: i64) {
+        let mut cur = self.stats.borrow_mut();
+        let value = if value < 0 {
+            tracing::warn!(
+                "Unexpected negative value for envelope_state_tombstones {}",
+                value
+            );
+            0
+        } else {
+            value.unsigned_abs()
+        };
+        cur.stats.envelope_state_tombstones = value;
+        cur.prom.envelope_state_tombstones.set(value);
+    }
+
     /// Set the `rehydration_latency_ms` stat based on the reported upper.
     pub fn update_rehydration_latency_ms(&self, upper: &Antichain<Timestamp>) {
         let mut cur = self.stats.borrow_mut();

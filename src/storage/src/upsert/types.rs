@@ -651,6 +651,9 @@ where
     /// Whether this backend supports the `multi_merge` operation.
     fn supports_merge(&self) -> bool;
 
+    /// Clear out all key-value state.
+    async fn clear(&mut self) -> Result<(), anyhow::Error>;
+
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
     ///
@@ -1178,6 +1181,21 @@ where
             .inc_by(stats.processed_gets_size);
 
         Ok(())
+    }
+
+    /// Clear out all key-value state.
+    pub async fn clear(&mut self) -> Result<(), anyhow::Error> {
+        fail::fail_point!("fail_state_clear", |_| {
+            Err(anyhow::anyhow!("Error clearing state"))
+        });
+
+        // Manually reset these back to zero, because we're clearing out our
+        // state.
+        self.stats.set_records_indexed(0);
+        self.stats.set_bytes_indexed(0);
+        self.stats.set_envelope_state_tombstones(0);
+
+        self.inner.clear().await
     }
 }
 
