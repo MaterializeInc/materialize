@@ -69,6 +69,15 @@ else:
 # The `upper` for a dataflow considering all its transitive inputs
 inputs_upper := meet(for all inputs i: i_upper)
 
+# Compute the upper of replica_expiration and any set refresh schedule
+# TODO: expiration_upper is only available in the optimizer, but replica_expiration
+# is only available in cluster.
+fn expiration_upper(obj, replica_expiration) :=
+  match obj:
+    MV(inputs, refresh schedule) => refresh_schedule.round_up_timestamp(meet(for all o in inputs: expiration_upper(o, replica_expiration)))
+    Index(inputs) | Subscribe(inputs) | ? => meet(for all o in inputs: expiration_upper(o, replica_expiration))
+    Table | Source => 1s.round_up_timestamp(expiration_time)
+
 # Dataflow expiration logic
 if compute_replica_expiration_offset is not set:
   dataflow_replication := []
@@ -78,31 +87,26 @@ else for dataflows of type in [materialized view, index, subscribe]:
     # Dataflows that do not depend on any source or table are not in the
     # EpochMilliseconds timeline
     dataflow_expiration := []
-  else if refresh_interval set in any transitive dependency of dataflow:
-    dataflow_expiration := []
-  else if inputs_upper == []:
-    dataflow_expiration := []
-  else if inputs_upper > expiration:
-    dataflow_expiration := inputs_upper
   else:
-    dataflow_expiration := replica_expiration
+    replica_expiration_upper := expiration_upper(dataflow, replica_expiration)
+    dataflow_expiration := join(replica_expiration_upper, inputs_upper)
 
 dataflow_until := dataflow_until.meet(dataflow_expiration)
 ```
 
-Note that we only consider dataflows representing materialized views, indexes,
-and subscribes. These are long-running dataflows that maintain state during
+Note that only dataflows representing materialized views, indexes,
+and subscribes are considered. These are long-running dataflows that maintain state during
 their lifetime. Other dataflows such as peeks are transient and do not need to
 explicitly drop retraction diffs.
 
-More concretely, we make the following changes:
+More concretely, this feature involves the following changes:
 
 * Introduce a new dyncfg `compute_replica_expiration_offset`.
 * If the offset is configured with a non-zero value, compute
-  `replica_expiration = now() + offset`. This value specifies the maximum
-  time for which the replica is expected to be running. Consequently, diffs
-  associated with timestamps beyond this limit do not have to be stored and can
-  be dropped.
+  `replica_expiration = now() + offset`. This value indicates the maximum
+  time for which the replica is expected to be running.
+  * Existing replicas should be restarted to enable or disable replica
+    expiration for them.
 * When building a dataflow, compute `dataflow_expiration` as per the logic
   described above. If non-empty, the `dataflow_expiration` is added to the
   dataflow `until` that ensures that any diff beyond this limit is dropped in
@@ -118,7 +122,7 @@ More concretely, we make the following changes:
 ## Open Questions
 
 - What is the appropriate default expiration time?
-  - Given that we currently restart replicas every week as part of the DB release
+  - Given that replicas are restarted every week as part of the DB release
     and leaving some buffer for skipped week, 3 weeks (+1 day margin) seems like
     a good limit to start with.
 
