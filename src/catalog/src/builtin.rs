@@ -5947,6 +5947,15 @@ pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: LazyLock<BuiltinView> = LazyLock::new(
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_INDEX_ADVICE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_index_advice",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_INDEX_ADVICE_OID,
+    column_defs: None,
+    sql: "SELECT 1",
+    access: vec![PUBLIC_SELECT],
+});
+
 // NOTE: If you add real data to this implementation, then please update
 // the related `pg_` function implementations (like `pg_get_constraintdef`)
 pub static PG_CONSTRAINT: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -8862,6 +8871,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_COMPUTE_EXPORTS),
         Builtin::View(&MZ_DATAFLOW_ARRANGEMENT_SIZES),
         Builtin::View(&MZ_EXPECTED_GROUP_SIZE_ADVICE),
+        Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),
