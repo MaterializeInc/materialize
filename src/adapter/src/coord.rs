@@ -2575,7 +2575,7 @@ impl Coordinator {
         mut collections: Vec<(GlobalId, CollectionDescription<Timestamp>)>,
     ) {
         for (id, collection) in &mut collections {
-            let entry = self.catalog.get_entry(id);
+            let entry = self.catalog.get_entry(*id);
             let ct = match &entry.item {
                 CatalogItem::ContinualTask(ct) => ct.clone(),
                 _ => unreachable!("only called with continual task builtins"),

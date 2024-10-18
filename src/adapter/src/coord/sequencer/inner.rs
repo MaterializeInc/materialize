@@ -3563,7 +3563,7 @@ impl Coordinator {
                         if let Some((_, _, _, export_data_config)) = entry.source_export_details() {
                             let data_config = export_data_config.clone();
                             source_export_data_configs.insert(
-                                *id,
+                                id,
                                 data_config.into_inline_connection(self.catalog().state()),
                             );
                         }

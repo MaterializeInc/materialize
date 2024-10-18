@@ -302,7 +302,6 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
         .clone()
         .into_iter()
         .chain_one(from.id())
-        .copied()
         .collect::<Vec<_>>();
 
     // Collect all Avro formats that use a schema registry, as well as a set of

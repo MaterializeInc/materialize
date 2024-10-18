@@ -611,7 +611,7 @@ impl CatalogState {
             Builtin::Index(index) => {
                 let mut item = self
                     .parse_item(
-                        id,
+                        id.to_global_id(),
                         &index.create_sql(),
                         None,
                         index.is_retained_metrics_object,
@@ -743,7 +743,7 @@ impl CatalogState {
 
                 let item = self
                     .parse_item(
-                        id,
+                        id.to_global_id(),
                         &ct.create_sql(),
                         None,
                         false,
@@ -775,7 +775,7 @@ impl CatalogState {
             Builtin::Connection(connection) => {
                 let mut item = self
                     .parse_item(
-                        id,
+                        id.to_global_id(),
                         connection.sql,
                         None,
                         false,
@@ -895,7 +895,7 @@ impl CatalogState {
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
                         if retraction.create_sql() != create_sql {
-                            let item = self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
+                            let item = self.deserialize_item(id.to_global_id(), &create_sql).unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
                             retraction.item = item;
@@ -910,7 +910,7 @@ impl CatalogState {
                     }
                     None => {
                         let catalog_item =
-                            self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
+                            self.deserialize_item(id.to_global_id(), &create_sql).unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
                         CatalogEntry {

@@ -111,7 +111,7 @@ impl CatalogState {
         }
 
         for (source_id, _references) in &self.source_references {
-            if !self.entry_by_id.contains_key(source_id) {
+            if !self.entry_by_id.contains_key(&source_id.to_item_id()) {
                 inconsistencies.push(InternalFieldsInconsistency::SourceReferences(*source_id));
             }
         }
