@@ -35,25 +35,6 @@ use mz_ore::instrument;
 mod cockroach;
 mod resources;
 
-struct DatabaseConfig {
-    mz_env_var: &'static str,
-    secret_key: &'static str,
-    schema: &'static str,
-}
-
-const DATABASE_CONFIGS: &[DatabaseConfig] = &[
-    DatabaseConfig {
-        mz_env_var: "MZ_PERSIST_CONSENSUS_URL",
-        secret_key: "CONSENSUS_DATABASE_URL",
-        schema: "consensus",
-    },
-    DatabaseConfig {
-        mz_env_var: "MZ_TIMESTAMP_ORACLE_URL",
-        secret_key: "TIMESTAMP_ORACLE_DATABASE_URL",
-        schema: "tsoracle",
-    },
-];
-
 #[derive(clap::Parser)]
 pub struct Args {
     #[clap(long)]
