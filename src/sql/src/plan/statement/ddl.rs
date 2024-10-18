@@ -2756,6 +2756,26 @@ pub fn plan_create_continual_task(
         RelationDesc::from_names_and_types(desc_columns)
     };
     let input = scx.get_item_by_resolved_name(&stmt.input)?;
+    match input.item_type() {
+        // Input must be a thing directly backed by a persist shard, so we can
+        // use a persist listen to efficiently rehydrate.
+        CatalogItemType::ContinualTask
+        | CatalogItemType::Table
+        | CatalogItemType::MaterializedView
+        | CatalogItemType::Source => {}
+        CatalogItemType::Sink
+        | CatalogItemType::View
+        | CatalogItemType::Index
+        | CatalogItemType::Type
+        | CatalogItemType::Func
+        | CatalogItemType::Secret
+        | CatalogItemType::Connection => {
+            sql_bail!(
+                "CONTINUAL TASK cannot use {} as an input",
+                input.item_type()
+            );
+        }
+    }
 
     let mut qcx = QueryContext::root(scx, QueryLifetime::MaterializedView);
     let ct_name = stmt.name;
