@@ -36,7 +36,6 @@ use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::trace;
-use urlencoding::encode;
 
 use super::CloudProvider;
 use crate::k8s::{apply_resource, delete_resource, get_resource};
@@ -619,18 +618,33 @@ fn create_statefulset_object(
     // When passing a secret, use a `SecretKeySelector` to forward a secret into
     // the pod. Do *not* hardcode a secret as the value directly, as doing so
     // will leak the secret to anyone with permission to describe the pod.
-    let mut env = vec![EnvVar {
-        name: "MZ_METADATA_BACKEND_URL".to_string(),
-        value_from: Some(EnvVarSource {
-            secret_key_ref: Some(SecretKeySelector {
-                name: Some(Materialize::cockroach_secret_name()),
-                key: "MZ_METADATA_BACKEND_URL".to_string(),
-                optional: Some(false),
+    let mut env = vec![
+        EnvVar {
+            name: "MZ_METADATA_BACKEND_URL".to_string(),
+            value_from: Some(EnvVarSource {
+                secret_key_ref: Some(SecretKeySelector {
+                    name: Some(mz.backend_secret_name()),
+                    key: "metadata_backend_url".to_string(),
+                    optional: Some(false),
+                }),
+                ..Default::default()
             }),
             ..Default::default()
-        }),
-        ..Default::default()
-    }];
+        },
+        EnvVar {
+            name: "MZ_PERSIST_BLOB_URL".to_string(),
+            value_from: Some(EnvVarSource {
+                secret_key_ref: Some(SecretKeySelector {
+                    name: Some(mz.backend_secret_name()),
+                    key: "persist_backend_url".to_string(),
+                    optional: Some(false),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    ];
+
     env.push(EnvVar {
         name: "AWS_REGION".to_string(),
         value: Some(config.region.clone()),
@@ -738,18 +752,6 @@ fn create_statefulset_object(
     }
 
     // Add persist arguments.
-    let persist_blob_url = config
-        .persist_bucket
-        .as_ref()
-        .map(|bucket| format!("s3://{}/{}", bucket, mz.persistence_bucket_prefix()))
-        .unwrap_or_else(|| {
-            format!(
-                "s3://minio:minio123@bucket/{}?endpoint={}&region=minio",
-                mz.name_unchecked(),
-                encode("http://minio.minio.svc.cluster.local:9000"),
-            )
-        });
-    args.push(format!("--persist-blob-url={persist_blob_url}"));
 
     // Configure the Persist Isolated Runtime to use one less thread than the total available.
     args.push("--persist-isolated-runtime-threads=-1".to_string());

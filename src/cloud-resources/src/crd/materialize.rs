@@ -29,6 +29,7 @@ pub mod v1alpha1 {
     )]
     #[serde(rename_all = "camelCase")]
     #[kube(
+        namespaced,
         group = "materialize.cloud",
         version = "v1alpha1",
         kind = "Materialize",
@@ -77,8 +78,8 @@ pub mod v1alpha1 {
     }
 
     impl Materialize {
-        pub fn cockroach_secret_name() -> String {
-            "cockroach-password".to_string()
+        pub fn backend_secret_name(&self) -> String {
+            format!("materialize-backend-{}", self.name_unchecked())
         }
 
         pub fn cockroach_database_name(&self) -> String {
@@ -102,7 +103,7 @@ pub mod v1alpha1 {
         }
 
         pub fn namespace(&self) -> String {
-            format!("materialize-{}", self.name_unchecked())
+            self.meta().namespace.clone().unwrap()
         }
 
         pub fn service_account_name(&self) -> String {
@@ -142,10 +143,16 @@ pub mod v1alpha1 {
         }
 
         pub fn default_labels(&self) -> BTreeMap<String, String> {
-            BTreeMap::from_iter([(
-                "materialize.cloud/organization-name".to_owned(),
-                self.name_unchecked(),
-            )])
+            BTreeMap::from_iter([
+                (
+                    "materialize.cloud/organization-name".to_owned(),
+                    self.name_unchecked(),
+                ),
+                (
+                    "materialize.cloud/organization-namespace".to_owned(),
+                    self.namespace(),
+                ),
+            ])
         }
 
         pub fn environmentd_cpu_allocation(&self, default_allocation: &str) -> String {
