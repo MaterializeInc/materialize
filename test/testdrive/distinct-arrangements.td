@@ -717,6 +717,7 @@ ReduceMinsMaxes
 "Arrange ReduceCollation"                     1
 "Arrange ReduceMinsMaxes"                     3
 "ArrangeAccumulable [val: empty]"             9
+"ArrangeBy[[CallVariadic { func: Coalesce, exprs: [Column(2), Column(3)] }]]" 2
 "ArrangeBy[[Column(0), CallUnary { func: CastInt32ToNumeric(CastInt32ToNumeric(None)), expr: Column(1) }]]" 1
 "ArrangeBy[[Column(0), CallUnary { func: CastUint64ToNumeric(CastUint64ToNumeric(None)), expr: Column(2) }]]" 1
 "ArrangeBy[[Column(0), CallUnary { func: Lower(Lower), expr: Column(1) }]]" 1
@@ -732,11 +733,11 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(0), Column(2)]]"           3
 "ArrangeBy[[Column(1), Column(2)]]"           1
 "ArrangeBy[[Column(0)]]-errors"              40
-"ArrangeBy[[Column(0)]]"                    143
+"ArrangeBy[[Column(0)]]"                    144
 "ArrangeBy[[Column(1), Column(3)]]"           1
 "ArrangeBy[[Column(1)]]-errors"               6
 ArrangeBy[[Column(13)]]                       1
-"ArrangeBy[[Column(1)]]"                     20
+"ArrangeBy[[Column(1)]]"                     21
 "ArrangeBy[[Column(2)]]"                     19
 "ArrangeBy[[Column(2)]]-errors"               7
 "ArrangeBy[[Column(3)]]"                      6
@@ -750,15 +751,14 @@ ArrangeBy[[Column(13)]]                       1
 "ArrangeBy[[Column(9)]]"                      1
 "ArrangeBy[[Column(20)]]"                     1
 "ArrangeBy[[Column(20)]]-errors"              1
-"ArrangeBy[[If { cond: CallUnary { func: IsNull(IsNull), expr: Column(2) }, then: Literal(Ok(Row{[Null]}), ColumnType { scalar_type: String, nullable: true }), els: Column(1) }]]" 1
-"ArrangeBy[[]]"                               10
-"Arranged DistinctBy"                         41
+"ArrangeBy[[]]"                               9
+"Arranged DistinctBy"                         42
 "Arranged MinsMaxesHierarchical input"        14
 "Arranged ReduceInaccumulable"                2
 "Arranged TopK input"                        24
 "Distinct recursive err"                      1
-"DistinctBy"                                  41
-"DistinctByErrorCheck"                        41
+"DistinctBy"                                  42
+"DistinctByErrorCheck"                        42
 "ReduceAccumulable"                           9
 "ReduceCollation Errors"                      1
 "ReduceCollation"                             1

@@ -3156,7 +3156,14 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
                     ON subsources.id = deps.object_id
                 JOIN mz_catalog.mz_sources AS sources ON sources.id = deps.referenced_object_id
     ),
-     -- Determine which collection's ID to use for the status
+    -- Determine which sources are source tables
+    tables AS
+    (
+        SELECT tables.id AS self, tables.source_id AS parent, tables.name
+        FROM mz_catalog.mz_tables AS tables
+        WHERE tables.source_id IS NOT NULL
+    ),
+    -- Determine which collection's ID to use for the status
     id_of_status_to_use AS
     (
         SELECT
@@ -3171,10 +3178,11 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
             END AS id_to_use
         FROM
             latest_events AS self_events
-                LEFT JOIN subsources ON self_events.source_id = self
+                LEFT JOIN subsources ON self_events.source_id = subsources.self
+                LEFT JOIN tables ON self_events.source_id = tables.self
                 LEFT JOIN
                     latest_events AS parent_events
-                    ON parent_events.source_id = parent
+                    ON parent_events.source_id = COALESCE(subsources.parent, tables.parent)
     ),
     -- Swap out events for the ID of the event we plan to use instead
     latest_events_to_use AS
@@ -3183,26 +3191,49 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
         FROM
             id_of_status_to_use AS s
                 JOIN latest_events AS e ON e.source_id = s.id_to_use
+    ),
+    combined AS (
+        SELECT
+            mz_sources.id,
+            mz_sources.name,
+            mz_sources.type,
+            occurred_at,
+            status,
+            error,
+            details
+        FROM
+            mz_catalog.mz_sources
+            LEFT JOIN latest_events_to_use AS e ON mz_sources.id = e.source_id
+        UNION ALL
+        SELECT
+            tables.self AS id,
+            tables.name,
+            'table' AS type,
+            occurred_at,
+            status,
+            error,
+            details
+        FROM
+            tables
+            LEFT JOIN latest_events_to_use AS e ON tables.self = e.source_id
     )
 SELECT
-    mz_sources.id,
+    id,
     name,
-    mz_sources.type,
+    type,
     occurred_at AS last_status_change_at,
     -- TODO(parkmycar): Report status of webhook source once database-issues#5986 is closed.
     CASE
-            WHEN
-                mz_sources.type = 'webhook' OR
-                mz_sources.type = 'progress'
-            THEN 'running'
-            ELSE COALESCE(status, 'created')
+        WHEN
+            type = 'webhook' OR
+            type = 'progress'
+        THEN 'running'
+        ELSE COALESCE(status, 'created')
     END AS status,
     error,
     details
-FROM
-    mz_catalog.mz_sources
-        LEFT JOIN latest_events_to_use AS e ON mz_sources.id = e.source_id
-WHERE mz_sources.id NOT LIKE 's%';",
+FROM combined
+WHERE id NOT LIKE 's%';",
     access: vec![PUBLIC_SELECT],
 });
 
