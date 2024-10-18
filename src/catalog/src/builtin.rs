@@ -5947,306 +5947,308 @@ pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: LazyLock<BuiltinView> = LazyLock::new(
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_INDEX_ADVICE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_index_advice",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_INDEX_ADVICE_OID,
-    column_defs: None,
-    sql: "
-        -- to avoid confusion with sources and sinks in the materialize sense,
-        -- the following uses the terms leafs (instead of sinks) and roots (instead of sources) when referring to the object dependency graph
-        WITH MUTUALLY RECURSIVE
-            -- for all objects, understand if they have an index on them and on which cluster they are running
-            -- this avoids having different cases for views with an index and materialized views later on
-            objects(id text, type text, cluster_id text, indexes text list) AS (
-                -- views and materialized views without an index
-                SELECT
-                    o.id,
-                    o.type,
-                    o.cluster_id,
-                    '{}'::text list AS indexes
-                FROM mz_objects o
-                WHERE o.id LIKE 'u%' AND o.type IN ('materialized-view', 'view') AND NOT EXISTS (
-                    SELECT FROM mz_internal.mz_object_dependencies d
-                    JOIN mz_objects AS i
-                        ON (i.id = d.object_id AND i.type = 'index')
-                    WHERE (o.id = d.referenced_object_id)
-                )
+pub static MZ_INDEX_ADVICE: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+        name: "mz_index_advice",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_INDEX_ADVICE_OID,
+        column_defs: None,
+        sql: "
+-- to avoid confusion with sources and sinks in the materialize sense,
+-- the following uses the terms leafs (instead of sinks) and roots (instead of sources) when referring to the object dependency graph
+WITH MUTUALLY RECURSIVE
+    -- for all objects, understand if they have an index on them and on which cluster they are running
+    -- this avoids having different cases for views with an index and materialized views later on
+    objects(id text, type text, cluster_id text, indexes text list) AS (
+        -- views and materialized views without an index
+        SELECT
+            o.id,
+            o.type,
+            o.cluster_id,
+            '{}'::text list AS indexes
+        FROM mz_objects o
+        WHERE o.id LIKE 'u%' AND o.type IN ('materialized-view', 'view') AND NOT EXISTS (
+            SELECT FROM mz_internal.mz_object_dependencies d
+            JOIN mz_objects AS i
+                ON (i.id = d.object_id AND i.type = 'index')
+            WHERE (o.id = d.referenced_object_id)
+        )
 
-                UNION ALL
+        UNION ALL
 
-                -- views and materialized views with an index
-                SELECT
-                    o.id,
-                    o.type,
-                    -- o.cluster_id is always NULL for views, so use the cluster of the index instead
-                    COALESCE(o.cluster_id, i.cluster_id) AS cluster_id,
-                    list_agg(i.id) AS indexes
-                FROM mz_objects o
-                JOIN mz_internal.mz_object_dependencies AS d
-                    ON (o.id = d.referenced_object_id)
-                JOIN mz_objects AS i
-                    ON (i.id = d.object_id AND i.type = 'index')
-                WHERE o.id LIKE 'u%' AND o.type IN ('materialized-view', 'view')
-                GROUP BY o.id, o.type, o.cluster_id, i.cluster_id
-            ),
+        -- views and materialized views with an index
+        SELECT
+            o.id,
+            o.type,
+            -- o.cluster_id is always NULL for views, so use the cluster of the index instead
+            COALESCE(o.cluster_id, i.cluster_id) AS cluster_id,
+            list_agg(i.id) AS indexes
+        FROM mz_objects o
+        JOIN mz_internal.mz_object_dependencies AS d
+            ON (o.id = d.referenced_object_id)
+        JOIN mz_objects AS i
+            ON (i.id = d.object_id AND i.type = 'index')
+        WHERE o.id LIKE 'u%' AND o.type IN ('materialized-view', 'view')
+        GROUP BY o.id, o.type, o.cluster_id, i.cluster_id
+    ),
 
-            -- maintained objects that are at the leafs of the dependency graph with respect to a specific cluster
-            maintained_leafs(id text, justification text) AS (
-                -- materialized views that are connected to a sink
-                SELECT
-                    m.id,
-                    s.id
-                FROM objects AS m
-                JOIN mz_internal.mz_object_dependencies AS d
-                    ON (m.id = d.referenced_object_id)
-                JOIN mz_objects AS s
-                    ON (s.id = d.object_id AND s.type = 'sink')
-                WHERE m.type = 'materialized-view'
+    -- maintained objects that are at the leafs of the dependency graph with respect to a specific cluster
+    maintained_leafs(id text, justification text) AS (
+        -- materialized views that are connected to a sink
+        SELECT
+            m.id,
+            s.id
+        FROM objects AS m
+        JOIN mz_internal.mz_object_dependencies AS d
+            ON (m.id = d.referenced_object_id)
+        JOIN mz_objects AS s
+            ON (s.id = d.object_id AND s.type = 'sink')
+        WHERE m.type = 'materialized-view'
 
-                UNION ALL
+        UNION ALL
 
-                -- materialized views that are referenced from a different cluster
-                SELECT DISTINCT
-                    m.id,
-                    child.cluster_id
-                FROM objects AS m
-                -- fixme: this only works if the materialized view is directly used by a maintained object on the remote cluster (but transitive dependencies are also valid)
-                JOIN mz_internal.mz_object_dependencies AS d
-                    ON (m.id = d.referenced_object_id)
-                JOIN mz_objects AS child
-                    ON (child.id = d.object_id)
-                WHERE m.type = 'materialized-view' AND child.type IN ('index', 'sink', 'materialized-view') AND child.cluster_id != m.cluster_id
+        -- materialized views that are referenced from a different cluster
+        SELECT DISTINCT
+            m.id,
+            child.cluster_id
+        FROM objects AS m
+        -- fixme: this only works if the materialized view is directly used by a maintained object on the remote cluster (but transitive dependencies are also valid)
+        JOIN mz_internal.mz_object_dependencies AS d
+            ON (m.id = d.referenced_object_id)
+        JOIN mz_objects AS child
+            ON (child.id = d.object_id)
+        WHERE m.type = 'materialized-view' AND child.type IN ('index', 'sink', 'materialized-view') AND child.cluster_id != m.cluster_id
 
-                UNION ALL
+        UNION ALL
 
-                -- (materialized) views with an index that are not transitively depend on by maintained objects on the same cluster
-                SELECT
-                    v.id,
-                    unnest(v.indexes)
-                FROM objects AS v
-                WHERE v.type = 'view' AND NOT EXISTS (
-                    SELECT FROM mz_internal.mz_object_transitive_dependencies AS d
-                    INNER JOIN mz_objects AS child
-                        ON (d.object_id = child.id)
-                    WHERE d.referenced_object_id = v.id AND child.type IN ('materialized-view', 'index') AND v.cluster_id = child.cluster_id AND NOT v.indexes @> LIST[child.id]
-                )
-            ),
+        -- (materialized) views with an index that are not transitively depend on by maintained objects on the same cluster
+        SELECT
+            v.id,
+            unnest(v.indexes)
+        FROM objects AS v
+        WHERE v.type = 'view' AND NOT EXISTS (
+            SELECT FROM mz_internal.mz_object_transitive_dependencies AS d
+            INNER JOIN mz_objects AS child
+                ON (d.object_id = child.id)
+            WHERE d.referenced_object_id = v.id AND child.type IN ('materialized-view', 'index') AND v.cluster_id = child.cluster_id AND NOT v.indexes @> LIST[child.id]
+        )
+    ),
 
-            -- this is just a helper cte to union multiple lists as part of an aggregation, which is not directly possible in SQL
-            agg_maintained_children(id text, maintained_children text list) AS (
-                SELECT
-                    parent_id AS id,
-                    list_agg(maintained_child) AS maintained_leafs
-                FROM (
-                    SELECT DISTINCT
-                        d.referenced_object_id AS parent_id,
-                        -- it's not possible to union lists in an aggregation, so we have to unnest the list first
-                        unnest(child.maintained_children) AS maintained_child
-                    FROM propagate_dependencies AS child
-                    INNER JOIN mz_internal.mz_object_dependencies AS d
-                        ON (child.id = d.object_id)
-                )
-                GROUP BY parent_id
-            ),
+    -- this is just a helper cte to union multiple lists as part of an aggregation, which is not directly possible in SQL
+    agg_maintained_children(id text, maintained_children text list) AS (
+        SELECT
+            parent_id AS id,
+            list_agg(maintained_child) AS maintained_leafs
+        FROM (
+            SELECT DISTINCT
+                d.referenced_object_id AS parent_id,
+                -- it's not possible to union lists in an aggregation, so we have to unnest the list first
+                unnest(child.maintained_children) AS maintained_child
+            FROM propagate_dependencies AS child
+            INNER JOIN mz_internal.mz_object_dependencies AS d
+                ON (child.id = d.object_id)
+        )
+        GROUP BY parent_id
+    ),
 
-            -- propagate dependencies of maintained objects from the leafs to the roots of the dependency graph and
-            -- record a justification when an object should be maintained, e.g. when it is depended on by more than one maintained object
-            -- when an object should be maintained, maintained_children will just contain that object so that further upstream objects refer to it in their maintained_children
-            propagate_dependencies(id text, maintained_children text list, justification text list) AS (
-                -- base case: start with the leafs
-                SELECT DISTINCT
-                    id,
-                    LIST[id] AS maintained_children,
-                    list_agg(justification) AS justification
-                FROM maintained_leafs
-                GROUP BY id
+    -- propagate dependencies of maintained objects from the leafs to the roots of the dependency graph and
+    -- record a justification when an object should be maintained, e.g. when it is depended on by more than one maintained object
+    -- when an object should be maintained, maintained_children will just contain that object so that further upstream objects refer to it in their maintained_children
+    propagate_dependencies(id text, maintained_children text list, justification text list) AS (
+        -- base case: start with the leafs
+        SELECT DISTINCT
+            id,
+            LIST[id] AS maintained_children,
+            list_agg(justification) AS justification
+        FROM maintained_leafs
+        GROUP BY id
 
-                UNION
+        UNION
 
-                -- recursive case: if there is a child with the same dependencies as the parent,
-                -- the parent is only reused by a single child
-                SELECT
-                    parent.id,
-                    child.maintained_children,
-                    NULL::text list AS justification
-                FROM agg_maintained_children AS parent
-                INNER JOIN mz_internal.mz_object_dependencies AS d
-                    ON (parent.id = d.referenced_object_id)
-                INNER JOIN propagate_dependencies AS child
-                    ON (d.object_id = child.id)
-                WHERE parent.maintained_children = child.maintained_children
+        -- recursive case: if there is a child with the same dependencies as the parent,
+        -- the parent is only reused by a single child
+        SELECT
+            parent.id,
+            child.maintained_children,
+            NULL::text list AS justification
+        FROM agg_maintained_children AS parent
+        INNER JOIN mz_internal.mz_object_dependencies AS d
+            ON (parent.id = d.referenced_object_id)
+        INNER JOIN propagate_dependencies AS child
+            ON (d.object_id = child.id)
+        WHERE parent.maintained_children = child.maintained_children
 
-                UNION
+        UNION
 
-                -- recursive case: if there is NO child with the same dependencies as the parent,
-                -- different children are reusing the parent so maintaining the object is justified by itself
-                SELECT DISTINCT
-                    parent.id,
-                    LIST[parent.id] AS maintained_children,
-                    parent.maintained_children AS justification
-                FROM agg_maintained_children AS parent
-                WHERE NOT EXISTS (
-                    SELECT FROM mz_internal.mz_object_dependencies AS d
-                    INNER JOIN propagate_dependencies AS child
-                        ON (d.object_id = child.id AND d.referenced_object_id = parent.id)
-                    WHERE parent.maintained_children = child.maintained_children
-                )
-            ),
+        -- recursive case: if there is NO child with the same dependencies as the parent,
+        -- different children are reusing the parent so maintaining the object is justified by itself
+        SELECT DISTINCT
+            parent.id,
+            LIST[parent.id] AS maintained_children,
+            parent.maintained_children AS justification
+        FROM agg_maintained_children AS parent
+        WHERE NOT EXISTS (
+            SELECT FROM mz_internal.mz_object_dependencies AS d
+            INNER JOIN propagate_dependencies AS child
+                ON (d.object_id = child.id AND d.referenced_object_id = parent.id)
+            WHERE parent.maintained_children = child.maintained_children
+        )
+    ),
 
-            objects_with_justification(id text, type text, maintained_children text list, justification text list, indexes text list) AS (
-                SELECT
-                    p.id,
-                    o.type,
-                    p.maintained_children,
-                    p.justification,
-                    o.indexes
-                FROM propagate_dependencies p
-                JOIN objects AS o
-                    ON (p.id = o.id)
-            ),
+    objects_with_justification(id text, type text, maintained_children text list, justification text list, indexes text list) AS (
+        SELECT
+            p.id,
+            o.type,
+            p.maintained_children,
+            p.justification,
+            o.indexes
+        FROM propagate_dependencies p
+        JOIN objects AS o
+            ON (p.id = o.id)
+    ),
 
-            hints(id text, hint text, details text, justification text list) AS (
-                -- materialized views that are not required
-                SELECT
-                    id,
-                    'convert to a view' AS hint,
-                    'no dependencies from sinks or objects on different clusters' AS details,
-                    justification
-                FROM objects_with_justification
-                WHERE type = 'materialized-view' AND justification IS NULL
+    hints(id text, hint text, details text, justification text list) AS (
+        -- materialized views that are not required
+        SELECT
+            id,
+            'convert to a view' AS hint,
+            'no dependencies from sinks or objects on different clusters' AS details,
+            justification
+        FROM objects_with_justification
+        WHERE type = 'materialized-view' AND justification IS NULL
 
-                UNION ALL
+        UNION ALL
 
-                -- materialized views that are required because a sink or a maintained object on a different cluster depends on them
-                SELECT
-                    id,
-                    'keep' AS hint,
-                    'dependencies from sinks or objects on different clusters: ' AS details,
-                    justification
-                FROM objects_with_justification
-                WHERE type = 'materialized-view' AND justification IS NOT NULL AND EXISTS (
-                    SELECT FROM unnest(justification) AS dependency
-                    JOIN mz_objects s ON (s.type = 'sink' AND s.id = dependency)
+        -- materialized views that are required because a sink or a maintained object on a different cluster depends on them
+        SELECT
+            id,
+            'keep' AS hint,
+            'dependencies from sinks or objects on different clusters: ' AS details,
+            justification
+        FROM objects_with_justification
+        WHERE type = 'materialized-view' AND justification IS NOT NULL AND EXISTS (
+            SELECT FROM unnest(justification) AS dependency
+            JOIN mz_objects s ON (s.type = 'sink' AND s.id = dependency)
 
-                    UNION ALL
+            UNION ALL
 
-                    SELECT FROM unnest(justification) AS dependency
-                    JOIN mz_clusters c ON (c.id = dependency)
-                )
+            SELECT FROM unnest(justification) AS dependency
+            JOIN mz_clusters c ON (c.id = dependency)
+        )
 
-                UNION ALL
+        UNION ALL
 
-                -- materialized views that can be concerted to an index because a sink or a maintained object on a different cluster depends on them
-                SELECT
-                    id,
-                    'convert to a view with an index' AS hint,
-                    'no dependencies from sinks or objects on different clusters, but maintained dependencies on the same cluster: ' AS details,
-                    justification
-                FROM objects_with_justification
-                WHERE type = 'materialized-view' AND justification IS NOT NULL AND NOT EXISTS (
-                    SELECT FROM unnest(justification) AS dependency
-                    JOIN mz_objects s ON (s.type = 'sink' AND s.id = dependency)
+        -- materialized views that can be concerted to an index because a sink or a maintained object on a different cluster depends on them
+        SELECT
+            id,
+            'convert to a view with an index' AS hint,
+            'no dependencies from sinks or objects on different clusters, but maintained dependencies on the same cluster: ' AS details,
+            justification
+        FROM objects_with_justification
+        WHERE type = 'materialized-view' AND justification IS NOT NULL AND NOT EXISTS (
+            SELECT FROM unnest(justification) AS dependency
+            JOIN mz_objects s ON (s.type = 'sink' AND s.id = dependency)
 
-                    UNION ALL
+            UNION ALL
 
-                    SELECT FROM unnest(justification) AS dependency
-                    JOIN mz_clusters c ON (c.id = dependency)
-                )
+            SELECT FROM unnest(justification) AS dependency
+            JOIN mz_clusters c ON (c.id = dependency)
+        )
 
-                UNION ALL
+        UNION ALL
 
-                -- views that have indexes on different clusters should be a materialized view
-                SELECT
-                    o.id,
-                    'convert to materialized view',
-                    'indexes on multiple different clusters: ',
-                    o.justification
-                FROM objects_with_justification o,
-                    LATERAL unnest(o.justification) j
-                LEFT JOIN mz_objects AS i
-                    ON (i.id = j AND i.type = 'index')
-                WHERE o.type = 'view' AND o.justification IS NOT NULL
-                GROUP BY o.id, o.justification
-                HAVING count(DISTINCT i.cluster_id) >= 2
+        -- views that have indexes on different clusters should be a materialized view
+        SELECT
+            o.id,
+            'convert to materialized view',
+            'indexes on multiple different clusters: ',
+            o.justification
+        FROM objects_with_justification o,
+            LATERAL unnest(o.justification) j
+        LEFT JOIN mz_objects AS i
+            ON (i.id = j AND i.type = 'index')
+        WHERE o.type = 'view' AND o.justification IS NOT NULL
+        GROUP BY o.id, o.justification
+        HAVING count(DISTINCT i.cluster_id) >= 2
 
-                UNION ALL
+        UNION ALL
 
-                -- views without an index that should be maintained
-                SELECT
-                    id,
-                    'add index' AS hint,
-                    'multiple maintained dependencies: ' AS details,
-                    justification
-                FROM objects_with_justification
-                WHERE type = 'view' AND justification IS NOT NULL AND indexes = '{}'::text list
+        -- views without an index that should be maintained
+        SELECT
+            id,
+            'add index' AS hint,
+            'multiple maintained dependencies: ' AS details,
+            justification
+        FROM objects_with_justification
+        WHERE type = 'view' AND justification IS NOT NULL AND indexes = '{}'::text list
 
-                UNION ALL
+        UNION ALL
 
-                -- index inside the dependency graph (not a leaf)
-                SELECT
-                    unnest(indexes) AS id,
-                    'drop unless queried directly' AS hint,
-                    'fewer than two maintained dependencies: ' AS details,
-                    maintained_children AS justification
-                FROM objects_with_justification
-                WHERE type = 'view' AND NOT indexes = '{}'::text list AND justification IS NULL
+        -- index inside the dependency graph (not a leaf)
+        SELECT
+            unnest(indexes) AS id,
+            'drop unless queried directly' AS hint,
+            'fewer than two maintained dependencies: ' AS details,
+            maintained_children AS justification
+        FROM objects_with_justification
+        WHERE type = 'view' AND NOT indexes = '{}'::text list AND justification IS NULL
 
-                UNION ALL
+        UNION ALL
 
-                -- index on a leaf of the dependency graph
-                SELECT
-                    unnest(indexes) AS id,
-                    'drop unless queried directly' AS hint,
-                    'associated view does not have any dependencies (maintained or not maintained)' AS details,
-                    NULL::text list AS justification
-                FROM objects_with_justification
-                -- indexes can only be part of justification for leaf nodes
-                WHERE type = 'view' AND NOT indexes = '{}'::text list AND justification @> indexes
+        -- index on a leaf of the dependency graph
+        SELECT
+            unnest(indexes) AS id,
+            'drop unless queried directly' AS hint,
+            'associated view does not have any dependencies (maintained or not maintained)' AS details,
+            NULL::text list AS justification
+        FROM objects_with_justification
+        -- indexes can only be part of justification for leaf nodes
+        WHERE type = 'view' AND NOT indexes = '{}'::text list AND justification @> indexes
 
-                UNION ALL
+        UNION ALL
 
-                -- indexes on views inside the dependency graph
-                SELECT
-                    unnest(indexes) AS id,
-                    'keep' AS hint,
-                    'dependant objects: ' AS details,
-                    justification
-                FROM objects_with_justification
-                -- indexes can only be part of justification for leaf nodes
-                WHERE type = 'view' AND justification IS NOT NULL AND NOT indexes = '{}'::text list AND NOT justification @> indexes
-            ),
+        -- indexes on views inside the dependency graph
+        SELECT
+            unnest(indexes) AS id,
+            'keep' AS hint,
+            'dependant objects: ' AS details,
+            justification
+        FROM objects_with_justification
+        -- indexes can only be part of justification for leaf nodes
+        WHERE type = 'view' AND justification IS NOT NULL AND NOT indexes = '{}'::text list AND NOT justification @> indexes
+    ),
 
-            hints_resolved_ids(id text, hint text, details text) AS (
-                SELECT
-                    h.id,
-                    h.hint,
-                    h.details || list_agg(COALESCE(o.name, c.name))::text AS details
-                FROM hints AS h,
-                    LATERAL unnest(h.justification) j
-                LEFT JOIN mz_objects AS o
-                    ON (o.id = j)
-                LEFT JOIN mz_clusters AS c
-                    ON (c.id = j)
-                GROUP BY h.id, h.hint, h.details
-
-                UNION ALL
-
-                SELECT
-                    id,
-                    hint,
-                    details
-                FROM hints AS h
-                WHERE justification IS NULL
-            )
-
+    hints_resolved_ids(id text, hint text, details text) AS (
         SELECT
             h.id,
             h.hint,
-            h.details
-        FROM hints_resolved_ids AS h
-        ORDER BY h.hint",
-    access: vec![PUBLIC_SELECT],
+            h.details || list_agg(COALESCE(o.name, c.name))::text AS details
+        FROM hints AS h,
+            LATERAL unnest(h.justification) j
+        LEFT JOIN mz_objects AS o
+            ON (o.id = j)
+        LEFT JOIN mz_clusters AS c
+            ON (c.id = j)
+        GROUP BY h.id, h.hint, h.details
+
+        UNION ALL
+
+        SELECT
+            id,
+            hint,
+            details
+        FROM hints AS h
+        WHERE justification IS NULL
+    )
+
+SELECT
+    h.id,
+    h.hint,
+    h.details
+FROM hints_resolved_ids AS h
+ORDER BY h.hint",
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 // NOTE: If you add real data to this implementation, then please update
@@ -9164,7 +9166,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_COMPUTE_EXPORTS),
         Builtin::View(&MZ_DATAFLOW_ARRANGEMENT_SIZES),
         Builtin::View(&MZ_EXPECTED_GROUP_SIZE_ADVICE),
-        Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS),
@@ -9398,6 +9399,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::ContinualTask(&MZ_CLUSTER_REPLICA_METRICS_HISTORY_CT),
         Builtin::ContinualTask(&MZ_CLUSTER_REPLICA_STATUS_HISTORY_CT),
         Builtin::ContinualTask(&MZ_WALLCLOCK_LAG_HISTORY_CT),
+        Builtin::View(&MZ_INDEX_ADVICE),
     ]);
 
     builtins.extend(notice::builtins());
