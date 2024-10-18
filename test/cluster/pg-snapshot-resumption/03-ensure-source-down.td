@@ -13,3 +13,5 @@
   WHERE
       name = ANY (ARRAY['mz_source', 't1', 'ten']);
 mz_source stalled "postgres: recoverable errors should crash the process during snapshots"
+t1 stalled "postgres: recoverable errors should crash the process during snapshots"
+ten stalled "postgres: recoverable errors should crash the process during snapshots"

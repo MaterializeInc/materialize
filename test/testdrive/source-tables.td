@@ -47,6 +47,9 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 > SELECT count(*) FROM bids
 255
 
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'bids';
+running
+
 # Create another table from the same bids upstream using a less qualified reference
 > CREATE TABLE bids2 FROM SOURCE auction_house (REFERENCE "bids");
 
@@ -91,6 +94,9 @@ users auction {id,org_id,name}
 
 > SELECT count(*) from counter_2;
 5
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'counter_2';
+running
 
 > DROP SOURCE counter CASCADE;
 
@@ -145,6 +151,9 @@ var0 0
 var1 1234
 var0 1
 var1 5678
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'pg_table_1';
+running
 
 > CREATE TABLE pg_table_2 FROM SOURCE pg_source (REFERENCE "pg_table") WITH (TEXT COLUMNS = (a));
 
@@ -250,6 +259,9 @@ contains:referenced tables use unsupported types
 > SELECT * FROM mysql_table_1;
 var0 0
 var1 1234
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mysql_table_1';
+running
 
 $ mysql-execute name=mysql
 INSERT INTO mysql_table VALUES ('var1', 5678), ('var0', 1);
@@ -358,6 +370,9 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'avro_table_upsert';
+running
+
 > SELECT * from avro_table_upsert
 key           f1       f2
 ---------------------------
@@ -417,6 +432,9 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 1   4
 2   4
 3   4
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'kv_1';
+running
 
 > SELECT partition, count(*) > 10 FROM kv_2 GROUP BY partition
 0   true
