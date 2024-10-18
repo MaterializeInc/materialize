@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
+use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::dyncfgs::ENABLE_CONTINUAL_TASK_BUILTINS;
 use mz_catalog::builtin::{
@@ -867,24 +868,35 @@ fn add_new_remove_old_builtin_items_migration(
     builtins_cfg: &BuiltinsConfig,
     txn: &mut mz_catalog::durable::Transaction<'_>,
 ) -> Result<(Vec<GlobalId>, Vec<GlobalId>), mz_catalog::durable::CatalogError> {
-    let mut new_builtins = Vec::new();
-    let mut new_builtin_ids = Vec::new();
+    let mut new_builtin_mappings = Vec::new();
     let mut migrated_builtin_ids = Vec::new();
+    // Used to validate unique descriptions.
+    let mut builtin_descs = HashSet::new();
 
     // We compare the builtin items that are compiled into the binary with the builtin items that
     // are persisted in the catalog to discover new, deleted, and migrated builtin items.
-    let builtins: Vec<_> = BUILTINS::iter(builtins_cfg)
-        .map(|builtin| {
-            (
+    let mut builtins = Vec::new();
+    for builtin in BUILTINS::iter(builtins_cfg) {
+        let desc = SystemObjectDescription {
+            schema_name: builtin.schema().to_string(),
+            object_type: builtin.catalog_item_type(),
+            object_name: builtin.name().to_string(),
+        };
+        // Validate that the description is unique.
+        if !builtin_descs.insert(desc.clone()) {
+            panic!(
+                "duplicate builtin description: {:?}, {:?}",
                 SystemObjectDescription {
                     schema_name: builtin.schema().to_string(),
                     object_type: builtin.catalog_item_type(),
                     object_name: builtin.name().to_string(),
                 },
-                builtin,
-            )
-        })
-        .collect();
+                builtin
+            );
+        }
+        builtins.push((desc, builtin));
+    }
+
     let mut system_object_mappings: BTreeMap<_, _> = txn
         .get_system_object_mappings()
         .map(|system_object_mapping| {
@@ -894,98 +906,96 @@ fn add_new_remove_old_builtin_items_migration(
             )
         })
         .collect();
-    let new_builtin_amount = builtins
-        .iter()
-        .filter(|(desc, _)| !system_object_mappings.contains_key(desc))
-        .count();
-    let mut new_ids = txn
-        .allocate_system_item_ids(usize_to_u64(new_builtin_amount))?
-        .into_iter();
 
-    // Look for new and migrated builtins.
-    for (desc, builtin) in builtins {
-        let fingerprint = match builtin.runtime_alterable() {
-            false => builtin.fingerprint(),
-            true => RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL.into(),
-        };
-        match system_object_mappings.remove(&desc) {
-            Some(system_object_mapping) => {
-                if system_object_mapping.unique_identifier.fingerprint != fingerprint {
-                    // `mz_storage_usage_by_shard` cannot be migrated for multiple reasons. Firstly,
-                    // it was cause the table to be truncated because the contents are not also
-                    // stored in the durable catalog. Secondly, we prune `mz_storage_usage_by_shard`
-                    // of old events in the background on startup. The correctness of that pruning
-                    // relies on there being no other retractions to `mz_storage_usage_by_shard`.
-                    assert_ne!(
-                        *MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
-                        system_object_mapping.description,
-                        "mz_storage_usage_by_shard cannot be migrated or else the table will be truncated"
-                    );
-                    assert_ne!(
-                        builtin.catalog_item_type(),
-                        CatalogItemType::Type,
-                        "types cannot be migrated"
-                    );
-                    assert_ne!(
-                        system_object_mapping.unique_identifier.fingerprint,
-                        RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
-                        "clearing the runtime alterable flag on an existing object is not permitted",
-                    );
-                    assert!(
-                        !builtin.runtime_alterable(),
-                        "setting the runtime alterable flag on an existing object is not permitted"
-                    );
-                    migrated_builtin_ids.push(system_object_mapping.unique_identifier.id);
+    let (existing_builtins, new_builtins): (Vec<_>, Vec<_>) =
+        builtins.into_iter().partition_map(|(desc, builtin)| {
+            let fingerprint = match builtin.runtime_alterable() {
+                false => builtin.fingerprint(),
+                true => RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL.into(),
+            };
+            match system_object_mappings.remove(&desc) {
+                Some(system_object_mapping) => {
+                    Either::Left((builtin, system_object_mapping, fingerprint))
                 }
+                None => Either::Right((builtin, fingerprint)),
             }
-            None => {
-                let id = new_ids.next().expect("not enough global IDs");
-                new_builtins.push(SystemObjectMapping {
-                    description: SystemObjectDescription {
-                        schema_name: builtin.schema().to_string(),
-                        object_type: builtin.catalog_item_type(),
-                        object_name: builtin.name().to_string(),
-                    },
-                    unique_identifier: SystemObjectUniqueIdentifier { id, fingerprint },
-                });
-                new_builtin_ids.push(id);
+        });
+    let new_builtin_ids = txn.allocate_system_item_ids(usize_to_u64(new_builtins.len()))?;
+    let new_builtins = new_builtins.into_iter().zip(new_builtin_ids.clone());
 
-                // Runtime-alterable system objects are durably recorded to the
-                // usual items collection, so that they can be later altered at
-                // runtime by their owner (i.e., outside of the usual builtin
-                // migration framework that requires changes to the binary
-                // itself).
-                let handled_runtime_alterable = match builtin {
-                    Builtin::Connection(c) if c.runtime_alterable => {
-                        let mut acl_items = vec![rbac::owner_privilege(
-                            mz_sql::catalog::ObjectType::Connection,
-                            c.owner_id.clone(),
-                        )];
-                        acl_items.extend_from_slice(c.access);
-                        txn.insert_item(
-                            id,
-                            c.oid,
-                            mz_catalog::durable::initialize::resolve_system_schema(c.schema).id,
-                            c.name,
-                            c.sql.into(),
-                            *c.owner_id,
-                            acl_items,
-                        )?;
-                        true
-                    }
-                    _ => false,
-                };
-                assert_eq!(
-                    builtin.runtime_alterable(),
-                    handled_runtime_alterable,
-                    "runtime alterable object was not handled by migration",
-                );
-            }
+    // Look for migrated builtins.
+    for (builtin, system_object_mapping, fingerprint) in existing_builtins {
+        if system_object_mapping.unique_identifier.fingerprint != fingerprint {
+            // `mz_storage_usage_by_shard` cannot be migrated for multiple reasons. Firstly,
+            // it was cause the table to be truncated because the contents are not also
+            // stored in the durable catalog. Secondly, we prune `mz_storage_usage_by_shard`
+            // of old events in the background on startup. The correctness of that pruning
+            // relies on there being no other retractions to `mz_storage_usage_by_shard`.
+            assert_ne!(
+                *MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, system_object_mapping.description,
+                "mz_storage_usage_by_shard cannot be migrated or else the table will be truncated"
+            );
+            assert_ne!(
+                builtin.catalog_item_type(),
+                CatalogItemType::Type,
+                "types cannot be migrated"
+            );
+            assert_ne!(
+                system_object_mapping.unique_identifier.fingerprint,
+                RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+                "clearing the runtime alterable flag on an existing object is not permitted",
+            );
+            assert!(
+                !builtin.runtime_alterable(),
+                "setting the runtime alterable flag on an existing object is not permitted"
+            );
+            migrated_builtin_ids.push(system_object_mapping.unique_identifier.id);
         }
     }
 
     // Add new builtin items to catalog.
-    txn.set_system_object_mappings(new_builtins)?;
+    for ((builtin, fingerprint), id) in new_builtins {
+        new_builtin_mappings.push(SystemObjectMapping {
+            description: SystemObjectDescription {
+                schema_name: builtin.schema().to_string(),
+                object_type: builtin.catalog_item_type(),
+                object_name: builtin.name().to_string(),
+            },
+            unique_identifier: SystemObjectUniqueIdentifier { id, fingerprint },
+        });
+
+        // Runtime-alterable system objects are durably recorded to the
+        // usual items collection, so that they can be later altered at
+        // runtime by their owner (i.e., outside of the usual builtin
+        // migration framework that requires changes to the binary
+        // itself).
+        let handled_runtime_alterable = match builtin {
+            Builtin::Connection(c) if c.runtime_alterable => {
+                let mut acl_items = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::Connection,
+                    c.owner_id.clone(),
+                )];
+                acl_items.extend_from_slice(c.access);
+                txn.insert_item(
+                    id,
+                    c.oid,
+                    mz_catalog::durable::initialize::resolve_system_schema(c.schema).id,
+                    c.name,
+                    c.sql.into(),
+                    *c.owner_id,
+                    acl_items,
+                )?;
+                true
+            }
+            _ => false,
+        };
+        assert_eq!(
+            builtin.runtime_alterable(),
+            handled_runtime_alterable,
+            "runtime alterable object was not handled by migration",
+        );
+    }
+    txn.set_system_object_mappings(new_builtin_mappings)?;
 
     // Anything left in `system_object_mappings` must have been deleted and should be removed from
     // the catalog.
