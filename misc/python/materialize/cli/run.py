@@ -279,10 +279,14 @@ def main() -> int:
                 f"{key}={value}"
                 for key, value in get_default_system_parameters().items()
             ]
-            env["MZ_SYSTEM_PARAMETER_DEFAULT"] = ";".join(formatted_params)
+            system_parameter_default = ";".join(formatted_params)
             # Connect to the database to ensure it exists.
             _connect_sql(args.postgres)
-            command += [f"--postgres-url={args.postgres}", *args.args]
+            command += [
+                f"--postgres-url={args.postgres}",
+                f"--system-parameter-default={system_parameter_default}",
+                *args.args,
+            ]
     elif args.program == "test":
         if args.bazel:
             raise UIError(
