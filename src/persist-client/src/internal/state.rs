@@ -8,12 +8,15 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::ensure;
+use async_stream::stream;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
+use std::pin::pin;
 use std::time::Duration;
 
 use arrow::array::{make_array, Array, ArrayData};
@@ -23,17 +26,20 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::Description;
 use differential_dataflow::Hashable;
+use futures::Stream;
+use futures_util::StreamExt;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_ore::soft_panic_or_log;
 use mz_ore::vec::PartialOrdVecExt;
 use mz_persist::indexed::encoding::BatchColumnarFormat;
-use mz_persist::location::SeqNo;
+use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::arrow::{ArrayBound, ProtoArrayData};
 use mz_persist_types::columnar::{ColumnEncoder, Schema2};
 use mz_persist_types::schema::{backward_compatible, SchemaId};
 use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_proto::ProtoType;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use semver::Version;
@@ -49,7 +55,7 @@ use crate::critical::CriticalReaderId;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats, LazyProto};
 use crate::internal::gc::GcReq;
-use crate::internal::paths::{PartialBatchKey, PartialRollupKey, WriterKey};
+use crate::internal::paths::{PartId, PartialBatchKey, PartialRollupKey, WriterKey};
 use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace,
 };
@@ -305,6 +311,257 @@ impl<T> BatchPart<T> {
     }
 }
 
+/// An ordered list of parts, generally stored as part of a larger run.
+#[derive(Debug, Clone)]
+pub struct HollowRun<T> {
+    /// Pointers usable to retrieve the updates.
+    pub(crate) parts: Vec<RunPart<T>>,
+}
+
+/// A reference to a [HollowRun], including the key in the blob store and some denormalized
+/// metadata.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize)]
+pub struct HollowRunRef<T> {
+    pub key: PartialBatchKey,
+
+    /// The size of the referenced runs object, plus all of the hollow objects it contains.
+    pub hollow_bytes: usize,
+
+    pub max_part_bytes: usize,
+
+    pub key_lower: Vec<u8>,
+    pub structured_key_lower: Option<LazyProto<ProtoArrayData>>,
+
+    /// A frontier to which timestamps in this runs are advanced on read, if
+    /// set.
+    ///
+    /// A value of `Some([T::minimum()])` is functionally the same as `None`,
+    /// but we maintain the distinction between the two for some internal sanity
+    /// checking of invariants as well as metrics. If this ever becomes an
+    /// issue, everything still works with this as just `Antichain<T>`.
+    pub ts_rewrite: Option<Antichain<T>>,
+}
+
+impl<T: Eq> PartialOrd<Self> for HollowRunRef<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.key.partial_cmp(&other.key)
+    }
+}
+
+impl<T: Eq> Ord for HollowRunRef<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
+impl<T> HollowRunRef<T> {
+    pub fn writer_key(&self) -> Option<WriterKey> {
+        Some(self.key.split()?.0)
+    }
+}
+
+impl<T: Timestamp + Codec64> HollowRunRef<T> {
+    /// Stores the given runs and returns a [HollowRunRef] that points to them.
+    pub async fn set(
+        shard_id: ShardId,
+        blob: &dyn Blob,
+        writer: &WriterKey,
+        data: HollowRun<T>,
+    ) -> anyhow::Result<Self> {
+        let hollow_bytes = data.parts.iter().map(|p| p.hollow_bytes()).sum();
+        let max_part_bytes = data
+            .parts
+            .iter()
+            .map(|p| p.max_part_bytes())
+            .max()
+            .unwrap_or(0);
+        let key_lower = data
+            .parts
+            .first()
+            .map_or(vec![], |p| p.key_lower().to_vec());
+        let structured_key_lower = None; // FIXME: track the lower
+        let key = PartialBatchKey::new(writer, &PartId::new());
+        let blob_key = key.complete(&shard_id);
+        let bytes = Bytes::from(prost::Message::encode_to_vec(&data.into_proto()));
+        blob.set(&blob_key, bytes).await.expect("FIXME: retry loop");
+        Ok(Self {
+            key,
+            hollow_bytes,
+            max_part_bytes,
+            key_lower,
+            structured_key_lower,
+            ts_rewrite: None,
+        })
+    }
+
+    /// Retrieve the [HollowRun] that this reference points to.
+    /// The caller is expected to ensure that this ref is the result of calling [HollowRunRef::set]
+    /// with the same shard id and backing store.
+    pub async fn get(&self, shard_id: ShardId, blob: &dyn Blob) -> HollowRun<T> {
+        let blob_key = self.key.complete(&shard_id);
+        let mut bytes = blob
+            .get(&blob_key)
+            .await
+            .expect("FIXME: retry loop")
+            .unwrap_or_else(|| panic!("illegal state: dangling ref {}", self.key));
+        let proto_runs: ProtoHollowRun =
+            prost::Message::decode(&mut bytes).expect("illegal state: invalid proto bytes");
+        let runs = proto_runs
+            .into_rust()
+            .expect("illegal state: invalid encoded runs proto");
+        runs
+    }
+}
+
+/// Part of the updates in a run.
+///
+/// Either a pointer to ones stored in Blob or a single part stored inline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum RunPart<T> {
+    Single(BatchPart<T>),
+    Many(HollowRunRef<T>),
+}
+
+impl<T: Ord> PartialOrd<Self> for RunPart<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (RunPart::Single(a), RunPart::Single(b)) => a.partial_cmp(&b),
+            (RunPart::Single(_), RunPart::Many(_)) => Some(Ordering::Less),
+            (RunPart::Many(_), RunPart::Single(_)) => Some(Ordering::Greater),
+            (RunPart::Many(a), RunPart::Many(b)) => a.partial_cmp(&b),
+        }
+    }
+}
+
+impl<T: Ord> Ord for RunPart<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
+impl<T> RunPart<T> {
+    #[cfg(test)]
+    pub fn expect_hollow_part(&self) -> &HollowBatchPart<T> {
+        match self {
+            RunPart::Single(BatchPart::Hollow(hollow)) => hollow,
+            _ => panic!("expected hollow part!"),
+        }
+    }
+
+    pub fn hollow_bytes(&self) -> usize {
+        match self {
+            Self::Single(p) => p.hollow_bytes(),
+            Self::Many(r) => r.hollow_bytes,
+        }
+    }
+
+    pub fn is_inline(&self) -> bool {
+        match self {
+            Self::Single(p) => p.is_inline(),
+            Self::Many(_) => false,
+        }
+    }
+
+    pub fn inline_bytes(&self) -> usize {
+        match self {
+            Self::Single(p) => p.inline_bytes(),
+            Self::Many(_) => 0,
+        }
+    }
+
+    pub fn max_part_bytes(&self) -> usize {
+        match self {
+            Self::Single(p) => p.encoded_size_bytes(),
+            Self::Many(r) => r.max_part_bytes,
+        }
+    }
+
+    pub fn writer_key(&self) -> Option<WriterKey> {
+        match self {
+            Self::Single(p) => p.writer_key(),
+            Self::Many(r) => r.writer_key(),
+        }
+    }
+
+    pub fn encoded_size_bytes(&self) -> usize {
+        match self {
+            Self::Single(p) => p.encoded_size_bytes(),
+            Self::Many(r) => r.hollow_bytes,
+        }
+    }
+
+    pub fn schema_id(&self) -> Option<SchemaId> {
+        match self {
+            Self::Single(p) => p.schema_id(),
+            Self::Many(_) => None,
+        }
+    }
+
+    // A user-interpretable identifier or description of the part (for logs and
+    // such).
+    pub fn printable_name(&self) -> &str {
+        match self {
+            Self::Single(p) => p.printable_name(),
+            Self::Many(r) => r.key.0.as_str(),
+        }
+    }
+
+    pub fn stats(&self) -> Option<&LazyPartStats> {
+        match self {
+            Self::Single(p) => p.stats(),
+            // FIXME: worth keeping stats here to save a fetch?
+            Self::Many(_) => None,
+        }
+    }
+
+    pub fn key_lower(&self) -> &[u8] {
+        match self {
+            Self::Single(p) => p.key_lower(),
+            Self::Many(r) => r.key_lower.as_slice(),
+        }
+    }
+
+    pub fn structured_key_lower(&self) -> Option<ArrayBound> {
+        match self {
+            Self::Single(p) => p.structured_key_lower(),
+            Self::Many(_) => None,
+        }
+    }
+
+    pub fn ts_rewrite(&self) -> Option<&Antichain<T>> {
+        match self {
+            Self::Single(p) => p.ts_rewrite(),
+            Self::Many(r) => r.ts_rewrite.as_ref(),
+        }
+    }
+}
+
+impl<T: Timestamp + Codec64> RunPart<T> {
+    pub fn part_stream<'a>(
+        &'a self,
+        shard_id: ShardId,
+        blob: &'a (dyn Blob + Send + Sync),
+    ) -> impl Stream<Item = Cow<'a, BatchPart<T>>> + 'a {
+        stream! {
+            match self {
+                RunPart::Single(p) => {
+                    yield Cow::Borrowed(p);
+                }
+                RunPart::Many(r) => {
+                    let fetched = r.get(shard_id, blob).await;
+                    for run_part in fetched.parts {
+                        let mut stream = Box::pin(run_part.part_stream(shard_id, blob));
+                        while let Some(batch_part) = stream.next().await {
+                            yield Cow::Owned(batch_part.into_owned());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl<T: Ord> PartialOrd for BatchPart<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -418,7 +675,7 @@ pub struct HollowBatch<T> {
     /// The number of updates in the batch.
     pub len: usize,
     /// Pointers usable to retrieve the updates.
-    pub(crate) parts: Vec<BatchPart<T>>,
+    pub(crate) parts: Vec<RunPart<T>>,
     /// Runs of sequential sorted batch parts, stored as indices into `parts`.
     /// ex.
     /// ```text
@@ -523,6 +780,22 @@ impl<T: Ord> Ord for HollowBatch<T> {
     }
 }
 
+impl<T: Timestamp + Codec64> HollowBatch<T> {
+    pub fn part_stream<'a>(
+        &'a self,
+        shard_id: ShardId,
+        blob: &'a (dyn Blob + Send + Sync),
+    ) -> impl Stream<Item = Cow<'a, BatchPart<T>>> + 'a {
+        stream! {
+            for part in &self.parts {
+                let mut stream = pin!(part.part_stream(shard_id, blob));
+                while let Some(part) = stream.next().await {
+                    yield part;
+                }
+            }
+        }
+    }
+}
 impl<T> HollowBatch<T> {
     /// Construct an in-memory hollow batch from the given metadata.
     ///
@@ -532,7 +805,7 @@ impl<T> HollowBatch<T> {
     /// `len` should represent the number of valid updates in the referenced parts.
     pub(crate) fn new(
         desc: Description<T>,
-        parts: Vec<BatchPart<T>>,
+        parts: Vec<RunPart<T>>,
         len: usize,
         run_meta: Vec<RunMeta>,
         run_splits: Vec<usize>,
@@ -564,7 +837,7 @@ impl<T> HollowBatch<T> {
     }
 
     /// Construct a batch of a single run with default metadata. Mostly interesting for tests.
-    pub(crate) fn new_run(desc: Description<T>, parts: Vec<BatchPart<T>>, len: usize) -> Self {
+    pub(crate) fn new_run(desc: Description<T>, parts: Vec<RunPart<T>>, len: usize) -> Self {
         let run_meta = if parts.is_empty() {
             vec![]
         } else {
@@ -590,7 +863,7 @@ impl<T> HollowBatch<T> {
         }
     }
 
-    pub(crate) fn runs(&self) -> impl Iterator<Item = (&RunMeta, &[BatchPart<T>])> {
+    pub(crate) fn runs(&self) -> impl Iterator<Item = (&RunMeta, &[RunPart<T>])> {
         let run_ends = self
             .run_splits
             .iter()
@@ -609,13 +882,7 @@ impl<T> HollowBatch<T> {
     }
 
     pub(crate) fn inline_bytes(&self) -> usize {
-        self.parts
-            .iter()
-            .map(|x| match x {
-                BatchPart::Inline { updates, .. } => updates.encoded_size_bytes(),
-                BatchPart::Hollow(_) => 0,
-            })
-            .sum()
+        self.parts.iter().map(|x| x.inline_bytes()).sum()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -688,10 +955,16 @@ impl<T: Timestamp + TotalOrder> HollowBatch<T> {
             new_upper,
             self.desc.since().clone(),
         );
+        // FIXME: rewrite_ts config at the run ref level
         for part in &mut self.parts {
             match part {
-                BatchPart::Hollow(part) => part.ts_rewrite = Some(frontier.clone()),
-                BatchPart::Inline { ts_rewrite, .. } => *ts_rewrite = Some(frontier.clone()),
+                RunPart::Single(BatchPart::Hollow(part)) => {
+                    part.ts_rewrite = Some(frontier.clone())
+                }
+                RunPart::Single(BatchPart::Inline { ts_rewrite, .. }) => {
+                    *ts_rewrite = Some(frontier.clone())
+                }
+                RunPart::Many(runs) => runs.ts_rewrite = Some(frontier.clone()),
             }
         }
         Ok(())
@@ -2236,7 +2509,7 @@ pub(crate) mod tests {
                 any::<T>(),
                 any::<T>(),
                 any::<T>(),
-                proptest::collection::vec(any_batch_part::<T>(), 0..3),
+                proptest::collection::vec(any_run_part::<T>(), 0..3),
                 any::<usize>(),
                 any::<bool>(),
             ),
@@ -2285,6 +2558,10 @@ pub(crate) mod tests {
                 }
             },
         )
+    }
+
+    pub fn any_run_part<T: Arbitrary + Timestamp>() -> impl Strategy<Value = RunPart<T>> {
+        Strategy::prop_map(any_batch_part(), |part| RunPart::Single(part))
     }
 
     pub fn any_hollow_batch_part<T: Arbitrary + Timestamp>(
@@ -2483,7 +2760,7 @@ pub(crate) mod tests {
             ),
             keys.iter()
                 .map(|x| {
-                    BatchPart::Hollow(HollowBatchPart {
+                    RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                         key: PartialBatchKey((*x).to_owned()),
                         encoded_size_bytes: 0,
                         key_lower: vec![],
@@ -2493,7 +2770,7 @@ pub(crate) mod tests {
                         diffs_sum: None,
                         format: None,
                         schema_id: None,
-                    })
+                    }))
                 })
                 .collect(),
             len,
