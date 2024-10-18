@@ -220,6 +220,13 @@ pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
     "Whether to mint reclock bindings based on the latest probed offset or the latest ingested offset."
 );
 
+/// Whether to use the new continual feedback upsert operator.
+pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
+    "storage_use_continual_feedback_upsert",
+    false,
+    "Whether to use the new continual feedback upsert operator.",
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -244,4 +251,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
         .add(&STORAGE_USE_RECLOCK_V2)
         .add(&STORAGE_RECLOCK_TO_LATEST)
+        .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
 }
