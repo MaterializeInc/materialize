@@ -667,7 +667,6 @@ mz_frontiers
 mz_global_frontiers
 mz_history_retention_strategies
 mz_hydration_statuses
-mz_index_advice
 mz_internal_cluster_replicas
 mz_kafka_source_tables
 mz_materialization_dependencies
