@@ -649,10 +649,13 @@ pub struct Table {
 }
 
 impl Table {
-    // The Coordinator controls insertions for tables (including system tables),
-    // so they are realtime.
     pub fn timeline(&self) -> Timeline {
-        Timeline::EpochMilliseconds
+        match &self.data_source {
+            // The Coordinator controls insertions for writable tables
+            // (including system tables), so they are realtime.
+            TableDataSource::TableWrites { .. } => Timeline::EpochMilliseconds,
+            TableDataSource::DataSource { timeline, .. } => timeline.clone(),
+        }
     }
 }
 
@@ -666,7 +669,10 @@ pub enum TableDataSource {
 
     /// The table receives its data from the identified `DataSourceDesc`.
     /// This table type does not support INSERT/UPDATE/DELETE statements.
-    DataSource(DataSourceDesc),
+    DataSource {
+        desc: DataSourceDesc,
+        timeline: Timeline,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1846,12 +1852,16 @@ impl CatalogEntry {
                 _ => None,
             },
             CatalogItem::Table(table) => match &table.data_source {
-                TableDataSource::DataSource(DataSourceDesc::IngestionExport {
-                    ingestion_id,
-                    external_reference,
-                    details,
-                    data_config,
-                }) => Some((*ingestion_id, external_reference, details, data_config)),
+                TableDataSource::DataSource {
+                    desc:
+                        DataSourceDesc::IngestionExport {
+                            ingestion_id,
+                            external_reference,
+                            details,
+                            data_config,
+                        },
+                    timeline: _,
+                } => Some((*ingestion_id, external_reference, details, data_config)),
                 _ => None,
             },
             _ => None,

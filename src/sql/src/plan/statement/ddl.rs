@@ -1532,6 +1532,7 @@ generate_extracted_config!(
     TableFromSourceOption,
     (TextColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
+    (Timeline, String),
     (Details, String)
 );
 
@@ -1560,6 +1561,7 @@ pub fn plan_create_table_from_source(
         text_columns,
         exclude_columns,
         details,
+        timeline,
         seen: _,
     } = with_options.clone().try_into()?;
 
@@ -1728,6 +1730,26 @@ pub fn plan_create_table_from_source(
         plan_utils::maybe_rename_columns(format!("source table {}", name), &mut desc, col_names)?;
     }
 
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
+
+    // Allow users to specify a timeline. If they do not, determine a default
+    // timeline for the source.
+    let timeline = match timeline {
+        None => match envelope {
+            SourceEnvelope::CdcV2 => {
+                Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
+            }
+            _ => Timeline::EpochMilliseconds,
+        },
+        // TODO(benesch): if we stabilize this, can we find a better name than
+        // `mz_epoch_ms`? Maybe just `mz_system`?
+        Some(timeline) if timeline == "mz_epoch_ms" => Timeline::EpochMilliseconds,
+        Some(timeline) if timeline.starts_with("mz_") => {
+            return Err(PlanError::UnacceptableTimelineName(timeline));
+        }
+        Some(timeline) => Timeline::User(timeline),
+    };
+
     let data_source = DataSourceDesc::IngestionExport {
         ingestion_id,
         external_reference: external_reference
@@ -1738,7 +1760,6 @@ pub fn plan_create_table_from_source(
         data_config: SourceExportDataConfig { envelope, encoding },
     };
 
-    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
     let if_not_exists = *if_not_exists;
 
     let create_sql = normalize::create_statement(scx, Statement::CreateTableFromSource(stmt))?;
@@ -1748,7 +1769,10 @@ pub fn plan_create_table_from_source(
         desc,
         temporary: false,
         compaction_window: None,
-        data_source: TableDataSource::DataSource(data_source),
+        data_source: TableDataSource::DataSource {
+            desc: data_source,
+            timeline,
+        },
     };
 
     Ok(Plan::CreateTable(CreateTablePlan {

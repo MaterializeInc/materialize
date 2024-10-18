@@ -487,7 +487,11 @@ impl CatalogState {
                 let mut updates = self
                     .pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff, table);
 
-                if let TableDataSource::DataSource(data_source) = &table.data_source {
+                if let TableDataSource::DataSource {
+                    desc: data_source,
+                    timeline: _,
+                } = &table.data_source
+                {
                     updates.extend(match data_source {
                         DataSourceDesc::IngestionExport {
                             ingestion_id,
@@ -753,7 +757,7 @@ impl CatalogState {
         // Use initial lcw so that we can tell apart default from non-existent windows.
         if let Some(cw) = entry.item().initial_logical_compaction_window() {
             updates.push(self.pack_history_retention_strategy_update(id, cw, diff));
-            // Propagate subsource changes.
+            // Propagate source export changes.
             for (cw, mut ids) in self.source_compaction_windows([id]) {
                 // Id already accounted for above.
                 ids.remove(&id);
@@ -805,10 +809,10 @@ impl CatalogState {
                 .ast
                 .to_ast_string_redacted()
         });
-        let source_id = if let TableDataSource::DataSource(DataSourceDesc::IngestionExport {
-            ingestion_id,
+        let source_id = if let TableDataSource::DataSource {
+            desc: DataSourceDesc::IngestionExport { ingestion_id, .. },
             ..
-        }) = &table.data_source
+        } = &table.data_source
         {
             Some(ingestion_id.to_string())
         } else {
