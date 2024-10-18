@@ -3755,6 +3755,29 @@ UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, cluste
     }
 });
 
+pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_objects_id_namespace_types",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECTS_ID_NAMESPACE_TYPES_OID,
+    column_defs: Some("object_type"),
+    sql: r#"SELECT *
+    FROM (
+        VALUES
+            ('table'),
+            ('view'),
+            ('materialized-view'),
+            ('source'),
+            ('sink'),
+            ('index'),
+            ('connection'),
+            ('type'),
+            ('function'),
+            ('secret')
+    )
+    AS _ (object_type)"#,
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_OBJECT_OID_ALIAS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_oid_alias",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3827,6 +3850,7 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
     access: vec![PUBLIC_SELECT],
 });
 
+// TODO (SangJunBak): Remove once mz_object_history is released and used in the Console https://github.com/MaterializeInc/console/issues/3342
 pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_lifetimes",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3844,6 +3868,60 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
         a.occurred_at
     FROM mz_catalog.mz_audit_events a
     WHERE a.event_type = 'create' OR a.event_type = 'drop'",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_object_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECT_HISTORY_OID,
+    column_defs: Some("id, cluster_id, object_type, created_at, dropped_at"),
+    sql: r#"
+    WITH
+        creates AS
+        (
+            SELECT
+                details ->> 'id' AS id,
+                -- We need to backfill cluster_id since older object create events don't include the cluster ID in the audit log
+                COALESCE(details ->> 'cluster_id', objects.cluster_id) AS cluster_id,
+                object_type,
+                occurred_at
+            FROM
+                mz_catalog.mz_audit_events AS events
+                    LEFT JOIN mz_catalog.mz_objects AS objects ON details ->> 'id' = objects.id
+            WHERE event_type = 'create' AND object_type IN ( SELECT object_type FROM mz_internal.mz_objects_id_namespace_types )
+        ),
+        drops AS
+        (
+            SELECT details ->> 'id' AS id, occurred_at
+            FROM mz_catalog.mz_audit_events
+            WHERE event_type = 'drop' AND object_type IN ( SELECT object_type FROM mz_internal.mz_objects_id_namespace_types )
+        ),
+        user_object_history AS
+        (
+            SELECT
+                creates.id,
+                creates.cluster_id,
+                creates.object_type,
+                creates.occurred_at AS created_at,
+                drops.occurred_at AS dropped_at
+            FROM creates LEFT JOIN drops ON creates.id = drops.id
+            WHERE creates.id LIKE 'u%'
+        ),
+        -- We need to union built in objects since they aren't in the audit log
+        built_in_objects AS
+        (
+            -- Functions that accept different arguments have different oids but the same id. We deduplicate in this case.
+            SELECT DISTINCT ON (objects.id)
+                objects.id,
+                objects.cluster_id,
+                objects.type AS object_type,
+                NULL::timestamptz AS created_at,
+                NULL::timestamptz AS dropped_at
+            FROM mz_catalog.mz_objects AS objects
+            WHERE objects.id LIKE 's%'
+        )
+    SELECT * FROM user_object_history UNION ALL (SELECT * FROM built_in_objects)"#,
     access: vec![PUBLIC_SELECT],
 });
 
@@ -7223,6 +7301,7 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
                     details ->> 'replica_id' AS replica_id,
                     details ->> 'replica_name' AS replica_name,
                     details ->> 'cluster_name' AS cluster_name,
+                    details ->> 'cluster_id' AS cluster_id,
                     occurred_at
                 FROM mz_catalog.mz_audit_events
                 WHERE
@@ -7241,6 +7320,7 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
         SELECT
             creates.replica_id,
             creates.size,
+            creates.cluster_id,
             creates.cluster_name,
             creates.replica_name,
             creates.occurred_at AS created_at,
@@ -7255,6 +7335,52 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
                 LEFT JOIN
                     mz_catalog.mz_cluster_replica_sizes
                     ON mz_cluster_replica_sizes.size = creates.size"#,
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_cluster_replica_name_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_CLUSTER_REPLICA_NAME_HISTORY_OID,
+    column_defs: Some("occurred_at, id, previous_name, new_name"),
+    sql: r#"WITH user_replica_alter_history AS (
+  SELECT occurred_at,
+    audit_events.details->>'replica_id' AS id,
+    audit_events.details->>'old_name' AS previous_name,
+    audit_events.details->>'new_name' AS new_name
+  FROM mz_catalog.mz_audit_events AS audit_events
+  WHERE object_type = 'cluster-replica'
+    AND audit_events.event_type = 'alter'
+    AND audit_events.details->>'replica_id' like 'u%'
+),
+user_replica_create_history AS (
+  SELECT occurred_at,
+    audit_events.details->>'replica_id' AS id,
+    NULL AS previous_name,
+    audit_events.details->>'replica_name' AS new_name
+  FROM mz_catalog.mz_audit_events AS audit_events
+  WHERE object_type = 'cluster-replica'
+    AND audit_events.event_type = 'create'
+    AND audit_events.details->>'replica_id' like 'u%'
+),
+-- Because built in system cluster replicas don't have audit events, we need to manually add them
+system_replicas AS (
+  -- We assume that the system cluster replicas were created at the beginning of time
+  SELECT NULL::timestamptz AS occurred_at,
+    id,
+    NULL AS previous_name,
+    name AS new_name
+  FROM mz_catalog.mz_cluster_replicas
+  WHERE id LIKE 's%'
+)
+SELECT *
+FROM user_replica_alter_history
+UNION ALL
+SELECT *
+FROM user_replica_create_history
+UNION ALL
+SELECT *
+FROM system_replicas"#,
     access: vec![PUBLIC_SELECT],
 });
 
@@ -7436,6 +7562,221 @@ FROM materialization_times m
 JOIN input_times i USING (id)
 JOIN root_times r USING (id)",
     access: vec![PUBLIC_SELECT],
+});
+
+/**
+ * This view is used to display the cluster utilization over 14 days bucketed by 8 hours.
+ * It's specifically for the Console's environment overview page to speed up load times
+ */
+pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+        name: "mz_console_cluster_utilization_overview",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_OID,
+        column_defs: Some(
+            r#"bucket_start,
+            replica_id,
+            memory_percent,
+            max_memory_at,
+            disk_percent,
+            max_disk_at,
+            memory_and_disk_percent,
+            max_memory_and_disk_memory_percent,
+            max_memory_and_disk_disk_percent,
+            max_memory_and_disk_at,
+            max_cpu_percent,
+            max_cpu_at,
+            offline_events,
+            bucket_end,
+            name,
+            cluster_id,
+            size"#,
+        ),
+        sql: r#"WITH replica_history AS (
+  SELECT replica_id,
+    size,
+    cluster_id
+  FROM mz_internal.mz_cluster_replica_history
+  UNION
+  -- We need to union the current set of cluster replicas since mz_cluster_replica_history doesn't include system clusters
+  SELECT id AS replica_id,
+    size,
+    cluster_id
+  FROM mz_catalog.mz_cluster_replicas
+),
+replica_utilization_history_binned AS (
+  SELECT m.occurred_at,
+    m.replica_id,
+    m.process_id,
+    (m.cpu_nano_cores::float8 / s.cpu_nano_cores) AS cpu_percent,
+    (m.memory_bytes::float8 / s.memory_bytes) AS memory_percent,
+    (m.disk_bytes::float8 / s.disk_bytes) AS disk_percent,
+    m.disk_bytes::float8 AS disk_bytes,
+    m.memory_bytes::float8 AS memory_bytes,
+    s.disk_bytes AS total_disk_bytes,
+    s.memory_bytes AS total_memory_bytes,
+    r.size,
+    date_bin(
+      '8 HOURS',
+      occurred_at,
+      '1970-01-01'::timestamp
+    ) AS bucket_start
+  FROM replica_history AS r
+    JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
+    JOIN mz_internal.mz_cluster_replica_metrics_history AS m ON m.replica_id = r.replica_id
+  WHERE mz_now() <= date_bin(
+      '8 HOURS',
+      occurred_at,
+      '1970-01-01'::timestamp
+    ) + INTERVAL '14 DAYS'
+),
+-- For each (replica, process_id, bucket), take the (replica, process_id, bucket) with the highest memory
+max_memory AS (
+  SELECT DISTINCT ON (bucket_start, replica_id, process_id) bucket_start,
+    replica_id,
+    process_id,
+    memory_percent,
+    occurred_at
+  FROM replica_utilization_history_binned
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
+  ORDER BY bucket_start,
+    replica_id,
+    process_id,
+    COALESCE(memory_bytes, 0) DESC
+),
+max_disk AS (
+  SELECT DISTINCT ON (bucket_start, replica_id, process_id) bucket_start,
+    replica_id,
+    process_id,
+    disk_percent,
+    occurred_at
+  FROM replica_utilization_history_binned
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
+  ORDER BY bucket_start,
+    replica_id,
+    process_id,
+    COALESCE(disk_bytes, 0) DESC
+),
+max_cpu AS (
+  SELECT DISTINCT ON (bucket_start, replica_id, process_id) bucket_start,
+    replica_id,
+    process_id,
+    cpu_percent,
+    occurred_at
+  FROM replica_utilization_history_binned
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
+  ORDER BY bucket_start,
+    replica_id,
+    process_id,
+    COALESCE(cpu_percent, 0) DESC
+),
+/*
+ This is different
+ from adding max_memory
+ and max_disk per bucket because both
+ values may not occur at the same time if the bucket interval is large.
+ */
+max_memory_and_disk AS (
+  SELECT DISTINCT ON (bucket_start, replica_id, process_id) bucket_start,
+    replica_id,
+    memory_percent,
+    disk_percent,
+    memory_and_disk_percent,
+    occurred_at
+  FROM (
+      SELECT *,
+        CASE
+          WHEN disk_bytes IS NULL
+          AND memory_bytes IS NULL THEN NULL
+          ELSE (
+            (
+              COALESCE(disk_bytes, 0) + COALESCE(memory_bytes, 0)
+            ) / total_memory_bytes
+          ) / (
+            (
+              total_disk_bytes::numeric + total_memory_bytes::numeric
+            ) / total_memory_bytes
+          )
+        END AS memory_and_disk_percent
+      FROM replica_utilization_history_binned
+    ) AS max_memory_and_disk_inner
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
+  ORDER BY bucket_start,
+    replica_id,
+    process_id,
+    COALESCE(memory_and_disk_percent, 0) DESC
+),
+-- For each (replica, process_id, bucket), get its offline events at that time
+replica_offline_event_history AS (
+  SELECT date_bin(
+      '8 HOURS',
+      occurred_at,
+      '1970-01-01'::timestamp
+    ) AS bucket_start,
+    replica_id,
+    jsonb_agg(
+      jsonb_build_object(
+        'replicaId',
+        rsh.replica_id,
+        'occurredAt',
+        rsh.occurred_at,
+        'status',
+        rsh.status,
+        'reason',
+        rsh.reason
+      )
+    ) AS offline_events
+  FROM mz_internal.mz_cluster_replica_status_history AS rsh -- We assume the statuses for process 0 are the same as all processes
+  WHERE process_id = '0'
+    AND status = 'offline'
+    AND mz_now() <= date_bin(
+      '8 HOURS',
+      occurred_at,
+      '1970-01-01'::timestamp
+    ) + INTERVAL '14 DAYS'
+  GROUP BY bucket_start,
+    replica_id
+)
+SELECT max_memory.bucket_start,
+  max_memory.replica_id,
+  max_memory.memory_percent,
+  max_memory.occurred_at as max_memory_at,
+  max_disk.disk_percent,
+  max_disk.occurred_at as max_disk_at,
+  max_memory_and_disk.memory_and_disk_percent as max_memory_and_disk_combined_percent,
+  max_memory_and_disk.memory_percent as max_memory_and_disk_memory_percent,
+  max_memory_and_disk.disk_percent as max_memory_and_disk_disk_percent,
+  max_memory_and_disk.occurred_at as max_memory_and_disk_at,
+  max_cpu.cpu_percent as max_cpu_percent,
+  max_cpu.occurred_at as max_cpu_at,
+  replica_offline_event_history.offline_events,
+  max_memory.bucket_start + INTERVAL '8 HOURS' as bucket_end,
+  replica_name_history.new_name AS name,
+  replica_history.cluster_id,
+  replica_history.size
+FROM max_memory
+  JOIN max_disk ON max_memory.bucket_start = max_disk.bucket_start
+  AND max_memory.replica_id = max_disk.replica_id
+  JOIN max_cpu ON max_memory.bucket_start = max_cpu.bucket_start
+  AND max_memory.replica_id = max_cpu.replica_id
+  JOIN max_memory_and_disk ON max_memory.bucket_start = max_memory_and_disk.bucket_start
+  AND max_memory.replica_id = max_memory_and_disk.replica_id
+  JOIN replica_history ON max_memory.replica_id = replica_history.replica_id,
+  LATERAL (
+    SELECT new_name
+    FROM mz_internal.mz_cluster_replica_name_history as replica_name_history
+    WHERE max_memory.replica_id = replica_name_history.id -- We treat NULLs as the beginning of time
+      AND max_memory.bucket_start + INTERVAL '8 HOURS' >= COALESCE(
+        replica_name_history.occurred_at,
+        '1970-01-01'::timestamp
+      )
+    ORDER BY replica_name_history.occurred_at DESC
+    LIMIT '1'
+  ) AS replica_name_history
+  LEFT JOIN replica_offline_event_history ON max_memory.bucket_start = replica_offline_event_history.bucket_start
+  AND max_memory.replica_id = replica_offline_event_history.replica_id"#,
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
@@ -7660,6 +8001,15 @@ pub const MZ_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     oid: oid::INDEX_MZ_VIEWS_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_catalog.mz_views (schema_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_console_cluster_utilization_overview_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_console_cluster_utilization_overview (cluster_id)",
     is_retained_metrics_object: false,
 };
 
@@ -7926,12 +8276,30 @@ ON mz_internal.mz_cluster_replica_history (dropped_at)",
     is_retained_metrics_object: true,
 };
 
+pub const MZ_CLUSTER_REPLICA_NAME_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_name_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_REPLICA_NAME_HISTORY_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_cluster_replica_name_history (id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_OBJECT_LIFETIMES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_lifetimes_ind",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_MZ_OBJECT_LIFETIMES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_object_lifetimes (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_OBJECT_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_object_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_OBJECT_HISTORY_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_object_history (id)",
     is_retained_metrics_object: false,
 };
 
@@ -8371,6 +8739,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),
         Builtin::View(&MZ_OBJECT_FULLY_QUALIFIED_NAMES),
+        Builtin::View(&MZ_OBJECTS_ID_NAMESPACE_TYPES),
+        Builtin::View(&MZ_OBJECT_HISTORY),
         Builtin::View(&MZ_OBJECT_LIFETIMES),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
@@ -8431,6 +8801,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_SHOW_INDEXES),
         Builtin::View(&MZ_SHOW_CONTINUAL_TASKS),
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
+        Builtin::View(&MZ_CLUSTER_REPLICA_NAME_HISTORY),
         Builtin::View(&MZ_TIMEZONE_NAMES),
         Builtin::View(&MZ_TIMEZONE_ABBREVIATIONS),
         Builtin::View(&PG_NAMESPACE_ALL_DATABASES),
@@ -8554,6 +8925,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
         Builtin::View(&MZ_MATERIALIZATION_DEPENDENCIES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
+        Builtin::View(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
@@ -8596,7 +8968,9 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_HISTORY_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_HISTORY_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_NAME_HISTORY_IND),
         Builtin::Index(&MZ_OBJECT_LIFETIMES_IND),
+        Builtin::Index(&MZ_OBJECT_HISTORY_IND),
         Builtin::Index(&MZ_OBJECT_DEPENDENCIES_IND),
         Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
@@ -8614,6 +8988,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_COLUMNS_IND),
         Builtin::Index(&MZ_SECRETS_IND),
         Builtin::Index(&MZ_VIEWS_IND),
+        Builtin::Index(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND),
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),

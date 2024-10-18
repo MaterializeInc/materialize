@@ -249,11 +249,24 @@ each replica, including the times at which it was created and dropped
 |-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
 | `replica_id`          | [`text`]                     | The ID of a cluster replica.                                                                                                              |
 | `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](../mz_catalog#mz_cluster_replica_sizes).                             |
+| `cluster_id`        | [`text`]                     | The ID of the cluster associated with the replica.                                                                                      |
 | `cluster_name`        | [`text`]                     | The name of the cluster associated with the replica.                                                                                      |
 | `replica_name`        | [`text`]                     | The name of the replica.                                                                                                                  |
 | `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
 | `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](../mz_catalog#mz_cluster_replica_sizes). |
+
+## `mz_cluster_replica_name_history`
+
+The `mz_cluster_replica_name_history` view contains historical information about names of each cluster replica.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_replica_name_history -->
+| Field                 | Type                         | Meaning                                                                                                                                   |
+|-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `occurred_at`          | [`timestamp with time zone`]                     |  The time at which the cluster replica was created or renamed. `NULL` if it's a built in system cluster replica.                                                                                                              |
+| `id`          | [`text`]                     | The ID of the cluster replica.                                                                                                              |
+| `previous_name`                | [`text`]                     | The previous name of the cluster replica. `NULL` if there was no previous name.   |
+| `new_name`        | [`text`]                     | The new name of the cluster replica.                                                                                     |
 
 ## `mz_internal_cluster_replicas`
 
@@ -475,6 +488,19 @@ The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/syste
 | `object_type`   | [`text`]                       | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
 | `event_type`    | [`text`]                       | The lifetime event, either `create` or `drop`.                                                                                                 |
 | `occurred_at`   | [`timestamp with time zone`]   | Wall-clock timestamp of when the event occurred.                                                                                               |
+
+## `mz_object_history`
+
+The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with historical information about each object in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_object_history -->
+| Field           | Type                           | Meaning                                                                                                                                        |
+| --------------- | ------------------------------ | -------------------------------------------------                                                                                              |
+| `id`            | [`text`]                       | Materialize's unique ID for the object.                                                                                                        |
+| `cluster_id`   | [`text`]                       | The object's cluster ID. `NULL` if the object has no associated cluster.                                                                                                       |
+| `object_type`   | [`text`]                       | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`. |
+| `created_at`    | [`timestamp with time zone`]                       | Wall-clock timestamp of when the object was created. `NULL` for built in system objects.                                                                                                |
+| `dropped_at`   | [`timestamp with time zone`]   | Wall-clock timestamp of when the object was dropped. `NULL` for built in system objects or if the object hasn't been dropped.                                              |
 
 ## `mz_object_transitive_dependencies`
 
@@ -1177,6 +1203,9 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_type_pg_metadata -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_oid_alias -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_objects_id_namespace_types -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_console_cluster_utilization_overview -->
+
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_class_all_databases -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_type_all_databases -->

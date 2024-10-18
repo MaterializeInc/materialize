@@ -162,11 +162,20 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 ----
 1  replica_id  text
 2  size  text
-3  cluster_name  text
-4  replica_name  text
-5  created_at  timestamp␠with␠time␠zone
-6  dropped_at  timestamp␠with␠time␠zone
-7  credits_per_hour  numeric
+3  cluster_id  text
+4  cluster_name  text
+5  replica_name  text
+6  created_at  timestamp␠with␠time␠zone
+7  dropped_at  timestamp␠with␠time␠zone
+8  credits_per_hour  numeric
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_name_history' ORDER BY position
+----
+1  occurred_at  timestamp␠with␠time␠zone
+2  id  text
+3  previous_name  text
+4  new_name  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_internal_cluster_replicas' ORDER BY position
@@ -286,6 +295,15 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  object_type  text
 4  event_type  text
 5  occurred_at  timestamp␠with␠time␠zone
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_history' ORDER BY position
+----
+1  id  text
+2  cluster_id  text
+3  object_type  text
+4  created_at  timestamp␠with␠time␠zone
+5  dropped_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_transitive_dependencies' ORDER BY position
@@ -609,6 +627,7 @@ mz_aws_privatelink_connection_statuses
 mz_cluster_replica_history
 mz_cluster_replica_metrics
 mz_cluster_replica_metrics_history
+mz_cluster_replica_name_history
 mz_cluster_replica_status_history
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
@@ -622,6 +641,7 @@ mz_compute_hydration_statuses
 mz_compute_hydration_times
 mz_compute_operator_hydration_statuses
 mz_compute_operator_hydration_statuses_per_worker
+mz_console_cluster_utilization_overview
 mz_continual_tasks
 mz_frontiers
 mz_global_frontiers
@@ -638,9 +658,11 @@ mz_notices
 mz_notices_redacted
 mz_object_dependencies
 mz_object_fully_qualified_names
+mz_object_history
 mz_object_lifetimes
 mz_object_oid_alias
 mz_object_transitive_dependencies
+mz_objects_id_namespace_types
 mz_optimizer_notices
 mz_pending_cluster_replicas
 mz_postgres_source_tables
