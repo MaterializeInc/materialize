@@ -78,8 +78,8 @@ pub mod v1alpha1 {
     }
 
     impl Materialize {
-        pub fn cockroach_secret_name() -> String {
-            "cockroach-password".to_string()
+        pub fn backend_secret_name(&self) -> String {
+            format!("materialize-backend-{}", self.name_unchecked())
         }
 
         pub fn cockroach_database_name(&self) -> String {

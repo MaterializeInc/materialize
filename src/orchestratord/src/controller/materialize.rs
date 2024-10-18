@@ -25,7 +25,6 @@ use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 
-mod cockroach;
 mod resources;
 
 #[derive(clap::Parser)]
@@ -37,15 +36,11 @@ pub struct Args {
     #[clap(long)]
     local_development: bool,
     #[clap(long)]
-    manage_cockroach_database: bool,
-    #[clap(long)]
     environmentd_target_arch: String,
 
     #[clap(flatten)]
     aws_info: AwsInfo,
 
-    #[clap(flatten)]
-    cockroach_info: cockroach::CockroachInfo,
     #[clap(long)]
     persist_bucket: Option<String>,
 
@@ -259,13 +254,6 @@ impl k8s_controller::Context for Context {
         mz: &Self::Resource,
     ) -> Result<Option<Action>, Self::Error> {
         let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
-
-        if self.config.manage_cockroach_database {
-            trace!("ensuring cockroach database is created");
-            cockroach::create_database(&self.config.cockroach_info, mz).await?;
-        }
-        trace!("acquiring cockroach connection");
-        cockroach::manage_role_password(&self.config.cockroach_info, client.clone(), mz).await?;
 
         let status = mz.status();
 
