@@ -1759,6 +1759,7 @@ where
             | ExecuteResponse::Copied(..)
             | ExecuteResponse::Prepare
             | ExecuteResponse::Raised
+            | ExecuteResponse::Refreshed
             | ExecuteResponse::ReassignOwned
             | ExecuteResponse::RevokedPrivilege
             | ExecuteResponse::RevokedRole
