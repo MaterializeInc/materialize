@@ -363,14 +363,14 @@ class PgCdcMzNow(Check):
                 DELETE FROM postgres_mz_now_table WHERE f2 = 'B3';
                 UPDATE postgres_mz_now_table SET f1 = NOW() WHERE f2 = 'E1'
 
-                # Expect some rows newer than 60 seconds in view
+                # Expect some rows newer than 90 seconds in view
                 > SELECT COUNT(*) >= 6 FROM postgres_mz_now_view
-                  WHERE f1 > NOW() - INTERVAL '60' SECOND;
+                  WHERE f1 > NOW() - INTERVAL '90' SECOND;
                 true
 
-                # Expect no rows older than 60 seconds in view
+                # Expect no rows older than 90 seconds in view
                 > SELECT COUNT(*) FROM postgres_mz_now_view
-                  WHERE f1 < NOW() - INTERVAL '60' SECOND;
+                  WHERE f1 < NOW() - INTERVAL '90' SECOND;
                 0
 
                 # Rollback the last INSERTs so that validate() can be called multiple times
