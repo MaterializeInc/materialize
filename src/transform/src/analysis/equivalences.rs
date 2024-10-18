@@ -324,17 +324,55 @@ impl EquivalenceClasses {
         }
     }
 
-    /// Sorts and deduplicates each class, and the classes themselves.
-    fn tidy(&mut self) {
+    /// Restores equivalence class structure, in roughly linear time.
+    /// Returns true iff any merging of equivalence classes occurs.
+    fn tidy(&mut self) -> bool {
+        // Remove all literal errors, as they cannot be equated to other things.
         for class in self.classes.iter_mut() {
-            // Remove all literal errors, as they cannot be equated to other things.
             class.retain(|e| !e.is_literal_err());
+        }
+
+        // Restore representation as sorted lists.
+        for class in self.classes.iter_mut() {
             class.sort_by(Self::mir_scalar_expr_complexity);
             class.dedup();
         }
         self.classes.retain(|c| c.len() > 1);
         self.classes.sort();
         self.classes.dedup();
+
+        // 3. Restore equivalence class structure using Union-Find
+        // Optimistically start by building the remap we would use.
+        let mut union_find = BTreeMap::default();
+        let mut dirtied = false;
+        for class in self.classes.iter() {
+            for expr in class.iter() {
+                if let Some(other) = union_find.insert(expr.clone(), class[0].clone()) {
+                    union_find.union(&other, &class[0]);
+                    dirtied = true;
+                }
+            }
+        }
+        if dirtied {
+            let mut classes: BTreeMap<_, Vec<_>> = BTreeMap::default();
+            for class in self.classes.drain(..) {
+                for expr in class {
+                    let root: MirScalarExpr = union_find.find(&expr).unwrap().clone();
+                    classes.entry(root).or_default().push(expr);
+                }
+            }
+            self.classes = classes.into_values().collect();
+            // Restore representation as sorted lists.
+            for class in self.classes.iter_mut() {
+                class.sort_by(Self::mir_scalar_expr_complexity);
+                class.dedup();
+            }
+            self.classes.retain(|c| c.len() > 1);
+            self.classes.sort();
+            self.classes.dedup();
+        }
+
+        dirtied
     }
 
     /// Update `self` to maintain the same equivalences which potentially reducing along `Ord::le`.
@@ -344,6 +382,9 @@ impl EquivalenceClasses {
         // Repeatedly, we reduce each of the classes themselves, then unify the classes.
         // This should strictly reduce complexity, and reach a fixed point.
         // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
+
+        // Tidy expressions to put them in equivalence class form.
+        // Users are allowed to mutate `self.classes`, so we must perform this normalization once.
         self.tidy();
 
         // We should not rely on nullability information present in `column_types`. (Doing this
@@ -366,79 +407,36 @@ impl EquivalenceClasses {
         while !stable {
             stable = self.minimize_once(&columns);
         }
-
-        // TODO: remove these measures once we are more confident about idempotence.
-        let prev = self.clone();
-        self.minimize_once(&columns);
-        mz_ore::soft_assert_eq_or_log!(self, &prev, "Equivalences::minimize() not idempotent");
     }
 
     /// A single iteration of minimization, which we expect to repeat but benefit from factoring out.
+    ///
+    /// This invocation should take roughly linear time.
+    /// It starts with equivalence class invariants maintained (closed under transitivity), and then
+    ///   1. Performs per-expression reduction, including the class structure to replace subexpressions.
+    ///   2. Applies idiom detection to e.g. unpack expressions equivalence to literal true or false.
+    ///   3. Restores the equivalence class invariants.
     fn minimize_once(&mut self, columns: &Option<Vec<ColumnType>>) -> bool {
-        // We are complete unless we experience an expression simplification, or an equivalence class unification.
-        let mut stable = true;
+        let remap: BTreeMap<MirScalarExpr, MirScalarExpr> = self
+            .classes
+            .iter()
+            .flat_map(|c| c.iter().map(move |e| (e.clone(), c[0].clone())))
+            .collect();
 
-        // 0. Reduce each expression
+        // 1. Reduce each expression
         //
-        // This is optional in that `columns` may not be provided (`reduce` requires type information).
-        if let Some(columns) = columns {
-            for class in self.classes.iter_mut() {
-                for expr in class.iter_mut() {
-                    let prev_expr = expr.clone();
+        // This reduction first looks for subexpression substitutions that can be performed,
+        // and then applies expression reduction if column type information is provided.
+        for class in self.classes.iter_mut() {
+            for expr in class.iter_mut() {
+                remap.reduce_child(expr);
+                if let Some(columns) = columns {
                     expr.reduce(columns);
-                    if &prev_expr != expr {
-                        stable = false;
-                    }
                 }
             }
         }
 
-        // 1. Reduce each class.
-        //    Each class can be reduced in the context of *other* classes, which are available for substitution.
-        for class_index in 0..self.classes.len() {
-            for index in 0..self.classes[class_index].len() {
-                let mut cloned = self.classes[class_index][index].clone();
-                // Use `reduce_child` rather than `reduce_expr` to avoid entire expression replacement.
-                let reduced = self.reduce_child(&mut cloned);
-                if reduced {
-                    self.classes[class_index][index] = cloned;
-                    stable = false;
-                }
-            }
-        }
-
-        // 2. Unify classes.
-        //    If the same expression is in two classes, we can unify the classes.
-        //    This element may not be the representative.
-        //    TODO: If all lists are sorted, this could be a linear merge among all.
-        //          They stop being sorted as soon as we make any modification, though.
-        //          But, it would be a fast rejection when faced with lots of data.
-        //    `expr_to_class_index` tells us for each expression the class index where we last saw
-        //    it.
-        //    `to_merge` has pairs of classes to be merged. The first element of the pair should be
-        //    an earlier class than the second, and `to_merge` should be in sorted order. (These
-        //    invariants are important when handling expressions that appear in more than two
-        //    classes: we'll first merge the first two into the second, and then all this into the
-        //    third, and so on.)
-        let mut expr_to_class_index = BTreeMap::new();
-        let mut to_merge = Vec::new();
-        for (index, class) in self.classes.iter().enumerate() {
-            for expr in class {
-                if let Some(other_index) = expr_to_class_index.get(expr) {
-                    to_merge.push((*other_index, index));
-                }
-            }
-            for expr in class {
-                expr_to_class_index.insert(expr, index);
-            }
-        }
-        for (from, to) in to_merge {
-            let prior = std::mem::take(&mut self.classes[from]);
-            self.classes[to].extend(prior);
-            stable = false;
-        }
-
-        // 3. Identify idioms
+        // 2. Identify idioms
         //    E.g. If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
         let mut to_add = Vec::new();
         for class in self.classes.iter_mut() {
@@ -459,7 +457,6 @@ impl EquivalenceClasses {
                             expr1.clone().call_is_null(),
                             expr2.clone().call_is_null(),
                         ]);
-                        stable = false;
                     }
                 }
                 // Remove the more complex form of the expression.
@@ -482,7 +479,6 @@ impl EquivalenceClasses {
                     } = expr
                     {
                         to_add.push(vec![MirScalarExpr::literal_false(), (**e).clone()]);
-                        stable = false;
                     }
                 }
                 class.retain(|expr| {
@@ -506,7 +502,6 @@ impl EquivalenceClasses {
                     } = expr
                     {
                         to_add.push(vec![MirScalarExpr::literal_true(), (**e).clone()]);
-                        stable = false;
                     }
                 }
                 class.retain(|expr| {
@@ -525,9 +520,17 @@ impl EquivalenceClasses {
         self.classes.extend(to_add);
 
         // Tidy up classes, restore representative.
+        // Specifically, we want to remove literal errors before restoring the equivalence class structure.
         self.tidy();
 
-        stable
+        // The state is stable if every expression is present in `remap` with the same representative, and their sizes are the same.
+        if remap.len() == self.classes.iter().map(|c| c.len()).sum::<usize>() {
+            self.classes
+                .iter()
+                .all(|c| c.iter().all(|e| remap.get(e) == Some(&c[0])))
+        } else {
+            false
+        }
     }
 
     /// Produce the equivalences present in both inputs.
@@ -713,5 +716,123 @@ impl EquivalenceClasses {
             }
         }
         false
+    }
+
+    /// Returns a map that can be used to replace (sub-)expressions.
+    pub fn reducer(&self) -> BTreeMap<&MirScalarExpr, &MirScalarExpr> {
+        self.classes
+            .iter()
+            .flat_map(|c| c.iter().map(|e| (e, &c[0])))
+            .collect()
+    }
+}
+
+trait ExpressionReducer {
+    fn replace(&self, expr: &mut MirScalarExpr) -> bool;
+    fn reduce_expr(&self, expr: &mut MirScalarExpr) -> bool {
+        let mut simplified = false;
+        simplified = simplified || self.reduce_child(expr);
+        simplified = simplified || self.replace(expr);
+        simplified
+    }
+    fn reduce_child(&self, expr: &mut MirScalarExpr) -> bool {
+        let mut simplified = false;
+        match expr {
+            MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+                simplified = self.reduce_expr(expr1) || simplified;
+                simplified = self.reduce_expr(expr2) || simplified;
+            }
+            MirScalarExpr::CallUnary { expr, .. } => {
+                simplified = self.reduce_expr(expr) || simplified;
+            }
+            MirScalarExpr::CallVariadic { exprs, .. } => {
+                for expr in exprs.iter_mut() {
+                    simplified = self.reduce_expr(expr) || simplified;
+                }
+            }
+            MirScalarExpr::If { cond: _, then, els } => {
+                // Do not simplify `cond`, as we cannot ensure the simplification
+                // continues to hold as expressions migrate around.
+                simplified = self.reduce_expr(then) || simplified;
+                simplified = self.reduce_expr(els) || simplified;
+            }
+            _ => {}
+        }
+        simplified
+    }
+}
+
+impl ExpressionReducer for BTreeMap<&MirScalarExpr, &MirScalarExpr> {
+    /// Perform any exact replacement for `expr`, report if it had an effect.
+    fn replace(&self, expr: &mut MirScalarExpr) -> bool {
+        if let Some(other) = self.get(expr) {
+            if other != &expr {
+                expr.clone_from(other);
+                return true;
+            }
+        }
+        false
+    }
+}
+
+impl ExpressionReducer for BTreeMap<MirScalarExpr, MirScalarExpr> {
+    /// Perform any exact replacement for `expr`, report if it had an effect.
+    fn replace(&self, expr: &mut MirScalarExpr) -> bool {
+        if let Some(other) = self.get(expr) {
+            if other != expr {
+                expr.clone_from(other);
+                return true;
+            }
+        }
+        false
+    }
+}
+
+trait UnionFind<T> {
+    /// Sets `self[x]` to the root from `x`, and returns a reference to the root.
+    fn find<'a>(&'a mut self, x: &T) -> Option<&'a T>;
+    /// Ensures that `x` and `y` have the same root.
+    fn union(&mut self, x: &T, y: &T);
+}
+
+impl<T: Clone + Ord> UnionFind<T> for BTreeMap<T, T> {
+    fn find<'a>(&'a mut self, x: &T) -> Option<&'a T> {
+        if !self.contains_key(x) {
+            None
+        } else {
+            if self[x] != self[&self[x]] {
+                // Path halving
+                let mut y = self[x].clone();
+                while y != self[&y] {
+                    let grandparent = self[&self[&y]].clone();
+                    *self.get_mut(&y).unwrap() = grandparent;
+                    y.clone_from(&self[&y]);
+                }
+                *self.get_mut(x).unwrap() = y;
+            }
+            Some(&self[x])
+        }
+    }
+
+    fn union(&mut self, x: &T, y: &T) {
+        match (self.find(x).is_some(), self.find(y).is_some()) {
+            (true, true) => {
+                if self[x] != self[y] {
+                    let root_x = self[x].clone();
+                    let root_y = self[y].clone();
+                    self.insert(root_x, root_y);
+                }
+            }
+            (false, true) => {
+                self.insert(x.clone(), self[y].clone());
+            }
+            (true, false) => {
+                self.insert(y.clone(), self[x].clone());
+            }
+            (false, false) => {
+                self.insert(x.clone(), x.clone());
+                self.insert(y.clone(), x.clone());
+            }
+        }
     }
 }
