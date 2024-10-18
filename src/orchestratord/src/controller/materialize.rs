@@ -14,19 +14,12 @@ use std::{
 };
 
 use http::HeaderValue;
-use k8s_openapi::{
-    api::core::v1::Namespace,
-    apimachinery::pkg::apis::meta::v1::{Condition, Time},
-};
-use kube::{
-    api::{ObjectMeta, PostParams},
-    runtime::controller::Action,
-    Api, Client, Resource, ResourceExt,
-};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+use kube::{api::PostParams, runtime::controller::Action, Api, Client, Resource, ResourceExt};
 use serde_json::json;
 use tracing::{debug, trace};
 
-use crate::{k8s::apply_resource, metrics::Metrics};
+use crate::metrics::Metrics;
 use mz_cloud_resources::crd::materialize::v1alpha1::{Materialize, MaterializeStatus};
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cast::CastFrom;
@@ -265,18 +258,7 @@ impl k8s_controller::Context for Context {
         client: Client,
         mz: &Self::Resource,
     ) -> Result<Option<Action>, Self::Error> {
-        let namespace_api: Api<Namespace> = Api::all(client.clone());
-        let mz_api: Api<Materialize> = Api::all(client.clone());
-
-        let namespace = Namespace {
-            metadata: ObjectMeta {
-                namespace: None,
-                ..mz.managed_resource_meta(mz.namespace())
-            },
-            ..Default::default()
-        };
-        trace!("creating namespace");
-        apply_resource(&namespace_api, &namespace).await?;
+        let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
 
         if self.config.manage_cockroach_database {
             trace!("ensuring cockroach database is created");
