@@ -9,7 +9,7 @@
 
 mod copy_to_s3_oneshot;
 mod correction;
-mod persist_sink;
+mod materialized_view;
 mod refresh;
 mod subscribe;
 

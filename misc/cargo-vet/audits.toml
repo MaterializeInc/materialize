@@ -807,7 +807,7 @@ version = "0.19.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 [[audits.postgres]]
 who = "Petros Angelatos <petrosagg@gmail.com>"
 criteria = "safe-to-deploy"
-version = "0.19.8@git:08105f5fa38ca63ec12efc2920693300ed31bd35"
+version = "0.19.8@git:548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 importable = false
 
 [[audits.postgres-openssl]]
@@ -818,7 +818,7 @@ version = "0.5.0@git:02336bebb28507665184c21566e5d1dc8de1dd7d"
 [[audits.postgres-openssl]]
 who = "Petros Angelatos <petrosagg@gmail.com>"
 criteria = "safe-to-deploy"
-version = "0.5.0@git:08105f5fa38ca63ec12efc2920693300ed31bd35"
+version = "0.5.0@git:548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 importable = false
 
 [[audits.postgres-openssl]]
@@ -839,7 +839,7 @@ version = "0.6.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 [[audits.postgres-protocol]]
 who = "Petros Angelatos <petrosagg@gmail.com>"
 criteria = "safe-to-deploy"
-version = "0.6.7@git:08105f5fa38ca63ec12efc2920693300ed31bd35"
+version = "0.6.7@git:548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 importable = false
 
 [[audits.postgres-types]]
@@ -855,7 +855,7 @@ version = "0.2.5@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 [[audits.postgres-types]]
 who = "Petros Angelatos <petrosagg@gmail.com>"
 criteria = "safe-to-deploy"
-version = "0.2.7@git:08105f5fa38ca63ec12efc2920693300ed31bd35"
+version = "0.2.7@git:548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 importable = false
 
 [[audits.pprof_util]]
@@ -1267,7 +1267,7 @@ version = "0.7.8@git:91522e47643ebb6d6a5e392957b2319e5bb522ad"
 [[audits.tokio-postgres]]
 who = "Petros Angelatos <petrosagg@gmail.com>"
 criteria = "safe-to-deploy"
-version = "0.7.11@git:08105f5fa38ca63ec12efc2920693300ed31bd35"
+version = "0.7.11@git:548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 importable = false
 
 [[audits.tokio-tungstenite]]

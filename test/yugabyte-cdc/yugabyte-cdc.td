@@ -576,7 +576,7 @@ hint: The similarly named column "pk_table.f2" does exist.
   FOR TABLES (
     "enum_table"
   );
-contains: invalid TEXT COLUMNS option value: reference to table_dne not found in source
+contains: reference to table_dne not found in source
 
 # Reference exists in two schemas, so is not unambiguous
 ! CREATE SOURCE enum_source
@@ -589,7 +589,7 @@ contains: invalid TEXT COLUMNS option value: reference to table_dne not found in
     conflict_schema.another_enum_table AS conflict_enum,
     public.another_enum_table AS public_enum
   );
-contains: invalid TEXT COLUMNS option value: reference to another_enum_table is ambiguous, consider specifying an additional layer of qualification
+contains: reference another_enum_table is ambiguous, consider specifying an additional layer of qualification
 
 ! CREATE SOURCE enum_source
   IN CLUSTER cdc_cluster
@@ -598,7 +598,7 @@ contains: invalid TEXT COLUMNS option value: reference to another_enum_table is 
     TEXT COLUMNS [foo]
   )
   FOR TABLES (pk_table);
-contains: invalid TEXT COLUMNS option value: column name 'foo' must have at least a table qualification
+contains: column name 'foo' must have at least a table qualification
 
 ! CREATE SOURCE enum_source
   IN CLUSTER cdc_cluster
@@ -607,7 +607,7 @@ contains: invalid TEXT COLUMNS option value: column name 'foo' must have at leas
     TEXT COLUMNS [foo.bar.qux.qax.foo]
   )
   FOR TABLES (pk_table);
-contains: invalid TEXT COLUMNS option value: reference to foo.bar.qux.qax not found in source
+contains: reference to foo.bar.qux.qax not found in source
 
 ! CREATE SOURCE enum_source
   IN CLUSTER cdc_cluster
@@ -616,7 +616,7 @@ contains: invalid TEXT COLUMNS option value: reference to foo.bar.qux.qax not fo
     TEXT COLUMNS [enum_table.a, enum_table.a]
   )
   FOR TABLES (enum_table);
-contains: invalid TEXT COLUMNS option value: unexpected multiple references to yugabyte.public.enum_table.a
+contains: unexpected multiple references to yugabyte.public.enum_table.a
 
 # utf8_table is not part of mz_source_narrow publication
 ! CREATE SOURCE enum_source
@@ -626,7 +626,7 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to y
     TEXT COLUMNS [enum_table.a, utf8_table.f1]
   )
   FOR TABLES (enum_table);
-contains: invalid TEXT COLUMNS option value: reference to utf8_table not found in source
+contains: reference to utf8_table not found in source
 
 # n.b includes a reference to pk_table, which is not a table that's part of the
 # source, but is part of the publication.

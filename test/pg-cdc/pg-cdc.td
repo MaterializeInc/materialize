@@ -46,7 +46,7 @@ INSERT INTO pk_table VALUES (2, 'two');
 
 INSERT INTO pk_table VALUES (3, 'three');
 
-CREATE TABLE nonpk_table (f1 INTEGER, f2 INTEGER);
+CREATE TABLE nonpk_table (f1 INTEGER, f2 INTEGER, f3 INTEGER GENERATED ALWAYS AS (f1 * 2) STORED);
 INSERT INTO nonpk_table VALUES (1, 1), (1, 1);
 ALTER TABLE nonpk_table REPLICA IDENTITY FULL;
 INSERT INTO nonpk_table VALUES (2, 2), (2, 2);

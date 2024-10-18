@@ -4344,7 +4344,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.121.0-dev.0"
+version = "0.122.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4482,7 +4482,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.121.0-dev.0"
+version = "0.122.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4637,7 +4637,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.121.0-dev.0"
+version = "0.122.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4893,7 +4893,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.121.0-dev.0"
+version = "0.122.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -5393,6 +5393,7 @@ dependencies = [
  "fancy-regex",
  "indexmap 1.9.1",
  "itertools 0.10.5",
+ "maplit",
  "mysql_async",
  "mysql_common",
  "mz-build-tools",
@@ -5690,7 +5691,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.121.0-dev.0"
+version = "0.122.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.4",
@@ -6777,7 +6778,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.121.0-dev.0"
+version = "0.122.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -7791,7 +7792,7 @@ checksum = "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0"
 [[package]]
 name = "postgres"
 version = "0.19.8"
-source = "git+https://github.com/MaterializeInc/rust-postgres#08105f5fa38ca63ec12efc2920693300ed31bd35"
+source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -7804,7 +7805,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres#08105f5fa38ca63ec12efc2920693300ed31bd35"
+source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 dependencies = [
  "openssl",
  "tokio",
@@ -7815,7 +7816,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#08105f5fa38ca63ec12efc2920693300ed31bd35"
+source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 dependencies = [
  "base64 0.22.0",
  "byteorder",
@@ -7832,7 +7833,7 @@ dependencies = [
 [[package]]
 name = "postgres-replication"
 version = "0.6.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#08105f5fa38ca63ec12efc2920693300ed31bd35"
+source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 dependencies = [
  "byteorder",
  "bytes",
@@ -7847,7 +7848,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#08105f5fa38ca63ec12efc2920693300ed31bd35"
+source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 dependencies = [
  "bytes",
  "chrono",
@@ -9929,7 +9930,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.11"
-source = "git+https://github.com/MaterializeInc/rust-postgres#08105f5fa38ca63ec12efc2920693300ed31bd35"
+source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 dependencies = [
  "async-trait",
  "byteorder",

@@ -29,7 +29,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mz_compute_types::plan::Plan;
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection,
+};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
 use mz_repr::refresh_schedule::RefreshSchedule;
@@ -242,7 +244,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
         let sink_description = ComputeSinkDesc {
             from: self.view_id,
             from_desc: rel_desc.clone(),
-            connection: ComputeSinkConnection::Persist(PersistSinkConnection {
+            connection: ComputeSinkConnection::MaterializedView(MaterializedViewSinkConnection {
                 value_desc: rel_desc,
                 storage_metadata: (),
             }),

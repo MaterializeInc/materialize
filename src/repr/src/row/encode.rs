@@ -12,7 +12,6 @@
 //! See row.proto for details.
 
 use std::fmt::Debug;
-use std::io::Cursor;
 use std::ops::AddAssign;
 use std::sync::Arc;
 
@@ -26,7 +25,7 @@ use arrow::array::{
     UInt8Builder,
 };
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::datatypes::{DataType, Field, Fields, ToByteSlice};
 use bytes::{BufMut, Bytes};
 use chrono::Timelike;
 use dec::{Context, Decimal, OrderedDecimal};
@@ -93,6 +92,10 @@ struct DatumEncoder {
 }
 
 impl DatumEncoder {
+    fn goodbytes(&self) -> usize {
+        self.encoder.goodbytes()
+    }
+
     fn push(&mut self, datum: Datum) {
         assert!(
             !datum.is_null() || self.nullable,
@@ -157,7 +160,7 @@ enum DatumColumnEncoder {
         /// Monotonically increasing offsets of each encoded segment.
         offsets: Vec<i32>,
         /// Buffer that contains UTF-8 encoded JSON.
-        buf: Cursor<Vec<u8>>,
+        buf: Vec<u8>,
         /// Null entries, if any.
         nulls: Option<BooleanBufferBuilder>,
     },
@@ -205,6 +208,51 @@ enum DatumColumnEncoder {
 }
 
 impl DatumColumnEncoder {
+    fn goodbytes(&self) -> usize {
+        match self {
+            DatumColumnEncoder::Bool(a) => a.len(),
+            DatumColumnEncoder::U8(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::U16(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::U32(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::U64(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::I16(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::I32(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::I64(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::F32(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::F64(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::Numeric {
+                binary_values,
+                approx_values,
+                ..
+            } => {
+                binary_values.values_slice().len()
+                    + approx_values.values_slice().to_byte_slice().len()
+            }
+            DatumColumnEncoder::Bytes(a) => a.values_slice().len(),
+            DatumColumnEncoder::String(a) => a.values_slice().len(),
+            DatumColumnEncoder::Date(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::Time(a) => a.len() * PackedNaiveTime::SIZE,
+            DatumColumnEncoder::Timestamp(a) => a.len() * PackedNaiveDateTime::SIZE,
+            DatumColumnEncoder::TimestampTz(a) => a.len() * PackedNaiveDateTime::SIZE,
+            DatumColumnEncoder::MzTimestamp(a) => a.values_slice().to_byte_slice().len(),
+            DatumColumnEncoder::Interval(a) => a.len() * PackedInterval::SIZE,
+            DatumColumnEncoder::Uuid(a) => a.len() * size_of::<Uuid>(),
+            DatumColumnEncoder::AclItem(a) => a.len() * PackedAclItem::SIZE,
+            DatumColumnEncoder::MzAclItem(a) => a.values_slice().len(),
+            DatumColumnEncoder::Range(a) => a.values_slice().len(),
+            DatumColumnEncoder::Jsonb { buf, .. } => buf.len(),
+            DatumColumnEncoder::Array { dims, vals, .. } => {
+                dims.len() * PackedArrayDimension::SIZE + vals.goodbytes()
+            }
+            DatumColumnEncoder::List { values, .. } => values.goodbytes(),
+            DatumColumnEncoder::Map { keys, vals, .. } => {
+                keys.values_slice().len() + vals.goodbytes()
+            }
+            DatumColumnEncoder::Record { fields, .. } => fields.iter().map(|f| f.goodbytes()).sum(),
+            DatumColumnEncoder::RecordEmpty(a) => a.len(),
+        }
+    }
+
     fn push<'e, 'd>(&'e mut self, datum: Datum<'d>) {
         match (self, datum) {
             (DatumColumnEncoder::Bool(bool_builder), Datum::True) => {
@@ -314,10 +362,7 @@ impl DatumColumnEncoder {
                 // Serialize our JSON.
                 json.to_writer(&mut buf)
                     .expect("failed to serialize Datum to jsonb");
-                let offset: i32 = buf
-                    .position()
-                    .try_into()
-                    .expect("wrote more than 4GB of JSON");
+                let offset: i32 = buf.len().try_into().expect("wrote more than 4GB of JSON");
                 offsets.push(offset);
 
                 if let Some(nulls) = nulls {
@@ -647,7 +692,7 @@ impl DatumColumnEncoder {
                 buf,
                 mut nulls,
             } => {
-                let values = Buffer::from_vec(buf.into_inner());
+                let values = Buffer::from_vec(buf);
                 let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
                 let nulls = nulls.as_mut().map(|n| NullBuffer::from(n.finish()));
                 let array = StringArray::new(offsets, values, nulls);
@@ -1280,6 +1325,10 @@ impl RowColumnarEncoder {
 impl ColumnEncoder<Row> for RowColumnarEncoder {
     type FinishedColumn = StructArray;
 
+    fn goodbytes(&self) -> usize {
+        self.encoders.iter().map(|e| e.goodbytes()).sum()
+    }
+
     fn append(&mut self, val: &Row) {
         let mut num_datums = 0;
         for (datum, encoder) in val.iter().zip(self.encoders.iter_mut()) {
@@ -1610,7 +1659,7 @@ fn scalar_type_to_encoder(col_ty: &ScalarType) -> Result<DatumColumnEncoder, any
         ScalarType::Range { .. } => DatumColumnEncoder::Range(BinaryBuilder::new()),
         ScalarType::Jsonb => DatumColumnEncoder::Jsonb {
             offsets: vec![0],
-            buf: Cursor::new(Vec::new()),
+            buf: Vec::new(),
             nulls: None,
         },
         s @ ScalarType::Array(_) | s @ ScalarType::Int2Vector => {

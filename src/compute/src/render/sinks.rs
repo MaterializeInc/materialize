@@ -129,9 +129,11 @@ where
 
         let region_name = match sink.connection {
             ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
-            ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),
+            ComputeSinkConnection::MaterializedView(_) => {
+                format!("MaterializedViewSink({:?})", sink_id)
+            }
             ComputeSinkConnection::ContinualTask(_) => {
-                format!("ContinualTask({:?})", sink_id)
+                format!("ContinualTaskSink({:?})", sink_id)
             }
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 format!("CopyToS3OneshotSink({:?})", sink_id)
@@ -192,7 +194,7 @@ where
 {
     match connection {
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
-        ComputeSinkConnection::Persist(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::MaterializedView(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::ContinualTask(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::CopyToS3Oneshot(connection) => Box::new(connection.clone()),
     }

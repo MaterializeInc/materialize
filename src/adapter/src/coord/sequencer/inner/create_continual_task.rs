@@ -15,7 +15,7 @@ use mz_catalog::memory::objects::{
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{
-    ComputeSinkConnection, ContinualTaskConnection, PersistSinkConnection,
+    ComputeSinkConnection, ContinualTaskConnection, MaterializedViewSinkConnection,
 };
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::collections::CollectionExt;
@@ -209,8 +209,9 @@ impl Coordinator {
         // configuration for this.
         for sink in physical_plan.sink_exports.values_mut() {
             match &mut sink.connection {
-                ComputeSinkConnection::Persist(PersistSinkConnection {
-                    storage_metadata, ..
+                ComputeSinkConnection::MaterializedView(MaterializedViewSinkConnection {
+                    storage_metadata,
+                    ..
                 }) => {
                     sink.connection =
                         ComputeSinkConnection::ContinualTask(ContinualTaskConnection {

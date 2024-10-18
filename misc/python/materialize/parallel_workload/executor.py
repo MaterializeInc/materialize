@@ -142,7 +142,7 @@ class Executor:
                         raise QueryError(str(e), query)
                 else:
                     try:
-                        if query == "commit":
+                        if query == "commit;":
                             self.log("commit")
                             self.cur.connection.commit()
                         else:

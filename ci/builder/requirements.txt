@@ -33,8 +33,8 @@ pandas-stubs==2.1.1.230928
 parameterized==0.8.1
 paramiko==3.4.1
 pdoc==14.6.0
-# We can revert back to standard pg800 versions once https://github.com/tlocke/pg8000/pull/161 merges
-pg8000 @ git+https://github.com/benesch/pg8000@0e7d1fbe02bd47958f9cf0cf132d6d08fbcca18e
+# We can revert back to standard pg8000 versions once https://github.com/tlocke/pg8000/pull/161 is released
+pg8000@git+https://github.com/tlocke/pg8000@46c00021ade1d19466b07ed30392386c5f0a6b8e
 prettytable==3.11.0
 psutil==5.9.4
 psycopg==3.2.3

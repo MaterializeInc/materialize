@@ -71,3 +71,32 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Create the name of the cluster role to use
+*/}}
+{{- define "materialize-operator.clusterRoleName" -}}
+{{- if .Values.rbac.clusterRole.create }}
+{{- default (include "materialize-operator.fullname" .) .Values.rbac.clusterRole.name }}
+{{- else }}
+{{- default "default" .Values.rbac.clusterRole.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create the name of the cluster role binding to use
+*/}}
+{{- define "materialize-operator.clusterRoleBindingName" -}}
+{{- if .Values.rbac.clusterRoleBinding.create }}
+{{- default (include "materialize-operator.fullname" .) .Values.rbac.clusterRoleBinding.name }}
+{{- else }}
+{{- default "default" .Values.rbac.clusterRoleBinding.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create the Metadata database connection string
+*/}}
+{{- define "materialize-operator.metadatadbConnectionString" -}}
+postgresql://{{ .Values.metadatadb.username }}:{{ .Values.metadatadb.password }}@{{ .Values.metadatadb.endpoint }}:{{ .Values.metadatadb.port }}/defaultdb?sslmode=verify-full&sslrootcert=/metadata/metadata-certs/ca.crt
+{{- end }}

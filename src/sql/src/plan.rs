@@ -635,7 +635,7 @@ pub struct CreateSourcePlan {
     pub in_cluster: Option<ClusterId>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceReferences {
     pub updated_at: u64,
     pub references: Vec<SourceReference>,
@@ -643,7 +643,7 @@ pub struct SourceReferences {
 
 /// An available external reference for a source and if possible to retrieve,
 /// any column names it contains.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceReference {
     pub name: String,
     pub namespace: Option<String>,

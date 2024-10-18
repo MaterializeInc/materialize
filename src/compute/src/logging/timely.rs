@@ -317,10 +317,10 @@ struct DemuxState {
     dataflow_channels: BTreeMap<usize, Vec<ChannelsEvent>>,
     /// Information about the last requested park.
     last_park: Option<Park>,
-    /// Maps channel IDs to vectors counting the messages sent to each target worker.
-    messages_sent: BTreeMap<usize, Vec<MessageCount>>,
-    /// Maps channel IDs to vectors counting the messages received from each source worker.
-    messages_received: BTreeMap<usize, Vec<MessageCount>>,
+    /// Maps channel IDs to boxed slices counting the messages sent to each target worker.
+    messages_sent: BTreeMap<usize, Box<[MessageCount]>>,
+    /// Maps channel IDs to boxed slices counting the messages received from each source worker.
+    messages_received: BTreeMap<usize, Box<[MessageCount]>>,
     /// Stores for scheduled operators the time when they were scheduled.
     schedule_starts: BTreeMap<usize, Duration>,
     /// Maps operator IDs to a vector recording the (count, elapsed_ns) values in each histogram
@@ -631,7 +631,7 @@ impl DemuxHandler<'_, '_> {
                 .state
                 .messages_sent
                 .entry(event.channel)
-                .or_insert_with(|| vec![Default::default(); self.peers]);
+                .or_insert_with(|| vec![Default::default(); self.peers].into_boxed_slice());
             sent_counts[event.target].records += count;
             sent_counts[event.target].batches += 1;
         } else {
@@ -646,7 +646,7 @@ impl DemuxHandler<'_, '_> {
                 .state
                 .messages_received
                 .entry(event.channel)
-                .or_insert_with(|| vec![Default::default(); self.peers]);
+                .or_insert_with(|| vec![Default::default(); self.peers].into_boxed_slice());
             received_counts[event.source].records += count;
             received_counts[event.source].batches += 1;
         }

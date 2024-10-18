@@ -139,7 +139,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 20
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: linux-aarch64-small
         coverage: skip
         sanitizer: skip
 

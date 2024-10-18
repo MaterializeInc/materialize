@@ -1420,7 +1420,7 @@ pub trait ExternalCatalogReference {
     fn item_name(&self) -> &str;
 }
 
-impl ExternalCatalogReference for mz_mysql_util::MySqlTableDesc {
+impl ExternalCatalogReference for &mz_mysql_util::MySqlTableDesc {
     fn schema_name(&self) -> &str {
         &self.schema_name
     }
@@ -1469,7 +1469,7 @@ pub enum ExternalReferenceResolutionError {
     #[error("reference to {name} not found in source")]
     DoesNotExist { name: String },
     #[error(
-        "reference to {name} is ambiguous, consider specifying an additional \
+        "reference {name} is ambiguous, consider specifying an additional \
     layer of qualification"
     )]
     Ambiguous { name: String },
@@ -1813,6 +1813,13 @@ pub enum SourceDataRowColumnarEncoder {
 }
 
 impl SourceDataRowColumnarEncoder {
+    pub(crate) fn goodbytes(&self) -> usize {
+        match self {
+            SourceDataRowColumnarEncoder::Row(e) => e.goodbytes(),
+            SourceDataRowColumnarEncoder::EmptyRow => 0,
+        }
+    }
+
     pub fn append(&mut self, row: &Row) {
         match self {
             SourceDataRowColumnarEncoder::Row(encoder) => encoder.append(row),
@@ -1859,6 +1866,10 @@ impl SourceDataColumnarEncoder {
 
 impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
     type FinishedColumn = StructArray;
+
+    fn goodbytes(&self) -> usize {
+        self.row_encoder.goodbytes() + self.err_encoder.values_slice().len()
+    }
 
     #[inline]
     fn append(&mut self, val: &SourceData) {

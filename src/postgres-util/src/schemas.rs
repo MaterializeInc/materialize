@@ -69,27 +69,61 @@ pub async fn publication_info(
     for row in tables {
         let oid = row.get("oid");
 
-        let columns = client
-            .query(
-                "SELECT
-                        a.attname AS name,
-                        a.atttypid AS typoid,
-                        a.attnum AS colnum,
-                        a.atttypmod AS typmod,
-                        a.attnotnull AS not_null,
-                        b.oid IS NOT NULL AS primary_key
-                    FROM pg_catalog.pg_attribute a
-                    LEFT JOIN pg_catalog.pg_constraint b
-                        ON a.attrelid = b.conrelid
-                        AND b.contype = 'p'
-                        AND a.attnum = ANY (b.conkey)
-                    WHERE a.attnum > 0::pg_catalog.int2
-                        AND NOT a.attisdropped
-                        AND a.attrelid = $1
-                    ORDER BY a.attnum",
-                &[&oid],
-            )
-            .await
+        // The Postgres replication protocol does not support GENERATED columns
+        // so we exclude them from this query. But not all Postgres-like
+        // databases have the `pg_attribute.attgenerated` column, so we maintain
+        // two different versions of the query.
+        let pg_columns_check_generated = "
+        SELECT
+            a.attname AS name,
+            a.atttypid AS typoid,
+            a.attnum AS colnum,
+            a.atttypmod AS typmod,
+            a.attnotnull AS not_null,
+            b.oid IS NOT NULL AS primary_key
+        FROM pg_catalog.pg_attribute a
+        LEFT JOIN pg_catalog.pg_constraint b
+            ON a.attrelid = b.conrelid
+            AND b.contype = 'p'
+            AND a.attnum = ANY (b.conkey)
+        WHERE a.attnum > 0::pg_catalog.int2
+            AND NOT a.attisdropped
+            AND a.attgenerated = ''
+            AND a.attrelid = $1
+        ORDER BY a.attnum";
+
+        let pg_columns_no_check_generated = "
+        SELECT
+            a.attname AS name,
+            a.atttypid AS typoid,
+            a.attnum AS colnum,
+            a.atttypmod AS typmod,
+            a.attnotnull AS not_null,
+            b.oid IS NOT NULL AS primary_key
+        FROM pg_catalog.pg_attribute a
+        LEFT JOIN pg_catalog.pg_constraint b
+            ON a.attrelid = b.conrelid
+            AND b.contype = 'p'
+            AND a.attnum = ANY (b.conkey)
+        WHERE a.attnum > 0::pg_catalog.int2
+            AND NOT a.attisdropped
+            AND a.attrelid = $1
+        ORDER BY a.attnum";
+
+        let columns_result = match client.query(pg_columns_check_generated, &[&oid]).await {
+            Ok(result) => Ok(result),
+            // Not all Postgres-like databases have the `attgenerated` column
+            // so issue a second query without the check if so.
+            Err(e)
+                if e.to_string()
+                    .contains("column a.attgenerated does not exist") =>
+            {
+                client.query(pg_columns_no_check_generated, &[&oid]).await
+            }
+            other => other,
+        };
+
+        let columns = columns_result
             .map_err(PostgresError::from)?
             .into_iter()
             .map(|row| {

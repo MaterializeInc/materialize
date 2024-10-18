@@ -53,19 +53,18 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::{Connection, PostgresConnection};
 use mz_storage_types::errors::ContextCreationError;
-use mz_storage_types::sources::load_generator::{
-    LoadGeneratorOutput, LOAD_GENERATOR_DATABASE_NAME,
-};
+use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    ExternalCatalogReference, GenericSourceConnection, PostgresSourceConnection, SourceConnection,
-    SourceExportStatementDetails, SourceReferenceResolver,
+    GenericSourceConnection, PostgresSourceConnection, SourceConnection,
+    SourceExportStatementDetails,
 };
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
 use rdkafka::admin::AdminClient;
+use references::{RetrievedSourceReferences, SourceReferenceClient};
 use uuid::Uuid;
 
 use crate::ast::{
@@ -81,7 +80,7 @@ use crate::names::{
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
-use crate::plan::StatementContext;
+use crate::plan::{SourceReferences, StatementContext};
 use crate::session::vars;
 use crate::{kafka_util, normalize};
 
@@ -93,59 +92,22 @@ use self::error::{
 pub(crate) mod error;
 pub mod mysql;
 pub mod postgres;
+mod references;
 
-pub(crate) struct RequestedSourceExport<'a, T> {
+pub(crate) struct RequestedSourceExport<T> {
     external_reference: UnresolvedItemName,
     name: UnresolvedItemName,
-    table: &'a T,
+    meta: T,
 }
 
-/// Generates appropriate source exports for a set of external references to export from a source.
-fn source_export_gen<'a, T: ExternalCatalogReference>(
-    selected_references: &'a [ExternalReferenceExport],
-    resolver: &SourceReferenceResolver,
-    references: &'a [T],
-    canonical_width: usize,
-    source_name: &UnresolvedItemName,
-) -> Result<Vec<RequestedSourceExport<'a, T>>, PlanError> {
-    let mut validated_exports = vec![];
-
-    for reference in selected_references {
-        let name = match &reference.alias {
-            Some(name) => {
-                let partial = normalize::unresolved_item_name(name.clone())?;
-                match partial.schema {
-                    Some(_) => name.clone(),
-                    // In cases when a prefix is not provided for the deferred name
-                    // fallback to using the schema of the source with the given name
-                    None => source_export_name_gen(source_name, &partial.item)?,
-                }
-            }
-            None => {
-                // Use the entered name as the upstream reference, and then use
-                // the item as the subsource name to ensure it's created in the
-                // current schema or the source's schema if provided, not mirroring
-                // the schema of the reference.
-                source_export_name_gen(
-                    source_name,
-                    &normalize::unresolved_item_name(reference.reference.clone())?.item,
-                )?
-            }
-        };
-
-        let (external_reference, idx) =
-            resolver.resolve(&reference.reference.0, canonical_width)?;
-
-        let table = &references[idx];
-
-        validated_exports.push(RequestedSourceExport {
-            external_reference,
-            name,
-            table,
-        });
+impl<T> RequestedSourceExport<T> {
+    fn change_meta<F>(self, new_meta: F) -> RequestedSourceExport<F> {
+        RequestedSourceExport {
+            external_reference: self.external_reference,
+            name: self.name,
+            meta: new_meta,
+        }
     }
-
-    Ok(validated_exports)
 }
 
 /// Generates a subsource name by prepending source schema name if present
@@ -154,13 +116,14 @@ fn source_export_gen<'a, T: ExternalCatalogReference>(
 /// so that it's generated in the same schema as source
 fn source_export_name_gen(
     source_name: &UnresolvedItemName,
-    subsource_name: &String,
+    subsource_name: &str,
 ) -> Result<UnresolvedItemName, PlanError> {
     let mut partial = normalize::unresolved_item_name(source_name.clone())?;
     partial.item = subsource_name.to_string();
     Ok(UnresolvedItemName::from(partial))
 }
 
+// TODO(database-issues#8620): Remove once subsources are removed
 /// Validates the requested subsources do not have name conflicts with each other
 /// and that the same upstream table is not referenced multiple times.
 fn validate_source_export_names<T>(
@@ -233,6 +196,9 @@ pub enum PurifiedStatement {
         create_source_stmt: CreateSourceStatement<Aug>,
         // Map of subsource names to external details
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
+        /// All the available upstream references that can be added as tables
+        /// to this primary source.
+        available_source_references: SourceReferences,
     },
     PurifiedAlterSource {
         alter_source_stmt: AlterSourceStatement<Aug>,
@@ -669,6 +635,8 @@ async fn purify_create_source(
 
     let mut format_options = SourceFormatOptions::Default;
 
+    let retrieved_source_references: RetrievedSourceReferences;
+
     match source_connection {
         CreateSourceConnection::Kafka {
             connection,
@@ -780,6 +748,9 @@ async fn purify_create_source(
                 }
             }
 
+            let reference_client = SourceReferenceClient::Kafka { topic: &topic };
+            retrieved_source_references = reference_client.get_source_references().await?;
+
             format_options = SourceFormatOptions::Kafka { topic };
         }
         source_connection @ CreateSourceConnection::Postgres { .. }
@@ -878,14 +849,20 @@ async fn purify_create_source(
                 Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 2 })?;
             }
 
+            let reference_client = SourceReferenceClient::Postgres {
+                client: &client,
+                publication: &publication,
+                database: &connection.database,
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+
             let postgres::PurifiedSourceExports {
                 source_exports: subsources,
                 normalized_text_columns,
             } = postgres::purify_source_exports(
                 &client,
                 &config,
-                &publication,
-                &connection,
+                &retrieved_source_references,
                 external_references,
                 text_columns,
                 source_name,
@@ -1002,12 +979,19 @@ async fn purify_create_source(
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
+            let reference_client = SourceReferenceClient::MySql {
+                conn: &mut conn,
+                include_system_schemas: mysql::references_system_schemas(external_references),
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+
             let mysql::PurifiedSourceExports {
                 source_exports: subsources,
                 normalized_text_columns,
                 normalized_exclude_columns,
             } = mysql::purify_source_exports(
                 &mut conn,
+                &retrieved_source_references,
                 external_references,
                 text_columns,
                 exclude_columns,
@@ -1046,44 +1030,57 @@ async fn purify_create_source(
             }
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            let (_load_generator, available_subsources) =
+            let load_generator =
                 load_generator_ast_to_generator(&scx, generator, options, include_metadata)?;
 
+            let reference_client = SourceReferenceClient::LoadGenerator {
+                generator: &load_generator,
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+            // Filter to the references that need to be created as 'subsources', which
+            // doesn't include the default output for single-output sources.
+            // TODO(database-issues#8620): Remove once subsources are removed
+            let subsource_references = retrieved_source_references
+                .all_references()
+                .iter()
+                .filter(|r| {
+                    r.load_generator_output().expect("is loadgen") != &LoadGeneratorOutput::Default
+                })
+                .collect::<Vec<_>>();
+
             match external_references {
-                Some(ExternalReferences::All) => {
-                    let available_subsources = match available_subsources {
-                        Some(available_subsources) => available_subsources,
-                        None => Err(LoadGeneratorSourcePurificationError::ForAllTables)?,
-                    };
-                    for (name, (desc, output)) in available_subsources {
-                        let subsource_name = source_export_name_gen(source_name, &name.item)?;
-                        let external_reference = UnresolvedItemName::from(name);
+                Some(requested) => {
+                    let requested_exports = retrieved_source_references
+                        .requested_source_exports(Some(requested), source_name)?;
+                    for export in requested_exports {
                         requested_subsource_map.insert(
-                            subsource_name,
+                            export.name,
                             PurifiedSourceExport {
-                                external_reference,
+                                external_reference: export.external_reference,
                                 details: PurifiedExportDetails::LoadGenerator {
-                                    table: Some(desc),
-                                    output,
+                                    table: export
+                                        .meta
+                                        .load_generator_desc()
+                                        .expect("is loadgen")
+                                        .clone(),
+                                    output: export
+                                        .meta
+                                        .load_generator_output()
+                                        .expect("is loadgen")
+                                        .clone(),
                                 },
                             },
                         );
                     }
                 }
-                Some(ExternalReferences::SubsetSchemas(..)) => {
-                    Err(LoadGeneratorSourcePurificationError::ForSchemas)?
-                }
-                Some(ExternalReferences::SubsetTables(_)) => {
-                    Err(LoadGeneratorSourcePurificationError::ForTables)?
-                }
                 None => {
                     if matches!(reference_policy, SourceReferencePolicy::Required)
-                        && available_subsources.is_some()
+                        && !subsource_references.is_empty()
                     {
                         Err(LoadGeneratorSourcePurificationError::MultiOutputRequiresForAllTables)?
                     }
                 }
-            };
+            }
 
             if let LoadGenerator::Clock = generator {
                 if !options
@@ -1170,9 +1167,11 @@ async fn purify_create_source(
         create_progress_subsource_stmt,
         create_source_stmt,
         subsources: requested_subsource_map,
+        available_source_references: retrieved_source_references.available_source_references(),
     })
 }
 
+// TODO(database-issues#8620): Remove once subsources are removed
 /// Equivalent to `purify_create_source` but for `AlterSourceStatement`.
 ///
 /// On success, returns the details on new subsources and updated
@@ -1301,14 +1300,20 @@ async fn purify_alter_source(
                 )
             }
 
+            let reference_client = SourceReferenceClient::Postgres {
+                client: &client,
+                publication: &pg_source_connection.publication,
+                database: &pg_connection.database,
+            };
+            let retrieved_source_references = reference_client.get_source_references().await?;
+
             let postgres::PurifiedSourceExports {
                 source_exports: subsources,
                 normalized_text_columns,
             } = postgres::purify_source_exports(
                 &client,
                 &config,
-                &pg_source_connection.publication,
-                pg_connection,
+                &retrieved_source_references,
                 &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
                 &unresolved_source_name,
@@ -1347,13 +1352,22 @@ async fn purify_alter_source(
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
+            let requested_references = Some(ExternalReferences::SubsetTables(external_references));
+
+            let reference_client = SourceReferenceClient::MySql {
+                conn: &mut conn,
+                include_system_schemas: mysql::references_system_schemas(&requested_references),
+            };
+            let retrieved_source_references = reference_client.get_source_references().await?;
+
             let mysql::PurifiedSourceExports {
                 source_exports: subsources,
                 normalized_text_columns,
                 normalized_exclude_columns,
             } = mysql::purify_source_exports(
                 &mut conn,
-                &Some(ExternalReferences::SubsetTables(external_references)),
+                &retrieved_source_references,
+                &requested_references,
                 text_columns,
                 exclude_columns,
                 &unresolved_source_name,
@@ -1471,28 +1485,19 @@ async fn purify_create_table_from_source(
     // Should be overriden below if a source-specific format is required.
     let mut format_options = SourceFormatOptions::Default;
 
+    let retrieved_source_references: RetrievedSourceReferences;
+
+    let requested_references = external_reference.as_ref().map(|ref_name| {
+        ExternalReferences::SubsetTables(vec![ExternalReferenceExport {
+            reference: ref_name.clone(),
+            alias: None,
+        }])
+    });
+
     // Run purification work specific to each source type: resolve the external reference to
     // a fully qualified name and obtain the appropriate details for the source-export statement
-    // NOTE that each source type has its own rules for how to resolve the external reference,
-    // and each source-type's fully-qualified external reference may be different. In Postgres
-    // a 3-layer reference is used (database, schema, table), whereas in MySQL only a 2-layer
-    // is used (schema, table), since databases == schemas. For load generator sources
-    // the reference is (schema, table) where schema defines the type of load-generator.
-    // When kafka is implemented, likely just the topic-name will be used.
     let purified_export = match desc.connection {
         GenericSourceConnection::Postgres(pg_source_connection) => {
-            let requested_reference = match external_reference {
-                // The requested external reference for this table which will be resolved below to a
-                // fully-qualified / normalized reference for each source type.
-                Some(reference) => ExternalReferenceExport {
-                    reference: reference.clone(),
-                    alias: None,
-                },
-                None => sql_bail!(
-                    "An external reference is required for {} sources",
-                    connection_name
-                ),
-            };
             // Get PostgresConnection for generating subsources.
             let pg_connection = &pg_source_connection.connection;
 
@@ -1528,18 +1533,24 @@ async fn purify_create_table_from_source(
                 )
             }
 
+            let reference_client = SourceReferenceClient::Postgres {
+                client: &client,
+                publication: &pg_source_connection.publication,
+                database: &pg_connection.database,
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+
             let postgres::PurifiedSourceExports {
                 source_exports,
+                // TODO(database-issues#8620): Remove once subsources are removed
                 // This `normalized_text_columns` is not relevant for us and is only returned for
-                // `CREATE SOURCE` statements that automatically generate subsources, and will be
-                // removed with that functionality in the future.
+                // `CREATE SOURCE` statements that automatically generate subsources
                 normalized_text_columns: _,
             } = postgres::purify_source_exports(
                 &client,
                 &config,
-                &pg_source_connection.publication,
-                pg_connection,
-                &Some(ExternalReferences::SubsetTables(vec![requested_reference])),
+                &retrieved_source_references,
+                &requested_references,
                 qualified_text_columns,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
@@ -1550,18 +1561,6 @@ async fn purify_create_table_from_source(
             purified_export
         }
         GenericSourceConnection::MySql(mysql_source_connection) => {
-            let requested_reference = match external_reference {
-                // The requested external reference for this table which will be resolved below to a
-                // fully-qualified / normalized reference for each source type.
-                Some(reference) => ExternalReferenceExport {
-                    reference: reference.clone(),
-                    alias: None,
-                },
-                None => sql_bail!(
-                    "An external reference is required for {} sources",
-                    connection_name
-                ),
-            };
             let mysql_connection = &mysql_source_connection.connection;
             let config = mysql_connection
                 .config(
@@ -1579,20 +1578,27 @@ async fn purify_create_table_from_source(
                 .await?;
 
             // Retrieve the current @gtid_executed value of the server to mark as the effective
-            // initial snapshot point for these subsources.
+            // initial snapshot point for this table.
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
+            let reference_client = SourceReferenceClient::MySql {
+                conn: &mut conn,
+                include_system_schemas: mysql::references_system_schemas(&requested_references),
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+
             let mysql::PurifiedSourceExports {
                 source_exports,
+                // TODO(database-issues#8620): Remove once subsources are removed
                 // `normalized_text/exclude_columns` is not relevant for us and is only returned for
-                // `CREATE SOURCE` statements that automatically generate subsources, and will be
-                // removed with that functionality in the future.
+                // `CREATE SOURCE` statements that automatically generate subsources
                 normalized_text_columns: _,
                 normalized_exclude_columns: _,
             } = mysql::purify_source_exports(
                 &mut conn,
-                &Some(ExternalReferences::SubsetTables(vec![requested_reference])),
+                &retrieved_source_references,
+                &requested_references,
                 qualified_text_columns,
                 qualified_exclude_columns,
                 &unresolved_source_name,
@@ -1605,84 +1611,46 @@ async fn purify_create_table_from_source(
             purified_export
         }
         GenericSourceConnection::LoadGenerator(load_gen_connection) => {
-            let mut views = load_gen_connection.load_generator.views();
-            if views.is_empty() {
-                // If there are no views then this load-generator just has a single output
-                // and the external reference specified in the statement should be the same
-                // as the load-generator's schema name or empty.
-                match external_reference {
-                    None => {}
-                    Some(reference) => {
-                        if reference.0.len() != 1
-                            || load_gen_connection.load_generator.schema_name()
-                                != reference.0.last().unwrap().as_str()
-                        {
-                            Err(LoadGeneratorSourcePurificationError::WrongLoadGenerator(
-                                load_gen_connection.load_generator.schema_name().to_string(),
-                                reference.clone(),
-                            ))?;
-                        }
-                    }
-                }
-                PurifiedSourceExport {
-                    external_reference: UnresolvedItemName(vec![Ident::new_unchecked(
-                        load_gen_connection.load_generator.schema_name(),
-                    )]),
-                    details: PurifiedExportDetails::LoadGenerator {
-                        table: None,
-                        output: LoadGeneratorOutput::Default,
-                    },
-                }
-            } else {
-                let external_reference = external_reference.as_ref().ok_or(
-                    LoadGeneratorSourcePurificationError::MultiOutputRequiresExternalReference,
-                )?;
-                // Resolve the desired view reference to a `schema_name.view_name` reference
-                let resolver = SourceReferenceResolver::new(
-                    LOAD_GENERATOR_DATABASE_NAME,
-                    &views
-                        .iter()
-                        .map(|(view_name, _, _)| {
-                            (load_gen_connection.load_generator.schema_name(), *view_name)
-                        })
-                        .collect_vec(),
-                )?;
-                let (qualified_reference, view_idx) = resolver.resolve(&external_reference.0, 2)?;
+            let reference_client = SourceReferenceClient::LoadGenerator {
+                generator: &load_gen_connection.load_generator,
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
 
-                let (_, table, output) = views.swap_remove(view_idx);
-                PurifiedSourceExport {
-                    external_reference: qualified_reference,
-                    details: PurifiedExportDetails::LoadGenerator {
-                        table: Some(table),
-                        output,
-                    },
-                }
+            let requested_exports = retrieved_source_references
+                .requested_source_exports(requested_references.as_ref(), &unresolved_source_name)?;
+            // There should be exactly one source_export returned
+            let export = requested_exports.into_iter().next().unwrap();
+            PurifiedSourceExport {
+                external_reference: export.external_reference,
+                details: PurifiedExportDetails::LoadGenerator {
+                    table: export
+                        .meta
+                        .load_generator_desc()
+                        .expect("is loadgen")
+                        .clone(),
+                    output: export
+                        .meta
+                        .load_generator_output()
+                        .expect("is loadgen")
+                        .clone(),
+                },
             }
         }
         GenericSourceConnection::Kafka(kafka_conn) => {
-            // Since Kafka sources have a single topic we validate that the specified
-            // external reference is either empty or the same as the Kafka topic
-            // on the referenced source connection.
-            match external_reference {
-                None => {}
-                Some(reference) => {
-                    if reference.0.len() != 1
-                        || &kafka_conn.topic != reference.0.last().unwrap().as_str()
-                    {
-                        Err(KafkaSourcePurificationError::WrongKafkaTopic(
-                            kafka_conn.topic.clone(),
-                            reference.clone(),
-                        ))?;
-                    }
-                }
-            }
+            let reference_client = SourceReferenceClient::Kafka {
+                topic: &kafka_conn.topic,
+            };
+            retrieved_source_references = reference_client.get_source_references().await?;
+            let requested_exports = retrieved_source_references
+                .requested_source_exports(requested_references.as_ref(), &unresolved_source_name)?;
+            // There should be exactly one source_export returned
+            let export = requested_exports.into_iter().next().unwrap();
+
             format_options = SourceFormatOptions::Kafka {
                 topic: kafka_conn.topic.clone(),
             };
             PurifiedSourceExport {
-                external_reference: UnresolvedItemName(vec![Ident::new_unchecked(
-                    &kafka_conn.topic,
-                )]),
+                external_reference: export.external_reference,
                 details: PurifiedExportDetails::Kafka {},
             }
         }
@@ -1847,6 +1815,9 @@ async fn purify_create_table_from_source(
         }
     };
 
+    // TODO: We might as well use the retrieved available references to update the source
+    // available references table in the catalog, so plumb this through.
+    // available_source_references: retrieved_source_references.available_source_references(),
     Ok(PurifiedStatement::PurifiedCreateTableFromSource { stmt })
 }
 

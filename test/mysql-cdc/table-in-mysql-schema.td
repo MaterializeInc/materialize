@@ -28,17 +28,18 @@ $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 DROP DATABASE IF EXISTS another_schema;
 USE mysql;
-
-# Insert data pre-snapshot
 CREATE TABLE t_in_mysql (f1 INT);
 INSERT INTO t_in_mysql VALUES (1), (2);
+CREATE DATABASE public;
+USE public;
+CREATE TABLE time_zone (f1 INT);
 
 > DROP SOURCE IF EXISTS mz_source;
 
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 ! CREATE TABLE timezone FROM SOURCE mz_source (REFERENCE public.timezone);
-contains:No tables found
+contains:reference to public.timezone not found in source
 
 > CREATE TABLE t_in_mysql FROM SOURCE mz_source (REFERENCE mysql.t_in_mysql);
 
@@ -54,4 +55,7 @@ contains:No tables found
 contains:referenced tables use unsupported types
 
 $ mysql-execute name=mysql
+USE mysql;
 DROP TABLE t_in_mysql;
+USE public;
+DROP TABLE time_zone;

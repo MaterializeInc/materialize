@@ -15,7 +15,6 @@ use std::time::Duration;
 use anyhow::bail;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
-use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
 use mz_ore::retry::Retry;
@@ -46,6 +45,8 @@ pub(super) struct ReplicaConfig {
     pub logging: LoggingConfig,
     pub arrangement_exert_proportionality: u32,
     pub grpc_client: GrpcClientParameters,
+    /// The offset to use for replica expiration, if any.
+    pub expiration_offset: Option<Duration>,
 }
 
 /// A client for a replica task.
@@ -80,8 +81,6 @@ where
         // the replica.
         let (command_tx, command_rx) = unbounded_channel();
 
-        let expiration_offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&dyncfg);
-
         let task = mz_ore::task::spawn(
             || format!("active-replication-replica-{id}"),
             ReplicaTask {
@@ -93,7 +92,6 @@ where
                 epoch,
                 metrics: metrics.clone(),
                 dyncfg,
-                expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
             }
             .run(),
         );
@@ -143,8 +141,6 @@ struct ReplicaTask<T> {
     metrics: ReplicaMetrics,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
-    /// The offset to use for replica expiration, if any.
-    expiration_offset: Option<Duration>,
 }
 
 impl<T> ReplicaTask<T>
@@ -278,7 +274,7 @@ where
                 expiration_offset,
             }) => {
                 *logging = self.config.logging.clone();
-                *expiration_offset = self.expiration_offset;
+                *expiration_offset = self.config.expiration_offset;
             }
             _ => {}
         }

@@ -654,14 +654,14 @@ class Composition:
         port: int | None = None,
         password: str | None = None,
         sslmode: str = "disable",
-        init_params: dict[str, str] = {},
+        startup_params: dict[str, str] = {},
     ) -> Connection:
         if service is None:
             service = "materialized"
 
         """Get a connection (with autocommit enabled) to the materialized service."""
         port = self.port(service, port) if port else self.default_port(service)
-        print(" ".join([f"-c {key}={val}" for key, val in init_params.items()]))
+        print(" ".join([f"-c {key}={val}" for key, val in startup_params.items()]))
         conn = psycopg.connect(
             host="localhost",
             dbname=database,
@@ -669,7 +669,9 @@ class Composition:
             password=password,
             port=port,
             sslmode=sslmode,
-            options=" ".join([f"-c {key}={val}" for key, val in init_params.items()]),
+            options=" ".join(
+                [f"-c {key}={val}" for key, val in startup_params.items()]
+            ),
         )
         conn.autocommit = True
         return conn
@@ -682,11 +684,11 @@ class Composition:
         port: int | None = None,
         password: str | None = None,
         sslmode: str = "disable",
-        init_params: dict[str, str] = {},
+        startup_params: dict[str, str] = {},
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
         conn = self.sql_connection(
-            service, user, database, port, password, sslmode, init_params
+            service, user, database, port, password, sslmode, startup_params
         )
         return conn.cursor()
 

@@ -55,7 +55,24 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 > SELECT count(*) FROM bids2
 255
 
+
+# Validate that the available source references table was correctly populated
+> SELECT u.name, u.namespace, u.columns
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_references u ON s.id = u.source_id
+  WHERE
+  s.name = 'auction_house'
+  ORDER BY u.name;
+accounts auction {id,org_id,balance}
+auctions auction {id,seller,item,end_time}
+bids auction {id,buyer,auction_id,amount,bid_time}
+organizations auction {id,name}
+users auction {id,org_id,name}
+
 > DROP SOURCE auction_house CASCADE;
+
+> SELECT count(*) FROM mz_internal.mz_source_references;
+0
 
 #
 # Single-output load generator source using source-fed tables
@@ -283,7 +300,6 @@ contains:unknown catalog item 'mysql_table_3'
 
 # TODO(def-) Remove when database-issues#8515 and database-issues#8526 are fixed
 $ skip-end
-
 
 #
 # Kafka source using source-fed tables

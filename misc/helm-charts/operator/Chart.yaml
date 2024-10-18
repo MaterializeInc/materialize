@@ -1,3 +1,4 @@
+---
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -14,3 +15,4 @@ type: application
 version: 0.1.0
 appVersion: "0.1.0"
 icon: https://materialize.com/favicon.ico
+home: https://materialize.com

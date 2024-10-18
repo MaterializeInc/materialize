@@ -25,6 +25,7 @@ import hashlib
 import os
 import subprocess
 import sys
+import traceback
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator
 from pathlib import Path
@@ -33,6 +34,7 @@ from typing import Any
 import yaml
 
 from materialize import mzbuild, spawn, ui
+from materialize.buildkite_insights.buildkite_api import generic_api
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
 from materialize.rustc_flags import Sanitizer
@@ -238,6 +240,8 @@ so it is executed.""",
 
     prioritize_pipeline(pipeline, args.priority)
 
+    switch_jobs_to_aws(pipeline, args.priority)
+
     permit_rerunning_successful_steps(pipeline)
 
     set_retry_on_agent_lost(pipeline)
@@ -329,6 +333,69 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
     for config in pipeline["steps"]:
         if "trigger" in config or "wait" in config:
             # Trigger and Wait steps do not allow priorities.
+            continue
+        if "group" in config:
+            for inner_config in config.get("steps", []):
+                visit(inner_config)
+            continue
+        visit(config)
+
+
+def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
+    """Switch jobs to AWS if Hetzner is currently overloaded"""
+
+    branch = os.getenv("BUILDKITE_BRANCH")
+
+    # If priority has manually been set to be low, or on main branch, we can
+    # wait for agents to become available
+    if branch == "main" or priority < 0:
+        return
+
+    # Consider Hetzner to be overloaded when at least 400 jobs exist with priority >= 0
+    try:
+        builds = generic_api.get_multiple(
+            "builds",
+            params={
+                "state[]": ["creating", "scheduled", "running", "failing", "canceling"],
+            },
+            max_fetches=None,
+        )
+
+        num_jobs = 0
+        for build in builds:
+            for job in build["jobs"]:
+                if "state" not in job:
+                    continue
+                if "agent_query_rules" not in job:
+                    continue
+                if job["state"] in ("scheduled", "running", "assigned", "accepted"):
+                    queue = job["agent_query_rules"][0].removeprefix("queue=")
+                    if not queue.startswith("hetzner-"):
+                        continue
+                    if job.get("priority", {}).get("number", 0) < 0:
+                        continue
+                    num_jobs += 1
+        print(f"Number of high-priority jobs on Hetzner: {num_jobs}")
+        if num_jobs < 400:
+            return
+    except Exception:
+        print("switch_jobs_to_aws failed, ignoring:")
+        traceback.print_exc()
+        return
+
+    def visit(config: Any) -> None:
+        if "agents" in config:
+            agent = config["agents"].get("queue", None)
+            if agent == "hetzner-aarch64-4cpu-8gb":
+                config["agents"]["queue"] = "linux-aarch64-small"
+            if agent == "hetzner-aarch64-8cpu-16gb":
+                config["agents"]["queue"] = "linux-aarch64"
+            if agent == "hetzner-aarch64-16cpu-32gb":
+                config["agents"]["queue"] = "linux-aarch64-medium"
+
+    for config in pipeline["steps"]:
+        if "trigger" in config or "wait" in config:
+            # Trigger and Wait steps don't have agents
             continue
         if "group" in config:
             for inner_config in config.get("steps", []):

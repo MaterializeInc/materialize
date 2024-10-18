@@ -63,3 +63,13 @@ query T
 SELECT * FROM y.z.ct;
 ----
 1
+
+# Regression test for a bug where we'd panic if no CT inputs were referenced.
+statement ok
+CREATE CONTINUAL TASK no_input_refs (key INT) ON INPUT input AS (
+    INSERT INTO no_input_refs SELECT null::INT
+)
+
+query I
+SELECT * FROM no_input_refs;
+----

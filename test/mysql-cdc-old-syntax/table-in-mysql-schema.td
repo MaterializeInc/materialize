@@ -38,12 +38,12 @@ INSERT INTO t_in_mysql VALUES (1), (2);
 ! CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
-contains:No tables found
+contains:MySQL source must ingest at least one table, but FOR ALL TABLES matched none
 
 ! CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR TABLES (mysql.timezone);
-contains:No tables found
+contains:reference to mysql.timezone not found in source
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
