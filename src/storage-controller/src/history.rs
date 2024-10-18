@@ -201,7 +201,10 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::url::SensitiveUrl;
     use mz_persist_types::PersistLocation;
     use mz_repr::{GlobalId, RelationDesc, RelationType};
     use mz_storage_client::client::{RunIngestionCommand, RunSinkCommand};
@@ -248,8 +251,8 @@ mod tests {
                 let export = SourceExport {
                     storage_metadata: CollectionMetadata {
                         persist_location: PersistLocation {
-                            blob_uri: Default::default(),
-                            consensus_uri: Default::default(),
+                            blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                            consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                         },
                         remap_shard: Default::default(),
                         data_shard: Default::default(),
@@ -291,8 +294,8 @@ mod tests {
             },
             ingestion_metadata: CollectionMetadata {
                 persist_location: PersistLocation {
-                    blob_uri: Default::default(),
-                    consensus_uri: Default::default(),
+                    blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                    consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                 },
                 remap_shard: Default::default(),
                 data_shard: Default::default(),
@@ -363,8 +366,8 @@ mod tests {
             status_id: Default::default(),
             from_storage_metadata: CollectionMetadata {
                 persist_location: PersistLocation {
-                    blob_uri: Default::default(),
-                    consensus_uri: Default::default(),
+                    blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                    consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                 },
                 remap_shard: Default::default(),
                 data_shard: Default::default(),

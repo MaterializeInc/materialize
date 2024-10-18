@@ -23,6 +23,7 @@ use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::url::SensitiveUrl;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64, Opaque};
@@ -294,7 +295,7 @@ pub struct BlobBatchPartArgs {
     /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
     /// URI scoped to the environment's bucket prefix.
     #[clap(long)]
-    blob_uri: String,
+    blob_uri: SensitiveUrl,
 
     /// Number of updates to output. Default is unbounded.
     #[clap(long, default_value = "18446744073709551615")]
@@ -329,7 +330,7 @@ impl fmt::Debug for PrettyBytes<'_> {
 
 /// Fetches the updates in a blob batch part
 pub async fn blob_batch_part(
-    blob_uri: &str,
+    blob_uri: &SensitiveUrl,
     shard_id: ShardId,
     partial_key: String,
     limit: usize,
@@ -430,7 +431,7 @@ pub struct BlobArgs {
     /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
     /// URI scoped to the environment's bucket prefix.
     #[clap(long)]
-    blob_uri: String,
+    blob_uri: SensitiveUrl,
 }
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -442,7 +443,7 @@ struct BlobCounts {
 }
 
 /// Fetches the blob count for given path
-pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow::Error> {
+pub async fn blob_counts(blob_uri: &SensitiveUrl) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
@@ -472,7 +473,7 @@ pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow
 }
 
 /// Rummages through S3 to find the latest rollup for each shard, then calculates summary stats.
-pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
+pub async fn shard_stats(blob_uri: &SensitiveUrl) -> anyhow::Result<()> {
     let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;

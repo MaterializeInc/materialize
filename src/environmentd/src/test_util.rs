@@ -363,8 +363,12 @@ impl Listeners {
                 ))
                 .await?;
             (
-                format!("{cockroach_url}?options=--search_path=consensus_{seed}"),
-                format!("{cockroach_url}?options=--search_path=tsoracle_{seed}"),
+                format!("{cockroach_url}?options=--search_path=consensus_{seed}")
+                    .parse()
+                    .expect("invalid consensus URI"),
+                format!("{cockroach_url}?options=--search_path=tsoracle_{seed}")
+                    .parse()
+                    .expect("invalid timestamp oracle URI"),
             )
         };
         let metrics_registry = config.metrics_registry.unwrap_or_else(MetricsRegistry::new);
@@ -477,7 +481,9 @@ impl Listeners {
                     init_container_image: None,
                     deploy_generation: config.deploy_generation,
                     persist_location: PersistLocation {
-                        blob_uri: format!("file://{}/persist/blob", data_directory.display()),
+                        blob_uri: format!("file://{}/persist/blob", data_directory.display())
+                            .parse()
+                            .expect("invalid blob URI"),
                         consensus_uri,
                     },
                     persist_clients,

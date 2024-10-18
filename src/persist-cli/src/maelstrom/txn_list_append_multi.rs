@@ -42,7 +42,6 @@ use mz_txn_wal::txns::{Tidy, TxnsHandle};
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
-use url::Url;
 
 use crate::maelstrom::api::{Body, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
@@ -453,13 +452,11 @@ impl Service for TransactorService {
         )?;
         // It's an annoying refactor to add an oracle_uri cli flag, so for now,
         // piggy-back on --consensus_uri.
-        let oracle_uri = args.consensus_uri.as_ref().map(|x| {
-            Url::parse(x).unwrap_or_else(|err| panic!("failed to parse oracle_uri {}: {}", x, err))
-        });
+        let oracle_uri = args.consensus_uri.clone();
         let oracle_scheme = oracle_uri.as_ref().map(|x| (x.scheme(), x));
         let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp> + Send> = match oracle_scheme {
             Some(("postgres", uri)) | Some(("postgresql", uri)) => {
-                let cfg = PostgresTimestampOracleConfig::new(uri.as_str(), &metrics_registry);
+                let cfg = PostgresTimestampOracleConfig::new(uri, &metrics_registry);
                 Box::new(
                     PostgresTimestampOracle::open(
                         cfg,

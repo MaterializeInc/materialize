@@ -10,6 +10,7 @@
 //! Implementation of [Consensus] backed by Postgres.
 
 use std::fmt::Formatter;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,6 +23,7 @@ use deadpool_postgres::{Object, PoolError};
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::url::SensitiveUrl;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 use tokio_postgres::error::SqlState;
@@ -94,7 +96,7 @@ impl<'a> FromSql<'a> for SeqNo {
 /// Configuration to connect to a Postgres backed implementation of [Consensus].
 #[derive(Clone, Debug)]
 pub struct PostgresConsensusConfig {
-    url: String,
+    url: SensitiveUrl,
     knobs: Arc<dyn PostgresClientKnobs>,
     metrics: PostgresClientMetrics,
 }
@@ -111,12 +113,12 @@ impl PostgresConsensusConfig {
 
     /// Returns a new [PostgresConsensusConfig] for use in production.
     pub fn new(
-        url: &str,
+        url: &SensitiveUrl,
         knobs: Box<dyn PostgresClientKnobs>,
         metrics: PostgresClientMetrics,
     ) -> Result<Self, Error> {
         Ok(PostgresConsensusConfig {
-            url: url.to_string(),
+            url: url.clone(),
             knobs: Arc::from(knobs),
             metrics,
         })
@@ -133,7 +135,7 @@ impl PostgresConsensusConfig {
     /// [1]: https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url
     pub fn new_for_test() -> Result<Option<Self>, Error> {
         let url = match std::env::var(Self::EXTERNAL_TESTS_POSTGRES_URL) {
-            Ok(url) => url,
+            Ok(url) => SensitiveUrl::from_str(&url).map_err(|e| e.to_string())?,
             Err(_) => {
                 if mz_ore::env::is_var_truthy("CI") {
                     panic!("CI is supposed to run this test but something has gone wrong!");
