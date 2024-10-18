@@ -308,12 +308,8 @@ impl CatalogState {
             | CatalogItem::Connection(_)
             | CatalogItem::ContinualTask(_)) => {
                 // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
-                for id in &item.references().0 {
-                    // TODO(alter_table): We probably only want to return a single GlobalId if
-                    // there is a table with multiple referenced here.
-                    for gid in self.get_entry(id).global_ids() {
-                        self.introspection_dependencies_inner(gid, out);
-                    }
+                for gid in item.references().collections() {
+                    self.introspection_dependencies_inner(*gid, out);
                 }
             }
             CatalogItem::Sink(sink) => self.introspection_dependencies_inner(sink.from, out),
@@ -503,7 +499,8 @@ impl CatalogState {
             // for dropping. We have additional code in planning to create a
             // kind of special-case "CASCADE" for this dependency.
             if let Some(progress_id) = entry.progress_id() {
-                dependents.extend_from_slice(&self.item_dependents(progress_id.to_item_id(), seen));
+                let progress_item = self.get_entry_by_global_id(&progress_id).item_id();
+                dependents.extend_from_slice(&self.item_dependents(progress_item, seen));
             }
         }
         dependents
@@ -524,8 +521,7 @@ impl CatalogState {
 
         let unstable_dependencies: Vec<_> = item
             .references()
-            .0
-            .iter()
+            .items()
             .filter(|id| !self.is_stable(**id))
             .map(|id| self.get_entry(id).name().item.clone())
             .collect();
@@ -592,14 +588,14 @@ impl CatalogState {
         let id = id.into();
         self.entry_by_id
             .get(&id)
-            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
+            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"))
     }
 
-    pub fn resolve_global_id(&self, id: &GlobalId) -> &CatalogEntry {
+    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> &CatalogEntry {
         let item_id = self
             .entry_by_global_id
             .get(&id)
-            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"));
+            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"));
         self.get_entry(item_id)
     }
 
@@ -933,7 +929,7 @@ impl CatalogState {
                 let dependencies: BTreeSet<_> = raw_expr
                     .depends_on()
                     .into_iter()
-                    .map(|gid| self.resolve_global_id(&gid).item_id())
+                    .map(|gid| self.get_entry_by_global_id(&gid).item_id())
                     .collect();
 
                 CatalogItem::View(View {
@@ -974,7 +970,7 @@ impl CatalogState {
                 let dependencies = raw_expr
                     .depends_on()
                     .into_iter()
-                    .map(|gid| self.resolve_global_id(&gid).item_id())
+                    .map(|gid| self.get_entry_by_global_id(&gid).item_id())
                     .collect();
 
                 CatalogItem::MaterializedView(MaterializedView {

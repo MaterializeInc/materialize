@@ -26,7 +26,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
-use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::batching_oracle::BatchingTimestampOracle;
@@ -540,7 +540,7 @@ impl Coordinator {
         // Gather all the used schemas.
         let mut schemas = BTreeSet::new();
         for id in uses_ids {
-            let entry = self.catalog().get_entry(id);
+            let entry = self.catalog().resolve_global_id(id);
             let name = entry.name();
             schemas.insert((name.qualifiers.database_spec, name.qualifiers.schema_spec));
         }
@@ -566,16 +566,23 @@ impl Coordinator {
         }
 
         // Gather the IDs of all items in all used schemas.
-        let mut item_ids: BTreeSet<CatalogItemId> = BTreeSet::new();
+        let mut collection_ids: BTreeSet<GlobalId> = BTreeSet::new();
         for (db, schema) in schemas {
             let schema = self.catalog().get_schema(&db, &schema, conn_id);
-            item_ids.extend(schema.items.values());
+            // Note: We include just the latest `GlobalId` instead of all `GlobalId`s associated
+            // with an object, because older versions will already get included, if there are
+            // objects the depend on them.
+            let global_ids = schema
+                .items
+                .values()
+                .map(|item_id| self.catalog().get_entry(item_id).latest_global_id());
+            collection_ids.extend(global_ids);
         }
 
         // Gather the dependencies of those items.
         let mut id_bundle: CollectionIdBundle = self
             .index_oracle(compute_instance)
-            .sufficient_collections(item_ids.iter().map(|id| id.to_global_id()));
+            .sufficient_collections(collection_ids);
 
         // Filter out ids from different timelines.
         for ids in [

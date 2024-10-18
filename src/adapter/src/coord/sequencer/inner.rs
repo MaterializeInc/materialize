@@ -372,7 +372,8 @@ impl Coordinator {
         params: &mz_sql::plan::Params,
         subsource_stmt: CreateSubsourceStatement<mz_sql::names::Aug>,
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
-        let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
+        let catalog = self.catalog().for_session(session);
+        let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
         let item_id = self.catalog_mut().allocate_user_id().await?;
         let collection_id = self.catalog_mut().allocate_user_global_id().await?;
 
@@ -441,7 +442,7 @@ impl Coordinator {
                 ingestion_id,
                 action,
             }),
-            ResolvedIds(BTreeSet::new()),
+            ResolvedIds::empty(),
         ))
     }
 
@@ -484,7 +485,8 @@ impl Coordinator {
 
         source_stmt.progress_subsource = Some(DeferredItemName::Named(progress_subsource));
 
-        let resolved_ids = mz_sql::names::visit_dependencies(&source_stmt);
+        let catalog = self.catalog().for_session(ctx.session());
+        let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &source_stmt);
 
         // 2. Then plan the main source.
         let source_plan = match self.plan_statement(
@@ -532,7 +534,7 @@ impl Coordinator {
 
         Ok((
             Plan::CreateSources(create_source_plans),
-            ResolvedIds(BTreeSet::new()),
+            ResolvedIds::empty(),
         ))
     }
 
@@ -760,13 +762,13 @@ impl Coordinator {
                         connection_gid,
                         plan_validity: PlanValidity::new(
                             transient_revision,
-                            resolved_ids.0.clone(),
+                            resolved_ids.items().copied().collect(),
                             None,
                             None,
                             role_metadata,
                         ),
                         otel_ctx,
-                        dependency_ids: resolved_ids.0,
+                        dependency_ids: resolved_ids.clone(),
                     },
                 ));
                 if let Err(e) = result {
@@ -3494,7 +3496,8 @@ impl Coordinator {
             task::spawn(
                 || format!("validate_alter_connection:{conn_id}"),
                 async move {
-                    let dependency_ids = conn.resolved_ids.0.clone();
+                    let resolved_ids = conn.resolved_ids.clone();
+                    let dependency_ids: BTreeSet<_> = resolved_ids.items().copied().collect();
                     let result = match connection.validate(id, &current_storage_parameters).await {
                         Ok(()) => Ok(conn),
                         Err(err) => Err(err.into()),
@@ -3514,7 +3517,7 @@ impl Coordinator {
                                 role_metadata,
                             ),
                             otel_ctx,
-                            dependency_ids,
+                            dependency_ids: resolved_ids,
                         },
                     ));
                     if let Err(e) = result {

@@ -298,9 +298,8 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
     let from = catalog.get_item(&from_id);
     let object_ids = from
         .references()
-        .0
-        .clone()
-        .into_iter()
+        .items()
+        .copied()
         .chain_one(from.item_id())
         .collect::<Vec<_>>();
 
@@ -2312,7 +2311,7 @@ pub fn purify_create_materialized_view_options(
     // - added references to `mz_timestamp`;
     // - removed references to `mz_now`.
     if introduced_mz_timestamp {
-        resolved_ids.0.insert(mz_timestamp_id);
+        resolved_ids.add_item(mz_timestamp_id);
     }
     // Even though we always remove `mz_now()` from the `with_options`, there might be `mz_now()`
     // remaining in the main query expression of the MV, so let's visit the entire statement to look
@@ -2320,7 +2319,7 @@ pub fn purify_create_materialized_view_options(
     let mut visitor = ExprContainsTemporalVisitor::new();
     visitor.visit_create_materialized_view_statement(cmvs);
     if !visitor.contains_temporal {
-        resolved_ids.0.remove(&mz_now_id);
+        resolved_ids.remove_item(&mz_now_id);
     }
 }
 

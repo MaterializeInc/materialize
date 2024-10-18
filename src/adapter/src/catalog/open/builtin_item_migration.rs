@@ -412,7 +412,7 @@ async fn migrate_builtin_items_0dt(
     // 7. Map the migrated `GlobalId`s to their corresponding `CatalogItemId`.
     let migrated_storage_collections_0dt = migrated_storage_collections_0dt
         .into_iter()
-        .map(|gid| state.resolve_global_id(&gid).item_id())
+        .map(|gid| state.get_entry_by_global_id(&gid).item_id())
         .collect();
 
     let updates = txn.get_and_commit_op_updates();

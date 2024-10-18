@@ -306,13 +306,8 @@ pub fn check_usage(
 
     // Certain statements depend on objects that haven't been created yet, like sub-sources, so we
     // need to filter those out.
-    let existing_resolved_ids = resolved_ids
-        .0
-        .iter()
-        .filter(|id| catalog.try_get_item(&(*id).into()).is_some())
-        .cloned()
-        .collect();
-    let existing_resolved_ids = ResolvedIds(existing_resolved_ids);
+    let existing_resolved_ids =
+        resolved_ids.retain_items(|item_id| catalog.try_get_item(item_id).is_some());
 
     let required_privileges = generate_usage_privileges(
         catalog,
@@ -528,7 +523,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )];
-            let items = iter::once(sink.from).map(|gid| catalog.resolve_global_id(&gid).item_id());
+            let items = iter::once(sink.from).map(|gid| catalog.resolve_item_id(&gid));
             privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
             privileges.push((
                 SystemObjectId::Object(in_cluster.into()),
@@ -784,7 +779,7 @@ fn generate_rbac_requirements(
             let items = source
                 .depends_on()
                 .into_iter()
-                .map(|gid| catalog.resolve_global_id(&gid).item_id());
+                .map(|gid| catalog.resolve_item_id(&gid));
             let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(privilege) = generate_cluster_usage_privileges(
                 source.as_const().is_some(),
@@ -810,7 +805,7 @@ fn generate_rbac_requirements(
             let items = from
                 .depends_on()
                 .into_iter()
-                .map(|gid| catalog.resolve_global_id(&gid).item_id());
+                .map(|gid| catalog.resolve_item_id(&gid));
             let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
@@ -859,7 +854,7 @@ fn generate_rbac_requirements(
                 .source
                 .depends_on()
                 .into_iter()
-                .map(|gid| catalog.resolve_global_id(&gid).item_id());
+                .map(|gid| catalog.resolve_item_id(&gid));
             let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
@@ -895,7 +890,7 @@ fn generate_rbac_requirements(
                     .depends_on()
                     .into_iter()
                     .map(|id| {
-                        let item = catalog.resolve_global_id(&id);
+                        let item = catalog.get_item_by_global_id(&id);
                         let schema_id: ObjectId = item.name().qualifiers.clone().into();
                         (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)
                     })
@@ -915,7 +910,7 @@ fn generate_rbac_requirements(
         Plan::ExplainSinkSchema(plan::ExplainSinkSchemaPlan { sink_from, .. }) => {
             RbacRequirements {
                 privileges: {
-                    let item = catalog.resolve_global_id(&sink_from);
+                    let item = catalog.get_item_by_global_id(&sink_from);
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
                 },
@@ -973,7 +968,7 @@ fn generate_rbac_requirements(
             let items = values
                 .depends_on()
                 .into_iter()
-                .map(|gid| catalog.resolve_global_id(&gid).item_id());
+                .map(|gid| catalog.resolve_item_id(&gid));
             privileges.extend_from_slice(&generate_read_privileges_inner(
                 catalog, items, role_id, &mut seen,
             ));
@@ -1050,7 +1045,7 @@ fn generate_rbac_requirements(
             with_snapshot: _,
             in_cluster,
         }) => {
-            let items = iter::once(sink.from).map(|gid| catalog.resolve_global_id(&gid).item_id());
+            let items = iter::once(sink.from).map(|gid| catalog.resolve_item_id(&gid));
             let mut privileges = generate_read_privileges(catalog, items, role_id);
             privileges.push((
                 SystemObjectId::Object(in_cluster.into()),
@@ -1162,7 +1157,7 @@ fn generate_rbac_requirements(
             }
         }
         Plan::AlterSecret(plan::AlterSecretPlan { id, secret_as: _ }) => RbacRequirements {
-            ownership: vec![ObjectId::from(*id)],
+            ownership: vec![ObjectId::Item(*id)],
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
@@ -1276,7 +1271,7 @@ fn generate_rbac_requirements(
             let items = selection
                 .depends_on()
                 .into_iter()
-                .map(|gid| catalog.resolve_global_id(&gid).item_id());
+                .map(|gid| catalog.resolve_item_id(&gid));
             privileges.extend_from_slice(&generate_read_privileges_inner(
                 catalog, items, role_id, &mut seen,
             ));
@@ -1623,7 +1618,7 @@ fn generate_read_privileges_inner(
                 | CatalogItemType::MaterializedView
                 | CatalogItemType::ContinualTask => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
-                    views.push((item.references().0.clone().into_iter(), item.owner_id()));
+                    views.push((item.references().items().copied(), item.owner_id()));
                 }
                 CatalogItemType::Table | CatalogItemType::Source => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
@@ -1652,10 +1647,9 @@ fn generate_usage_privileges(
     item_types: &BTreeSet<CatalogItemType>,
 ) -> BTreeSet<(SystemObjectId, AclMode, RoleId)> {
     // Use a `BTreeSet` to remove duplicate privileges.
-    ids.0
-        .iter()
+    ids.items()
         .filter_map(move |id| {
-            let item = catalog.get_item(&id.into());
+            let item = catalog.get_item(id);
             if item_types.contains(&item.item_type()) {
                 let schema_id = item.name().qualifiers.clone().into();
                 Some([

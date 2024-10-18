@@ -419,7 +419,7 @@ impl CatalogState {
             StateDiff::Addition => {
                 if let Some(entry) = retractions
                     .introspection_source_indexes
-                    .remove(&introspection_source_index.index_id.to_item_id())
+                    .remove(&introspection_source_index.item_id)
                 {
                     // Introspection source indexes can only be updated through the builtin
                     // migration process, which allocates new IDs for each index.
@@ -432,12 +432,13 @@ impl CatalogState {
                 self.insert_introspection_source_index(
                     introspection_source_index.cluster_id,
                     log,
+                    introspection_source_index.item_id,
                     introspection_source_index.index_id,
                     introspection_source_index.oid,
                 );
             }
             StateDiff::Retraction => {
-                let entry = self.drop_item(introspection_source_index.index_id.to_item_id());
+                let entry = self.drop_item(introspection_source_index.item_id);
                 retractions
                     .introspection_source_indexes
                     .insert(entry.id, entry);
@@ -591,7 +592,7 @@ impl CatalogState {
                         desc: table.desc.clone(),
                         collections: [(RelationVersion::root(), global_id)].into_iter().collect(),
                         conn_id: None,
-                        resolved_ids: ResolvedIds(BTreeSet::new()),
+                        resolved_ids: ResolvedIds::empty(),
                         custom_logical_compaction_window: table.is_retained_metrics_object.then(
                             || {
                                 self.system_config()
@@ -691,7 +692,7 @@ impl CatalogState {
                         create_sql: None,
                         details: typ.details.clone(),
                         desc,
-                        resolved_ids: ResolvedIds(BTreeSet::new()),
+                        resolved_ids: ResolvedIds::empty(),
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(vec![
@@ -733,7 +734,7 @@ impl CatalogState {
                         desc: coll.desc.clone(),
                         collection_id: global_id,
                         timeline: Timeline::EpochMilliseconds,
-                        resolved_ids: ResolvedIds(BTreeSet::new()),
+                        resolved_ids: ResolvedIds::empty(),
                         custom_logical_compaction_window: coll.is_retained_metrics_object.then(
                             || {
                                 self.system_config()
@@ -749,6 +750,10 @@ impl CatalogState {
                 );
             }
             Builtin::ContinualTask(ct) => {
+                let kind = ItemValueKind::ContinualTask {
+                    create_sql: ct.create_sql(),
+                    collection: global_id,
+                };
                 let mut acl_items = vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Source,
                     MZ_SYSTEM_ROLE_ID,
@@ -757,8 +762,8 @@ impl CatalogState {
 
                 let item = self
                     .parse_item(
-                        id,
-                        &ct.create_sql(),
+                        item_id,
+                        &kind,
                         None,
                         false,
                         None,
@@ -778,7 +783,7 @@ impl CatalogState {
                 };
 
                 self.insert_item(
-                    id,
+                    item_id,
                     ct.oid,
                     name,
                     item,
@@ -1125,7 +1130,7 @@ impl CatalogState {
             StateUpdateKind::SystemConfiguration(_) => Vec::new(),
             StateUpdateKind::Cluster(cluster) => self.pack_cluster_update(&cluster.name, diff),
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
-                self.pack_item_update(introspection_source_index.index_id.to_item_id(), diff)
+                self.pack_item_update(introspection_source_index.item_id, diff)
             }
             StateUpdateKind::ClusterReplica(cluster_replica) => self.pack_cluster_replica_update(
                 cluster_replica.cluster_id,
@@ -1393,7 +1398,7 @@ impl CatalogState {
             };
         }
 
-        for u in &entry.references().0 {
+        for u in entry.references().items() {
             match self.entry_by_id.get_mut(u) {
                 Some(metadata) => metadata.referenced_by.push(entry.item_id()),
                 None => panic!(
@@ -1406,7 +1411,7 @@ impl CatalogState {
         for u in entry.uses() {
             // Ignore self for self-referential tasks (e.g. Continual Tasks), if
             // present.
-            if u == entry.id() {
+            if u == entry.item_id() {
                 continue;
             }
             match self.entry_by_id.get_mut(&u) {
@@ -1476,7 +1481,7 @@ impl CatalogState {
     #[mz_ore::instrument(level = "trace")]
     fn drop_item(&mut self, id: CatalogItemId) -> CatalogEntry {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
-        for u in &metadata.references().0 {
+        for u in metadata.references().items() {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
                 dep_metadata
                     .referenced_by
@@ -1531,6 +1536,7 @@ impl CatalogState {
         &mut self,
         cluster_id: ClusterId,
         log: &'static BuiltinLog,
+        item_id: CatalogItemId,
         index_id: GlobalId,
         oid: u32,
     ) {
@@ -1551,11 +1557,10 @@ impl CatalogState {
         let index_item_name = index_name.item.clone();
         let (log_item_id, log_global_id) = self.resolve_builtin_log(log);
         self.insert_item(
-            index_id.to_item_id(),
+            item_id,
             oid,
             index_name,
             CatalogItem::Index(Index {
-                // TODO(alter_table): Allocate a unique GlobalId.
                 collection_id: index_id,
                 on: log_global_id,
                 keys: log
@@ -1572,7 +1577,7 @@ impl CatalogState {
                     &log.variant.index_by(),
                 ),
                 conn_id: None,
-                resolved_ids: ResolvedIds(BTreeSet::from_iter([log_item_id])),
+                resolved_ids: [(log_item_id, log_global_id)].into_iter().collect(),
                 cluster_id,
                 is_retained_metrics_object: false,
                 custom_logical_compaction_window: None,

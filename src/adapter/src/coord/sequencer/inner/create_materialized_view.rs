@@ -145,7 +145,7 @@ impl Coordinator {
         let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
-        let resolved_ids = ResolvedIds(Default::default());
+        let resolved_ids = ResolvedIds::empty();
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,
@@ -383,7 +383,7 @@ impl Coordinator {
                 // index), otherwise we might be missing some read holds.
                 let ids = self
                     .index_oracle(*cluster_id)
-                    .sufficient_collections(resolved_ids.0.iter().map(|id| id.to_global_id()));
+                    .sufficient_collections(resolved_ids.collections().copied());
                 if !ids.difference(&read_holds.id_bundle()).is_empty() {
                     return Err(AdapterError::ChangedPlan(
                         "the set of possible inputs changed during the creation of the \
@@ -433,13 +433,15 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let item_id = if let ExplainContext::None = explain_ctx {
-            self.catalog_mut().allocate_user_id().await?
+        let (item_id, collection_id) = if let ExplainContext::None = explain_ctx {
+            let item_id = self.catalog_mut().allocate_user_id().await?;
+            let collection_id = self.catalog_mut().allocate_user_global_id().await?;
+            (item_id, collection_id)
         } else {
-            self.allocate_transient_item_id()
+            let item_id = self.allocate_transient_item_id();
+            let collection_id = self.allocate_transient_id();
+            (item_id, collection_id)
         };
-        // TODO(alter_table): Allocate a unique GlobalId.
-        let collection_id = item_id.to_global_id();
 
         let view_id = self.allocate_transient_id();
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();

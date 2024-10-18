@@ -18,7 +18,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use mz_adapter::catalog::{Catalog, Op};
@@ -102,7 +101,7 @@ async fn datadriven() {
                                             .into_iter()
                                             .collect(),
                                             conn_id: None,
-                                            resolved_ids: ResolvedIds(BTreeSet::new()),
+                                            resolved_ids: ResolvedIds::empty(),
                                             custom_logical_compaction_window: None,
                                             is_retained_metrics_object: false,
                                             data_source: TableDataSource::TableWrites {

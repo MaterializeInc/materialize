@@ -244,10 +244,12 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Panics if `id` does not specify a valid item.
     fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem;
 
-    /// Gets an item by its [`GlobalId`].
+    /// Gets an item by a [`GlobalId`].
     ///
     /// Returns an error if there is no item with the associated [`GlobalId`].
-    fn resolve_global_id(&self, id: &GlobalId) -> Box<dyn CatalogCollectionItem>;
+    ///
+    /// Note: A single Catalog Item can have multiple [`GlobalId`]s associated with it.
+    fn get_item_by_global_id(&self, id: &GlobalId) -> Box<dyn CatalogCollectionItem>;
 
     /// Gets all items.
     fn get_items(&self) -> Vec<&dyn CatalogItem>;
@@ -293,6 +295,16 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Returns a fully qualified human readable schema name from fully qualified non-human
     /// readable schema name
     fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName;
+
+    /// Returns the [`CatalogItemId`] for from a [`GlobalId`].
+    fn resolve_item_id(&self, global_id: &GlobalId) -> CatalogItemId;
+
+    /// Returns the [`GlobalId`] for the specificed Catalog Item, at the specified version.
+    fn resolve_global_id(
+        &self,
+        item_id: &CatalogItemId,
+        version: RelationVersionSelector,
+    ) -> GlobalId;
 
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
@@ -572,6 +584,9 @@ pub trait CatalogItem {
 
     /// Returns the [`CatalogItemId`] for the item.
     fn item_id(&self) -> CatalogItemId;
+
+    /// Returns the [`GlobalId`]s associated with this item.
+    fn global_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_>;
 
     /// Returns the catalog item's OID.
     fn oid(&self) -> u32;

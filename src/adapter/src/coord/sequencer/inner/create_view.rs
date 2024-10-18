@@ -115,7 +115,7 @@ impl Coordinator {
         let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
-        let resolved_ids = ResolvedIds(Default::default());
+        let resolved_ids = ResolvedIds::empty();
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,
@@ -316,7 +316,7 @@ impl Coordinator {
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 CreateViewStage::Explain(CreateViewExplain {
                                     validity,
-                                    id: item_id.to_global_id(),
+                                    id: collection_id,
                                     plan,
                                     explain_ctx,
                                 })

@@ -217,8 +217,7 @@ impl Coordinator {
                     };
 
                     let conn_id = ctx.session().conn_id().clone();
-                    self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
-                        .await;
+                    self.sequence_plan(ctx, plan, ResolvedIds::empty()).await;
                     // Part of the Command::Commit contract is that the Coordinator guarantees that
                     // it has cleared its transaction state for the connection.
                     self.clear_connection(&conn_id).await;
@@ -819,9 +818,10 @@ impl Coordinator {
                     )
                     .await;
                     let result = result.map_err(|e| e.into());
+                    let dependency_ids = resolved_ids.items().copied().collect();
                     let plan_validity = PlanValidity::new(
                         transient_revision,
-                        resolved_ids.0,
+                        dependency_ids,
                         cluster_id,
                         None,
                         ctx.session().role_metadata().clone(),
@@ -1061,11 +1061,9 @@ impl Coordinator {
         {
             let catalog = self.catalog().for_session(session);
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
-            let gids = resolved_ids
-                .0
-                .iter()
-                .flat_map(|item_id| self.catalog().get_global_ids(item_id));
-            let ids = self.index_oracle(cluster).sufficient_collections(gids);
+            let ids = self
+                .index_oracle(cluster)
+                .sufficient_collections(resolved_ids.collections().copied());
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later
@@ -1084,8 +1082,8 @@ impl Coordinator {
                 .iter()
                 .any(materialized_view_option_contains_temporal)
             {
-                let timeline_context = self
-                    .validate_timeline_context(resolved_ids.0.iter().map(|id| id.to_global_id()))?;
+                let timeline_context =
+                    self.validate_timeline_context(resolved_ids.collections().copied())?;
 
                 // We default to EpochMilliseconds, similarly to `determine_timestamp_for`,
                 // but even in the TimestampIndependent case.

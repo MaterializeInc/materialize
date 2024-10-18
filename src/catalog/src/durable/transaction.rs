@@ -561,14 +561,19 @@ impl<'a> Transaction<'a> {
     /// Panics if provided id is not a system id.
     pub fn update_introspection_source_index_gids(
         &mut self,
-        mappings: impl Iterator<Item = (ClusterId, impl Iterator<Item = (String, GlobalId, u32)>)>,
+        mappings: impl Iterator<
+            Item = (
+                ClusterId,
+                impl Iterator<Item = (String, CatalogItemId, GlobalId, u32)>,
+            ),
+        >,
     ) -> Result<(), CatalogError> {
         for (cluster_id, updates) in mappings {
-            for (name, index_id, oid) in updates {
+            for (name, item_id, index_id, oid) in updates {
                 let introspection_source_index = IntrospectionSourceIndex {
                     cluster_id,
                     name,
-                    item_id: index_id.to_item_id(),
+                    item_id,
                     index_id,
                     oid,
                 };

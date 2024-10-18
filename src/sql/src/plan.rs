@@ -1214,7 +1214,7 @@ pub struct AlterItemSwapPlan {
 
 #[derive(Debug)]
 pub struct AlterSecretPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub secret_as: MirScalarExpr,
 }
 

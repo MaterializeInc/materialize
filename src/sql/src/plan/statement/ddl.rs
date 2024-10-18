@@ -1032,7 +1032,9 @@ pub fn plan_create_source(
     let progress_subsource = match progress_subsource {
         Some(name) => match name {
             DeferredItemName::Named(name) => match name {
-                ResolvedItemName::Item { id, .. } => *id,
+                ResolvedItemName::Item { id, version, .. } => {
+                    scx.catalog.get_item(id).at_version(*version).global_id()
+                }
                 ResolvedItemName::Cte { .. }
                 | ResolvedItemName::ContinualTask { .. }
                 | ResolvedItemName::Error => {
@@ -1094,7 +1096,7 @@ pub fn plan_create_source(
         create_sql,
         data_source: DataSourceDesc::Ingestion(Ingestion {
             desc: source_desc,
-            progress_subsource: progress_subsource.to_global_id(),
+            progress_subsource,
         }),
         desc,
         compaction_window,
@@ -1446,7 +1448,9 @@ pub fn plan_create_subsource(
     let data_source = if let Some(source_reference) = of_source {
         // This is a subsource with the "natural" dependency order, i.e. it is
         // not a legacy subsource with the inverted structure.
-        let ingestion_id = *source_reference.item_id();
+        let ingestion_id = scx
+            .catalog
+            .resolve_global_id(source_reference.item_id(), *source_reference.version());
         let external_reference = external_reference.unwrap();
 
         // Decode the details option stored on the subsource statement, which contains information
@@ -1490,7 +1494,7 @@ pub fn plan_create_subsource(
             }
         };
         DataSourceDesc::IngestionExport {
-            ingestion_id: ingestion_id.to_global_id(),
+            ingestion_id,
             external_reference,
             details,
             // Subsources don't currently support non-default envelopes / encoding
@@ -2333,7 +2337,7 @@ pub fn plan_view(
     let dependencies = expr
         .depends_on()
         .into_iter()
-        .map(|gid| scx.catalog.resolve_global_id(&gid).item_id())
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
         .collect();
 
     let name = if temporary {
@@ -2383,20 +2387,29 @@ pub fn plan_create_view(
     let replace = if *if_exists == IfExistsBehavior::Replace && !ignore_if_exists_errors {
         let if_exists = true;
         let cascade = false;
-        if let Some(id) = plan_drop_item(
+        let maybe_item_to_drop = plan_drop_item(
             scx,
             ObjectType::View,
             if_exists,
             definition.name.clone(),
             cascade,
-        )? {
-            if view.expr.depends_on().contains(&id.to_global_id()) {
-                let item = scx.catalog.get_item(&id.into());
+        )?;
+
+        // Check if the new View depends on the item that we would be replacing.
+        if let Some(id) = maybe_item_to_drop {
+            let dependencies = view.expr.depends_on();
+            let invalid_drop = scx
+                .get_item(&id)
+                .global_ids()
+                .any(|gid| dependencies.contains(&gid));
+            if invalid_drop {
+                let item = scx.catalog.get_item(&id);
                 sql_bail!(
                     "cannot replace view {0}: depended upon by new {0} definition",
                     scx.catalog.resolve_full_name(item.name())
                 );
             }
+
             Some(id)
         } else {
             None
@@ -2662,8 +2675,15 @@ pub fn plan_create_materialized_view(
                 partial_name.into(),
                 cascade,
             )?;
+
+            // Check if the new Materialized View depends on the item that we would be replacing.
             if let Some(id) = replace_id {
-                if expr.depends_on().contains(&id.to_global_id()) {
+                let dependencies = expr.depends_on();
+                let invalid_drop = scx
+                    .get_item(&id)
+                    .global_ids()
+                    .any(|gid| dependencies.contains(&gid));
+                if invalid_drop {
                     let item = scx.catalog.get_item(&id);
                     sql_bail!(
                         "cannot replace materialized view {0}: depended upon by new {0} definition",
@@ -2688,7 +2708,7 @@ pub fn plan_create_materialized_view(
     let dependencies = expr
         .depends_on()
         .into_iter()
-        .map(|gid| scx.catalog.resolve_global_id(&gid).item_id())
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
         .collect();
 
     // Check for an object in the catalog with this same name
@@ -2839,7 +2859,7 @@ pub fn plan_create_continual_task(
     let dependencies = expr
         .depends_on()
         .into_iter()
-        .map(|gid| scx.catalog.resolve_global_id(&gid).item_id())
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
         .collect();
 
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
@@ -4864,7 +4884,7 @@ pub fn plan_drop_objects(
             }
             UnresolvedObjectName::Item(name) => {
                 plan_drop_item(scx, object_type, if_exists, name.clone(), cascade)?
-                    .map(ObjectId::from)
+                    .map(ObjectId::Item)
             }
         };
         match id {
@@ -4984,6 +5004,7 @@ fn plan_drop_cluster_replica(
     Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
 
+/// Returns the [`CatalogItemId`] of the item we should drop, if it exists.
 fn plan_drop_item(
     scx: &StatementContext,
     object_type: ObjectType,
@@ -6225,7 +6246,7 @@ pub fn plan_alter_secret(
     } = stmt;
     let object_type = ObjectType::Secret;
     let id = match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
-        Some(entry) => entry.item_id().to_global_id(),
+        Some(entry) => entry.item_id(),
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
                 name: name.to_string(),

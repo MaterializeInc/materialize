@@ -117,7 +117,7 @@ impl Coordinator {
         let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
-        let resolved_ids = ResolvedIds(Default::default());
+        let resolved_ids = ResolvedIds::empty();
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,

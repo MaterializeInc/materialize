@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
@@ -851,15 +852,16 @@ impl Catalog {
                 let privileges: Vec<_> =
                     merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                         .collect();
-                let introspection_source_ids =
+                let introspection_source_item_ids =
                     tx.allocate_system_item_ids(usize_to_u64(introspection_sources.len()))?;
+                let introspection_source_gids =
+                    tx.allocate_system_global_ids(usize_to_u64(introspection_sources.len()))?;
+
                 let introspection_sources = introspection_sources
                     .into_iter()
-                    .zip(
-                        introspection_source_ids
-                            .into_iter()
-                            .map(|item_id| item_id.to_global_id()),
-                    )
+                    .zip_eq(introspection_source_item_ids.into_iter())
+                    .zip_eq(introspection_source_gids.into_iter())
+                    .map(|((log, item_id), gid)| (log, item_id, gid))
                     .collect();
 
                 tx.insert_user_cluster(

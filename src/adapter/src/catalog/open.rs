@@ -822,7 +822,9 @@ impl Catalog {
                         cluster_id,
                         updates
                             .into_iter()
-                            .map(|(_variant, name, index_id, oid)| (name, index_id, oid)),
+                            .map(|(_variant, name, item_id, index_id, oid)| {
+                                (name, item_id, index_id, oid)
+                            }),
                     )
                 }),
         )?;
@@ -1427,7 +1429,7 @@ mod builtin_migration_tests {
                         .into_iter()
                         .collect(),
                     conn_id: None,
-                    resolved_ids: ResolvedIds(BTreeSet::new()),
+                    resolved_ids: ResolvedIds::empty(),
                     custom_logical_compaction_window: None,
                     is_retained_metrics_object: false,
                     data_source: TableDataSource::TableWrites {
@@ -1444,7 +1446,8 @@ mod builtin_migration_tests {
                         .enumerate()
                         .map(|(idx, _)| format!("a{idx}"))
                         .join(",");
-                    let resolved_ids = convert_names_to_ids(referenced_names, id_mapping);
+                    // TODO(alter_table): Use these below.
+                    let _resolved_ids = convert_names_to_ids(referenced_names, id_mapping);
                     CatalogItem::MaterializedView(MaterializedView {
                         // TODO(alter_table).
                         collection_id: GlobalId::User(1),
@@ -1470,7 +1473,8 @@ mod builtin_migration_tests {
                             .with_column("a", ScalarType::Int32.nullable(true))
                             .with_key(vec![0])
                             .finish(),
-                        resolved_ids: ResolvedIds(resolved_ids),
+                        // TODO(alter_table): Use the _resolved_ids from above.
+                        resolved_ids: ResolvedIds::empty(),
                         cluster_id: ClusterId::User(1),
                         non_null_assertions: vec![],
                         custom_logical_compaction_window: None,
@@ -1487,7 +1491,7 @@ mod builtin_migration_tests {
                         on: on_id.to_global_id(),
                         keys: Default::default(),
                         conn_id: None,
-                        resolved_ids: ResolvedIds(BTreeSet::from_iter([on_id])),
+                        resolved_ids: [(on_id, on_id.to_global_id())].into_iter().collect(),
                         cluster_id: ClusterId::User(1),
                         custom_logical_compaction_window: None,
                         is_retained_metrics_object: false,

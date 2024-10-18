@@ -388,7 +388,7 @@ pub struct ValidationReady<T> {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
     pub result: Result<T, AdapterError>,
-    pub dependency_ids: BTreeSet<CatalogItemId>,
+    pub dependency_ids: ResolvedIds,
     pub connection_gid: CatalogItemId,
     pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
@@ -1916,7 +1916,7 @@ impl Coordinator {
                     || entry
                         .uses()
                         .iter()
-                        .all(|dependency_id| *dependency_id <= entry.id.to_global_id()),
+                        .all(|dependency_id| *dependency_id <= entry.id),
                 "entries should only use to items with lesser `GlobalId`s, but \
                 {:?} uses {:?}",
                 entry.id,

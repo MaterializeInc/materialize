@@ -267,7 +267,7 @@ impl Coordinator {
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(
             || "alter secret ensure",
             async move {
-                secrets_controller.ensure(id.to_item_id(), &payload).await?;
+                secrets_controller.ensure(id, &payload).await?;
                 Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
             }
             .instrument(span),

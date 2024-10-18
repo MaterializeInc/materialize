@@ -871,7 +871,7 @@ impl Coordinator {
             let mut transitive_compute_deps = BTreeSet::new();
             for item_id in id_bundle
                 .iter()
-                .map(|gid| self.catalog.state().resolve_global_id(&gid).item_id())
+                .map(|gid| self.catalog.state().get_entry_by_global_id(&gid).item_id())
                 .flat_map(|id| self.catalog.state().transitive_uses(id))
             {
                 let entry = self.catalog.state().get_entry(&item_id);

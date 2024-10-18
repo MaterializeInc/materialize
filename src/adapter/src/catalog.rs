@@ -37,7 +37,6 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
-use mz_ore::cast::CastInto;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::option::FallibleMapExt;
@@ -860,7 +859,7 @@ impl Catalog {
     }
 
     pub fn resolve_global_id(&self, id: &GlobalId) -> &CatalogEntry {
-        self.state.resolve_global_id(id)
+        self.state.get_entry_by_global_id(id)
     }
 
     pub fn get_schema(
@@ -1396,17 +1395,17 @@ impl ConnCatalog<'_> {
 
 impl ExprHumanizer for ConnCatalog<'_> {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        let entry = self.state.resolve_global_id(&id);
+        let entry = self.state.get_entry_by_global_id(&id);
         Some(self.resolve_full_name(entry.name()).to_string())
     }
 
     fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
-        let entry = self.state.resolve_global_id(&id);
+        let entry = self.state.get_entry_by_global_id(&id);
         Some(entry.name().item.clone())
     }
 
     fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>> {
-        let entry = self.state.resolve_global_id(&id);
+        let entry = self.state.get_entry_by_global_id(&id);
         Some(self.resolve_full_name(entry.name()).into_parts())
     }
 
@@ -1416,14 +1415,14 @@ impl ExprHumanizer for ConnCatalog<'_> {
         match typ {
             Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
             List {
-                custom_id: Some(global_id),
+                custom_id: Some(gid),
                 ..
             }
             | Map {
-                custom_id: Some(global_id),
+                custom_id: Some(gid),
                 ..
             } => {
-                let item = self.resolve_global_id(&global_id);
+                let item = self.get_item_by_global_id(&gid);
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
@@ -1435,10 +1434,10 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 self.humanize_scalar_type(value_type)
             ),
             Record {
-                custom_id: Some(id),
+                custom_id: Some(gid),
                 ..
             } => {
-                let item = self.resolve_global_id(&id);
+                let item = self.get_item_by_global_id(&gid);
                 self.minimal_qualification(item.name()).to_string()
             }
             Record { fields, .. } => format!(
@@ -1480,18 +1479,14 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
-        let Some(entry) = self.state.entry_by_id.get(&id.to_item_id()) else {
-            return None;
-        };
+        let entry = self.state.get_entry_by_global_id(&id);
 
         match entry.index() {
             Some(index) => {
-                let Some(on_entry) = self.state.entry_by_id.get(&index.on.to_item_id()) else {
-                    return None;
-                };
-                let Ok(on_desc) = on_entry.desc(&self.resolve_full_name(on_entry.name())) else {
-                    return None;
-                };
+                let on_entry = self.state.get_entry_by_global_id(&index.on);
+                let on_desc = on_entry
+                    .desc(&self.resolve_full_name(on_entry.name()))
+                    .ok()?;
 
                 let mut on_names = on_desc
                     .iter_names()
@@ -1531,19 +1526,14 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn humanize_column(&self, id: GlobalId, column: usize) -> Option<String> {
-        self.state
-            .entry_by_id
-            .get(&id.to_item_id())
-            .try_map(|entry| {
-                let desc = entry.desc(&self.resolve_full_name(entry.name()))?;
-                let column_name = desc.get_name(column);
-                Ok::<_, SqlCatalogError>(column_name.to_string())
-            })
-            .unwrap_or(None)
+        let entry = self.state.get_entry_by_global_id(&id);
+        let desc = entry.desc(&self.resolve_full_name(entry.name())).ok()?;
+        Some(desc.get_name(column).to_string())
     }
 
+    // TODO(parkmycar): When is this method called? IDs should seemingly always exist?
     fn id_exists(&self, id: GlobalId) -> bool {
-        self.state.entry_by_id.contains_key(&id.to_item_id())
+        self.state.entry_by_global_id.contains_key(&id)
     }
 }
 
@@ -1777,8 +1767,11 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.get_entry(id)
     }
 
-    fn resolve_global_id(&self, id: &GlobalId) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
-        let entry = self.state.resolve_global_id(id);
+    fn get_item_by_global_id(
+        &self,
+        id: &GlobalId,
+    ) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
+        let entry = self.state.get_entry_by_global_id(id);
         let entry = match &entry.item {
             CatalogItem::Table(table) => {
                 let (version, _gid) = table
@@ -1865,6 +1858,21 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName {
         self.state.resolve_full_schema_name(name)
+    }
+
+    fn resolve_item_id(&self, global_id: &GlobalId) -> CatalogItemId {
+        self.state.get_entry_by_global_id(global_id).item_id()
+    }
+
+    fn resolve_global_id(
+        &self,
+        item_id: &CatalogItemId,
+        version: RelationVersionSelector,
+    ) -> GlobalId {
+        self.state
+            .get_entry(item_id)
+            .at_version(version)
+            .global_id()
     }
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {

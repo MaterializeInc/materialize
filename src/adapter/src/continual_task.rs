@@ -60,7 +60,7 @@ pub fn ct_item_from_plan(
     let dependencies = raw_expr
         .depends_on()
         .into_iter()
-        .map(|gid| catalog.resolve_global_id(&gid).item_id())
+        .map(|gid| catalog.get_entry_by_global_id(&gid).item_id())
         .collect();
 
     Ok(ContinualTask {

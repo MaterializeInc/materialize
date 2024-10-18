@@ -551,7 +551,8 @@ impl Coordinator {
 
                 // Determine all dependencies, not just those in the statement
                 // itself.
-                let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
+                let catalog = self.catalog().for_session(ctx.session());
+                let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &stmt);
                 self.plan_statement(ctx.session(), stmt, &params, &resolved_ids)
                     .map(|plan| (plan, resolved_ids))
             }
@@ -600,7 +601,7 @@ impl Coordinator {
                 ctx.session_mut(),
                 connection_gid,
                 plan,
-                ResolvedIds(dependency_ids),
+                dependency_ids,
             )
             .await;
         ctx.retire(result);
@@ -658,7 +659,7 @@ impl Coordinator {
                     } else {
                         // Write statements never need to track resolved IDs (NOTE: This is not the
                         // same thing as plan dependencies, which we do need to re-validate).
-                        let resolved_ids = ResolvedIds(BTreeSet::new());
+                        let resolved_ids = ResolvedIds::empty();
                         self.sequence_plan(ready.ctx, ready.plan, resolved_ids)
                             .await;
                     }

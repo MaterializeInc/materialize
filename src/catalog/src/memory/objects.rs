@@ -653,6 +653,10 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
         self.entry.item_id()
     }
 
+    fn global_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_> {
+        Box::new(self.entry.global_ids())
+    }
+
     fn oid(&self) -> u32 {
         self.entry.oid()
     }
@@ -1479,7 +1483,7 @@ impl CatalogItem {
     /// Collects the identifiers of the objects that were encountered when resolving names in the
     /// item's DDL statement.
     pub fn references(&self) -> &ResolvedIds {
-        static EMPTY: LazyLock<ResolvedIds> = LazyLock::new(|| ResolvedIds(BTreeSet::new()));
+        static EMPTY: LazyLock<ResolvedIds> = LazyLock::new(|| ResolvedIds::empty());
         match self {
             CatalogItem::Func(_) => &*EMPTY,
             CatalogItem::Index(idx) => &idx.resolved_ids,
@@ -1502,7 +1506,7 @@ impl CatalogItem {
     /// referenced. For example this will include any catalog objects used to implement functions
     /// and casts in the item.
     pub fn uses(&self) -> BTreeSet<CatalogItemId> {
-        let mut uses: BTreeSet<_> = self.references().0.iter().copied().collect();
+        let mut uses: BTreeSet<_> = self.references().items().copied().collect();
         match self {
             // TODO(jkosh44) This isn't really correct for functions. They may use other objects in
             // their implementation. However, currently there's no way to get that information.
@@ -2863,6 +2867,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn item_id(&self) -> CatalogItemId {
         self.item_id()
+    }
+
+    fn global_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_> {
+        Box::new(self.global_ids())
     }
 
     fn oid(&self) -> u32 {

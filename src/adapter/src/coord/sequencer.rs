@@ -141,8 +141,9 @@ impl Coordinator {
             match plan {
                 Plan::CreateSource(plan) => {
                     let item_id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
-                    // TODO(alter_table): Allocate a unique GlobalId.
-                    let collection_id = item_id.to_global_id();
+                    let collection_id =
+                        return_if_err!(self.catalog_mut().allocate_user_global_id().await, ctx);
+
                     let result = self
                         .sequence_create_source(
                             ctx.session_mut(),
@@ -159,7 +160,7 @@ impl Coordinator {
                 }
                 Plan::CreateSources(plans) => {
                     assert!(
-                        resolved_ids.0.is_empty(),
+                        resolved_ids.is_empty(),
                         "each plan has separate resolved_ids"
                     );
                     let result = self.sequence_create_source(ctx.session_mut(), plans).await;
