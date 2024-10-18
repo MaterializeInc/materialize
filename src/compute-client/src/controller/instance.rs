@@ -1274,6 +1274,7 @@ where
                         .clone();
                     let conn = ContinualTaskConnection {
                         input_id: conn.input_id,
+                        snapshot: conn.snapshot,
                         storage_metadata: metadata,
                     };
                     ComputeSinkConnection::ContinualTask(conn)

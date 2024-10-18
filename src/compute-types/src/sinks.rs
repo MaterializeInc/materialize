@@ -269,6 +269,8 @@ pub struct ContinualTaskConnection<S> {
     // TODO(ct3): This can be removed once we render the "input" sources without
     // the hack.
     pub input_id: GlobalId,
+    /// Whether to emit an initial snapshot of the input.
+    pub snapshot: bool,
     /// The necessary storage information for writing to the output collection.
     pub storage_metadata: S,
 }
@@ -277,6 +279,7 @@ impl RustType<ProtoContinualTaskConnection> for ContinualTaskConnection<Collecti
     fn into_proto(&self) -> ProtoContinualTaskConnection {
         ProtoContinualTaskConnection {
             input_id: Some(self.input_id.into_proto()),
+            snapshot: self.snapshot,
             storage_metadata: Some(self.storage_metadata.into_proto()),
         }
     }
@@ -286,6 +289,7 @@ impl RustType<ProtoContinualTaskConnection> for ContinualTaskConnection<Collecti
             input_id: proto
                 .input_id
                 .into_rust_if_some("ProtoContinualTaskConnection::input_id")?,
+            snapshot: proto.snapshot,
             storage_metadata: proto
                 .storage_metadata
                 .into_rust_if_some("ProtoContinualTaskConnection::output_metadata")?,

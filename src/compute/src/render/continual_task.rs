@@ -82,6 +82,7 @@ use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, ContinualT
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::error::UpperMismatch;
+use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -106,6 +107,7 @@ use crate::sink::ConsolidatingVec;
 pub(crate) struct ContinualTaskCtx<G: Scope<Timestamp = Timestamp>> {
     name: Option<String>,
     dataflow_as_of: Option<Antichain<Timestamp>>,
+    snapshot_inputs: Option<bool>,
     ct_inputs: BTreeSet<GlobalId>,
     pub ct_times: Vec<Collection<G, (), Diff>>,
 }
@@ -114,15 +116,21 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
     pub fn new<P, S>(dataflow: &DataflowDescription<P, S, Timestamp>) -> Self {
         let mut name = None;
         let mut ct_inputs = BTreeSet::new();
+        let mut snapshot_inputs = None;
         for (sink_id, sink) in &dataflow.sink_exports {
             match &sink.connection {
                 ComputeSinkConnection::ContinualTask(ContinualTaskConnection {
-                    input_id, ..
+                    input_id,
+                    snapshot,
+                    ..
                 }) => {
                     ct_inputs.insert(*input_id);
                     // There's only one CT sink per dataflow at this point.
                     assert_eq!(name, None);
                     name = Some(sink_id.to_string());
+                    assert_eq!(snapshot_inputs, None);
+                    // WIP only if we're at the initial as_of
+                    snapshot_inputs = Some(*snapshot);
                 }
                 _ => continue,
             }
@@ -130,6 +138,7 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
         let mut ret = ContinualTaskCtx {
             name,
             dataflow_as_of: None,
+            snapshot_inputs,
             ct_inputs,
             ct_times: Vec::new(),
         };
@@ -144,6 +153,18 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
 
     pub fn is_ct_dataflow(&self) -> bool {
         !self.ct_inputs.is_empty()
+    }
+
+    pub fn get_snapshot_mode(&self, source_id: GlobalId) -> Option<SnapshotMode> {
+        let Some(snapshot_inputs) = self.snapshot_inputs else {
+            return None;
+        };
+        let snapshot_mode = match (self.ct_inputs.contains(&source_id), snapshot_inputs) {
+            (true, true) => SnapshotMode::Include,
+            (true, false) => SnapshotMode::Exclude,
+            (false, _) => SnapshotMode::Include,
+        };
+        Some(snapshot_mode)
     }
 
     pub fn get_ct_inserts_transformer<S: Scope<Timestamp = Timestamp>>(

@@ -736,6 +736,7 @@ pub struct CreateContinualTaskPlan {
     pub placeholder_id: Option<mz_expr::LocalId>,
     pub desc: RelationDesc,
     pub input_id: GlobalId,
+    pub snapshot: bool,
     pub continual_task: MaterializedView,
 }
 
