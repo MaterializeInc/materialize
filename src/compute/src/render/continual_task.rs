@@ -539,7 +539,7 @@ where
 {
     let name = format!("ct_step_backward({})", name);
     let mut builder = AsyncOperatorBuilder::new(name, input.scope());
-    let (mut output, output_stream) = builder.new_output();
+    let (output, output_stream) = builder.new_output();
     let mut input = builder.new_input_for(&input.inner, Pipeline, &output);
     builder.build(move |caps| async move {
         let [mut cap]: [_; 1] = caps.try_into().expect("one capability per output");
@@ -582,7 +582,7 @@ where
     let name = format!("ct_step_forward({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), input.scope());
     let mut input = builder.new_disconnected_input(&input.inner, Pipeline);
-    let (mut output, output_stream) = builder.new_output();
+    let (output, output_stream) = builder.new_output();
     builder.build(move |caps| async move {
         let [mut cap]: [_; 1] = caps.try_into().expect("one capability per output");
         loop {

@@ -735,7 +735,7 @@ impl OpenTelemetryContext {
     /// If there is not enough information in this `OpenTelemetryContext`
     /// to create a context, then the current thread's `Context` is used
     /// defaulting to the default `Context`.
-    pub fn attach_as_parent_to(&self, span: &mut Span) {
+    pub fn attach_as_parent_to(&self, span: &Span) {
         let parent_cx = global::get_text_map_propagator(|prop| prop.extract(self));
         span.set_parent(parent_cx);
     }

@@ -53,10 +53,10 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (mut data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (mut stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (mut probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let busy_signal = Arc::clone(&config.busy_signal);
     let button = builder.build(move |caps| {
@@ -513,7 +513,7 @@ impl UpdateProducer {
 }
 
 pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
-    scope: &mut G,
+    scope: &G,
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
 ) -> (Stream<G, ProgressStatisticsUpdate>, PressOnDropButton) {
@@ -521,7 +521,7 @@ pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
     let mut builder =
         AsyncOperatorBuilder::new(format!("key_value_loadgen_statistics:{id}"), scope.clone());
 
-    let (mut stats_output, stats_stream) = builder.new_output();
+    let (stats_output, stats_stream) = builder.new_output();
 
     let button = builder.build(move |caps| async move {
         let [stats_cap]: [_; 1] = caps.try_into().unwrap();

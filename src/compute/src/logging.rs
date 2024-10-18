@@ -185,12 +185,12 @@ impl PermutedRowPacker {
     }
 
     /// Pack a slice of datums suitable for the key columns in the log variant.
-    pub(crate) fn pack_slice(&mut self, datums: &[Datum]) -> (Row, Row) {
+    pub(crate) fn pack_slice(&self, datums: &[Datum]) -> (Row, Row) {
         self.pack_by_index(|packer, index| packer.push(datums[index]))
     }
 
     /// Pack using a callback suitable for the key columns in the log variant.
-    pub(crate) fn pack_by_index<F: Fn(&mut RowPacker, usize)>(&mut self, logic: F) -> (Row, Row) {
+    pub(crate) fn pack_by_index<F: Fn(&mut RowPacker, usize)>(&self, logic: F) -> (Row, Row) {
         let binding = SharedRow::get();
         let mut row_builder = binding.borrow_mut();
 

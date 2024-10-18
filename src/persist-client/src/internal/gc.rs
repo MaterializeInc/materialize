@@ -157,10 +157,10 @@ where
                 machine.applier.metrics.gc.started.inc();
                 let (mut maintenance, _stats) = {
                     let name = format!("gc_and_truncate ({})", &consolidated_req.shard_id);
-                    let mut machine = machine.clone();
+                    let machine = machine.clone();
                     isolated_runtime
                         .spawn_named(|| name, async move {
-                            Self::gc_and_truncate(&mut machine, consolidated_req)
+                            Self::gc_and_truncate(&machine, consolidated_req)
                                 .instrument(gc_span)
                                 .await
                         })
@@ -217,7 +217,7 @@ where
     }
 
     pub(crate) async fn gc_and_truncate(
-        machine: &mut Machine<K, V, T, D>,
+        machine: &Machine<K, V, T, D>,
         req: GcReq,
     ) -> (RoutineMaintenance, GcResults) {
         let mut step_start = Instant::now();

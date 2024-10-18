@@ -139,12 +139,12 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let mut builder =
         AsyncOperatorBuilder::new(format!("MySqlSnapshotReader({})", config.id), scope.clone());
 
-    let (mut raw_handle, raw_data) = builder.new_output::<AccountedStackBuilder<_>>();
-    let (mut rewinds_handle, rewinds) = builder.new_output();
+    let (raw_handle, raw_data) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (rewinds_handle, rewinds) = builder.new_output();
     // Captures DefiniteErrors that affect the entire source, including all outputs
-    let (mut definite_error_handle, definite_errors) = builder.new_output();
+    let (definite_error_handle, definite_errors) = builder.new_output();
 
-    let (mut stats_output, stats_stream) = builder.new_output();
+    let (stats_output, stats_stream) = builder.new_output();
 
     // A global view of all outputs that will be snapshot by all workers.
     let mut all_outputs = vec![];
@@ -252,9 +252,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         return Ok(return_definite_error(
                             err,
                             &all_outputs,
-                            &mut raw_handle,
+                            &raw_handle,
                             data_cap_set,
-                            &mut definite_error_handle,
+                            &definite_error_handle,
                             definite_error_cap_set,
                         )
                         .await);
@@ -275,9 +275,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         return Ok(return_definite_error(
                             err,
                             &all_outputs,
-                            &mut raw_handle,
+                            &raw_handle,
                             data_cap_set,
-                            &mut definite_error_handle,
+                            &definite_error_handle,
                             definite_error_cap_set,
                         )
                         .await);
@@ -301,9 +301,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         return Ok(return_definite_error(
                             DefiniteError::ServerConfigurationError(err.to_string()),
                             &all_outputs,
-                            &mut raw_handle,
+                            &raw_handle,
                             data_cap_set,
-                            &mut definite_error_handle,
+                            &definite_error_handle,
                             definite_error_cap_set,
                         )
                         .await);

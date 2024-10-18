@@ -1545,18 +1545,18 @@ impl<'a> Parser<'a> {
         self.peek_nth_token(0)
     }
 
-    fn peek_keyword(&mut self, kw: Keyword) -> bool {
+    fn peek_keyword(&self, kw: Keyword) -> bool {
         match self.peek_token() {
             Some(Token::Keyword(k)) => k == kw,
             _ => false,
         }
     }
 
-    fn peek_keywords(&mut self, keywords: &[Keyword]) -> bool {
+    fn peek_keywords(&self, keywords: &[Keyword]) -> bool {
         self.peek_keywords_from(0, keywords)
     }
 
-    fn peek_keywords_from(&mut self, start: usize, keywords: &[Keyword]) -> bool {
+    fn peek_keywords_from(&self, start: usize, keywords: &[Keyword]) -> bool {
         for (i, keyword) in keywords.iter().enumerate() {
             match self.peek_nth_token(start + i) {
                 Some(Token::Keyword(k)) => {
@@ -1570,7 +1570,7 @@ impl<'a> Parser<'a> {
         true
     }
 
-    fn peek_one_of_keywords(&mut self, kws: &[Keyword]) -> bool {
+    fn peek_one_of_keywords(&self, kws: &[Keyword]) -> bool {
         match self.peek_token() {
             Some(Token::Keyword(k)) => kws.contains(&k),
             _ => false,
@@ -1579,7 +1579,7 @@ impl<'a> Parser<'a> {
 
     /// Returns whether the sequence of keywords is found at any point before
     /// the end of the unprocessed tokens.
-    fn peek_keywords_lookahead(&mut self, keywords: &[Keyword]) -> bool {
+    fn peek_keywords_lookahead(&self, keywords: &[Keyword]) -> bool {
         let mut index = 0;
         while index < self.tokens.len() {
             if self.peek_keywords_from(index, keywords) {
@@ -7038,7 +7038,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_set_operator(&mut self, token: &Option<Token>) -> Option<SetOperator> {
+    fn parse_set_operator(&self, token: &Option<Token>) -> Option<SetOperator> {
         match token {
             Some(Token::Keyword(UNION)) => Some(SetOperator::Union),
             Some(Token::Keyword(EXCEPT)) => Some(SetOperator::Except),
@@ -8022,7 +8022,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_tail(&mut self) -> Result<Statement<Raw>, ParserError> {
+    fn parse_tail(&self) -> Result<Statement<Raw>, ParserError> {
         parser_err!(
             self,
             self.peek_prev_pos(),
@@ -8670,7 +8670,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_grant_revoke_object_type_inner(
-        &mut self,
+        &self,
         statement_type: &str,
         object_type: ObjectType,
     ) -> Result<ObjectType, ParserError> {

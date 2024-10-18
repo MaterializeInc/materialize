@@ -161,8 +161,7 @@ where
         // spin off a single task responsible for executing compaction requests.
         // work is enqueued into the task through a channel
         let _worker_handle = mz_ore::task::spawn(|| "PersistCompactionScheduler", async move {
-            while let Some((enqueued, req, mut machine, completer)) =
-                compact_req_receiver.recv().await
+            while let Some((enqueued, req, machine, completer)) = compact_req_receiver.recv().await
             {
                 assert_eq!(req.shard_id, machine.shard_id());
                 let metrics = Arc::clone(&machine.applier.metrics);
@@ -200,7 +199,7 @@ where
                 compact_span.follows_from(&Span::current());
                 let gc = gc.clone();
                 mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
-                    let res = Self::compact_and_apply(&mut machine, req, write_schemas)
+                    let res = Self::compact_and_apply(&machine, req, write_schemas)
                         .instrument(compact_span)
                         .await;
                     let res = res.map(|(res, maintenance)| {
@@ -274,7 +273,7 @@ where
     }
 
     pub(crate) async fn compact_and_apply(
-        machine: &mut Machine<K, V, T, D>,
+        machine: &Machine<K, V, T, D>,
         req: CompactReq<T>,
         write_schemas: Schemas<K, V>,
     ) -> Result<(ApplyMergeResult, RoutineMaintenance), anyhow::Error> {

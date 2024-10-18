@@ -53,6 +53,7 @@ impl<> FoldNode<> for BinOp {
         folder.fold_bin_op(self)
     }
 }
+#[allow(clippy::needless_pass_by_ref_mut)]
 pub fn fold_bin_op<F, >(folder: &mut F, node: BinOp) -> BinOp
 where
     F: Fold<> + ?Sized,
@@ -76,6 +77,7 @@ impl<> FoldNode<> for Expr {
         folder.fold_expr(self)
     }
 }
+#[allow(clippy::needless_pass_by_ref_mut)]
 pub fn fold_expr<F, >(folder: &mut F, node: Expr) -> Expr
 where
     F: Fold<> + ?Sized,
@@ -107,6 +109,7 @@ impl<> FoldNode<> for Function {
         folder.fold_function(self)
     }
 }
+#[allow(clippy::needless_pass_by_ref_mut)]
 pub fn fold_function<F, >(folder: &mut F, node: Function) -> Function
 where
     F: Fold<> + ?Sized,
@@ -141,6 +144,7 @@ impl<T: Foo, T2: Foo, U: Bar, U2: Bar, > FoldNode<T, T2, U, U2, > for Function<T
         folder.fold_function(self)
     }
 }
+#[allow(clippy::needless_pass_by_ref_mut)]
 pub fn fold_function<F, T: Foo, T2: Foo, U: Bar, U2: Bar, >(folder: &mut F, node: Function<T, U>) -> Function<T2, U2>
 where
     F: Fold<T, T2, U, U2, > + ?Sized,

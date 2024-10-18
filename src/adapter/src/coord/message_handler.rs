@@ -282,9 +282,9 @@ impl Coordinator {
         match self.catalog_transact_inner(None, ops).await {
             Ok(table_updates) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let mut task_span =
+                let task_span =
                     info_span!(parent: None, "coord::storage_usage_update::table_updates");
-                OpenTelemetryContext::obtain().attach_as_parent_to(&mut task_span);
+                OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
                 task::spawn(|| "storage_usage_update_table_updates", async move {
                     table_updates.instrument(task_span).await;
                     // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
@@ -871,13 +871,13 @@ impl Coordinator {
             // Sniff out one ctx, this is where tracing breaks down because we
             // process all outstanding txns as a batch here.
             let otel_ctx = ready_txns.first().expect("known to exist").otel_ctx.clone();
-            let mut span = tracing::debug_span!("message_linearize_reads");
-            otel_ctx.attach_as_parent_to(&mut span);
+            let span = tracing::debug_span!("message_linearize_reads");
+            otel_ctx.attach_as_parent_to(&span);
 
             let now = Instant::now();
             for ready_txn in ready_txns {
-                let mut span = tracing::debug_span!("retire_read_results");
-                ready_txn.otel_ctx.attach_as_parent_to(&mut span);
+                let span = tracing::debug_span!("retire_read_results");
+                ready_txn.otel_ctx.attach_as_parent_to(&span);
                 let _entered = span.enter();
                 self.metrics
                     .linearize_message_seconds

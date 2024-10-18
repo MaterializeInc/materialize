@@ -935,7 +935,7 @@ where
     ///   * A `PeekResponse::Canceled` affirming that the peek was canceled.
     ///   * No `PeekResponse` at all.
     pub fn cancel_peek(
-        &mut self,
+        &self,
         instance_id: ComputeInstanceId,
         uuid: Uuid,
         reason: PeekResponse,
@@ -957,7 +957,7 @@ where
     /// It is an error to attempt to set a read policy for a collection that is not readable in the
     /// context of compute. At this time, only indexes are readable compute collections.
     pub fn set_read_policy(
-        &mut self,
+        &self,
         instance_id: ComputeInstanceId,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
     ) -> Result<(), ReadPolicyError> {

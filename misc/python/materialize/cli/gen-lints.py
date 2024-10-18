@@ -121,7 +121,7 @@ WARN_CLIPPY_LINTS = [
     "crosspointer_transmute",
     # Confusing and likely buggy.
     "excessive_precision",
-    "overflow_check_conditional",
+    "panicking_overflow_checks",
     # The `as` operator silently truncates data in many situations. It is very
     # difficult to assess whether a given usage of `as` is dangerous or not. So
     # ban it outright, to force usage of safer patterns, like `From` and
@@ -169,6 +169,7 @@ WARN_CLIPPY_LINTS = [
     "from_over_into",
     # We consistently don't use `mod.rs` files.
     "mod_module_files",
+    "needless_pass_by_ref_mut",
 ]
 
 MESSAGE_LINT_MISSING = (

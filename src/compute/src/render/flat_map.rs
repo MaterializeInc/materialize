@@ -29,7 +29,7 @@ where
 {
     /// Applies a `TableFunc` to every row, followed by an `mfp`.
     pub fn render_flat_map(
-        &mut self,
+        &self,
         input: CollectionBundle<G>,
         func: TableFunc,
         exprs: Vec<MirScalarExpr>,

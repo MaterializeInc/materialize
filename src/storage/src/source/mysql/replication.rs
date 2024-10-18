@@ -120,7 +120,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let (mut data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     // Captures DefiniteErrors that affect the entire source, including all outputs
-    let (mut definite_error_handle, definite_errors) =
+    let (definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<_>>();
     let mut rewind_input = builder.new_input_for(
         rewind_stream,
@@ -179,9 +179,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         return_definite_error(
                             err,
                             &output_indexes,
-                            &mut data_output,
+                            &data_output,
                             data_cap_set,
-                            &mut definite_error_handle,
+                            &definite_error_handle,
                             definite_error_cap_set,
                         )
                         .await,
@@ -246,9 +246,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 return Ok(return_definite_error(
                     err,
                     &output_indexes,
-                    &mut data_output,
+                    &data_output,
                     data_cap_set,
-                    &mut definite_error_handle,
+                    &definite_error_handle,
                     definite_error_cap_set,
                 )
                 .await);
@@ -271,9 +271,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
-                                &mut data_output,
+                                &data_output,
                                 data_cap_set,
-                                &mut definite_error_handle,
+                                &definite_error_handle,
                                 definite_error_cap_set,
                             )
                             .await);
@@ -298,9 +298,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         return Ok(return_definite_error(
                             err,
                             &output_indexes,
-                            &mut data_output,
+                            &data_output,
                             data_cap_set,
-                            &mut definite_error_handle,
+                            &definite_error_handle,
                             definite_error_cap_set,
                         )
                         .await)
@@ -352,9 +352,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
-                                &mut data_output,
+                                &data_output,
                                 data_cap_set,
-                                &mut definite_error_handle,
+                                &definite_error_handle,
                                 definite_error_cap_set,
                             )
                             .await);
@@ -380,9 +380,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
-                                &mut data_output,
+                                &data_output,
                                 data_cap_set,
-                                &mut definite_error_handle,
+                                &definite_error_handle,
                                 definite_error_cap_set,
                             )
                             .await);
@@ -402,7 +402,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                         events::handle_rows_event(
                             data,
-                            &mut repl_context,
+                            &repl_context,
                             &cur_gtid,
                             &mut row_event_buffer,
                         )
@@ -415,9 +415,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,
-                                &mut data_output,
+                                &data_output,
                                 data_cap_set,
-                                &mut definite_error_handle,
+                                &definite_error_handle,
                                 definite_error_cap_set,
                             )
                             .await);
@@ -448,9 +448,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 return Ok(return_definite_error(
                                     err,
                                     &output_indexes,
-                                    &mut data_output,
+                                    &data_output,
                                     data_cap_set,
-                                    &mut definite_error_handle,
+                                    &definite_error_handle,
                                     definite_error_cap_set,
                                 )
                                 .await);

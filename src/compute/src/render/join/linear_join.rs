@@ -208,7 +208,7 @@ where
     T: Timestamp + Lattice + Columnation,
 {
     pub(crate) fn render_join(
-        &mut self,
+        &self,
         inputs: Vec<CollectionBundle<G, T>>,
         linear_plan: LinearJoinPlan,
     ) -> CollectionBundle<G, T> {
@@ -218,7 +218,7 @@ where
     }
 
     fn render_join_inner(
-        &mut self,
+        &self,
         inputs: Vec<CollectionBundle<G, T>>,
         linear_plan: LinearJoinPlan,
         inner: &mut Child<G, <G as ScopeParent>::Timestamp>,

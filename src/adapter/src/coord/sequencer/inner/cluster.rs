@@ -715,7 +715,7 @@ impl Coordinator {
     }
 
     fn create_managed_cluster_replica_op(
-        &mut self,
+        &self,
         cluster_id: ClusterId,
         name: String,
         compute: &mz_sql::plan::ComputeReplicaConfig,
@@ -1563,7 +1563,7 @@ impl Coordinator {
 
     /// Convert a [`AlterSetClusterPlan`] to a sequence of catalog operators and adjust state.
     pub(crate) async fn sequence_alter_set_cluster(
-        &mut self,
+        &self,
         _session: &Session,
         AlterSetClusterPlan { id, set_cluster: _ }: AlterSetClusterPlan,
     ) -> Result<ExecuteResponse, AdapterError> {

@@ -214,7 +214,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
 
-        let mut response_tx = ActivatingSender::new(response_tx, activatable);
+        let response_tx = ActivatingSender::new(response_tx, activatable);
 
         mz_ore::task::spawn(|| "AsyncStorageWorker", async move {
             while let Some(command) = command_rx.recv().await {
@@ -480,7 +480,7 @@ impl<T, A: Activatable> ActivatingSender<T, A> {
         Self { tx, activatable }
     }
 
-    fn send(&mut self, message: T) -> Result<(), crossbeam_channel::SendError<T>> {
+    fn send(&self, message: T) -> Result<(), crossbeam_channel::SendError<T>> {
         let res = self.tx.send(message);
         self.activatable.activate();
         res

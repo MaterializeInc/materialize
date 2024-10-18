@@ -146,7 +146,7 @@ where
         self.applier.seqno()
     }
 
-    pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
+    pub async fn add_rollup_for_current_seqno(&self) -> RoutineMaintenance {
         let rollup = self.applier.write_rollup_for_state().await;
         let Some(rollup) = rollup else {
             return RoutineMaintenance::default();
@@ -165,7 +165,7 @@ where
     }
 
     pub async fn add_rollup(
-        &mut self,
+        &self,
         add_rollup: (SeqNo, &HollowRollup),
     ) -> (bool, RoutineMaintenance) {
         // See the big SUBTLE comment in [Self::merge_res] for what's going on
@@ -185,7 +185,7 @@ where
     }
 
     pub async fn remove_rollups(
-        &mut self,
+        &self,
         remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> (Vec<SeqNo>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
@@ -198,7 +198,7 @@ where
     }
 
     pub async fn register_leased_reader(
-        &mut self,
+        &self,
         reader_id: &LeasedReaderId,
         purpose: &str,
         lease_duration: Duration,
@@ -237,7 +237,7 @@ where
     }
 
     pub async fn register_critical_reader<O: Opaque + Codec64>(
-        &mut self,
+        &self,
         reader_id: &CriticalReaderId,
         purpose: &str,
     ) -> (CriticalReaderState<T>, RoutineMaintenance) {
@@ -251,7 +251,7 @@ where
     }
 
     pub async fn register_schema(
-        &mut self,
+        &self,
         key_schema: &K::Schema,
         val_schema: &V::Schema,
     ) -> (Option<SchemaId>, RoutineMaintenance) {
@@ -264,7 +264,7 @@ where
         (state, maintenance)
     }
 
-    pub async fn spine_exert(&mut self, fuel: usize) -> (Vec<CompactReq<T>>, RoutineMaintenance) {
+    pub async fn spine_exert(&self, fuel: usize) -> (Vec<CompactReq<T>>, RoutineMaintenance) {
         // Performance special case for no-ops, to avoid the State clones.
         if fuel == 0 || self.applier.all_batches().len() < 2 {
             return (Vec::new(), RoutineMaintenance::default());
@@ -292,7 +292,7 @@ where
     }
 
     pub async fn compare_and_append(
-        &mut self,
+        &self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
         debug_info: &HandleDebugState,
@@ -345,7 +345,7 @@ where
     }
 
     async fn compare_and_append_idempotent(
-        &mut self,
+        &self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
         heartbeat_timestamp_ms: u64,
@@ -601,7 +601,7 @@ where
     }
 
     pub async fn merge_res(
-        &mut self,
+        &self,
         res: &FueledMergeRes<T>,
     ) -> (ApplyMergeResult, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
@@ -657,7 +657,7 @@ where
     }
 
     pub async fn downgrade_since(
-        &mut self,
+        &self,
         reader_id: &LeasedReaderId,
         outstanding_seqno: Option<SeqNo>,
         new_since: &Antichain<T>,
@@ -677,7 +677,7 @@ where
     }
 
     pub async fn compare_and_downgrade_since<O: Opaque + Codec64>(
-        &mut self,
+        &self,
         reader_id: &CriticalReaderId,
         expected_opaque: &O,
         (new_opaque, new_since): (&O, &Antichain<T>),
@@ -703,7 +703,7 @@ where
     }
 
     pub async fn heartbeat_leased_reader(
-        &mut self,
+        &self,
         reader_id: &LeasedReaderId,
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, bool, RoutineMaintenance) {
@@ -717,7 +717,7 @@ where
     }
 
     pub async fn expire_leased_reader(
-        &mut self,
+        &self,
         reader_id: &LeasedReaderId,
     ) -> (SeqNo, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
@@ -731,7 +731,7 @@ where
 
     #[allow(dead_code)] // TODO(bkirwi): remove this when since behaviour on expiry has settled
     pub async fn expire_critical_reader(
-        &mut self,
+        &self,
         reader_id: &CriticalReaderId,
     ) -> (SeqNo, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
@@ -743,7 +743,7 @@ where
         (seqno, maintenance)
     }
 
-    pub async fn expire_writer(&mut self, writer_id: &WriterId) -> (SeqNo, RoutineMaintenance) {
+    pub async fn expire_writer(&self, writer_id: &WriterId) -> (SeqNo, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
         let (seqno, _existed, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_writer, |_, _, state| {
@@ -772,7 +772,7 @@ where
     ///
     /// TODO: Unify this with [Self::register_schema]?
     pub async fn compare_and_evolve_schema(
-        &mut self,
+        &self,
         expected: SchemaId,
         key_schema: &K::Schema,
         val_schema: &V::Schema,
@@ -789,7 +789,7 @@ where
         (state, maintenance)
     }
 
-    async fn tombstone_step(&mut self) -> Result<(bool, RoutineMaintenance), InvalidUsage<T>> {
+    async fn tombstone_step(&self) -> Result<(bool, RoutineMaintenance), InvalidUsage<T>> {
         let metrics = Arc::clone(&self.applier.metrics);
         let mut retry = self
             .applier
@@ -828,7 +828,7 @@ where
         }
     }
 
-    pub async fn become_tombstone(&mut self) -> Result<RoutineMaintenance, InvalidUsage<T>> {
+    pub async fn become_tombstone(&self) -> Result<RoutineMaintenance, InvalidUsage<T>> {
         self.applier.check_since_upper_both_empty()?;
 
         let mut maintenance = RoutineMaintenance::default();
@@ -844,10 +844,7 @@ where
         Ok(maintenance)
     }
 
-    pub async fn snapshot(
-        &mut self,
-        as_of: &Antichain<T>,
-    ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
+    pub async fn snapshot(&self, as_of: &Antichain<T>) -> Result<Vec<HollowBatch<T>>, Since<T>> {
         let start = Instant::now();
         let (mut seqno, mut upper) = match self.applier.snapshot(as_of) {
             Ok(x) => return Ok(x),
@@ -993,7 +990,7 @@ where
     }
 
     pub async fn next_listen_batch(
-        &mut self,
+        &self,
         frontier: &Antichain<T>,
         watch: &mut StateWatch<K, V, T, D>,
         reader_id: Option<&LeasedReaderId>,
@@ -1109,7 +1106,7 @@ where
             &mut StateCollections<T>,
         ) -> ControlFlow<NoOpStateTransition<R>, R>,
     >(
-        &mut self,
+        &self,
         cmd: &CmdMetrics,
         mut work_fn: WorkFn,
     ) -> (SeqNo, R, RoutineMaintenance) {
@@ -1234,7 +1231,7 @@ where
     }
 
     async fn reader_heartbeat_task(
-        mut machine: Self,
+        machine: Self,
         reader_id: LeasedReaderId,
         gc: GarbageCollector<K, V, T, D>,
     ) {
@@ -1633,7 +1630,7 @@ pub mod datadriven {
 
     #[allow(clippy::unused_async)]
     pub async fn dyncfg(
-        datadriven: &mut MachineState,
+        datadriven: &MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let mut updates = ConfigUpdates::default();
@@ -2000,7 +1997,7 @@ pub mod datadriven {
     }
 
     pub async fn clear_blob(
-        datadriven: &mut MachineState,
+        datadriven: &MachineState,
         _args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let mut to_delete = vec![];
@@ -2018,7 +2015,7 @@ pub mod datadriven {
     }
 
     pub async fn restore_blob(
-        datadriven: &mut MachineState,
+        datadriven: &MachineState,
         _args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let not_restored = crate::internal::restore::restore_blob(
@@ -2062,7 +2059,7 @@ pub mod datadriven {
             new_seqno_since,
         };
         let (maintenance, stats) =
-            GarbageCollector::gc_and_truncate(&mut datadriven.machine, req).await;
+            GarbageCollector::gc_and_truncate(&datadriven.machine, req).await;
         datadriven.routine.push(maintenance);
 
         Ok(format!(
@@ -2086,7 +2083,7 @@ pub mod datadriven {
     }
 
     pub async fn snapshot(
-        datadriven: &mut MachineState,
+        datadriven: &MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let as_of = args.expect_antichain("as_of");
@@ -2238,7 +2235,7 @@ pub mod datadriven {
     }
 
     pub async fn heartbeat_leased_reader(
-        datadriven: &mut MachineState,
+        datadriven: &MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let reader_id = args.expect("reader_id");
@@ -2333,7 +2330,7 @@ pub mod datadriven {
     }
 
     pub(crate) fn is_finalized(
-        datadriven: &mut MachineState,
+        datadriven: &MachineState,
         _args: DirectiveArgs<'_>,
     ) -> anyhow::Result<String> {
         let seqno = datadriven.machine.seqno();
@@ -2556,14 +2553,14 @@ pub mod tests {
         // renders the shard permanently un-gc-able.
         assert!(new_seqno_since > SeqNo::minimum());
         intercept.set_post_delete(Some(Arc::new(|_, _| panic!("boom"))));
-        let mut machine = read.machine.clone();
+        let machine = read.machine.clone();
         // Run this in a spawn so we can catch the boom panic
         let gc = spawn(|| "", async move {
             let req = GcReq {
                 shard_id: machine.shard_id(),
                 new_seqno_since,
             };
-            GarbageCollector::gc_and_truncate(&mut machine, req).await
+            GarbageCollector::gc_and_truncate(&machine, req).await
         });
         // Wait for gc to either panic (regression case) or finish (good case)
         // because it happens to not call blob delete.
@@ -2576,7 +2573,7 @@ pub mod tests {
             shard_id: read.machine.shard_id(),
             new_seqno_since,
         };
-        let _ = GarbageCollector::gc_and_truncate(&mut read.machine, req.clone()).await;
+        let _ = GarbageCollector::gc_and_truncate(&read.machine, req.clone()).await;
     }
 
     // A regression test for materialize#20776, where a bug meant that compare_and_append

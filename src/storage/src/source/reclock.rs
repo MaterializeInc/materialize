@@ -95,7 +95,7 @@ where
     }
 
     /// Pushes a new trace batch into this [`ReclockFollower`].
-    pub fn push_trace_batch(&mut self, mut batch: ReclockBatch<FromTime, IntoTime>) {
+    pub fn push_trace_batch(&self, mut batch: ReclockBatch<FromTime, IntoTime>) {
         let mut inner = self.inner.borrow_mut();
         // Ensure we only add consolidated batches to our trace
         consolidation::consolidate_updates(&mut batch.updates);
@@ -690,7 +690,7 @@ mod tests {
 
         let (mut operator, initial_batch) = ReclockOperator::new(remap_handle).await;
 
-        let mut follower = ReclockFollower::new(as_of);
+        let follower = ReclockFollower::new(as_of);
 
         // Push any updates that might already exist in the persist shard to the follower.
         if *initial_batch.upper == [Timestamp::minimum()] {
@@ -741,7 +741,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_basic_usage() {
-        let (mut operator, mut follower) =
+        let (mut operator, follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
 
         // Reclock offsets 1 and 3 to timestamp 1000
@@ -1022,7 +1022,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock() {
-        let (mut operator, mut follower) =
+        let (mut operator, follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
 
         // Reclock offsets 1 and 2 to timestamp 1000
@@ -1169,7 +1169,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock_gh16318() {
-        let (mut operator, mut follower) =
+        let (mut operator, follower) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
 
         // First mint bindings for 0 at timestamp 1000
@@ -1456,7 +1456,7 @@ mod tests {
         let shared_shard = ShardId::new();
         let (mut op_a, mut follower_a) =
             make_test_operator(shared_shard, Antichain::from_elem(0.into())).await;
-        let (mut op_b, mut follower_b) =
+        let (mut op_b, follower_b) =
             make_test_operator(shared_shard, Antichain::from_elem(0.into())).await;
 
         // Reclock a batch from one of the operators

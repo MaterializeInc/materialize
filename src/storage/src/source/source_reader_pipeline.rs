@@ -360,14 +360,14 @@ where
     let name = format!("SourceGenericStats({})", source_id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
-    let (mut data_output, data) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (data_output, data) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (progress_output, derived_progress) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut data_input = builder.new_input_for_many(
         &input_data.inner,
         Pipeline,
         [&data_output, &progress_output],
     );
-    let (mut health_output, derived_health) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (health_output, derived_health) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     builder.build(move |mut caps| async move {
         let health_cap = caps.pop().unwrap();
@@ -475,7 +475,7 @@ where
 
     let operator_name = format!("remap({})", id);
     let mut remap_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-    let (mut remap_output, remap_stream) = remap_op.new_output::<CapacityContainerBuilder<_>>();
+    let (remap_output, remap_stream) = remap_op.new_output::<CapacityContainerBuilder<_>>();
 
     let button = remap_op.build(move |capabilities| async move {
         if !active_worker {
@@ -656,7 +656,7 @@ where
 
     let operator_name = format!("reclock({})", id);
     let mut reclock_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-    let (mut reclocked_output, reclocked_stream) =
+    let (reclocked_output, reclocked_stream) =
         reclock_op.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates.inner, Pipeline);
 

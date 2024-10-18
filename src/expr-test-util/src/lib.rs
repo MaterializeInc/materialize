@@ -215,7 +215,7 @@ impl ExprHumanizer for TestCatalog {
 pub struct MirScalarExprDeserializeContext;
 
 impl MirScalarExprDeserializeContext {
-    fn build_column(&mut self, token: Option<TokenTree>) -> Result<MirScalarExpr, String> {
+    fn build_column(&self, token: Option<TokenTree>) -> Result<MirScalarExpr, String> {
         if let Some(TokenTree::Literal(literal)) = token {
             return Ok(MirScalarExpr::Column(
                 literal
@@ -231,7 +231,7 @@ impl MirScalarExprDeserializeContext {
     }
 
     fn build_literal_if_able<I>(
-        &mut self,
+        &self,
         first_arg: TokenTree,
         rest_of_stream: &mut I,
     ) -> Result<Option<MirScalarExpr>, String>
@@ -265,7 +265,7 @@ impl MirScalarExprDeserializeContext {
     }
 
     fn build_literal_ok_if_able<I>(
-        &mut self,
+        &self,
         first_arg: TokenTree,
         rest_of_stream: &mut I,
     ) -> Result<Option<MirScalarExpr>, String>
@@ -457,7 +457,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
         })
     }
 
-    fn build_get(&mut self, token: Option<TokenTree>) -> Result<MirRelationExpr, String> {
+    fn build_get(&self, token: Option<TokenTree>) -> Result<MirRelationExpr, String> {
         match token {
             Some(TokenTree::Ident(ident)) => {
                 let name = ident.to_string();

@@ -1285,9 +1285,9 @@ where
         };
 
         Box::pin(async move {
-            let mut read_handle = read_handle?;
+            let read_handle = read_handle?;
             let result = match data_snapshot {
-                Some(data_snapshot) => data_snapshot.snapshot_parts_stats(&mut read_handle).await,
+                Some(data_snapshot) => data_snapshot.snapshot_parts_stats(&read_handle).await,
                 None => read_handle.snapshot_parts_stats(as_of).await,
             };
             read_handle.expire().await;

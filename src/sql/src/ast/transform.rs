@@ -421,7 +421,7 @@ impl CreateSqlRewriter {
         v.visit_query_mut(query);
     }
 
-    fn maybe_rewrite_idents(&mut self, name: &mut [Ident]) {
+    fn maybe_rewrite_idents(&self, name: &mut [Ident]) {
         if name.len() > 0 && name.ends_with(&self.from) {
             name[name.len() - 1] = self.to.clone();
         }
