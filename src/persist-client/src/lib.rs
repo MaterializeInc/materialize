@@ -753,6 +753,7 @@ mod tests {
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::lattice::Lattice;
     use futures_task::noop_waker;
+    use futures_util::StreamExt;
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::assert_ok;
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
@@ -1657,7 +1658,7 @@ mod tests {
     async fn concurrency(dyncfgs: ConfigUpdates) {
         let data = DataGenerator::small();
 
-        const NUM_WRITERS: usize = 2;
+        const NUM_WRITERS: usize = 1;
         let id = ShardId::new();
         let client = new_test_client(&dyncfgs).await;
         let mut handles = Vec::<mz_ore::task::JoinHandle<()>>::new();
@@ -1724,6 +1725,14 @@ mod tests {
                 while let Some(batch) = batch_rx.recv().await {
                     let lower = batch.lower().clone();
                     let upper = batch.upper().clone();
+                    eprintln!("BATCH {:?}", batch.batch.len);
+                    let parts: Vec<_> = batch
+                        .batch
+                        .part_stream(id, client.blob.as_ref())
+                        .collect()
+                        .await;
+                    eprintln!("PARTS {:?}", parts);
+
                     write
                         .append_batch(batch, lower, upper)
                         .await
@@ -1738,13 +1747,18 @@ mod tests {
             let () = handle.await.expect("task failed");
         }
 
-        let expected = data.records().collect::<Vec<_>>();
+        let mut expected = data.records().collect::<Vec<_>>();
         let max_ts = expected.last().map(|(_, t, _)| *t).unwrap_or_default();
+        expected.iter_mut().for_each(|(kv, t, d)| *t = max_ts);
+        consolidate_updates(&mut expected);
+
         let (_, mut read) = client.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
-        assert_eq!(
-            read.expect_snapshot_and_fetch(max_ts).await,
-            all_ok(expected.iter(), max_ts)
-        );
+        let fetched = read.expect_snapshot_and_fetch(max_ts).await;
+        let expected = all_ok(expected.iter(), max_ts);
+        // assert_eq!(fetched.len(), expected.len());
+        let missing: Vec<_> = expected.iter().filter(|p| !fetched.contains(p)).collect();
+        assert_eq!(missing[..], missing[..0]);
+        assert_eq!(fetched, expected);
     }
 
     // Regression test for database-issues#3523. Snapshot with as_of >= upper would

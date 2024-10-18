@@ -17,7 +17,7 @@ use std::sync::Arc;
 use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_ore::cast::CastInto;
+use mz_ore::cast::{CastFrom, CastInto};
 use mz_ore::{assert_none, halt};
 use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};

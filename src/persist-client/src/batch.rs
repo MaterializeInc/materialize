@@ -14,9 +14,9 @@ use differential_dataflow::Hashable;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Debug;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::mem;
-use std::ops::Deref;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
@@ -27,9 +27,11 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::{FuturesUnordered, StreamExt};
+use futures_util::FutureExt;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
+use mz_ore::vec::VecExt;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
@@ -45,7 +47,7 @@ use proptest_derive::Arbitrary;
 use semver::Version;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
+use timely::{Container, PartialOrder};
 use tracing::{debug_span, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
@@ -56,8 +58,8 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{
-    BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart, RunMeta, RunOrder, RunPart,
-    WRITE_DIFFS_SUM,
+    BatchPart, HollowBatch, HollowBatchPart, HollowRun, HollowRunRef, ProtoInlineBatchPart,
+    RunMeta, RunOrder, RunPart, WRITE_DIFFS_SUM,
 };
 use crate::stats::{
     encode_updates, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
@@ -171,9 +173,9 @@ where
         }
         let () = deletes
             .delete(
-                &self.blob,
+                &*self.blob,
                 self.shard_id(),
-                &self.metrics.retries.external.batch_delete,
+                &*self.metrics.retries.external.batch_delete,
             )
             .await;
     }
@@ -646,11 +648,6 @@ where
     write_schemas: Schemas<K, V>,
     buffer: BatchBuffer,
 
-    max_kvt_in_run: Option<(Vec<u8>, Vec<u8>, T)>,
-    runs: Vec<usize>,
-    run_meta: Vec<RunMeta>,
-    parts_written: usize,
-
     num_updates: usize,
     parts: BatchParts<T>,
 
@@ -700,10 +697,6 @@ where
             buffer: BatchBuffer::new(Arc::clone(&metrics), cfg.blob_target_size),
             metrics,
             write_schemas,
-            max_kvt_in_run: None,
-            parts_written: 0,
-            runs: Vec::new(),
-            run_meta: Vec::new(),
             num_updates: 0,
             parts,
             shard_id,
@@ -759,20 +752,29 @@ where
             .run_meta(self.parts.cfg.expected_order, self.write_schemas.id);
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
+        let expected_order = self.parts.cfg.expected_order;
         let parts = self.parts.finish().await;
 
         let desc = Description::new(self.lower, registered_upper, self.since);
-        if self.parts_written != 0 {
-            // Record the metadata for the final / implicit run.
-            self.run_meta.push(run_meta)
-        }
+        let (runs, run_meta) = if parts.is_empty() {
+            (vec![], vec![])
+        } else {
+            if expected_order == RunOrder::Unordered {
+                // all parts get their own run
+                ((1..parts.len()).collect(), vec![run_meta; parts.len()])
+            } else {
+                // we've generated one big run!
+                (vec![], vec![run_meta])
+            }
+        };
+
         let batch = Batch::new(
             batch_delete_enabled,
             Arc::clone(&self.metrics),
             self.blob,
             shard_metrics,
             self.version,
-            HollowBatch::new(desc, parts, self.num_updates, self.run_meta, self.runs),
+            HollowBatch::new(desc, parts, self.num_updates, run_meta, runs),
         );
 
         Ok(batch)
@@ -863,62 +865,6 @@ where
         }
         let diffs_sum = diffs_sum::<D>(columnar.records()).expect("part is non empty");
 
-        match self.parts.cfg.expected_order {
-            RunOrder::Codec => {
-                let columnar = columnar.records();
-                // if our parts are written in codec order, we can rely on their sorted order to
-                // appropriately determine runs of ordered parts
-                let ((min_part_k, min_part_v), min_part_t, _d) =
-                    columnar.get(0).expect("num updates is greater than zero");
-                let min_part_t = T::decode(min_part_t);
-                let ((max_part_k, max_part_v), max_part_t, _d) = columnar
-                    .get(num_updates.saturating_sub(1))
-                    .expect("num updates is greater than zero");
-                let max_part_t = T::decode(max_part_t);
-
-                if let Some((max_run_k, max_run_v, max_run_t)) = &mut self.max_kvt_in_run {
-                    // Our caller has promised to provide us data in sorted order. Verify that
-                    // the smallest data in the part is not regressing... but for now, keep splitting
-                    // runs as before.
-                    if (min_part_k, min_part_v, &min_part_t) < (max_run_k, max_run_v, max_run_t) {
-                        soft_panic_or_log!("expected data in sorted order");
-                        self.runs.push(self.parts_written);
-                        self.run_meta.push(
-                            self.parts
-                                .cfg
-                                .run_meta(RunOrder::Unordered, self.write_schemas.id),
-                        )
-                    }
-
-                    // given the above check, whether or not we extended an existing run or
-                    // started a new one, this part contains the greatest KVT in the run
-                    max_run_k.clear();
-                    max_run_v.clear();
-                    max_run_k.extend_from_slice(max_part_k);
-                    max_run_v.extend_from_slice(max_part_v);
-                    *max_run_t = max_part_t;
-                } else {
-                    self.max_kvt_in_run =
-                        Some((max_part_k.to_vec(), max_part_v.to_vec(), max_part_t));
-                }
-            }
-            RunOrder::Unordered => {
-                // if our parts are not consolidated, we simply say each part is its own run.
-                // NB: there is an implicit run starting at index 0
-                if self.parts_written > 0 {
-                    self.runs.push(self.parts_written);
-                    self.run_meta.push(
-                        self.parts
-                            .cfg
-                            .run_meta(RunOrder::Unordered, self.write_schemas.id),
-                    )
-                }
-            }
-            RunOrder::Structured => {
-                // Nothing to do - we should generate a single long run.
-            }
-        }
-
         let start = Instant::now();
         self.parts
             .write(
@@ -936,7 +882,6 @@ where
             .step_part_writing
             .inc_by(start.elapsed().as_secs_f64());
 
-        self.parts_written += 1;
         self.num_updates += num_updates;
     }
 }
@@ -1022,6 +967,36 @@ impl BatchBuffer {
     }
 }
 
+struct Pending<T> {
+    writing: Option<JoinHandle<T>>,
+    finished: Option<T>,
+}
+
+impl<T: Send + 'static> Pending<T> {
+    fn new(name: String, future: impl Future<Output = T> + Send + 'static) -> Self {
+        Self {
+            writing: Some(mz_ore::task::spawn(|| name, future)),
+            finished: None,
+        }
+    }
+
+    fn is_finished(&self) -> bool {
+        self.finished.is_some()
+    }
+
+    async fn into_result(mut self) -> T {
+        self.block_until_ready().await;
+        self.finished.expect("ready")
+    }
+
+    async fn block_until_ready(&mut self) {
+        if let Some(handle) = self.writing.take() {
+            let value = handle.wait_and_assert_finished().await;
+            self.finished = Some(value);
+        }
+    }
+}
+
 // TODO: If this is dropped, cancel (and delete?) any writing parts and delete
 // any finished ones.
 #[derive(Debug)]
@@ -1033,8 +1008,8 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob>,
     isolated_runtime: Arc<IsolatedRuntime>,
-    writing_parts: VecDeque<JoinHandle<BatchPart<T>>>,
-    finished_parts: Vec<RunPart<T>>,
+    writing_parts: VecDeque<(JoinHandle<RunPart<T>>, usize)>,
+    finished_parts: Vec<Vec<RunPart<T>>>,
     batch_metrics: BatchWriteMetrics,
 }
 
@@ -1058,7 +1033,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             blob,
             isolated_runtime,
             writing_parts: VecDeque::new(),
-            finished_parts: Vec::new(),
+            finished_parts: vec![vec![]],
             batch_metrics: batch_metrics.clone(),
         }
     }
@@ -1074,7 +1049,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     ) {
         let desc = Description::new(self.lower.clone(), upper, since);
         let batch_metrics = self.batch_metrics.clone();
-        let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
+        let index = u64::cast_from(
+            self.finished_parts.iter().map(|r| r.len()).sum::<usize>() + self.writing_parts.len(),
+        );
         let ts_rewrite = None;
         let schema_id = write_schemas.id;
 
@@ -1131,11 +1108,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     batch_metrics
                         .step_inline
                         .inc_by(start.elapsed().as_secs_f64());
-                    BatchPart::Inline {
+                    RunPart::Single(BatchPart::Inline {
                         updates,
                         ts_rewrite,
                         schema_id,
-                    }
+                    })
                 }
                 .instrument(span),
             )
@@ -1163,22 +1140,15 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     D::encode(&diffs_sum),
                     write_schemas.clone(),
                 )
+                .map(RunPart::Single)
                 .instrument(write_span),
             )
         };
-        self.writing_parts.push_back(handle);
+        self.writing_parts.push_back((handle, 0));
 
         while self.writing_parts.len() > self.cfg.batch_builder_max_outstanding_parts {
             batch_metrics.write_stalls.inc();
-            let handle = self
-                .writing_parts
-                .pop_front()
-                .expect("pop failed when len was just > some usize");
-            let part = handle
-                .instrument(debug_span!("batch::max_outstanding"))
-                .wait_and_assert_finished()
-                .await;
-            self.finished_parts.push(RunPart::Single(part));
+            self.finish_part().await;
         }
     }
 
@@ -1335,14 +1305,64 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         })
     }
 
-    #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(self) -> Vec<RunPart<T>> {
-        let mut parts = self.finished_parts;
-        for handle in self.writing_parts {
-            let part = handle.wait_and_assert_finished().await;
-            parts.push(RunPart::Single(part));
+    async fn finish_part(&mut self) {
+        let Some((handle, depth)) = self.writing_parts.pop_front() else {
+            return;
+        };
+        let part = handle
+            .instrument(debug_span!("batch::max_outstanding"))
+            .wait_and_assert_finished()
+            .await;
+        self.push_part(part, depth);
+    }
+
+    fn push_part(&mut self, part: RunPart<T>, depth: usize) {
+        let parts = self.finished_parts.get_or_default(depth);
+        parts.push(part);
+        if parts.len() >= 3 && self.cfg.expected_order != RunOrder::Unordered {
+            let runs = HollowRun {
+                parts: mem::take(parts),
+            };
+            let shard_id = self.shard_id;
+            let blob = Arc::clone(&self.blob);
+            let writer_key = self.cfg.writer_key.clone();
+            let handle = mz_ore::task::spawn(
+                || "batch::inline_part",
+                async move {
+                    let run_ref = HollowRunRef::set(shard_id, blob.as_ref(), &writer_key, runs)
+                        .await
+                        .expect("TODO: retry");
+
+                    RunPart::Many(run_ref)
+                }
+                .instrument(debug_span!("batch::spill_run")),
+            );
+            self.writing_parts.push_front((handle, depth + 1))
         }
-        parts
+    }
+
+    #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
+    pub(crate) async fn finish(mut self) -> Vec<RunPart<T>> {
+        while !self.writing_parts.is_empty() {
+            self.finish_part().await;
+        }
+
+        for depth in 0..(self.finished_parts.len() - 1) {
+            for part in mem::take(&mut self.finished_parts[depth]) {
+                self.push_part(part, depth + 1);
+            }
+            while !self.writing_parts.is_empty() {
+                self.finish_part().await;
+            }
+        }
+
+        while !self.writing_parts.is_empty() {
+            self.finish_part().await;
+        }
+
+        self.finished_parts
+            .pop()
+            .expect("all data in the deepest level")
     }
 }
 
@@ -1393,18 +1413,28 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
     Ok(())
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct PartDeletes(BTreeSet<PartialBatchKey>);
+#[derive(Debug)]
+pub(crate) struct PartDeletes<T> {
+    hollow_parts: BTreeSet<PartialBatchKey>,
+    hollow_runs: BTreeSet<HollowRunRef<T>>,
+}
 
-impl PartDeletes {
+impl<T> Default for PartDeletes<T> {
+    fn default() -> Self {
+        Self {
+            hollow_parts: Default::default(),
+            hollow_runs: Default::default(),
+        }
+    }
+}
+
+impl<T: Timestamp> PartDeletes<T> {
     // Adds the part to the set to be deleted and returns true if it was newly
     // inserted.
-    pub fn add<T>(&mut self, part: &RunPart<T>) -> bool {
+    pub fn add(&mut self, part: &RunPart<T>) -> bool {
         match part {
-            RunPart::Many(_) => {
-                todo!("walk the tree of parts and delete them individually.")
-            }
-            RunPart::Single(BatchPart::Hollow(x)) => self.0.insert(x.key.clone()),
+            RunPart::Many(r) => self.hollow_runs.insert(r.clone()),
+            RunPart::Single(BatchPart::Hollow(x)) => self.hollow_parts.insert(x.key.clone()),
             RunPart::Single(BatchPart::Inline { .. }) => {
                 // Nothing to delete.
                 true
@@ -1412,29 +1442,54 @@ impl PartDeletes {
         }
     }
 
-    pub async fn delete(
-        self,
-        blob: &Arc<dyn Blob>,
-        shard_id: ShardId,
-        metrics: &Arc<RetryMetrics>,
-    ) {
-        let deletes = FuturesUnordered::new();
-        for key in self.0 {
-            let metrics = Arc::clone(metrics);
-            let blob = Arc::clone(blob);
-            deletes.push(async move {
-                let key = key.complete(&shard_id);
-                retry_external(&metrics, || blob.delete(&key)).await;
-            });
+    pub fn contains(&mut self, part: &RunPart<T>) -> bool {
+        match part {
+            RunPart::Many(r) => self.hollow_runs.contains(r),
+            RunPart::Single(BatchPart::Hollow(x)) => self.hollow_parts.contains(&x.key),
+            RunPart::Single(BatchPart::Inline { .. }) => false,
         }
-        let () = deletes.collect().await;
     }
-}
 
-impl Deref for PartDeletes {
-    type Target = BTreeSet<PartialBatchKey>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    pub fn is_empty(&self) -> bool {
+        self.hollow_runs.is_empty() && self.hollow_parts.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.hollow_runs.len() + self.hollow_parts.len()
+    }
+
+    pub async fn delete(mut self, blob: &dyn Blob, shard_id: ShardId, metrics: &RetryMetrics)
+    where
+        T: Codec64,
+    {
+        loop {
+            let deletes = FuturesUnordered::new();
+            for key in std::mem::take(&mut self.hollow_parts) {
+                deletes.push(async move {
+                    let key = key.complete(&shard_id);
+                    retry_external(metrics, || blob.delete(&key)).await;
+                });
+            }
+            let () = deletes.collect().await;
+
+            let Some(run) = self.hollow_runs.pop_first() else {
+                break;
+            };
+
+            let runs = match run.get(shard_id, blob).await {
+                Ok(runs) => runs,
+                Err(err) => {
+                    warn!(
+                        "unable to retrieve runs to delete - already deleted? {:#?}",
+                        err
+                    );
+                    continue;
+                }
+            };
+            for part in &runs.parts {
+                self.add(part);
+            }
+        }
     }
 }
 
@@ -1491,7 +1546,7 @@ mod tests {
         let builder = write.builder(Antichain::from_elem(0));
         let mut builder = builder.builder;
         assert_eq!(builder.parts.writing_parts.len(), 0);
-        assert_eq!(builder.parts.finished_parts.len(), 0);
+        assert_eq!(builder.parts.finished_parts[0].len(), 0);
 
         // We set blob_target_size to 0, so the first update gets forced out
         // into a batch.
@@ -1500,7 +1555,7 @@ mod tests {
         let val = v.encode_to_vec();
         builder.add(&key, &val, t, d).await.expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 1);
-        assert_eq!(builder.parts.finished_parts.len(), 0);
+        assert_eq!(builder.parts.finished_parts[0].len(), 0);
 
         // We set batch_builder_max_outstanding_parts to 2, so we are allowed to
         // pipeline a second part.
@@ -1509,7 +1564,7 @@ mod tests {
         let val = v.encode_to_vec();
         builder.add(&key, &val, t, d).await.expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 2);
-        assert_eq!(builder.parts.finished_parts.len(), 0);
+        assert_eq!(builder.parts.finished_parts[0].len(), 0);
 
         // But now that we have 3 parts, the add call back-pressures until the
         // first one finishes.
@@ -1518,7 +1573,7 @@ mod tests {
         let val = v.encode_to_vec();
         builder.add(&key, &val, t, d).await.expect("invalid usage");
         assert_eq!(builder.parts.writing_parts.len(), 2);
-        assert_eq!(builder.parts.finished_parts.len(), 1);
+        assert_eq!(builder.parts.finished_parts[0].len(), 1);
 
         // Finish off the batch and verify that the keys and such get plumbed
         // correctly by reading the data back.

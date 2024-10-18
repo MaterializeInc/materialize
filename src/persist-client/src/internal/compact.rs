@@ -369,7 +369,7 @@ where
                         }
                         let () = part_deletes
                             .delete(
-                                &machine.applier.state_versions.blob,
+                                machine.applier.state_versions.blob.as_ref(),
                                 machine.shard_id(),
                                 &metrics.retries.external.compaction_noop_delete,
                             )

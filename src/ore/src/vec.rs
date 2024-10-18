@@ -150,6 +150,12 @@ pub trait VecExt<T> {
     fn is_sorted_by<F>(&self, compare: F) -> bool
     where
         F: FnMut(&T, &T) -> bool;
+
+    /// Get the value at the specified index, padding with the default value for T if
+    /// it does not exist. (By analogy with `map.entry(k).or_default()`.)
+    fn get_or_default(&mut self, index: usize) -> &mut T
+    where
+        T: Default;
 }
 
 /// Extension methods for `Vec<T>` where `T: PartialOrd`
@@ -180,6 +186,16 @@ impl<T> VecExt<T> for Vec<T> {
         F: FnMut(&T, &T) -> bool,
     {
         self.windows(2).all(|win| compare(&win[0], &win[1]))
+    }
+
+    fn get_or_default(&mut self, index: usize) -> &mut T
+    where
+        T: Default,
+    {
+        if index >= self.len() {
+            self.resize_with(index + 1, || T::default());
+        }
+        &mut self[index]
     }
 }
 

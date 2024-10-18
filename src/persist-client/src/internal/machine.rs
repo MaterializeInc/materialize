@@ -1809,8 +1809,6 @@ pub mod datadriven {
             for part in batch.parts.iter_mut() {
                 if let RunPart::Single(BatchPart::Hollow(part)) = part {
                     part.encoded_size_bytes = size
-                } else {
-                    unreachable!("flushed out above")
                 }
             }
             datadriven.batches.insert(output.to_owned(), batch);
@@ -1833,6 +1831,7 @@ pub mod datadriven {
             .part_stream(datadriven.shard_id, &*datadriven.state_versions.blob)
             .enumerate());
         while let Some((idx, part)) = stream.next().await {
+            let part = part?;
             write!(s, "<part {idx}>\n");
             let key_lower = match &*part {
                 BatchPart::Hollow(x) => x.key_lower.clone(),
@@ -2120,7 +2119,7 @@ pub mod datadriven {
                         datadriven.machine.applier.shard_metrics.as_ref(),
                         &datadriven.client.metrics.read.batch_fetcher,
                         &batch.desc,
-                        &part,
+                        &*part?,
                     )
                     .await
                     .expect("invalid batch part");

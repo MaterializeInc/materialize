@@ -21,6 +21,7 @@ use bytes::{BufMut, Bytes};
 use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use futures_util::TryStreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -30,7 +31,6 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::RustType;
 use prost::Message;
 use serde_json::json;
-use tokio_stream::StreamExt;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
@@ -41,7 +41,7 @@ use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
-use crate::internal::state::{BatchPart, ProtoRollup, ProtoStateDiff, RunPart, State};
+use crate::internal::state::{BatchPart, ProtoRollup, ProtoStateDiff, State};
 use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
 use crate::{Metrics, PersistClient, PersistConfig, ShardId};
@@ -591,14 +591,14 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
             known_writers.insert(writer_id.clone());
         }
         for batch in v.collections.trace.batches() {
-            for batch_part in &batch.parts {
-                match batch_part {
-                    RunPart::Single(BatchPart::Hollow(x)) => known_parts.insert(x.key.clone()),
-                    RunPart::Single(BatchPart::Inline { .. }) => continue,
-                    RunPart::Many(runs) => {
-                        known_parts.insert(runs.key.clone());
-                        todo!("recursively fetch")
-                    }
+            // TODO: this may end up refetching externally-stored runs once per batch...
+            // but if we have enough parts for this to be a problem, we may need to track a more
+            // efficient state representation.
+            let mut parts = pin!(batch.part_stream(shard_id, &*state_versions.blob));
+            while let Some(batch_part) = parts.try_next().await? {
+                match &*batch_part {
+                    BatchPart::Hollow(x) => known_parts.insert(x.key.clone()),
+                    BatchPart::Inline { .. } => continue,
                 };
             }
         }
