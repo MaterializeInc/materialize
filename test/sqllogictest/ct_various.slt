@@ -73,3 +73,17 @@ CREATE CONTINUAL TASK no_input_refs (key INT) ON INPUT input AS (
 query I
 SELECT * FROM no_input_refs;
 ----
+
+# INSERT will put in a cast if necessary
+statement ok
+CREATE CONTINUAL TASK cast_int_to_string (key STRING) ON INPUT input AS (
+    INSERT INTO cast_int_to_string SELECT * FROM input WHERE key > 1;
+)
+
+statement ok
+INSERT INTO input VALUES (2);
+
+query T
+SELECT * FROM cast_int_to_string;
+----
+2

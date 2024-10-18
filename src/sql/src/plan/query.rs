@@ -879,16 +879,17 @@ fn handle_mutation_using_clause(
     Ok(get.filter(vec![using_rel_expr.exists()]))
 }
 
-struct CastRelationError {
-    column: usize,
-    source_type: ScalarType,
-    target_type: ScalarType,
+#[derive(Debug)]
+pub(crate) struct CastRelationError {
+    pub(crate) column: usize,
+    pub(crate) source_type: ScalarType,
+    pub(crate) target_type: ScalarType,
 }
 
 /// Cast a relation from one type to another using the specified type of cast.
 ///
 /// The length of `target_types` must match the arity of `expr`.
-fn cast_relation<'a, I>(
+pub(crate) fn cast_relation<'a, I>(
     qcx: &QueryContext,
     ccx: CastContext,
     expr: HirRelationExpr,

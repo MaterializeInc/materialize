@@ -28,7 +28,27 @@ ALTER SYSTEM SET enable_create_continual_task = true
 COMPLETE 0
 
 # INSERT columns do not match
-statement error CONTINUAL TASK query columns did not match
-CREATE CONTINUAL TASK nope (key STRING) ON INPUT foo AS (
+statement error statement 0: column "key" is of type boolean but expression is of type integer
+CREATE CONTINUAL TASK nope (key BOOL) ON INPUT foo AS (
+    INSERT INTO nope SELECT * FROM foo;
+)
+
+statement error statement 0: INSERT has more target columns than expressions
+CREATE CONTINUAL TASK nope (key INT) ON INPUT foo AS (
+    INSERT INTO nope SELECT FROM foo;
+)
+
+statement error statement 0: INSERT has more expressions than target columns
+CREATE CONTINUAL TASK nope (key INT) ON INPUT foo AS (
+    INSERT INTO nope SELECT *, 'nope' FROM foo;
+)
+
+# Cannot use a VIEW (or other things not directly backed by a persist shard) as
+# an input.
+statement ok
+CREATE VIEW some_view AS SELECT *, 'bar' FROM foo;
+
+statement error CONTINUAL TASK cannot use view as an input
+CREATE CONTINUAL TASK nope (key INT, val STRING) ON INPUT some_view AS (
     INSERT INTO nope SELECT * FROM foo;
 )
