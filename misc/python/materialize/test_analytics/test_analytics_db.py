@@ -32,6 +32,9 @@ from materialize.test_analytics.data.output_consistency.output_consistency_stats
 from materialize.test_analytics.data.parallel_benchmark.parallel_benchmark_result_storage import (
     ParallelBenchmarkResultStorage,
 )
+from materialize.test_analytics.data.product_limits.product_limits_result_storage import (
+    ProductLimitsResultStorage,
+)
 from materialize.test_analytics.data.scalability_framework.scalability_framework_result_storage import (
     ScalabilityFrameworkResultStorage,
 )
@@ -60,6 +63,9 @@ class TestAnalyticsDb:
         self.output_consistency = OutputConsistencyStatsStorage(self.database_connector)
         self.known_issues = KnownIssuesStorage(self.database_connector)
         self.parallel_benchmark_results = ParallelBenchmarkResultStorage(
+            self.database_connector
+        )
+        self.product_limits_results = ProductLimitsResultStorage(
             self.database_connector
         )
 
