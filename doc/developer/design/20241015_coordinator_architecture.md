@@ -187,11 +187,37 @@ of the catalog to plan and sequence the query locally. We need to:
 This looks like a significant task that requires intimate understanding of how
 query processing works, but has the chance to yield significant improvements.
 
-### Batching of requests
+### Efficient use of prepared statements
+
+Materializes simply handles prepared statements as a safe form of string
+interpolation, but doesn't use the opportunity to avoid re-doing some work. We
+could reduce the average query latency by a split optimizer that first
+optimizes the prepared statements without bound values, and then only does a
+fast pass optimization once values are bound.
+
+This might have obvious limits where different values lead to differently
+optimized plans, so some care needs to be taken here.
 
 ### Caching optimized plans
 
+Some workloads might show repeated submissions of the same query, or one that
+is very similar to a past query. (Determining similarity is probably a too hard
+problem to solve.) We could maintain a cache of recent queries, invalidated
+with catalog changes, to avoid re-optimizing the same query if the state of the
+world didn't sufficiently change to make a different optimization decision.
+
 ### Caching results
+
+A similar approach would be to cache results of queries. The benefit here would
+be to avoid rendering a dataflow for slow-path queries, or a network round-trip
+to the replica for fast-path queries.
+
+### Batching of requests
+
+When interacting with expensive parts of the query processing pipeline, it
+might make sense to batch several requests together and work on them
+concurrently. For example, the timestamp oracle could fulfill many requests in
+one operation versus one-by-one.
 
 ## Minimal viable prototype
 
