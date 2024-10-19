@@ -1564,7 +1564,7 @@ impl CatalogItem {
     /// Collects the identifiers of the objects that were encountered when resolving names in the
     /// item's DDL statement.
     pub fn references(&self) -> &ResolvedIds {
-        static EMPTY: LazyLock<ResolvedIds> = LazyLock::new(|| ResolvedIds::empty());
+        static EMPTY: LazyLock<ResolvedIds> = LazyLock::new(ResolvedIds::empty);
         match self {
             CatalogItem::Func(_) => &*EMPTY,
             CatalogItem::Index(idx) => &idx.resolved_ids,

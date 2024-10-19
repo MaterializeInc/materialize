@@ -382,6 +382,11 @@ impl Catalog {
                 }
             })
             .collect();
+        let dropped_global_ids = drop_ids
+            .iter()
+            .flat_map(|item_id| self.get_global_ids(item_id))
+            .collect();
+
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
         let mut audit_events = vec![];
@@ -421,10 +426,6 @@ impl Catalog {
         self.transient_revision += 1;
 
         // Drop in-memory planning metadata.
-        let dropped_global_ids = drop_ids
-            .into_iter()
-            .flat_map(|item_id| self.get_global_ids(&item_id))
-            .collect();
         let dropped_notices = self.drop_plans_and_metainfos(&dropped_global_ids);
         if self.state.system_config().enable_mz_notices() {
             // Generate retractions for the Builtin tables.
@@ -1035,7 +1036,7 @@ impl Catalog {
                             .iter()
                             .find(|id| match state.try_get_entry(*id) {
                                 Some(entry) => entry.item().is_temporary(),
-                                None => temporary_ids.contains(&id),
+                                None => temporary_ids.contains(id),
                             })
                     {
                         let temp_item = state.get_entry(temp_id);
@@ -1887,7 +1888,7 @@ impl Catalog {
                 tx.update_schema(schema_id, new_schema.into())?;
 
                 for id in updates {
-                    Self::log_update(state, &id);
+                    Self::log_update(state, id);
                 }
             }
             Op::UpdateOwner { id, new_owner } => {

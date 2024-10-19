@@ -68,7 +68,7 @@ pub fn upgrade(
                     key: old_mapping
                         .key
                         .as_ref()
-                        .map(|old| v69::GidMappingKey::convert(old)),
+                        .map(v69::GidMappingKey::convert),
                     // ** MIGRATION **
                     value: old_mapping
                         .value

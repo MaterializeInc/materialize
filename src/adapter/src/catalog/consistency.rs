@@ -395,7 +395,7 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !used_by_entry.uses().contains(&id) {
+                if !used_by_entry.uses().contains(id) {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUses {
                             object_a: *id,

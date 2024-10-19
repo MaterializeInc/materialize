@@ -2422,7 +2422,7 @@ pub fn plan_create_view(
             scx.catalog
                 .item_dependents(id)
                 .into_iter()
-                .map(|id| id.unwrap_item_id().into())
+                .map(|id| id.unwrap_item_id())
                 .collect()
         })
         .unwrap_or_default();

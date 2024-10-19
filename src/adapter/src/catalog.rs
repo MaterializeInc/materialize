@@ -1429,7 +1429,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 custom_id: Some(item_id),
                 ..
             } => {
-                let item = self.get_item(&item_id);
+                let item = self.get_item(item_id);
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
@@ -1444,7 +1444,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 custom_id: Some(item_id),
                 ..
             } => {
-                let item = self.get_item(&item_id);
+                let item = self.get_item(item_id);
                 self.minimal_qualification(item.name()).to_string()
             }
             Record { fields, .. } => format!(

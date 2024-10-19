@@ -398,7 +398,7 @@ impl Coordinator {
                 .iter()
                 .find(|id| collections_to_drop.contains(id))
             {
-                let entry = self.catalog().get_entry_by_global_id(&id);
+                let entry = self.catalog().get_entry_by_global_id(id);
                 let name = self
                     .catalog()
                     .resolve_full_name(entry.name(), Some(conn_id))
@@ -429,7 +429,7 @@ impl Coordinator {
                 .iter()
                 .find(|id| collections_to_drop.contains(id))
             {
-                let entry = self.catalog().get_entry_by_global_id(&id);
+                let entry = self.catalog().get_entry_by_global_id(id);
                 let name = self
                     .catalog()
                     .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
@@ -838,7 +838,7 @@ impl Coordinator {
     /// A convenience method for dropping sources.
     fn drop_sources(&mut self, sources: Vec<(CatalogItemId, Source)>) {
         for (id, _source) in &sources {
-            self.active_webhooks.remove(&id);
+            self.active_webhooks.remove(id);
         }
         let storage_metadata = self.catalog.state().storage_metadata();
         let source_gids = sources

@@ -350,7 +350,7 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
                 version: RelationVersionSelector::Latest,
             };
 
-            if let Some(comments_map) = catalog.get_item_comments(&object_id) {
+            if let Some(comments_map) = catalog.get_item_comments(object_id) {
                 // Attach comment for the item itself, if the user has not
                 // already provided an overriding `DOC ON` option for the item.
                 let doc_on_item_key = AvroDocOn {

@@ -640,7 +640,7 @@ impl<'a> Transaction<'a> {
         ) {
             Ok(_) => Ok(()),
             Err(_) => {
-                Err(SqlCatalogError::ItemAlreadyExists(id.into(), item_name.to_owned()).into())
+                Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into())
             }
         }
     }

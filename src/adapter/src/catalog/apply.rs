@@ -569,7 +569,7 @@ impl CatalogState {
                     name.clone(),
                     CatalogItem::Log(Log {
                         variant: log.variant,
-                        global_id: global_id,
+                        global_id,
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(acl_items),
@@ -799,7 +799,7 @@ impl CatalogState {
                 let mut item = self
                     .parse_item(
                         global_id,
-                        &connection.sql.to_string(),
+                        connection.sql,
                         &versions,
                         None,
                         false,
@@ -1151,7 +1151,7 @@ impl CatalogState {
                 // `StateUpdateKind::Item`.`
                 if !system_object_mapping.unique_identifier.runtime_alterable() {
                     self.pack_item_update(
-                        system_object_mapping.unique_identifier.catalog_id.into(),
+                        system_object_mapping.unique_identifier.catalog_id,
                         diff,
                     )
                 } else {
@@ -2075,7 +2075,7 @@ fn lookup_builtin_view_addition(
 
     (
         view,
-        mapping.unique_identifier.catalog_id.into(),
-        mapping.unique_identifier.collection_id.into(),
+        mapping.unique_identifier.catalog_id,
+        mapping.unique_identifier.collection_id,
     )
 }

@@ -4617,7 +4617,7 @@ where
 {
     let log_names = source_ids
         .iter()
-        .map(|gid| catalog.resolve_item_id(&gid))
+        .map(|gid| catalog.resolve_item_id(gid))
         .flat_map(|item_id| catalog.introspection_dependencies(item_id))
         .map(|item_id| catalog.get_entry(&item_id).name().item.clone())
         .collect::<Vec<_>>();

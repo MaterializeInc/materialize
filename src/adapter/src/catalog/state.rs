@@ -591,14 +591,14 @@ impl CatalogState {
 
     pub fn get_entry(&self, id: &CatalogItemId) -> &CatalogEntry {
         self.entry_by_id
-            .get(&id)
+            .get(id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"))
     }
 
     pub fn get_entry_by_global_id(&self, id: &GlobalId) -> &CatalogEntry {
         let item_id = self
             .entry_by_global_id
-            .get(&id)
+            .get(id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"));
         self.get_entry(item_id)
     }
@@ -825,42 +825,47 @@ impl CatalogState {
         let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &session_catalog)?;
 
         let item = match plan {
-            Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
-                create_sql: Some(table.create_sql),
-                desc: table.desc,
-                // TODO(alter_table): Validate the provided versions against the ones from the Plan.
-                collections: versions.clone(),
-                conn_id: None,
-                resolved_ids,
-                custom_logical_compaction_window: custom_logical_compaction_window
-                    .or(table.compaction_window),
-                is_retained_metrics_object,
-                data_source: match table.data_source {
-                    mz_sql::plan::TableDataSource::TableWrites { defaults } => {
-                        TableDataSource::TableWrites { defaults }
-                    }
-                    mz_sql::plan::TableDataSource::DataSource(data_source_desc) => {
-                        match data_source_desc {
-                            mz_sql::plan::DataSourceDesc::IngestionExport {
-                                ingestion_id,
-                                external_reference,
-                                details,
-                                data_config,
-                            } => TableDataSource::DataSource(DataSourceDesc::IngestionExport {
-                                ingestion_id,
-                                external_reference,
-                                details,
-                                data_config,
-                            }),
-                            _ => {
-                                return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                    "unsupported data source for table"
-                                )))
+            Plan::CreateTable(CreateTablePlan { table, .. }) => {
+                // TODO(alter_table): Support versioning tables.
+                assert_eq!(versions.len(), 0);
+                let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+
+                CatalogItem::Table(Table {
+                    create_sql: Some(table.create_sql),
+                    desc: table.desc,
+                    collections,
+                    conn_id: None,
+                    resolved_ids,
+                    custom_logical_compaction_window: custom_logical_compaction_window
+                        .or(table.compaction_window),
+                    is_retained_metrics_object,
+                    data_source: match table.data_source {
+                        mz_sql::plan::TableDataSource::TableWrites { defaults } => {
+                            TableDataSource::TableWrites { defaults }
+                        }
+                        mz_sql::plan::TableDataSource::DataSource(data_source_desc) => {
+                            match data_source_desc {
+                                mz_sql::plan::DataSourceDesc::IngestionExport {
+                                    ingestion_id,
+                                    external_reference,
+                                    details,
+                                    data_config,
+                                } => TableDataSource::DataSource(DataSourceDesc::IngestionExport {
+                                    ingestion_id,
+                                    external_reference,
+                                    details,
+                                    data_config,
+                                }),
+                                _ => {
+                                    return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                                        "unsupported data source for table"
+                                    )))
+                                }
                             }
                         }
-                    }
-                },
-            }),
+                    },
+                })
+            }
             Plan::CreateSource(CreateSourcePlan {
                 source,
                 timeline,
@@ -988,7 +993,7 @@ impl CatalogState {
                 })
             }
             Plan::CreateContinualTask(plan) => CatalogItem::ContinualTask(
-                crate::continual_task::ct_item_from_plan(&self, plan, global_id, resolved_ids)?,
+                crate::continual_task::ct_item_from_plan(self, plan, global_id, resolved_ids)?,
             ),
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,

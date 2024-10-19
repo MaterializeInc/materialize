@@ -784,7 +784,7 @@ impl Catalog {
         visited_set.insert(id);
         let entry = state.get_entry(&id);
         for dependant in entry.used_by() {
-            if !visited_set.contains(&dependant) {
+            if !visited_set.contains(dependant) {
                 let child_topological_sort =
                     Catalog::topological_sort(state, *dependant, visited_set);
                 sorted_entries.extend(child_topological_sort);
