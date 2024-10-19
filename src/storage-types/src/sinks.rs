@@ -63,7 +63,7 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
     /// support `ALTER CONNECTION` or `ALTER SINK`.
     fn alter_compatible(
         &self,
-        id: CatalogItemId,
+        id: GlobalId,
         other: &StorageSinkDesc<S, T>,
     ) -> Result<(), AlterError> {
         if self == other {
@@ -304,7 +304,7 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
     /// CONNECTION`).
     pub fn alter_compatible(
         &self,
-        id: CatalogItemId,
+        id: GlobalId,
         other: &StorageSinkConnection<C>,
     ) -> Result<(), AlterError> {
         if self == other {
@@ -524,7 +524,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
     /// CONNECTION`).
     pub fn alter_compatible(
         &self,
-        id: CatalogItemId,
+        id: GlobalId,
         other: &KafkaSinkConnection<C>,
     ) -> Result<(), AlterError> {
         if self == other {
@@ -804,7 +804,7 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
         }
     }
 
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }

@@ -66,7 +66,7 @@ impl Coordinator {
             .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_FRONTIERS);
         let replica_frontier_gid = self
             .catalog()
-            .get_entry(replica_frontier_item_id)
+            .get_entry(&replica_frontier_item_id)
             .latest_global_id();
 
         let live_frontiers = self

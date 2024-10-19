@@ -437,7 +437,7 @@ impl Coordinator {
             if !seen.insert(id) {
                 continue;
             }
-            if let Some(entry) = self.catalog().try_get_entry(&id) {
+            if let Some(entry) = self.catalog().try_get_entry_by_global_id(&id) {
                 match entry.item() {
                     CatalogItem::Source(source) => {
                         timelines
@@ -540,7 +540,7 @@ impl Coordinator {
         // Gather all the used schemas.
         let mut schemas = BTreeSet::new();
         for id in uses_ids {
-            let entry = self.catalog().resolve_global_id(id);
+            let entry = self.catalog().get_entry_by_global_id(id);
             let name = entry.name();
             schemas.insert((name.qualifiers.database_spec, name.qualifiers.schema_spec));
         }

@@ -316,6 +316,7 @@ message CatalogItemKind {
 
   message Connection {
     string create_sql = 1;
+    GlobalId storage_id = 2;
   }
 
   message ContinualTask {

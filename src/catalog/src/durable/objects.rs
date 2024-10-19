@@ -1219,6 +1219,7 @@ pub enum ItemValueKind {
     },
     Connection {
         create_sql: String,
+        storage_id: GlobalId,
     },
 }
 
@@ -1234,7 +1235,7 @@ impl ItemValueKind {
             | ItemValueKind::Type { create_sql }
             | ItemValueKind::Function { create_sql }
             | ItemValueKind::Secret { create_sql }
-            | ItemValueKind::Connection { create_sql }
+            | ItemValueKind::Connection { create_sql, .. }
             | ItemValueKind::ContinualTask { create_sql, .. } => &create_sql,
         }
     }
@@ -1288,7 +1289,7 @@ impl ItemValueKind {
             | ItemValueKind::Type { create_sql }
             | ItemValueKind::Function { create_sql }
             | ItemValueKind::Secret { create_sql }
-            | ItemValueKind::Connection { create_sql }
+            | ItemValueKind::Connection { create_sql, .. }
             | ItemValueKind::ContinualTask { create_sql, .. } => {
                 *create_sql = new_sql;
             }

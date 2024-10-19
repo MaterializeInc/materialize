@@ -33,7 +33,7 @@ pub mod stats;
 pub trait AlterCompatible: std::fmt::Debug + PartialEq {
     fn alter_compatible(
         &self,
-        id: mz_repr::CatalogItemId,
+        id: mz_repr::GlobalId,
         other: &Self,
     ) -> Result<(), controller::AlterError> {
         if self == other {
@@ -44,4 +44,5 @@ pub trait AlterCompatible: std::fmt::Debug + PartialEq {
     }
 }
 
+impl AlterCompatible for mz_repr::GlobalId {}
 impl AlterCompatible for mz_repr::CatalogItemId {}

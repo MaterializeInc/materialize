@@ -166,7 +166,7 @@ impl Coordinator {
             .from
             .depends_on()
             .iter()
-            .map(|id| id.to_item_id())
+            .map(|id| self.catalog().resolve_item_id(id))
             .collect();
         let validity = PlanValidity::new(
             self.catalog.transient_revision(),
@@ -217,6 +217,7 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
         );
+        let catalog = self.owned_catalog();
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
@@ -227,7 +228,8 @@ impl Coordinator {
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.from)?;
                     // Add introduced indexes as validity dependencies.
                     let id_bundle = global_mir_plan.id_bundle(cluster_id);
-                    validity.extend_dependencies(id_bundle.iter().map(|id| id.to_item_id()));
+                    let item_ids = id_bundle.iter().map(|id| catalog.resolve_item_id(&id));
+                    validity.extend_dependencies(item_ids);
 
                     let stage = IntrospectionSubscribeStage::TimestampOptimizeLir(
                         IntrospectionSubscribeTimestampOptimizeLir {

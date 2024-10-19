@@ -39,7 +39,6 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
-use mz_ore::option::FallibleMapExt;
 use mz_ore::result::ResultExt as _;
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log};
 use mz_persist_client::PersistClient;
@@ -846,20 +845,28 @@ impl Catalog {
         self.state.resolve_full_name(name, conn_id)
     }
 
-    pub fn try_get_entry<T: Into<CatalogItemId>>(&self, id: T) -> Option<&CatalogEntry> {
+    pub fn try_get_entry(&self, id: &CatalogItemId) -> Option<&CatalogEntry> {
         self.state.try_get_entry(id)
     }
 
-    pub fn get_entry<T: Into<CatalogItemId>>(&self, id: T) -> &CatalogEntry {
+    pub fn try_get_entry_by_global_id(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+        self.state.try_get_entry_by_global_id(id)
+    }
+
+    pub fn get_entry(&self, id: &CatalogItemId) -> &CatalogEntry {
         self.state.get_entry(id)
+    }
+
+    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> &CatalogEntry {
+        self.state.get_entry_by_global_id(id)
     }
 
     pub fn get_global_ids(&self, id: &CatalogItemId) -> impl Iterator<Item = GlobalId> + '_ {
         self.get_entry(id).global_ids()
     }
 
-    pub fn resolve_global_id(&self, id: &GlobalId) -> &CatalogEntry {
-        self.state.get_entry_by_global_id(id)
+    pub fn resolve_item_id(&self, id: &GlobalId) -> CatalogItemId {
+        self.get_entry_by_global_id(id).item_id()
     }
 
     pub fn get_schema(
@@ -1030,7 +1037,7 @@ impl Catalog {
     }
 
     /// Return the ids of all log sources the given object depends on.
-    pub fn introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+    pub fn introspection_dependencies(&self, id: CatalogItemId) -> Vec<CatalogItemId> {
         self.state.introspection_dependencies(id)
     }
 
@@ -3220,7 +3227,7 @@ mod tests {
 
             for entry in catalog.entries() {
                 let schema_spec = entry.name().qualifiers.schema_spec;
-                let introspection_deps = catalog.introspection_dependencies(entry.id.into());
+                let introspection_deps = catalog.introspection_dependencies(entry.id);
                 if introspection_deps.is_empty() {
                     assert!(
                         schema_spec != introspection_schema_spec,

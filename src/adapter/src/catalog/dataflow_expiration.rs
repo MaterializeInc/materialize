@@ -20,7 +20,7 @@ impl Catalog {
             false
         };
 
-        let item_id = self.resolve_global_id(&id).item_id();
+        let item_id = self.resolve_item_id(&id);
         test_has_transitive_refresh_schedule(item_id)
             || self
                 .state()

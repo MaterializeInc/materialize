@@ -346,7 +346,7 @@ impl Coordinator {
         let appends = appends
             .into_iter()
             .map(|(id, updates)| {
-                let gid = self.catalog().get_entry(id).latest_global_id();
+                let gid = self.catalog().get_entry(&id).latest_global_id();
                 let updates = updates
                     .into_iter()
                     .map(|(row, diff)| TimestamplessUpdate { row, diff })

@@ -2221,11 +2221,17 @@ impl ResolvedIds {
 
 impl FromIterator<(CatalogItemId, GlobalId)> for ResolvedIds {
     fn from_iter<T: IntoIterator<Item = (CatalogItemId, GlobalId)>>(iter: T) -> Self {
-        let mut entries: BTreeMap<CatalogItemId, BTreeSet<_>> = BTreeMap::new();
+        let mut ids = ResolvedIds::empty();
+        ids.extend(iter);
+        ids
+    }
+}
+
+impl Extend<(CatalogItemId, GlobalId)> for ResolvedIds {
+    fn extend<T: IntoIterator<Item = (CatalogItemId, GlobalId)>>(&mut self, iter: T) {
         for (item_id, global_id) in iter {
-            entries.entry(item_id).or_default().insert(global_id);
+            self.entries.entry(item_id).or_default().insert(global_id);
         }
-        ResolvedIds { entries }
     }
 }
 

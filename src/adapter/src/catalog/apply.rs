@@ -668,7 +668,7 @@ impl CatalogState {
                         CatalogItem::Type(item_type) => item_type,
                         _ => unreachable!("types can only reference other types"),
                     };
-                    item_type.details.array_id = Some(global_id);
+                    item_type.details.array_id = Some(item_id);
                 }
 
                 // Assert that no built-in types are record types so that we don't
@@ -794,6 +794,7 @@ impl CatalogState {
             Builtin::Connection(connection) => {
                 let kind = ItemValueKind::Connection {
                     create_sql: connection.sql.to_string(),
+                    storage_id: global_id,
                 };
                 let mut item = self
                     .parse_item(

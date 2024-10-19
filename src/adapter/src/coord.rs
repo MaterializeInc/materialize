@@ -1943,7 +1943,7 @@ impl Coordinator {
                         {
                             policy = Some(
                                 self.catalog()
-                                    .get_entry(&ingestion_id)
+                                    .get_entry_by_global_id(&ingestion_id)
                                     .source()
                                     .expect("must be source")
                                     .custom_logical_compaction_window
@@ -2171,7 +2171,7 @@ impl Coordinator {
             } else {
                 let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
                 for update in migrated_builtin_table_updates {
-                    let gid = self.catalog().get_entry(update.id).latest_global_id();
+                    let gid = self.catalog().get_entry(&update.id).latest_global_id();
                     appends
                         .entry(gid)
                         .or_default()
@@ -2473,7 +2473,7 @@ impl Coordinator {
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
         let source_status_collection_id = catalog
-            .get_entry(source_status_collection_id)
+            .get_entry(&source_status_collection_id)
             .latest_global_id();
 
         let source_desc = |data_source: &DataSourceDesc, desc: &RelationDesc| {
@@ -2616,10 +2616,11 @@ impl Coordinator {
     /// selection itself.
     async fn bootstrap_builtin_continual_tasks(
         &mut self,
+        // TODO(alter_table): Switch to CatalogItemId.
         mut collections: Vec<(GlobalId, CollectionDescription<Timestamp>)>,
     ) {
         for (id, collection) in &mut collections {
-            let entry = self.catalog.get_entry(*id);
+            let entry = self.catalog.get_entry_by_global_id(id);
             let ct = match &entry.item {
                 CatalogItem::ContinualTask(ct) => ct.clone(),
                 _ => unreachable!("only called with continual task builtins"),
@@ -3409,7 +3410,7 @@ impl Coordinator {
         let item_id = self
             .catalog()
             .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD);
-        let global_id = self.catalog.get_entry(item_id).latest_global_id();
+        let global_id = self.catalog.get_entry(&item_id).latest_global_id();
         let read_ts = self.get_local_read_ts().await;
         let current_contents_fut = self.controller.storage.snapshot(global_id, read_ts);
         let internal_cmd_tx = self.internal_cmd_tx.clone();

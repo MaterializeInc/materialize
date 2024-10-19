@@ -348,8 +348,9 @@ impl Coordinator {
         // are not producing the same definite collection for these.
         let log_names = expr_depends_on
             .iter()
-            .flat_map(|id| self.catalog().introspection_dependencies(*id))
-            .map(|id| self.catalog().get_entry(&id).name().item.clone())
+            .map(|gid| self.catalog.resolve_item_id(gid))
+            .flat_map(|item_id| self.catalog().introspection_dependencies(item_id))
+            .map(|item_id| self.catalog().get_entry(&item_id).name().item.clone())
             .collect::<Vec<_>>();
         if !log_names.is_empty() {
             return Err(AdapterError::InvalidLogDependency {

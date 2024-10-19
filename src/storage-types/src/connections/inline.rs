@@ -27,7 +27,7 @@ use crate::AlterCompatible;
 
 use super::Connection;
 
-/// Permits any struct to take a [`CatalogItemId`] into an inlined connection.
+/// Permits any struct to take a [`GlobalId`] into an inlined connection.
 ///
 /// It is safe to assume that if this `id` does not refer to a catalog
 /// connection, this function will panic.

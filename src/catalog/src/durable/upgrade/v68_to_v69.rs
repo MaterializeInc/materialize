@@ -141,7 +141,10 @@ impl From<v68::state_update_kind::Item> for v69::state_update_kind::Item {
                             })
                         }
                         Some("CONNECTION") => v69::catalog_item_kind::Value::Connection(
-                            v69::catalog_item_kind::Connection { create_sql },
+                            v69::catalog_item_kind::Connection {
+                                create_sql,
+                                storage_id: global_id,
+                            },
                         ),
                         Some("MATERIALIZED") => {
                             assert_eq!(tokens.next(), Some("VIEW"));

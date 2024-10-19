@@ -294,13 +294,13 @@ impl CatalogState {
 
     /// Computes the IDs of any log sources this catalog entry transitively
     /// depends on.
-    pub fn introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+    pub fn introspection_dependencies(&self, id: CatalogItemId) -> Vec<CatalogItemId> {
         let mut out = Vec::new();
         self.introspection_dependencies_inner(id, &mut out);
         out
     }
 
-    fn introspection_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
+    fn introspection_dependencies_inner(&self, id: CatalogItemId, out: &mut Vec<CatalogItemId>) {
         match self.get_entry(&id).item() {
             CatalogItem::Log(_) => out.push(id),
             item @ (CatalogItem::View(_)
@@ -308,12 +308,18 @@ impl CatalogState {
             | CatalogItem::Connection(_)
             | CatalogItem::ContinualTask(_)) => {
                 // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
-                for gid in item.references().collections() {
-                    self.introspection_dependencies_inner(*gid, out);
+                for item_id in item.references().items() {
+                    self.introspection_dependencies_inner(*item_id, out);
                 }
             }
-            CatalogItem::Sink(sink) => self.introspection_dependencies_inner(sink.from, out),
-            CatalogItem::Index(idx) => self.introspection_dependencies_inner(idx.on, out),
+            CatalogItem::Sink(sink) => {
+                let from_item_id = self.get_entry_by_global_id(&sink.from).item_id();
+                self.introspection_dependencies_inner(from_item_id, out)
+            }
+            CatalogItem::Index(idx) => {
+                let on_item_id = self.get_entry_by_global_id(&idx.on).item_id();
+                self.introspection_dependencies_inner(on_item_id, out)
+            }
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Type(_)
@@ -584,8 +590,7 @@ impl CatalogState {
         }
     }
 
-    pub fn get_entry<T: Into<CatalogItemId>>(&self, id: T) -> &CatalogEntry {
-        let id = id.into();
+    pub fn get_entry(&self, id: &CatalogItemId) -> &CatalogEntry {
         self.entry_by_id
             .get(&id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"))
@@ -671,9 +676,13 @@ impl CatalogState {
         name
     }
 
-    pub fn try_get_entry<T: Into<CatalogItemId>>(&self, id: T) -> Option<&CatalogEntry> {
-        let id: CatalogItemId = id.into();
-        self.entry_by_id.get(&id)
+    pub fn try_get_entry(&self, id: &CatalogItemId) -> Option<&CatalogEntry> {
+        self.entry_by_id.get(id)
+    }
+
+    pub fn try_get_entry_by_global_id(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+        let item_id = self.entry_by_global_id.get(id)?;
+        self.try_get_entry(item_id)
     }
 
     pub(crate) fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
@@ -1057,9 +1066,10 @@ impl CatalogState {
                         },
                     ..
                 }),
-                ItemValueKind::Connection { .. },
+                ItemValueKind::Connection { storage_id, .. },
             ) => CatalogItem::Connection(Connection {
                 create_sql,
+                storage_id: *storage_id,
                 details,
                 resolved_ids,
             }),
@@ -1105,7 +1115,7 @@ impl CatalogState {
     ) -> impl Iterator<Item = (GlobalId, &Index)> {
         let index_matches = move |idx: &Index| idx.on == id && idx.cluster_id == cluster;
 
-        self.try_get_entry(&id)
+        self.try_get_entry_by_global_id(&id)
             .into_iter()
             .map(move |e| {
                 e.used_by()
@@ -1363,7 +1373,7 @@ impl CatalogState {
     /// Panics if the builtin log doesn't exist in the catalog.
     pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> (CatalogItemId, GlobalId) {
         let item_id = self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin));
-        let log = match self.get_entry(item_id).item() {
+        let log = match self.get_entry(&item_id).item() {
             CatalogItem::Log(log) => log,
             other => unreachable!("programming error, expected BuiltinLog, found {other:?}"),
         };
@@ -2133,7 +2143,7 @@ impl CatalogState {
                     // For subsources, look up the parent source and propagate the compaction
                     // window.
                     let ingestion = self
-                        .get_entry(&ingestion_id)
+                        .get_entry_by_global_id(&ingestion_id)
                         .source()
                         .expect("must be source");
                     let cw = ingestion
@@ -2243,7 +2253,7 @@ impl ConnectionResolver for CatalogState {
 
 impl OptimizerCatalog for CatalogState {
     fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
-        CatalogState::get_entry(self, id)
+        CatalogState::get_entry_by_global_id(self, id)
     }
     fn resolve_full_name(
         &self,
@@ -2263,7 +2273,7 @@ impl OptimizerCatalog for CatalogState {
 
 impl OptimizerCatalog for Catalog {
     fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
-        self.state.get_entry(id)
+        self.state.get_entry_by_global_id(id)
     }
 
     fn resolve_full_name(

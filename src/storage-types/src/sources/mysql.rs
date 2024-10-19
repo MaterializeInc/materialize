@@ -16,6 +16,7 @@ use std::sync::LazyLock;
 
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::CatalogItemId;
+use mz_repr::GlobalId;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::Partitioned;
 use mz_timely_util::order::Step;
@@ -143,7 +144,7 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for MySqlSourceConnection<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -225,7 +226,7 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
 impl AlterCompatible for MySqlSourceDetails {
     fn alter_compatible(
         &self,
-        _id: CatalogItemId,
+        _id: GlobalId,
         _other: &Self,
     ) -> Result<(), crate::controller::AlterError> {
         Ok(())
@@ -275,7 +276,7 @@ impl RustType<ProtoMySqlSourceExportDetails> for MySqlSourceExportDetails {
 impl AlterCompatible for MySqlSourceExportDetails {
     fn alter_compatible(
         &self,
-        _id: CatalogItemId,
+        _id: GlobalId,
         _other: &Self,
     ) -> Result<(), crate::controller::AlterError> {
         // compatibility checks are performed against the upstream table in the source

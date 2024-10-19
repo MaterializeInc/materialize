@@ -181,7 +181,7 @@ impl<S: Clone> IngestionDescription<S> {
 impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionDescription<S> {
     fn alter_compatible(
         &self,
-        id: CatalogItemId,
+        id: GlobalId,
         other: &IngestionDescription<S>,
     ) -> Result<(), AlterError> {
         if self == other {
@@ -763,7 +763,7 @@ impl RustType<ProtoSourceExportDataConfig> for SourceExportDataConfig {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for SourceExportDataConfig<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -880,7 +880,7 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
     /// Determines if `self` is compatible with another `SourceDesc`, in such a
     /// way that it is possible to turn `self` into `other` through a valid
     /// series of transformations (e.g. no transformation or `ALTER SOURCE`).
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -1059,7 +1059,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -1130,7 +1130,7 @@ pub enum SourceExportDetails {
 }
 
 impl crate::AlterCompatible for SourceExportDetails {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }

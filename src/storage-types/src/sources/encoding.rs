@@ -13,7 +13,7 @@ use anyhow::Context;
 use mz_interchange::{avro, protobuf};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::regex::any_regex;
-use mz_repr::{CatalogItemId, ColumnType, RelationDesc, ScalarType};
+use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -76,7 +76,7 @@ impl RustType<ProtoSourceDataEncoding> for SourceDataEncoding {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for SourceDataEncoding<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -271,7 +271,7 @@ impl<C: ConnectionAccess> DataEncoding<C> {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for DataEncoding<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -323,7 +323,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<AvroEncoding, R>
 }
 
 impl<C: ConnectionAccess> AlterCompatible for AvroEncoding<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }

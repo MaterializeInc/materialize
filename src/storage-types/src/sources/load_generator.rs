@@ -15,7 +15,7 @@ use std::time::Duration;
 use mz_ore::now::NowFn;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::{CatalogItemId, RelationDesc, Row, ScalarType};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Row, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -739,7 +739,7 @@ impl RustType<ProtoLoadGeneratorSourceExportDetails> for LoadGeneratorSourceExpo
 }
 
 impl AlterCompatible for LoadGeneratorSourceExportDetails {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let Self { output } = self;
         if output != &other.output {
             tracing::warn!(

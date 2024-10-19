@@ -322,7 +322,7 @@ impl ConnectionValidationError {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
-    fn alter_compatible(&self, id: mz_repr::CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         match (self, other) {
             (Self::Aws(s), Self::Aws(o)) => s.alter_compatible(id, o),
             (Self::AwsPrivatelink(s), Self::AwsPrivatelink(o)) => s.alter_compatible(id, o),
@@ -350,7 +350,7 @@ pub struct AwsPrivatelinkConnection {
 }
 
 impl AlterCompatible for AwsPrivatelinkConnection {
-    fn alter_compatible(&self, _id: CatalogItemId, _other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
         // Every element of the AwsPrivatelinkConnection connection is configurable.
         Ok(())
     }
@@ -874,7 +874,7 @@ impl KafkaConnection {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for KafkaConnection<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let KafkaConnection {
             brokers: _,
             default_tunnel: _,
@@ -1222,7 +1222,7 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for CsrConnection<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let CsrConnection {
             tunnel,
             // All non-tunnel fields may change
@@ -1537,7 +1537,7 @@ impl PostgresConnection<InlinedConnection> {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for PostgresConnection<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let PostgresConnection {
             tunnel,
             flavor,
@@ -1657,7 +1657,7 @@ impl RustType<ProtoTunnel> for Tunnel<InlinedConnection> {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for Tunnel<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let compatible = match (self, other) {
             (Self::Ssh(s), Self::Ssh(o)) => s.alter_compatible(id, o).is_ok(),
             (s, o) => s == o,
@@ -1960,7 +1960,7 @@ impl RustType<ProtoMySqlConnection> for MySqlConnection {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let MySqlConnection {
             tunnel,
             // All non-tunnel options may change arbitrarily
@@ -2022,7 +2022,7 @@ impl RustType<ProtoSshConnection> for SshConnection {
 }
 
 impl AlterCompatible for SshConnection {
-    fn alter_compatible(&self, _id: CatalogItemId, _other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
         // Every element of the SSH connection is configurable.
         Ok(())
     }
@@ -2061,7 +2061,7 @@ impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
 }
 
 impl AlterCompatible for AwsPrivatelink {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let AwsPrivatelink {
             connection_id,
             availability_zone: _,
@@ -2174,7 +2174,7 @@ impl SshTunnel<InlinedConnection> {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for SshTunnel<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let SshTunnel {
             connection_id,
             connection,

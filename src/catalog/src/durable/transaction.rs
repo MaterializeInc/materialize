@@ -1561,7 +1561,7 @@ impl<'a> Transaction<'a> {
     /// Insert persisted introspection source index.
     pub fn insert_introspection_source_indexes(
         &mut self,
-        introspection_source_indexes: Vec<(ClusterId, String, GlobalId)>,
+        introspection_source_indexes: Vec<(ClusterId, String, CatalogItemId, GlobalId)>,
         temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
         if introspection_source_indexes.is_empty() {
@@ -1574,10 +1574,10 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .zip(oids)
             .map(
-                |((cluster_id, name, index_id), oid)| IntrospectionSourceIndex {
+                |((cluster_id, name, item_id, index_id), oid)| IntrospectionSourceIndex {
                     cluster_id,
                     name,
-                    item_id: index_id.to_item_id(),
+                    item_id,
                     index_id,
                     oid,
                 },

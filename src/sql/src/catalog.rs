@@ -810,7 +810,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogTypeDetails<T: TypeReference> {
     /// The ID of the type with this type as the array element, if available.
-    pub array_id: Option<GlobalId>,
+    pub array_id: Option<CatalogItemId>,
     /// The description of this type.
     pub typ: CatalogType<T>,
     /// Additional metadata about the type in PostgreSQL, if relevant.

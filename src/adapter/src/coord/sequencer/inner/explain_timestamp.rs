@@ -102,7 +102,7 @@ impl Coordinator {
             .raw_plan
             .depends_on()
             .into_iter()
-            .map(|id| id.to_item_id())
+            .map(|id| self.catalog().resolve_item_id(&id))
             .collect();
         let validity = PlanValidity::new(
             self.catalog().transient_revision(),
@@ -176,7 +176,7 @@ impl Coordinator {
         let source_ids = optimized_plan.depends_on();
         let source_items: Vec<_> = source_ids
             .iter()
-            .map(|gid| self.catalog().resolve_global_id(gid).item_id())
+            .map(|gid| self.catalog().resolve_item_id(gid))
             .collect();
         let fut = self
             .determine_real_time_recent_timestamp(session, source_items.into_iter())
@@ -236,7 +236,7 @@ impl Coordinator {
             for (id, since, upper) in frontiers {
                 let name = self
                     .catalog()
-                    .try_get_entry(&id)
+                    .try_get_entry_by_global_id(&id)
                     .map(|item| item.name())
                     .map(|name| {
                         self.catalog()
@@ -261,7 +261,7 @@ impl Coordinator {
                         .collection_frontiers(*id, Some(cluster_id))
                         .expect("id does not exist");
                     let name = catalog
-                        .try_get_entry(id)
+                        .try_get_entry_by_global_id(id)
                         .map(|item| item.name())
                         .map(|name| {
                             catalog

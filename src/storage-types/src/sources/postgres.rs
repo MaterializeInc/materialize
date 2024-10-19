@@ -12,7 +12,7 @@
 use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::{CatalogItemId, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, ScalarType};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -133,7 +133,7 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for PostgresSourceConnection<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -248,7 +248,7 @@ pub struct PostgresSourceExportDetails {
 }
 
 impl AlterCompatible for PostgresSourceExportDetails {
-    fn alter_compatible(&self, _id: CatalogItemId, _other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
         // compatibility checks are performed against the upstream table in the source
         // render operators instead
         let Self {
@@ -327,7 +327,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
 }
 
 impl AlterCompatible for PostgresSourcePublicationDetails {
-    fn alter_compatible(&self, id: mz_repr::CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let PostgresSourcePublicationDetails {
             slot,
             timeline_id,

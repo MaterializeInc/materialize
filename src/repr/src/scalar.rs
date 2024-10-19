@@ -1494,6 +1494,7 @@ pub enum ScalarType {
     /// always be [`Datum::Null`].
     List {
         element_type: Box<ScalarType>,
+        // TODO(parkmycar): Switch to CatalogItemId.
         custom_id: Option<GlobalId>,
     },
     /// An ordered and named sequence of datums.
@@ -1503,6 +1504,7 @@ pub enum ScalarType {
         ///
         /// Boxed slice to reduce the size of the enum variant.
         fields: Box<[(ColumnName, ColumnType)]>,
+        // TODO(parkmycar): Switch to CatalogItemId.
         custom_id: Option<GlobalId>,
     },
     /// A PostgreSQL object identifier.
@@ -1514,6 +1516,7 @@ pub enum ScalarType {
     /// be [`Datum::Null`].
     Map {
         value_type: Box<ScalarType>,
+        // TODO(parkmycar): Switch to CatalogItemId.
         custom_id: Option<GlobalId>,
     },
     /// A PostgreSQL function name.

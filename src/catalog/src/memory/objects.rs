@@ -1315,8 +1315,13 @@ pub struct Secret {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Connection {
+    /// Parse-able SQL that defines this connection.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this connection from the storage layer.
+    pub storage_id: GlobalId,
+    /// The kind of connection.
     pub details: ConnectionDetails,
+    /// Other objects this connection depends on.
     pub resolved_ids: ResolvedIds,
 }
 

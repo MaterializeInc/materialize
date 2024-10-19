@@ -495,7 +495,7 @@ impl CatalogState {
                             data_config: _,
                         } => {
                             let ingestion_entry = self
-                                .get_entry(ingestion_id)
+                                .get_entry_by_global_id(ingestion_id)
                                 .source_desc()
                                 .expect("primary source exists")
                                 .expect("primary source is a source");
@@ -565,7 +565,7 @@ impl CatalogState {
                     // Ingestion exports don't have their own cluster, but
                     // run on their ingestion's cluster.
                     DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                        self.get_entry(&ingestion_id)
+                        self.get_entry_by_global_id(&ingestion_id)
                     }
                     _ => entry,
                 };
@@ -610,7 +610,7 @@ impl CatalogState {
                         data_config: _,
                     } => {
                         let ingestion_entry = self
-                            .get_entry(ingestion_id)
+                            .get_entry_by_global_id(ingestion_id)
                             .source_desc()
                             .expect("primary source exists")
                             .expect("primary source is a source");
@@ -721,7 +721,7 @@ impl CatalogState {
                         custom_id: Some(custom_id),
                         ..
                     } => {
-                        let entry = self.get_entry(custom_id);
+                        let entry = self.get_entry_by_global_id(custom_id);
                         // NOTE(benesch): the `mz_columns.type text` field is
                         // wrong. Types do not have a name that can be
                         // represented as a single textual field. There can be
@@ -1538,7 +1538,7 @@ impl CatalogState {
         });
 
         for (i, key) in index.keys.iter().enumerate() {
-            let on_entry = self.get_entry(&index.on);
+            let on_entry = self.get_entry_by_global_id(&index.on);
             let nullable = key
                 .typ(
                     &on_entry

@@ -372,7 +372,10 @@ impl Coordinator {
         )?;
         session.add_notices(notices);
 
-        let dependencies = source_ids.iter().map(|id| id.to_item_id()).collect();
+        let dependencies = source_ids
+            .iter()
+            .map(|id| self.catalog.resolve_item_id(id))
+            .collect();
         let validity = PlanValidity::new(
             catalog.transient_revision(),
             dependencies,
@@ -481,7 +484,10 @@ impl Coordinator {
 
         // Although we have added `sources.depends_on()` to the validity already, also add the
         // sufficient collections for safety.
-        validity.extend_dependencies(id_bundle.iter().map(|id| id.to_item_id()));
+        let item_ids = id_bundle
+            .iter()
+            .map(|id| self.catalog().resolve_item_id(&id));
+        validity.extend_dependencies(item_ids);
 
         let determination = self.sequence_peek_timestamp(
             session,
@@ -746,7 +752,7 @@ impl Coordinator {
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         let item_ids: Vec<_> = source_ids
             .iter()
-            .map(|gid| self.catalog.resolve_global_id(gid).item_id())
+            .map(|gid| self.catalog.resolve_item_id(gid))
             .collect();
         let fut = self
             .determine_real_time_recent_timestamp(session, item_ids.into_iter())

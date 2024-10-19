@@ -455,7 +455,7 @@ impl Coordinator {
                 is_retained_metrics_object: false,
                 custom_logical_compaction_window: compaction_window,
             }),
-            owner_id: *self.catalog().get_entry(&on).owner_id(),
+            owner_id: *self.catalog().get_entry_by_global_id(&on).owner_id(),
         }];
 
         // Collect properties for `DataflowExpirationDesc`.
@@ -556,7 +556,7 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
         let session_catalog = self.catalog().for_session(session);
         let expr_humanizer = {
-            let on_entry = self.catalog.get_entry(&index.on);
+            let on_entry = self.catalog.get_entry_by_global_id(&index.on);
             let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
             let on_desc = on_entry
                 .desc(&full_name)

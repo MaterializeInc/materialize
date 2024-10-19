@@ -644,9 +644,13 @@ impl RustType<proto::CatalogItemKind> for ItemValueKind {
                     create_sql: create_sql.clone(),
                 })
             }
-            ItemValueKind::Connection { create_sql } => {
+            ItemValueKind::Connection {
+                create_sql,
+                storage_id,
+            } => {
                 proto::catalog_item_kind::Value::Connection(proto::catalog_item_kind::Connection {
                     create_sql: create_sql.clone(),
+                    storage_id: Some(storage_id.into_proto()),
                 })
             }
         };
@@ -724,6 +728,9 @@ impl RustType<proto::CatalogItemKind> for ItemValueKind {
             },
             Connection(conn) => ItemValueKind::Connection {
                 create_sql: conn.create_sql,
+                storage_id: conn
+                    .storage_id
+                    .into_rust_if_some("ItemValueKind::Connection::storage_id")?,
             },
         };
 

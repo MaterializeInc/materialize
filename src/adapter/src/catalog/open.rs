@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
+use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::dyncfgs::ENABLE_CONTINUAL_TASK_BUILTINS;
 use mz_catalog::builtin::{
@@ -533,7 +534,7 @@ impl Catalog {
             .collect();
         let collections_to_drop = storage_collections_to_drop
             .into_iter()
-            .flat_map(|item_id| self.get_entry(item_id).global_ids())
+            .flat_map(|item_id| self.get_entry(&item_id).global_ids())
             .collect();
 
         // Clone the state so that any errors that occur do not leak any
@@ -919,8 +920,11 @@ fn add_new_remove_old_builtin_items_migration(
         .iter()
         .filter(|(desc, _)| !system_object_mappings.contains_key(desc))
         .count();
-    let mut new_ids = txn
+    let mut new_item_ids = txn
         .allocate_system_item_ids(usize_to_u64(new_builtin_amount))?
+        .into_iter();
+    let mut new_gids = txn
+        .allocate_system_global_ids(usize_to_u64(new_builtin_amount))?
         .into_iter();
 
     // Look for new and migrated builtins.
@@ -960,9 +964,9 @@ fn add_new_remove_old_builtin_items_migration(
                 }
             }
             None => {
-                let item_id = new_ids.next().expect("not enough global IDs");
-                // TODO(alter_table): Allocate a unique GlobalId.
-                let collection_id = item_id.to_global_id();
+                let item_id = new_item_ids.next().expect("not enough global IDs");
+                let collection_id = new_gids.next().expect("not enough global IDs");
+
                 new_builtins.push(SystemObjectMapping {
                     description: SystemObjectDescription {
                         schema_name: builtin.schema().to_string(),
@@ -991,6 +995,7 @@ fn add_new_remove_old_builtin_items_migration(
                         acl_items.extend_from_slice(c.access);
                         let kind = ItemValueKind::Connection {
                             create_sql: c.sql.into(),
+                            storage_id: collection_id,
                         };
                         txn.insert_item(
                             item_id,
@@ -1105,10 +1110,16 @@ fn add_new_remove_old_builtin_introspection_source_migration(
             }
         }
 
-        let new_ids = txn.allocate_system_item_ids(usize_to_u64(new_logs.len()))?;
-        assert_eq!(new_logs.len(), new_ids.len());
-        for (log, index_id) in new_logs.into_iter().zip(new_ids) {
-            new_indexes.push((cluster.id, log.name.to_string(), index_id.to_global_id()));
+        let new_item_ids = txn.allocate_system_item_ids(usize_to_u64(new_logs.len()))?;
+        let new_gids = txn.allocate_system_global_ids(usize_to_u64(new_logs.len()))?;
+        let new_entries = new_logs
+            .into_iter()
+            .zip_eq(new_item_ids)
+            .zip_eq(new_gids)
+            .map(|((log, item_id), gid)| (log, item_id, gid));
+
+        for (log, item_id, gid) in new_entries {
+            new_indexes.push((cluster.id, log.name.to_string(), item_id, gid));
         }
 
         // Anything left in `introspection_source_index_ids` must have been deleted and should be

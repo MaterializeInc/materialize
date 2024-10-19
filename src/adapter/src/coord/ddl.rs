@@ -398,7 +398,7 @@ impl Coordinator {
                 .iter()
                 .find(|id| collections_to_drop.contains(id))
             {
-                let entry = self.catalog().get_entry(id);
+                let entry = self.catalog().get_entry_by_global_id(&id);
                 let name = self
                     .catalog()
                     .resolve_full_name(entry.name(), Some(conn_id))
@@ -429,7 +429,7 @@ impl Coordinator {
                 .iter()
                 .find(|id| collections_to_drop.contains(id))
             {
-                let entry = self.catalog().get_entry(id);
+                let entry = self.catalog().get_entry_by_global_id(&id);
                 let name = self
                     .catalog()
                     .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
@@ -1243,7 +1243,7 @@ impl Coordinator {
         let status_id = self
             .catalog()
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY);
-        let status_id = Some(self.catalog().get_entry(status_id).latest_global_id());
+        let status_id = Some(self.catalog().get_entry(&status_id).latest_global_id());
 
         // The AsOf is used to determine at what time to snapshot reading from
         // the persist collection.  This is primarily relevant when we do _not_
@@ -1266,7 +1266,7 @@ impl Coordinator {
         let read_holds = self.acquire_read_holds(&id_bundle);
         let as_of = self.least_valid_read(&read_holds);
 
-        let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
+        let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry

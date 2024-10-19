@@ -231,7 +231,7 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -385,7 +385,7 @@ pub struct KafkaSourceExportDetails {
 }
 
 impl crate::AlterCompatible for KafkaSourceExportDetails {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let Self { metadata_columns } = self;
         let compatibility_checks = [(
             metadata_columns == &other.metadata_columns,

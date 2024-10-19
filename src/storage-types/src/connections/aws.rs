@@ -20,7 +20,7 @@ use aws_types::SdkConfig;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::CatalogItemId;
+use mz_repr::{CatalogItemId, GlobalId};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -91,7 +91,7 @@ impl RustType<ProtoAwsConnection> for AwsConnection {
 }
 
 impl AlterCompatible for AwsConnection {
-    fn alter_compatible(&self, _id: CatalogItemId, _other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
         // Every element of the AWS connection is configurable.
         Ok(())
     }

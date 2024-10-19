@@ -885,16 +885,14 @@ where
             DataSource::Ingestion(cur_ingestion) => {
                 cur_ingestion
                     .desc
-                    .alter_compatible(ingestion_id.to_item_id(), source_desc)?;
+                    .alter_compatible(ingestion_id, source_desc)?;
             }
             o => {
                 tracing::info!(
                     "{ingestion_id} inalterable because its data source is {:?} and not an ingestion",
                     o
                 );
-                Err(AlterError {
-                    id: ingestion_id.to_item_id(),
-                })?
+                Err(AlterError { id: ingestion_id })?
             }
         }
 
@@ -1319,7 +1317,7 @@ where
             new_export_description.sink.connection = connection;
 
             // Ensure compatibility
-            current_sink.alter_compatible(id.to_item_id(), &new_export_description.sink)?;
+            current_sink.alter_compatible(id, &new_export_description.sink)?;
 
             let from_storage_metadata = self
                 .storage_collections

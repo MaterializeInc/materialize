@@ -17,7 +17,7 @@ use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_timely_util::antichain::AntichainExt;
 use proptest_derive::Arbitrary;
@@ -50,7 +50,7 @@ pub struct CollectionMetadata {
 }
 
 impl crate::AlterCompatible for CollectionMetadata {
-    fn alter_compatible(&self, id: CatalogItemId, other: &Self) -> Result<(), self::AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), self::AlterError> {
         if self == other {
             return Ok(());
         }
@@ -343,7 +343,7 @@ pub struct InvalidUpper<T> {
 
 #[derive(Debug)]
 pub struct AlterError {
-    pub id: CatalogItemId,
+    pub id: GlobalId,
 }
 
 impl Error for AlterError {}

@@ -297,7 +297,7 @@ impl crate::coord::Coordinator {
             .map(|(item_id, policy)| {
                 // Set the read policy for all GlobalIds associated with an item.
                 self.catalog()
-                    .get_entry(item_id)
+                    .get_entry(&item_id)
                     .global_ids()
                     .map(move |gid| (gid, policy.clone()))
             })
@@ -326,12 +326,12 @@ impl crate::coord::Coordinator {
     pub(crate) fn update_compute_read_policy(
         &self,
         compute_instance: ComputeInstanceId,
-        id: CatalogItemId,
+        item_id: CatalogItemId,
         base_policy: ReadPolicy<Timestamp>,
     ) {
         let policies = self
             .catalog()
-            .get_entry(id)
+            .get_entry(&item_id)
             .global_ids()
             .map(move |gid| (compute_instance, gid, base_policy.clone()))
             .collect();

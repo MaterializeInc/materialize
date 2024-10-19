@@ -156,7 +156,10 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
     }
 
     // These dependencies are just existing dataflows that are referenced in the plan.
-    let mut depends_on = depends_on.into_iter().peekable();
+    let mut depends_on = depends_on
+        .into_iter()
+        .map(|gid| catalog.resolve_item_id(&gid))
+        .peekable();
     let has_dependencies = depends_on.peek().is_some();
 
     // Make sure we only depend on the system catalog, and nothing we depend on is a

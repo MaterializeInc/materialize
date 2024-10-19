@@ -573,7 +573,7 @@ impl Coordinator {
                     let source_status_collection_id = Some(
                         coord
                             .catalog()
-                            .get_entry(source_status_item_id)
+                            .get_entry(&source_status_item_id)
                             .latest_global_id(),
                     );
 
@@ -796,11 +796,13 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let storage_id = self.catalog_mut().allocate_user_global_id().await?;
         let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
+                storage_id,
                 details: plan.connection.details.clone(),
                 resolved_ids,
             }),
@@ -1036,7 +1038,7 @@ impl Coordinator {
                                 let status_collection_id = Some(
                                     coord
                                         .catalog()
-                                        .get_entry(source_status_item_id)
+                                        .get_entry(&source_status_item_id)
                                         .latest_global_id(),
                                 );
                                 let collection_desc = CollectionDescription::<Timestamp> {
@@ -1146,7 +1148,7 @@ impl Coordinator {
             owner_id: *ctx.session().current_role_id(),
         }];
 
-        let from = self.catalog().get_entry(&catalog_sink.from);
+        let from = self.catalog().get_entry_by_global_id(&catalog_sink.from);
         if let Err(e) = self
             .controller
             .storage
@@ -1223,7 +1225,7 @@ impl Coordinator {
         if uses_ambiguous_columns
             && depends_on
                 .iter()
-                .any(|id| id.is_system() && self.catalog().get_entry(id).is_relation())
+                .any(|id| id.is_system() && self.catalog().get_entry_by_global_id(id).is_relation())
         {
             Err(AdapterError::AmbiguousSystemColumnReference)
         } else {
@@ -2402,7 +2404,7 @@ impl Coordinator {
         let explain_timeout = *session.vars().statement_timeout();
         let mut futures = FuturesOrdered::new();
         for (id, mfp) in imports {
-            let catalog_entry = self.catalog.get_entry(id);
+            let catalog_entry = self.catalog.get_entry_by_global_id(&id);
             let full_name = self
                 .catalog
                 .for_session(session)
@@ -2593,7 +2595,7 @@ impl Coordinator {
             .selection
             .depends_on()
             .into_iter()
-            .map(|gid| self.catalog().resolve_global_id(&gid).item_id())
+            .map(|gid| self.catalog().resolve_item_id(&gid))
             .collect();
         source_ids.insert(plan.id);
         guard_write_critical_section!(self, ctx, Plan::ReadThenWrite(plan), source_ids);
@@ -2649,7 +2651,7 @@ impl Coordinator {
         //   timestamp.
         fn validate_read_dependencies(
             catalog: &Catalog,
-            id: &GlobalId,
+            id: &CatalogItemId,
         ) -> Result<(), AdapterError> {
             use mz_catalog::memory::objects;
             use CatalogItemType::*;
@@ -2670,12 +2672,7 @@ impl Coordinator {
                     }
                     match entry.item().typ() {
                         typ @ (Func | View | MaterializedView | ContinualTask) => {
-                            // TODO(parkmycar): This probably isn't right.
-                            let gids = entry
-                                .uses()
-                                .into_iter()
-                                .flat_map(|item_id| catalog.get_entry(item_id).global_ids());
-                            ids_to_check.extend(gids);
+                            ids_to_check.extend(entry.uses());
                             let valid_id = id.is_user() || matches!(typ, Func);
                             valid_id
                         }
@@ -2697,8 +2694,9 @@ impl Coordinator {
             Ok(())
         }
 
-        for id in selection.depends_on() {
-            if let Err(err) = validate_read_dependencies(self.catalog(), &id) {
+        for gid in selection.depends_on() {
+            let item_id = self.catalog().resolve_item_id(&gid);
+            if let Err(err) = validate_read_dependencies(self.catalog(), &item_id) {
                 ctx.retire(Err(err));
                 return;
             }
@@ -3224,10 +3222,11 @@ impl Coordinator {
         };
 
         let otel_ctx = OpenTelemetryContext::obtain();
+        let from_item_id = self.catalog().resolve_item_id(&plan.sink.from);
 
         let plan_validity = PlanValidity::new(
             self.catalog().transient_revision(),
-            BTreeSet::from_iter([plan.sink.from.to_item_id()]),
+            BTreeSet::from_iter([from_item_id]),
             Some(plan.in_cluster),
             None,
             ctx.session().role_metadata().clone(),
@@ -3331,9 +3330,9 @@ impl Coordinator {
         let status_id = self
             .catalog()
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY);
-        let status_id = Some(self.catalog().get_entry(status_id).latest_global_id());
+        let status_id = Some(self.catalog().get_entry(&status_id).latest_global_id());
 
-        let from_entry = self.catalog().get_entry(&sink.from);
+        let from_entry = self.catalog().get_entry_by_global_id(&sink.from);
         let storage_sink_desc = StorageSinkDesc {
             from: sink.from,
             from_desc: from_entry
@@ -3468,6 +3467,7 @@ impl Coordinator {
 
             Ok(Connection {
                 create_sql: plan.connection.create_sql,
+                storage_id: cur_conn.storage_id,
                 details: plan.connection.details,
                 resolved_ids: new_deps,
             })
@@ -3545,7 +3545,7 @@ impl Coordinator {
                 curr_conn
                     .details
                     .to_connection()
-                    .alter_compatible(id, &connection.details.to_connection())
+                    .alter_compatible(curr_conn.storage_id, &connection.details.to_connection())
                     .map_err(StorageError::from)?;
             }
             _ => unreachable!("known to be a connection"),
@@ -3577,7 +3577,7 @@ impl Coordinator {
         let entry = self.catalog().get_entry(&id);
 
         let mut connections = VecDeque::new();
-        connections.push_front(entry.id());
+        connections.push_front(entry.item_id());
 
         let mut source_connections = BTreeMap::new();
         let mut sink_connections = BTreeMap::new();
@@ -3585,11 +3585,10 @@ impl Coordinator {
 
         while let Some(id) = connections.pop_front() {
             for id in self.catalog.get_entry(&id).used_by() {
-                let id = GlobalId::from(id);
-                let entry = self.catalog.get_entry(&id);
-                match entry.item_type() {
-                    CatalogItemType::Connection => connections.push_back(id),
-                    CatalogItemType::Source => {
+                let entry = self.catalog.get_entry(id);
+                match entry.item() {
+                    CatalogItem::Connection(_) => connections.push_back(*id),
+                    CatalogItem::Source(source) => {
                         let desc = match &entry.source().expect("known to be source").data_source {
                             DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc
                                 .desc
@@ -3598,30 +3597,30 @@ impl Coordinator {
                             _ => unreachable!("only ingestions reference connections"),
                         };
 
-                        source_connections.insert(id, desc.connection);
+                        source_connections.insert(source.collection_id, desc.connection);
                     }
-                    CatalogItemType::Sink => {
+                    CatalogItem::Sink(sink) => {
                         let export = entry.sink().expect("known to be sink");
                         sink_connections.insert(
-                            id,
+                            sink.export_id,
                             export
                                 .connection
                                 .clone()
                                 .into_inline_connection(self.catalog().state()),
                         );
                     }
-                    CatalogItemType::Table => {
+                    CatalogItem::Table(table) => {
                         // This is a source-fed table that reference a schema registry
                         // connection as a part of its encoding / data config
                         if let Some((_, _, _, export_data_config)) = entry.source_export_details() {
                             let data_config = export_data_config.clone();
                             source_export_data_configs.insert(
-                                id,
+                                table.global_id_writes(),
                                 data_config.into_inline_connection(self.catalog().state()),
                             );
                         }
                     }
-                    t => unreachable!("connection dependency not expected on {}", t),
+                    t => unreachable!("connection dependency not expected on {:?}", t),
                 }
             }
         }
@@ -3916,7 +3915,7 @@ impl Coordinator {
                         &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                     );
                     let source_status_collection_id =
-                        Some(self.catalog().get_entry(status_id).latest_global_id());
+                        Some(self.catalog().get_entry(&status_id).latest_global_id());
 
                     let (data_source, status_collection_id) = match source.data_source {
                         // Subsources use source statuses.
@@ -4410,7 +4409,7 @@ impl Coordinator {
                     .used_by()
                     .into_iter()
                     .map(GlobalId::from)
-                    .filter(|id| self.catalog().get_entry(&id).is_index())
+                    .filter(|id| self.catalog().get_entry_by_global_id(id).is_index())
                     .map(|id| catalog::Op::UpdateOwner {
                         id: ObjectId::from(id),
                         new_owner,
@@ -4609,8 +4608,9 @@ where
 {
     let log_names = source_ids
         .iter()
-        .flat_map(|id| catalog.introspection_dependencies(*id))
-        .map(|id| catalog.get_entry(&id).name().item.clone())
+        .map(|gid| catalog.resolve_item_id(&gid))
+        .flat_map(|item_id| catalog.introspection_dependencies(item_id))
+        .map(|item_id| catalog.get_entry(&item_id).name().item.clone())
         .collect::<Vec<_>>();
 
     if log_names.is_empty() {

@@ -145,7 +145,10 @@ impl Coordinator {
             timeline = TimelineContext::TimestampDependent;
         }
 
-        let dependencies = depends_on.iter().map(|id| id.to_item_id()).collect();
+        let dependencies = depends_on
+            .iter()
+            .map(|id| self.catalog().resolve_item_id(id))
+            .collect();
         let validity = PlanValidity::new(
             self.catalog().transient_revision(),
             dependencies,
@@ -211,6 +214,7 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
         );
+        let catalog = self.owned_catalog();
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
@@ -224,7 +228,7 @@ impl Coordinator {
                         global_mir_plan
                             .id_bundle(optimizer.cluster_id())
                             .iter()
-                            .map(|id| id.to_item_id()),
+                            .map(|id| catalog.resolve_item_id(&id)),
                     );
 
                     let stage =
