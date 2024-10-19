@@ -313,14 +313,14 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let (item_id, collection_id) = if let ExplainContext::None = explain_ctx {
+        let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
             let item_id = self.catalog_mut().allocate_user_id().await?;
-            let collection_id = self.catalog_mut().allocate_user_global_id().await?;
-            (item_id, collection_id)
+            let global_id = self.catalog_mut().allocate_user_global_id().await?;
+            (item_id, global_id)
         } else {
             let item_id = self.allocate_transient_item_id();
-            let collection_id = self.allocate_transient_id();
-            (item_id, collection_id)
+            let global_id = self.allocate_transient_id();
+            (item_id, global_id)
         };
 
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
@@ -331,7 +331,7 @@ impl Coordinator {
         let mut optimizer = optimize::index::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
-            collection_id,
+            global_id,
             optimizer_config,
             self.optimizer_metrics(),
         );
@@ -364,7 +364,7 @@ impl Coordinator {
                                 let (_, df_meta) = global_lir_plan.unapply();
                                 CreateIndexStage::Explain(CreateIndexExplain {
                                     validity,
-                                    exported_index_id: collection_id,
+                                    exported_index_id: global_id,
                                     plan,
                                     df_meta,
                                     explain_ctx,
@@ -373,7 +373,7 @@ impl Coordinator {
                                 CreateIndexStage::Finish(CreateIndexFinish {
                                     validity,
                                     item_id,
-                                    collection_id,
+                                    global_id,
                                     plan,
                                     resolved_ids,
                                     global_mir_plan,
@@ -396,7 +396,7 @@ impl Coordinator {
                                 tracing::error!("error while handling EXPLAIN statement: {}", err);
                                 CreateIndexStage::Explain(CreateIndexExplain {
                                     validity,
-                                    exported_index_id: collection_id,
+                                    exported_index_id: global_id,
                                     plan,
                                     df_meta: Default::default(),
                                     explain_ctx,
@@ -419,7 +419,7 @@ impl Coordinator {
         session: &Session,
         CreateIndexFinish {
             item_id,
-            collection_id,
+            global_id,
             plan:
                 plan::CreateIndexPlan {
                     name,
@@ -446,7 +446,7 @@ impl Coordinator {
             name: name.clone(),
             item: CatalogItem::Index(Index {
                 create_sql,
-                collection_id,
+                global_id,
                 keys: keys.into(),
                 on,
                 conn_id: None,
@@ -472,15 +472,15 @@ impl Coordinator {
                 // Save plan structures.
                 coord
                     .catalog_mut()
-                    .set_optimized_plan(collection_id, global_mir_plan.df_desc().clone());
+                    .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
                 coord
                     .catalog_mut()
-                    .set_physical_plan(collection_id, global_lir_plan.df_desc().clone());
+                    .set_physical_plan(global_id, global_lir_plan.df_desc().clone());
 
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 let notice_builtin_updates_fut = coord
-                    .process_dataflow_metainfo(df_meta, collection_id, session, notice_ids)
+                    .process_dataflow_metainfo(df_meta, global_id, session, notice_ids)
                     .await;
 
                 // We're putting in place read holds, such that ship_dataflow,

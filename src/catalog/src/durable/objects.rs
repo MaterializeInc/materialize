@@ -31,7 +31,6 @@ pub(crate) mod state_update;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use anyhow::Context;
 use mz_audit_log::VersionedEvent;
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -472,11 +471,13 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
 pub struct Item {
     pub id: CatalogItemId,
     pub oid: u32,
+    pub global_id: GlobalId,
     pub schema_id: SchemaId,
     pub name: String,
-    pub kind: ItemValueKind,
+    pub create_sql: String,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
+    pub versions: BTreeMap<RelationVersion, GlobalId>,
 }
 
 impl DurableType for Item {
@@ -488,11 +489,13 @@ impl DurableType for Item {
             ItemKey { id: self.id },
             ItemValue {
                 oid: self.oid,
+                global_id: self.global_id,
                 schema_id: self.schema_id,
                 name: self.name,
-                kind: self.kind,
+                create_sql: self.create_sql,
                 owner_id: self.owner_id,
                 privileges: self.privileges,
+                versions: self.versions,
             },
         )
     }
@@ -501,11 +504,13 @@ impl DurableType for Item {
         Self {
             id: key.id,
             oid: value.oid,
+            global_id: value.global_id,
             schema_id: value.schema_id,
             name: value.name,
-            kind: value.kind,
+            create_sql: value.create_sql,
             owner_id: value.owner_id,
             privileges: value.privileges,
+            versions: value.versions,
         }
     }
 
@@ -1194,148 +1199,41 @@ pub struct ItemKey {
 pub struct ItemValue {
     pub(crate) schema_id: SchemaId,
     pub(crate) name: String,
-    pub(crate) kind: ItemValueKind,
+    pub(crate) create_sql: String,
     pub(crate) owner_id: RoleId,
     pub(crate) privileges: Vec<MzAclItem>,
     pub(crate) oid: u32,
+    pub(crate) global_id: GlobalId,
+    pub(crate) versions: BTreeMap<RelationVersion, GlobalId>
 }
 
 impl ItemValue {
     pub(crate) fn item_type(&self) -> CatalogItemType {
-        match self.kind {
-            ItemValueKind::Table { .. } => CatalogItemType::Table,
-            ItemValueKind::Source { .. } => CatalogItemType::Source,
-            ItemValueKind::Sink { .. } => CatalogItemType::Sink,
-            ItemValueKind::View { .. } => CatalogItemType::View,
-            ItemValueKind::MaterializedView { .. } => CatalogItemType::MaterializedView,
-            ItemValueKind::Index { .. } => CatalogItemType::Index,
-            ItemValueKind::Type { .. } => CatalogItemType::Type,
-            ItemValueKind::Function { .. } => CatalogItemType::Func,
-            ItemValueKind::Secret { .. } => CatalogItemType::Secret,
-            ItemValueKind::Connection { .. } => CatalogItemType::Connection,
-            ItemValueKind::ContinualTask { .. } => CatalogItemType::ContinualTask,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
-pub enum ItemValueKind {
-    Table {
-        create_sql: String,
-        collections: BTreeMap<RelationVersion, GlobalId>,
-    },
-    Source {
-        create_sql: String,
-        collection: GlobalId,
-    },
-    Sink {
-        create_sql: String,
-        collection: GlobalId,
-    },
-    View {
-        create_sql: String,
-        collection: GlobalId,
-    },
-    MaterializedView {
-        create_sql: String,
-        collection: GlobalId,
-    },
-    ContinualTask {
-        create_sql: String,
-        collection: GlobalId,
-    },
-    Index {
-        create_sql: String,
-        collection: GlobalId,
-    },
-    Type {
-        create_sql: String,
-    },
-    Function {
-        create_sql: String,
-    },
-    Secret {
-        create_sql: String,
-    },
-    Connection {
-        create_sql: String,
-        storage_id: GlobalId,
-    },
-}
-
-impl ItemValueKind {
-    pub fn create_sql(&self) -> &str {
-        match self {
-            ItemValueKind::Table { create_sql, .. }
-            | ItemValueKind::Source { create_sql, .. }
-            | ItemValueKind::Sink { create_sql, .. }
-            | ItemValueKind::View { create_sql, .. }
-            | ItemValueKind::MaterializedView { create_sql, .. }
-            | ItemValueKind::Index { create_sql, .. }
-            | ItemValueKind::Type { create_sql }
-            | ItemValueKind::Function { create_sql }
-            | ItemValueKind::Secret { create_sql }
-            | ItemValueKind::Connection { create_sql, .. }
-            | ItemValueKind::ContinualTask { create_sql, .. } => &create_sql,
-        }
-    }
-
-    /// Update the inner `create_sql`.
-    ///
-    /// Returns an error if the `create_sql` is changed in a way that would
-    /// create a different type when re-parsed.
-    pub fn rewrite_sql<F>(&mut self, f: F) -> Result<(), anyhow::Error>
-    where
-        F: FnOnce(&str) -> Result<String, anyhow::Error>,
-    {
-        let new_sql = f(self.create_sql()).context("re-writing SQL")?;
-
-        // Validate the new SQL.
-        //
-        // TODO(parkmycar): Do we just want to re-parse the entire statement?
-        let mut tokens = new_sql.split_whitespace();
+        // NOTE(benesch): the implementation of this method is hideous, but is
+        // there a better alternative? Storing the object type alongside the
+        // `create_sql` would introduce the possibility of skew.
+        let mut tokens = self.create_sql.split_whitespace();
         assert_eq!(tokens.next(), Some("CREATE"));
-        let () = match (tokens.next(), &self) {
-            (Some("TABLE"), ItemValueKind::Table { .. })
-            | (Some("SOURCE") | Some("SUBSOURCE"), ItemValueKind::Source { .. })
-            | (Some("SINK"), ItemValueKind::Sink { .. })
-            | (Some("VIEW"), ItemValueKind::View { .. })
-            | (Some("INDEX"), ItemValueKind::Index { .. })
-            | (Some("TYPE"), ItemValueKind::Type { .. })
-            | (Some("FUNCTION"), ItemValueKind::Function { .. })
-            | (Some("SECRET"), ItemValueKind::Secret { .. })
-            | (Some("CONNECTION"), ItemValueKind::Connection { .. }) => (),
-            (Some("MATERIALIZED"), ItemValueKind::MaterializedView { .. }) => {
+        match tokens.next() {
+            Some("TABLE") => CatalogItemType::Table,
+            Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
+            Some("SINK") => CatalogItemType::Sink,
+            Some("VIEW") => CatalogItemType::View,
+            Some("MATERIALIZED") => {
                 assert_eq!(tokens.next(), Some("VIEW"));
-                ()
+                CatalogItemType::MaterializedView
             }
-            (Some("CONTINUAL"), ItemValueKind::ContinualTask { .. }) => {
+            Some("CONTINUAL") => {
                 assert_eq!(tokens.next(), Some("TASK"));
-                ()
+                CatalogItemType::ContinualTask
             }
-            (keyword, kind) => {
-                anyhow::bail!("invalid sql re-write, new type: {keyword:?}, current type: {kind:?}")
-            }
-        };
-
-        // Update the existing SQL.
-        match self {
-            ItemValueKind::Table { create_sql, .. }
-            | ItemValueKind::Source { create_sql, .. }
-            | ItemValueKind::Sink { create_sql, .. }
-            | ItemValueKind::View { create_sql, .. }
-            | ItemValueKind::MaterializedView { create_sql, .. }
-            | ItemValueKind::Index { create_sql, .. }
-            | ItemValueKind::Type { create_sql }
-            | ItemValueKind::Function { create_sql }
-            | ItemValueKind::Secret { create_sql }
-            | ItemValueKind::Connection { create_sql, .. }
-            | ItemValueKind::ContinualTask { create_sql, .. } => {
-                *create_sql = new_sql;
-            }
+            Some("INDEX") => CatalogItemType::Index,
+            Some("TYPE") => CatalogItemType::Type,
+            Some("FUNCTION") => CatalogItemType::Func,
+            Some("SECRET") => CatalogItemType::Secret,
+            Some("CONNECTION") => CatalogItemType::Connection,
+            _ => panic!("unexpected create sql: {}", self.create_sql),
         }
-
-        Ok(())
     }
 }
 

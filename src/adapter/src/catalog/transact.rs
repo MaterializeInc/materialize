@@ -1055,15 +1055,17 @@ impl Catalog {
                     }
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
-                    let serialized_item = item.to_serialized();
+                    let (create_sql, global_id, versions) = item.to_serialized();
                     tx.insert_user_item(
-                        id.into(),
+                        id,
+                        global_id,
                         schema_id,
                         &name.item,
-                        serialized_item,
+                        create_sql,
                         owner_id,
                         privileges.clone(),
                         &temporary_oids,
+                        versions,
                     )?;
                     info!(
                         "create {} {} ({})",

@@ -14,6 +14,7 @@ use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::{objects_v68 as v68, objects_v69 as v69};
 
 wire_compatible!(v68::ItemKey with v69::ItemKey);
+wire_compatible!(v68::CatalogItem with v69::CatalogItem);
 wire_compatible!(v68::SchemaId with v69::SchemaId);
 wire_compatible!(v68::RoleId with v69::RoleId);
 wire_compatible!(v68::MzAclItem with v69::MzAclItem);
@@ -22,7 +23,6 @@ wire_compatible!(v68::GidMappingKey with v69::GidMappingKey);
 
 /// In v69 we migrated a few things:
 ///
-/// * `create_sql` to be wrapped in a `oneof` so we can associate `GlobalId`s with a Catalog item.
 /// * `SourceReferencesKey` to use `CatalogItemId`.
 /// * `GidMappingValue` to include both a `CatalogItemId` and `GlobalId`.
 ///
@@ -109,108 +109,25 @@ impl From<v68::state_update_kind::Item> for v69::state_update_kind::Item {
             })
             .map(|value| v69::GlobalId { value });
 
+        let key = item.key.map(|key| v69::ItemKey::convert(&key));
         let value = match item.value {
-            Some(value) => {
-                let v68::catalog_item::Value::V1(v68::catalog_item::V1 { create_sql }) = value
-                    .definition
-                    .expect("missing definition")
-                    .value
-                    .expect("missing value");
-
-                let mut tokens = create_sql.split_whitespace();
-                assert_eq!(tokens.next(), Some("CREATE"));
-                let kind =
-                    match tokens.next() {
-                        Some("TABLE") => {
-                            v69::catalog_item_kind::Value::Table(v69::catalog_item_kind::Table {
-                                create_sql,
-                                collections: vec![v69::ItemCollection {
-                                    version: Some(v69::Version { value: 0 }),
-                                    id: global_id,
-                                }],
-                            })
-                        }
-                        Some("SOURCE") | Some("SUBSOURCE") => {
-                            v69::catalog_item_kind::Value::Source(v69::catalog_item_kind::Source {
-                                create_sql,
-                                collection: global_id,
-                            })
-                        }
-                        Some("SINK") => {
-                            v69::catalog_item_kind::Value::Sink(v69::catalog_item_kind::Sink {
-                                create_sql,
-                                collection: global_id,
-                            })
-                        }
-                        Some("VIEW") => {
-                            v69::catalog_item_kind::Value::View(v69::catalog_item_kind::View {
-                                create_sql,
-                                collection: global_id,
-                            })
-                        }
-                        Some("INDEX") => {
-                            v69::catalog_item_kind::Value::Index(v69::catalog_item_kind::Index {
-                                create_sql,
-                                collection: global_id,
-                            })
-                        }
-                        Some("TYPE") => {
-                            v69::catalog_item_kind::Value::Type(v69::catalog_item_kind::Type {
-                                create_sql,
-                            })
-                        }
-                        Some("FUNCTION") => v69::catalog_item_kind::Value::Function(
-                            v69::catalog_item_kind::Function { create_sql },
-                        ),
-                        Some("SECRET") => {
-                            v69::catalog_item_kind::Value::Secret(v69::catalog_item_kind::Secret {
-                                create_sql,
-                            })
-                        }
-                        Some("CONNECTION") => v69::catalog_item_kind::Value::Connection(
-                            v69::catalog_item_kind::Connection {
-                                create_sql,
-                                storage_id: global_id,
-                            },
-                        ),
-                        Some("MATERIALIZED") => {
-                            assert_eq!(tokens.next(), Some("VIEW"));
-                            v69::catalog_item_kind::Value::MaterializedView(
-                                v69::catalog_item_kind::MaterializedView {
-                                    create_sql,
-                                    collection: global_id,
-                                },
-                            )
-                        }
-                        Some("CONTINUAL") => {
-                            assert_eq!(tokens.next(), Some("TASK"));
-                            v69::catalog_item_kind::Value::ContinualTask(
-                                v69::catalog_item_kind::ContinualTask {
-                                    create_sql,
-                                    collection: global_id,
-                                },
-                            )
-                        }
-                        other => panic!("unknown keyword {other:?}"),
-                    };
-
-                Some(v69::ItemValue {
-                    schema_id: value.schema_id.map(|id| v69::SchemaId::convert(&id)),
-                    kind: Some(v69::CatalogItemKind { value: Some(kind) }),
-                    name: value.name,
-                    owner_id: value.owner_id.map(|id| v69::RoleId::convert(&id)),
-                    privileges: value
-                        .privileges
-                        .into_iter()
-                        .map(|item| v69::MzAclItem::convert(&item))
-                        .collect(),
-                    oid: value.oid,
-                })
-            }
+            Some(value) => Some(v69::ItemValue {
+                global_id,
+                schema_id: value.schema_id.map(|id| v69::SchemaId::convert(&id)),
+                definition: value.definition.map(|def| v69::CatalogItem::convert(&def)),
+                name: value.name,
+                owner_id: value.owner_id.map(|id| v69::RoleId::convert(&id)),
+                privileges: value
+                    .privileges
+                    .into_iter()
+                    .map(|item| v69::MzAclItem::convert(&item))
+                    .collect(),
+                oid: value.oid,
+                versions: Vec::new(),
+            }),
             None => None,
         };
 
-        let key = item.key.map(|key| v69::ItemKey::convert(&key));
         v69::state_update_kind::Item { key, value }
     }
 }

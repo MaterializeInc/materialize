@@ -1031,7 +1031,7 @@ fn generate_rbac_requirements(
         },
         Plan::AlterSink(plan::AlterSinkPlan {
             item_id,
-            export_id: _,
+            global_id: _,
             sink,
             with_snapshot: _,
             in_cluster,

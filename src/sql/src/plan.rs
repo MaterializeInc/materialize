@@ -1139,7 +1139,7 @@ pub struct AlterSourcePlan {
 #[derive(Debug, Clone)]
 pub struct AlterSinkPlan {
     pub item_id: CatalogItemId,
-    pub export_id: GlobalId,
+    pub global_id: GlobalId,
     pub sink: Sink,
     pub with_snapshot: bool,
     pub in_cluster: ClusterId,

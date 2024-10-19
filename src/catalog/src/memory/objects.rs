@@ -66,7 +66,6 @@ use tracing::debug;
 
 use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
-use crate::durable::objects::ItemValueKind;
 
 /// Used to update `self` from the input value while consuming the input value.
 pub trait UpdateFrom<T>: From<T> {
@@ -639,9 +638,33 @@ impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
     }
 
     fn global_id(&self) -> GlobalId {
-        // TODO(alter_table): Use the version here to get the correct GlobalId.
-        // self.entry.item_id().to_global_id()
-        todo!()
+        match self.entry.item() {
+            CatalogItem::Source(source) => source.global_id,
+            CatalogItem::Log(log) => log.global_id,
+            CatalogItem::View(view) => view.global_id,
+            CatalogItem::MaterializedView(mv) => mv.global_id,
+            CatalogItem::Sink(sink) => sink.global_id,
+            CatalogItem::Index(index) => index.global_id,
+            CatalogItem::Type(ty) => ty.global_id,
+            CatalogItem::Func(func) => func.global_id,
+            CatalogItem::Secret(secret) => secret.global_id,
+            CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::ContinualTask(ct) => ct.global_id,
+            CatalogItem::Table(table) => match self.version {
+                RelationVersionSelector::Latest => {
+                    let (_version, gid) = table
+                        .collections
+                        .last_key_value()
+                        .expect("at least one version");
+                    *gid
+                }
+                RelationVersionSelector::Specific(version) => table
+                    .collections
+                    .get(&version)
+                    .expect("catalog corruption, missing version!")
+                    .clone(),
+            },
+        }
     }
 }
 
@@ -774,14 +797,17 @@ pub enum CatalogItem {
 
 impl From<CatalogEntry> for durable::Item {
     fn from(entry: CatalogEntry) -> durable::Item {
+        let (create_sql, global_id, versions) = entry.item.into_serialized();
         durable::Item {
             id: entry.id,
             oid: entry.oid,
+            global_id,
             schema_id: entry.name.qualifiers.schema_spec.into(),
             name: entry.name.item,
-            kind: entry.item.into_serialized(),
+            create_sql,
             owner_id: entry.owner_id,
             privileges: entry.privileges.into_all_values().collect(),
+            versions,
         }
     }
 }
@@ -957,14 +983,18 @@ impl DataSourceDesc {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
+    /// Parse-able SQL that defines this table.
     pub create_sql: Option<String>,
     /// [`GlobalId`] used to reference this source from outside the catalog.
-    pub collection_id: GlobalId,
+    pub global_id: GlobalId,
     // TODO: Unskip: currently blocked on some inner BTreeMap<X, _> problems.
     #[serde(skip)]
     pub data_source: DataSourceDesc,
+    /// [`RelationDesc`] of this source, derived from the `create_sql`.
     pub desc: RelationDesc,
+    /// The timeline this source exists on.
     pub timeline: Timeline,
+    /// Other catalog objects referenced by this table, e.g. custom types.
     pub resolved_ids: ResolvedIds,
     /// This value is ignored for subsources, i.e. for
     /// [`DataSourceDesc::IngestionExport`]. Instead, it uses the primary
@@ -1038,7 +1068,7 @@ impl Source {
                 },
             },
             desc: plan.source.desc,
-            collection_id,
+            global_id: collection_id,
             timeline: plan.timeline,
             resolved_ids,
             custom_logical_compaction_window: plan
@@ -1077,7 +1107,7 @@ impl Source {
 
     /// The single [`GlobalId`] that refers to this Source.
     pub fn global_id(&self) -> GlobalId {
-        self.collection_id
+        self.global_id
     }
 
     /// The expensive resource that each source consumes is persist shards. To
@@ -1124,14 +1154,14 @@ impl Source {
 pub struct Log {
     /// The category of data this log stores.
     pub variant: LogVariant,
-    /// Id used to reference the storage object for this log.
-    pub collection_id: GlobalId,
+    /// [`GlobalId`] used to reference this log from outside the catalog.
+    pub global_id: GlobalId,
 }
 
 impl Log {
     /// The single [`GlobalId`] that refers to this Log.
     pub fn global_id(&self) -> GlobalId {
-        self.collection_id
+        self.global_id
     }
 }
 
@@ -1139,8 +1169,8 @@ impl Log {
 pub struct Sink {
     /// Parse-able SQL that defines this sink.
     pub create_sql: String,
-    /// ID used to reference the export in compute powering the sink.
-    pub export_id: GlobalId,
+    /// [`GlobalId`] used to reference this sink from outside the catalog, e.g storage.
+    pub global_id: GlobalId,
     /// Collection we read into this sink.
     pub from: GlobalId,
     /// Connection to the external service we're sinking into, e.g. Kafka.
@@ -1201,7 +1231,7 @@ impl Sink {
 
     /// The single [`GlobalId`] that this Sink can be referenced by.
     pub fn global_id(&self) -> GlobalId {
-        self.export_id
+        self.global_id
     }
 }
 
@@ -1209,8 +1239,8 @@ impl Sink {
 pub struct View {
     /// Parse-able SQL that defines this view.
     pub create_sql: String,
-    /// ID used to reference this view from outside the catalog, e.g. compute.
-    pub collection_id: GlobalId,
+    /// [`GlobalId`] used to reference this view from outside the catalog, e.g. compute.
+    pub global_id: GlobalId,
     /// Unoptimized high-level expression from parsing the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
     /// Optimized mid-level expression from optimizing the `raw_expr`.
@@ -1228,7 +1258,7 @@ pub struct View {
 impl View {
     /// The single [`GlobalId`] this [`View`] can be referenced by.
     pub fn global_id(&self) -> GlobalId {
-        self.collection_id
+        self.global_id
     }
 }
 
@@ -1236,14 +1266,14 @@ impl View {
 pub struct MaterializedView {
     /// Parse-able SQL that defines this materialized view.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this materialized view from outside the catalog.
+    pub global_id: GlobalId,
     /// Raw high-level expression from planning, derived from the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
     /// Optimized mid-level expression, derived from the `raw_expr`.
     pub optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// Columns for this materialized view.
     pub desc: RelationDesc,
-    /// [`GlobalId`] used to reference this materialized view from outside the catalog.
-    pub collection_id: GlobalId,
     /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
@@ -1268,50 +1298,70 @@ pub struct MaterializedView {
 impl MaterializedView {
     /// The single [`GlobalId`] this [`MaterializedView`] can be referenced by.
     pub fn global_id(&self) -> GlobalId {
-        self.collection_id
+        self.global_id
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Index {
+    /// Parse-able SQL that defines this table.
     pub create_sql: String,
-    /// [`GlobalId`] used to reference this Index.
-    pub collection_id: GlobalId,
+    /// [`GlobalId`] used to reference this index from outside the catalog, e.g. compute.
+    pub global_id: GlobalId,
     /// The [`GlobalId`] this Index is on.
     pub on: GlobalId,
+    /// Keys of the index.
     pub keys: Arc<[MirScalarExpr]>,
+    /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
     pub conn_id: Option<ConnectionId>,
+    /// Other catalog objects referenced by this index, e.g. the object we're indexing.
     pub resolved_ids: ResolvedIds,
+    /// Cluster this index is installed on.
     pub cluster_id: ClusterId,
+    /// Custom compaction window, e.g. set via `ALTER RETAIN HISTORY`.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
+    /// Whether the table's logical compaction window is controlled by the ['metrics_retention']
+    /// session variable.
+    ///
+    /// ['metrics_retention']: mz_sql::session::vars::METRICS_RETENTION
     pub is_retained_metrics_object: bool,
 }
 
 impl Index {
     /// The [`GlobalId`] that refers to this Index.
     pub fn global_id(&self) -> GlobalId {
-        self.collection_id
+        self.global_id
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Type {
+    /// Parse-able SQL that defines this type.
     pub create_sql: Option<String>,
+    /// [`GlobalId`] used to reference this type from outside the catalog.
+    pub global_id: GlobalId,
     #[serde(skip)]
     pub details: CatalogTypeDetails<IdReference>,
     pub desc: Option<RelationDesc>,
+    /// Other catalog objects referenced by this type.
     pub resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Func {
+    /// Static definition of the function.
     #[serde(skip)]
     pub inner: &'static mz_sql::func::Func,
+    /// [`GlobalId`] used to reference this function from outside the catalog.
+    pub global_id: GlobalId,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Secret {
+    /// Parse-able SQL that defines this secret.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this secret from outside the catalog.
+    pub global_id: GlobalId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1319,7 +1369,7 @@ pub struct Connection {
     /// Parse-able SQL that defines this connection.
     pub create_sql: String,
     /// [`GlobalId`] used to reference this connection from the storage layer.
-    pub storage_id: GlobalId,
+    pub global_id: GlobalId,
     /// The kind of connection.
     pub details: ConnectionDetails,
     /// Other objects this connection depends on.
@@ -1331,7 +1381,7 @@ pub struct ContinualTask {
     /// Parse-able SQL that defines this continual task.
     pub create_sql: String,
     /// [`GlobalId`] used to reference this continual task from outside the catalog.
-    pub collection_id: GlobalId,
+    pub global_id: GlobalId,
     /// [`GlobalId`] of the collection that we read into this continual task.
     pub input_id: GlobalId,
     /// ContinualTasks are self-referential. We make this work by using a
@@ -1354,7 +1404,7 @@ pub struct ContinualTask {
 impl ContinualTask {
     /// The single [`GlobalId`] used to reference this continual task.
     pub fn global_id(&self) -> GlobalId {
-        self.collection_id
+        self.global_id
     }
 }
 
@@ -1378,25 +1428,50 @@ impl CatalogItem {
     }
 
     /// Returns the [`GlobalId`]s that reference this item, if any.
-    pub fn global_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_> {
-        match self {
-            CatalogItem::Table(table) => Box::new(table.collections.values().copied()),
-            CatalogItem::Source(source) => Box::new(std::iter::once(source.collection_id)),
-            CatalogItem::Log(log) => Box::new(std::iter::once(log.collection_id)),
-            CatalogItem::Sink(sink) => Box::new(std::iter::once(sink.export_id)),
-            CatalogItem::View(view) => Box::new(std::iter::once(view.collection_id)),
-            CatalogItem::MaterializedView(mv) => Box::new(std::iter::once(mv.collection_id)),
-            CatalogItem::ContinualTask(ct) => Box::new(std::iter::once(ct.collection_id)),
-            CatalogItem::Index(index) => Box::new(std::iter::once(index.collection_id)),
-            CatalogItem::Func(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => Box::new(std::iter::empty()),
-        }
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        let gid = match self {
+            CatalogItem::Source(source) => source.global_id,
+            CatalogItem::Log(log) => log.global_id,
+            CatalogItem::Sink(sink) => sink.global_id,
+            CatalogItem::View(view) => view.global_id,
+            CatalogItem::MaterializedView(mv) => mv.global_id,
+            CatalogItem::ContinualTask(ct) => ct.global_id,
+            CatalogItem::Index(index) => index.global_id,
+            CatalogItem::Func(func) => func.global_id,
+            CatalogItem::Type(ty) => ty.global_id,
+            CatalogItem::Secret(secret) => secret.global_id,
+            CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::Table(table) => {
+                return itertools::Either::Left(table.collections.values().copied());
+            }
+        };
+        itertools::Either::Right(std::iter::once(gid))
     }
 
+    /// Returns the most up-to-date [`GlobalId`] for this item.
+    ///
+    /// Note: The only type of object that can have multiple [`GlobalId`]s are tables.
     pub fn latest_global_id(&self) -> GlobalId {
-        self.global_ids().max().expect("at least one GlobalId")
+        match self {
+            CatalogItem::Source(source) => source.global_id,
+            CatalogItem::Log(log) => log.global_id,
+            CatalogItem::Sink(sink) => sink.global_id,
+            CatalogItem::View(view) => view.global_id,
+            CatalogItem::MaterializedView(mv) => mv.global_id,
+            CatalogItem::ContinualTask(ct) => ct.global_id,
+            CatalogItem::Index(index) => index.global_id,
+            CatalogItem::Func(func) => func.global_id,
+            CatalogItem::Type(ty) => ty.global_id,
+            CatalogItem::Secret(secret) => secret.global_id,
+            CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::Table(table) => {
+                let (_version, gid) = table
+                    .collections
+                    .last_key_value()
+                    .expect("at least one version");
+                *gid
+            }
+        }
     }
 
     /// Whether this item represents a storage collection.
@@ -1947,68 +2022,101 @@ impl CatalogItem {
         }
     }
 
-    pub fn to_serialized(&self) -> ItemValueKind {
-        todo!()
-        // match self {
-        //     CatalogItem::Table(table) => table
-        //         .create_sql
-        //         .as_ref()
-        //         .expect("builtin tables cannot be serialized")
-        //         .clone(),
-        //     CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
-        //     CatalogItem::Source(source) => {
-        //         assert!(
-        //             !matches!(source.data_source, DataSourceDesc::Introspection(_)),
-        //             "cannot serialize introspection/builtin sources",
-        //         );
-        //         source
-        //             .create_sql
-        //             .as_ref()
-        //             .expect("builtin sources cannot be serialized")
-        //             .clone()
-        //     }
-        //     CatalogItem::View(view) => view.create_sql.clone(),
-        //     CatalogItem::MaterializedView(mview) => mview.create_sql.clone(),
-        //     CatalogItem::Index(index) => index.create_sql.clone(),
-        //     CatalogItem::Sink(sink) => sink.create_sql.clone(),
-        //     CatalogItem::Type(typ) => typ
-        //         .create_sql
-        //         .as_ref()
-        //         .expect("builtin types cannot be serialized")
-        //         .clone(),
-        //     CatalogItem::Secret(secret) => secret.create_sql.clone(),
-        //     CatalogItem::Connection(connection) => connection.create_sql.clone(),
-        //     CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-        //     CatalogItem::ContinualTask(ct) => ct.create_sql.clone(),
-        // }
+    pub fn to_serialized(&self) -> (String, GlobalId, BTreeMap<RelationVersion, GlobalId>) {
+        match self {
+            CatalogItem::Table(table) => {
+                let create_sql = table
+                    .create_sql
+                    .clone()
+                    .expect("builtin tables cannot be serialized");
+                let mut collections = table.collections.clone();
+                let global_id = collections
+                    .remove(&RelationVersion::root())
+                    .expect("at least one version");
+                (create_sql, global_id, collections)
+            }
+            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
+            CatalogItem::Source(source) => {
+                assert!(
+                    !matches!(source.data_source, DataSourceDesc::Introspection(_)),
+                    "cannot serialize introspection/builtin sources",
+                );
+                let create_sql = source
+                    .create_sql
+                    .clone()
+                    .expect("builtin sources cannot be serialized");
+                (create_sql, source.global_id, BTreeMap::new())
+            }
+            CatalogItem::View(view) => (view.create_sql.clone(), view.global_id, BTreeMap::new()),
+            CatalogItem::MaterializedView(mview) => {
+                (mview.create_sql.clone(), mview.global_id, BTreeMap::new())
+            }
+            CatalogItem::Index(index) => {
+                (index.create_sql.clone(), index.global_id, BTreeMap::new())
+            }
+            CatalogItem::Sink(sink) => (sink.create_sql.clone(), sink.global_id, BTreeMap::new()),
+            CatalogItem::Type(typ) => {
+                let create_sql = typ
+                    .create_sql
+                    .clone()
+                    .expect("builtin types cannot be serialized");
+                (create_sql, typ.global_id, BTreeMap::new())
+            }
+            CatalogItem::Secret(secret) => {
+                (secret.create_sql.clone(), secret.global_id, BTreeMap::new())
+            }
+            CatalogItem::Connection(connection) => (
+                connection.create_sql.clone(),
+                connection.global_id,
+                BTreeMap::new(),
+            ),
+            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::ContinualTask(ct) => {
+                (ct.create_sql.clone(), ct.global_id, BTreeMap::new())
+            }
+        }
     }
 
-    pub fn into_serialized(self) -> ItemValueKind {
-        todo!()
-        // match self {
-        //     CatalogItem::Table(table) => table
-        //         .create_sql
-        //         .expect("builtin tables cannot be serialized"),
-        //     CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
-        //     CatalogItem::Source(source) => {
-        //         assert!(
-        //             !matches!(source.data_source, DataSourceDesc::Introspection(_)),
-        //             "cannot serialize introspection/builtin sources",
-        //         );
-        //         source
-        //             .create_sql
-        //             .expect("builtin sources cannot be serialized")
-        //     }
-        //     CatalogItem::View(view) => view.create_sql,
-        //     CatalogItem::MaterializedView(mview) => mview.create_sql,
-        //     CatalogItem::Index(index) => index.create_sql,
-        //     CatalogItem::Sink(sink) => sink.create_sql,
-        //     CatalogItem::Type(typ) => typ.create_sql.expect("builtin types cannot be serialized"),
-        //     CatalogItem::Secret(secret) => secret.create_sql,
-        //     CatalogItem::Connection(connection) => connection.create_sql,
-        //     CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-        //     CatalogItem::ContinualTask(ct) => ct.create_sql,
-        // }
+    pub fn into_serialized(self) -> (String, GlobalId, BTreeMap<RelationVersion, GlobalId>) {
+        match self {
+            CatalogItem::Table(mut table) => {
+                let create_sql = table
+                    .create_sql
+                    .expect("builtin tables cannot be serialized");
+                let global_id = table
+                    .collections
+                    .remove(&RelationVersion::root())
+                    .expect("at least one version");
+                (create_sql, global_id, table.collections)
+            }
+            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
+            CatalogItem::Source(source) => {
+                assert!(
+                    !matches!(source.data_source, DataSourceDesc::Introspection(_)),
+                    "cannot serialize introspection/builtin sources",
+                );
+                let create_sql = source
+                    .create_sql
+                    .expect("builtin sources cannot be serialized");
+                (create_sql, source.global_id, BTreeMap::new())
+            }
+            CatalogItem::View(view) => (view.create_sql, view.global_id, BTreeMap::new()),
+            CatalogItem::MaterializedView(mview) => {
+                (mview.create_sql, mview.global_id, BTreeMap::new())
+            }
+            CatalogItem::Index(index) => (index.create_sql, index.global_id, BTreeMap::new()),
+            CatalogItem::Sink(sink) => (sink.create_sql, sink.global_id, BTreeMap::new()),
+            CatalogItem::Type(typ) => {
+                let create_sql = typ.create_sql.expect("builtin types cannot be serialized");
+                (create_sql, typ.global_id, BTreeMap::new())
+            }
+            CatalogItem::Secret(secret) => (secret.create_sql, secret.global_id, BTreeMap::new()),
+            CatalogItem::Connection(connection) => {
+                (connection.create_sql, connection.global_id, BTreeMap::new())
+            }
+            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::ContinualTask(ct) => (ct.create_sql, ct.global_id, BTreeMap::new()),
+        }
     }
 }
 

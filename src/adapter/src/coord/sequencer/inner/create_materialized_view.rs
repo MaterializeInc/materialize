@@ -434,14 +434,14 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let (item_id, collection_id) = if let ExplainContext::None = explain_ctx {
+        let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
             let item_id = self.catalog_mut().allocate_user_id().await?;
-            let collection_id = self.catalog_mut().allocate_user_global_id().await?;
-            (item_id, collection_id)
+            let global_id = self.catalog_mut().allocate_user_global_id().await?;
+            (item_id, global_id)
         } else {
             let item_id = self.allocate_transient_item_id();
-            let collection_id = self.allocate_transient_id();
-            (item_id, collection_id)
+            let global_id = self.allocate_transient_id();
+            (item_id, global_id)
         };
 
         let view_id = self.allocate_transient_id();
@@ -454,7 +454,7 @@ impl Coordinator {
         let mut optimizer = optimize::materialized_view::Optimizer::new(
             self.owned_catalog().as_optimizer_catalog(),
             compute_instance,
-            collection_id,
+            global_id,
             view_id,
             column_names.clone(),
             non_null_assertions.clone(),
@@ -495,7 +495,7 @@ impl Coordinator {
                                 CreateMaterializedViewStage::Explain(
                                     CreateMaterializedViewExplain {
                                         validity,
-                                        collection_id,
+                                        global_id,
                                         plan,
                                         df_meta,
                                         explain_ctx,
@@ -504,7 +504,7 @@ impl Coordinator {
                             } else {
                                 CreateMaterializedViewStage::Finish(CreateMaterializedViewFinish {
                                     item_id,
-                                    collection_id,
+                                    global_id,
                                     validity,
                                     plan,
                                     resolved_ids,
@@ -529,7 +529,7 @@ impl Coordinator {
                                 tracing::error!("error while handling EXPLAIN statement: {}", err);
                                 CreateMaterializedViewStage::Explain(
                                     CreateMaterializedViewExplain {
-                                        collection_id,
+                                        global_id,
                                         validity,
                                         plan,
                                         df_meta: Default::default(),
@@ -555,7 +555,7 @@ impl Coordinator {
         session: &Session,
         CreateMaterializedViewFinish {
             item_id,
-            collection_id,
+            global_id,
             plan:
                 plan::CreateMaterializedViewPlan {
                     name,
@@ -648,7 +648,7 @@ impl Coordinator {
                     raw_expr: raw_expr.into(),
                     optimized_expr: local_mir_plan.expr().into(),
                     desc: global_lir_plan.desc().clone(),
-                    collection_id,
+                    global_id,
                     resolved_ids,
                     dependencies,
                     cluster_id,
@@ -671,16 +671,16 @@ impl Coordinator {
                 // Save plan structures.
                 coord
                     .catalog_mut()
-                    .set_optimized_plan(collection_id, global_mir_plan.df_desc().clone());
+                    .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
                 coord
                     .catalog_mut()
-                    .set_physical_plan(collection_id, global_lir_plan.df_desc().clone());
+                    .set_physical_plan(global_id, global_lir_plan.df_desc().clone());
 
                 let output_desc = global_lir_plan.desc().clone();
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 let notice_builtin_updates_fut = coord
-                    .process_dataflow_metainfo(df_meta, collection_id, session, notice_ids)
+                    .process_dataflow_metainfo(df_meta, global_id, session, notice_ids)
                     .await;
 
                 df_desc.set_as_of(dataflow_as_of.clone());
@@ -702,7 +702,7 @@ impl Coordinator {
                         storage_metadata,
                         None,
                         vec![(
-                            collection_id,
+                            global_id,
                             CollectionDescription {
                                 desc: output_desc,
                                 data_source: DataSource::Other,
@@ -827,7 +827,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateMaterializedViewExplain {
-            collection_id,
+            global_id,
             plan:
                 plan::CreateMaterializedViewPlan {
                     name,
@@ -855,7 +855,7 @@ impl Coordinator {
         let expr_humanizer = {
             let full_name = self.catalog().resolve_full_name(&name, None);
             let transient_items = btreemap! {
-                collection_id => TransientItem::new(
+                global_id => TransientItem::new(
                     Some(full_name.into_parts()),
                     Some(column_names.iter().map(|c| c.to_string()).collect()),
                 )

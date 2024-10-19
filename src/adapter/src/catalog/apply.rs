@@ -23,7 +23,7 @@ use mz_catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinView, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP,
 };
 use mz_catalog::durable::objects::{
-    ClusterKey, DatabaseKey, DurableType, ItemKey, ItemValueKind, RoleKey, SchemaKey,
+    ClusterKey, DatabaseKey, DurableType, ItemKey, RoleKey, SchemaKey,
 };
 use mz_catalog::durable::{CatalogError, DurableCatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -569,7 +569,7 @@ impl CatalogState {
                     name.clone(),
                     CatalogItem::Log(Log {
                         variant: log.variant,
-                        collection_id: global_id,
+                        global_id: global_id,
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(acl_items),
@@ -611,10 +611,6 @@ impl CatalogState {
                 );
             }
             Builtin::Index(index) => {
-                let kind = ItemValueKind::Index {
-                    create_sql: index.create_sql(),
-                    collection: global_id,
-                };
                 let custom_logical_compaction_window =
                     index.is_retained_metrics_object.then(|| {
                         self.system_config()
@@ -622,11 +618,14 @@ impl CatalogState {
                             .try_into()
                             .expect("invalid metrics retention")
                     });
+                // Indexes can't be versioned.
+                let versions = BTreeMap::new();
 
                 let item = self
                     .parse_item(
-                        item_id,
-                        &kind,
+                        global_id,
+                        &index.create_sql(),
+                        &versions,
                         None,
                         index.is_retained_metrics_object,
                         custom_logical_compaction_window,
@@ -690,6 +689,7 @@ impl CatalogState {
                     },
                     CatalogItem::Type(Type {
                         create_sql: None,
+                        global_id,
                         details: typ.details.clone(),
                         desc,
                         resolved_ids: ResolvedIds::empty(),
@@ -711,7 +711,10 @@ impl CatalogState {
                     item_id,
                     oid,
                     name.clone(),
-                    CatalogItem::Func(Func { inner: func.inner }),
+                    CatalogItem::Func(Func {
+                        inner: func.inner,
+                        global_id,
+                    }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::default(),
                 );
@@ -732,7 +735,7 @@ impl CatalogState {
                         create_sql: None,
                         data_source: DataSourceDesc::Introspection(coll.data_source),
                         desc: coll.desc.clone(),
-                        collection_id: global_id,
+                        global_id,
                         timeline: Timeline::EpochMilliseconds,
                         resolved_ids: ResolvedIds::empty(),
                         custom_logical_compaction_window: coll.is_retained_metrics_object.then(
@@ -750,20 +753,19 @@ impl CatalogState {
                 );
             }
             Builtin::ContinualTask(ct) => {
-                let kind = ItemValueKind::ContinualTask {
-                    create_sql: ct.create_sql(),
-                    collection: global_id,
-                };
                 let mut acl_items = vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Source,
                     MZ_SYSTEM_ROLE_ID,
                 )];
                 acl_items.extend_from_slice(&ct.access);
+                // Continual Tasks can't be versioned.
+                let versions = BTreeMap::new();
 
                 let item = self
                     .parse_item(
-                        item_id,
-                        &kind,
+                        global_id,
+                        &ct.create_sql(),
+                        &versions,
                         None,
                         false,
                         None,
@@ -792,14 +794,13 @@ impl CatalogState {
                 );
             }
             Builtin::Connection(connection) => {
-                let kind = ItemValueKind::Connection {
-                    create_sql: connection.sql.to_string(),
-                    storage_id: global_id,
-                };
+                // Connections can't be versioned.
+                let versions = BTreeMap::new();
                 let mut item = self
                     .parse_item(
-                        item_id,
-                        &kind,
+                        global_id,
+                        &connection.sql.to_string(),
+                        &versions,
                         None,
                         false,
                         None,
@@ -896,11 +897,13 @@ impl CatalogState {
                 let mz_catalog::durable::Item {
                     id,
                     oid,
+                    global_id,
                     schema_id,
                     name,
-                    kind,
+                    create_sql,
                     owner_id,
                     privileges,
+                    versions,
                 } = item;
                 let schema = self.find_non_temp_schema(&schema_id);
                 let name = QualifiedItemName {
@@ -917,12 +920,14 @@ impl CatalogState {
                         // item. This is a performance optimization and not needed for correctness.
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
-                        //
-                        // TODO(alter_table): Re-add this performance optimization.
-                        let item = self
-                            .deserialize_item(id, &kind)
-                            .unwrap_or_else(|e| panic!("{e:?}: invalid persisted Item: {kind:?}"));
-                        retraction.item = item;
+                        if retraction.create_sql() != create_sql {
+                            let item = self
+                                .deserialize_item(global_id, &create_sql, &versions)
+                                .unwrap_or_else(|e| {
+                                    panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                                });
+                            retraction.item = item;
+                        }
                         retraction.id = id;
                         retraction.oid = oid;
                         retraction.name = name;
@@ -933,8 +938,10 @@ impl CatalogState {
                     }
                     None => {
                         let catalog_item = self
-                            .deserialize_item(id, &kind)
-                            .unwrap_or_else(|e| panic!("{e:?}: invalid persisted Item: {kind:?}"));
+                            .deserialize_item(global_id, &create_sql, &versions)
+                            .unwrap_or_else(|e| {
+                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                            });
                         CatalogEntry {
                             item: catalog_item,
                             referenced_by: Vec::new(),
@@ -1251,20 +1258,25 @@ impl CatalogState {
                 let spawn_state = Arc::new(state.clone());
                 while let Some(id) = ready.pop_front() {
                     let (view, global_id) = views.get(&id).expect("must exist");
-
                     let global_id = *global_id;
                     let create_sql = view.create_sql();
+                    // Views can't be versioned.
+                    let versions = BTreeMap::new();
+
                     let span = info_span!(parent: None, "parse builtin view", name = view.name);
                     OpenTelemetryContext::obtain().attach_as_parent_to(&span);
                     let task_state = Arc::clone(&spawn_state);
                     let handle = mz_ore::task::spawn(
                         || "parse view",
                         async move {
-                            let kind = ItemValueKind::View {
-                                create_sql,
-                                collection: global_id,
-                            };
-                            let res = task_state.parse_item(id, &kind, None, false, None);
+                            let res = task_state.parse_item(
+                                global_id,
+                                &create_sql,
+                                &versions,
+                                None,
+                                false,
+                                None,
+                            );
                             (id, res)
                         }
                         .instrument(span),
@@ -1541,7 +1553,7 @@ impl CatalogState {
         cluster_id: ClusterId,
         log: &'static BuiltinLog,
         item_id: CatalogItemId,
-        index_id: GlobalId,
+        global_id: GlobalId,
         oid: u32,
     ) {
         let source_name = FullItemName {
@@ -1565,7 +1577,7 @@ impl CatalogState {
             oid,
             index_name,
             CatalogItem::Index(Index {
-                collection_id: index_id,
+                global_id,
                 on: log_global_id,
                 keys: log
                     .variant
@@ -1764,7 +1776,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             // and can never depend upon one another, to fix the topological sort,
             // we can just always move sinks to the end.
             .sorted_by_key(|(item, _ts, _diff)| {
-                if matches!(item.kind, ItemValueKind::Sink { .. }) {
+                if item.create_sql.starts_with("CREATE SINK") {
                     CatalogItemId::User(u64::MAX)
                 } else {
                     item.id

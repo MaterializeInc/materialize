@@ -26,7 +26,7 @@ use mz_catalog::builtin::{
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
-    ItemValueKind, SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
+    SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
 use mz_catalog::durable::{
     ClusterVariant, ClusterVariantManaged, Transaction, SYSTEM_CLUSTER_ID_ALLOC_KEY,
@@ -47,7 +47,7 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::is_unstable_schema;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{
     BuiltinsConfig, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType, RoleMembership, RoleVars,
@@ -88,6 +88,7 @@ pub struct BuiltinMigrationMetadata {
 pub struct CreateOp {
     id: CatalogItemId,
     oid: u32,
+    global_id: GlobalId,
     schema_id: SchemaId,
     name: String,
     owner_id: RoleId,
@@ -111,7 +112,7 @@ impl BuiltinMigrationMetadata {
 pub enum CatalogItemRebuilder {
     SystemSource(CatalogItem),
     Object {
-        kind: ItemValueKind,
+        sql: String,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
     },
@@ -128,41 +129,42 @@ impl CatalogItemRebuilder {
         {
             Self::SystemSource(entry.item().clone())
         } else {
-            let mut item = entry.item.to_serialized();
-            item.rewrite_sql(|create_sql| {
-                let mut create_stmt = mz_sql::parse::parse(&create_sql)
-                    .expect("invalid create sql persisted to catalog")
-                    .into_element()
-                    .ast;
-                mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, ancestor_ids);
-                Ok(create_stmt.to_ast_string_stable())
-            })
-            .expect("valid re-write, TODO");
-
+            let create_sql = entry.create_sql().to_string();
+            let mut create_stmt = mz_sql::parse::parse(&create_sql)
+                .expect("invalid create sql persisted to catalog")
+                .into_element()
+                .ast;
+            mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, ancestor_ids);
             Self::Object {
-                kind: item,
+                sql: create_stmt.to_ast_string_stable(),
                 is_retained_metrics_object: entry.item().is_retained_metrics_object(),
                 custom_logical_compaction_window: entry.item().custom_logical_compaction_window(),
             }
         }
     }
 
-    fn build(self, id: CatalogItemId, state: &CatalogState) -> CatalogItem {
+    fn build(
+        self,
+        global_id: GlobalId,
+        state: &CatalogState,
+        versions: &BTreeMap<RelationVersion, GlobalId>,
+    ) -> CatalogItem {
         match self {
             Self::SystemSource(item) => item,
             Self::Object {
-                kind,
+                sql,
                 is_retained_metrics_object,
                 custom_logical_compaction_window,
             } => state
                 .parse_item(
-                    id,
-                    &kind,
+                    global_id,
+                    &sql,
+                    versions,
                     None,
                     is_retained_metrics_object,
                     custom_logical_compaction_window,
                 )
-                .unwrap_or_else(|error| panic!("invalid persisted Item ({error:?}): {kind:?}")),
+                .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")),
         }
     }
 }
@@ -640,7 +642,7 @@ impl Catalog {
         for entry in sorted_entries {
             let id = entry.item_id();
 
-            let (new_item_id, new_collection_id) = match id {
+            let (new_item_id, new_global_id) = match id {
                 CatalogItemId::System(_) => {
                     let item_id = txn.allocate_system_item_ids(1)?.into_element();
                     let gid = txn.allocate_system_global_ids(1)?.into_element();
@@ -683,7 +685,7 @@ impl Catalog {
                         },
                         unique_identifier: SystemObjectUniqueIdentifier {
                             catalog_id: new_item_id,
-                            collection_id: new_collection_id,
+                            collection_id: new_global_id,
                             fingerprint: fingerprint.clone(),
                         },
                     },
@@ -717,7 +719,7 @@ impl Catalog {
                                         .expect("all variants have a name")
                                         .to_string(),
                                     new_item_id,
-                                    new_collection_id,
+                                    new_global_id,
                                     entry.oid(),
                                 ));
                         }
@@ -757,6 +759,7 @@ impl Catalog {
                 migration_metadata.user_item_create_ops.push(CreateOp {
                     id: new_item_id,
                     oid: entry.oid(),
+                    global_id: new_global_id,
                     schema_id,
                     name: name.item.clone(),
                     owner_id: entry.owner_id().clone(),
@@ -835,6 +838,7 @@ impl Catalog {
         for CreateOp {
             id,
             oid,
+            global_id,
             schema_id,
             name,
             owner_id,
@@ -842,15 +846,29 @@ impl Catalog {
             item_rebuilder,
         } in migration_metadata.user_item_create_ops.drain(..)
         {
-            let item = item_rebuilder.build(id, state);
+            // Builtin Items can't be versioned.
+            let versions = BTreeMap::new();
+            let item = item_rebuilder.build(global_id, state, &versions);
+            let (create_sql, expect_gid, expect_versions) = item.to_serialized();
+            assert_eq!(
+                global_id, expect_gid,
+                "serializing a CatalogItem changed the GlobalId"
+            );
+            assert_eq!(
+                versions, expect_versions,
+                "serializing a CatalogItem changed the Versions"
+            );
+
             txn.insert_item(
                 id,
                 oid,
+                global_id,
                 schema_id,
                 &name,
-                item.to_serialized(),
+                create_sql,
                 owner_id.clone(),
                 privileges.all_values_owned().collect(),
+                versions,
             )?;
             let updates = txn.get_and_commit_op_updates();
             let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
@@ -993,18 +1011,19 @@ fn add_new_remove_old_builtin_items_migration(
                             c.owner_id.clone(),
                         )];
                         acl_items.extend_from_slice(c.access);
-                        let kind = ItemValueKind::Connection {
-                            create_sql: c.sql.into(),
-                            storage_id: collection_id,
-                        };
+                        // Connections can't be versioned.
+                        let versions = BTreeMap::new();
+
                         txn.insert_item(
                             item_id,
                             c.oid,
+                            collection_id,
                             mz_catalog::durable::initialize::resolve_system_schema(c.schema).id,
                             c.name,
-                            kind,
+                            c.sql.into(),
                             *c.owner_id,
                             acl_items,
+                            versions,
                         )?;
                         true
                     }
@@ -1462,7 +1481,7 @@ mod builtin_migration_tests {
 
                     CatalogItem::MaterializedView(MaterializedView {
                         // TODO(alter_table).
-                        collection_id: GlobalId::User(1),
+                        global_id: GlobalId::User(1),
                         create_sql: format!(
                             "CREATE MATERIALIZED VIEW materialize.public.mv ({column_list}) AS SELECT * FROM {table_list}"
                         ),
@@ -1498,7 +1517,7 @@ mod builtin_migration_tests {
                     let on_gid = global_id_mapping[&on];
                     CatalogItem::Index(Index {
                         create_sql: format!("CREATE INDEX idx ON materialize.public.{on} (a)"),
-                        collection_id: GlobalId::User(1),
+                        global_id: GlobalId::User(1),
                         on: on_gid,
                         keys: Default::default(),
                         conn_id: None,

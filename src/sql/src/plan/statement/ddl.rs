@@ -6521,7 +6521,7 @@ pub fn plan_alter_sink(
 
             Ok(Plan::AlterSink(AlterSinkPlan {
                 item_id: item.item_id(),
-                export_id: item.global_id(),
+                global_id: item.global_id(),
                 sink: plan.sink,
                 with_snapshot: plan.with_snapshot,
                 in_cluster: plan.in_cluster,

@@ -559,7 +559,7 @@ pub struct CreateIndexOptimize {
 pub struct CreateIndexFinish {
     validity: PlanValidity,
     item_id: CatalogItemId,
-    collection_id: GlobalId,
+    global_id: GlobalId,
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
     global_mir_plan: optimize::index::GlobalMirPlan,
@@ -598,7 +598,7 @@ pub struct CreateViewFinish {
     /// ID of this item in the Catalog.
     item_id: CatalogItemId,
     /// ID by with Compute will reference this View.
-    collection_id: GlobalId,
+    global_id: GlobalId,
     plan: plan::CreateViewPlan,
     /// IDs of objects resolved during name resolution.
     resolved_ids: ResolvedIds,
@@ -759,7 +759,7 @@ pub struct CreateMaterializedViewFinish {
     /// The ID of this Materialized View in the Catalog.
     item_id: CatalogItemId,
     /// The ID of the durable pTVC backing this Materialized View.
-    collection_id: GlobalId,
+    global_id: GlobalId,
     validity: PlanValidity,
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
@@ -770,7 +770,7 @@ pub struct CreateMaterializedViewFinish {
 
 #[derive(Debug)]
 pub struct CreateMaterializedViewExplain {
-    collection_id: GlobalId,
+    global_id: GlobalId,
     validity: PlanValidity,
     plan: plan::CreateMaterializedViewPlan,
     df_meta: DataflowMetainfo,
@@ -867,7 +867,8 @@ pub struct CreateSecretEnsure {
 #[derive(Debug)]
 pub struct CreateSecretFinish {
     validity: PlanValidity,
-    id: CatalogItemId,
+    item_id: CatalogItemId,
+    global_id: GlobalId,
     plan: plan::CreateSecretPlan,
 }
 

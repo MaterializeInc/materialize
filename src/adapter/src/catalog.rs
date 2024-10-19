@@ -2038,7 +2038,6 @@ mod tests {
     use std::{env, iter};
 
     use itertools::Itertools;
-    use mz_catalog::durable::objects::ItemValueKind;
     use mz_catalog::memory::objects::CatalogItem;
     use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
@@ -2384,14 +2383,11 @@ mod tests {
         assert_err!(mz_sql_parser::parser::parse_statements_with_limit(
             &create_sql
         ));
-        let item_kind = ItemValueKind::View {
-            create_sql,
-            collection: GlobalId::User(100),
-        };
 
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
         let id = CatalogItemId::User(1);
+        let gid = GlobalId::User(1);
         {
             let mut catalog =
                 Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
@@ -2399,7 +2395,7 @@ mod tests {
                     .expect("unable to open debug catalog");
             let item = catalog
                 .state()
-                .deserialize_item(id, &item_kind)
+                .deserialize_item(gid, &create_sql, &BTreeMap::new())
                 .expect("unable to parse view");
             catalog
                 .transact(
@@ -3289,20 +3285,21 @@ mod tests {
             let schema_spec = schema.id().clone();
             let schema_name = &schema.name().schema;
             let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
-            let create_sql = format!(
-                "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
-            );
-            let kind = ItemValueKind::MaterializedView {
-                create_sql,
-                collection: GlobalId::User(100),
-            };
             let mv_id = catalog
                 .allocate_user_id()
                 .await
                 .expect("unable to allocate id");
+            let mv_gid = catalog
+                .allocate_user_global_id()
+                .await
+                .expect("unable to allocate gid");
             let mv = catalog
                 .state()
-                .deserialize_item(mv_id, &kind)
+                .deserialize_item(
+                    mv_gid,
+                    &format!("CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"),
+                    &BTreeMap::new(),
+                )
                 .expect("unable to deserialize item");
             catalog
                 .transact(

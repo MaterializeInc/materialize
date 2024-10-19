@@ -25,7 +25,7 @@ use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
     RoleVars,
@@ -47,12 +47,12 @@ use crate::durable::objects::{
     ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
     Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, ItemValueKind, ReplicaConfig, Role,
-    RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, SourceReference, SourceReferencesKey,
-    SourceReferencesValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
-    SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
-    TxnWalShardValue, UnfinalizedShardKey,
+    IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
+    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
+    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
@@ -596,15 +596,19 @@ impl<'a> Transaction<'a> {
     pub fn insert_user_item(
         &mut self,
         id: CatalogItemId,
+        global_id: GlobalId,
         schema_id: SchemaId,
         item_name: &str,
-        kind: ItemValueKind,
+        create_sql: String,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         temporary_oids: &HashSet<u32>,
+        versions: BTreeMap<RelationVersion, GlobalId>,
     ) -> Result<u32, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
-        self.insert_item(id, oid, schema_id, item_name, kind, owner_id, privileges)?;
+        self.insert_item(
+            id, oid, global_id, schema_id, item_name, create_sql, owner_id, privileges, versions,
+        )?;
         Ok(oid)
     }
 
@@ -612,21 +616,25 @@ impl<'a> Transaction<'a> {
         &mut self,
         id: CatalogItemId,
         oid: u32,
+        global_id: GlobalId,
         schema_id: SchemaId,
         item_name: &str,
-        kind: ItemValueKind,
+        create_sql: String,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
+        versions: BTreeMap<RelationVersion, GlobalId>,
     ) -> Result<(), CatalogError> {
         match self.items.insert(
             ItemKey { id },
             ItemValue {
                 schema_id,
                 name: item_name.to_string(),
-                kind,
+                create_sql,
                 owner_id,
                 privileges,
                 oid,
+                global_id,
+                versions,
             },
             self.op_id,
         ) {

@@ -7,11 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::proto;
-use mz_catalog::durable::objects::{DurableType, IdAlloc, ItemValueKind};
+use mz_catalog::durable::objects::{DurableType, IdAlloc};
 use mz_catalog::durable::{
     test_bootstrap_args, CatalogError, DurableCatalogError, FenceError, Item,
     TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY,
@@ -201,26 +203,24 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
         Item {
             id: CatalogItemId::User(100),
             oid: 20_000,
+            global_id: GlobalId::User(100),
             schema_id: SchemaId::User(1),
             name: "foo".to_string(),
-            kind: ItemValueKind::View {
-                create_sql: "CREATE VIEW v AS SELECT 1".to_string(),
-                collection: GlobalId::User(100),
-            },
+            create_sql: "CREATE VIEW v AS SELECT 1".to_string(),
             owner_id: RoleId::User(1),
             privileges: vec![],
+            versions: BTreeMap::new(),
         },
         Item {
             id: CatalogItemId::User(200),
             oid: 20_001,
+            global_id: GlobalId::User(200),
             schema_id: SchemaId::User(1),
             name: "bar".to_string(),
-            kind: ItemValueKind::MaterializedView {
-                create_sql: "CREATE MATERIALIZED VIEW mv AS SELECT 2".to_string(),
-                collection: GlobalId::User(200),
-            },
+            create_sql: "CREATE MATERIALIZED VIEW mv AS SELECT 2".to_string(),
             owner_id: RoleId::User(2),
             privileges: vec![],
+            versions: BTreeMap::new(),
         },
     ];
 
@@ -240,11 +240,13 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
         txn.insert_item(
             item.id,
             item.oid,
+            item.global_id,
             item.schema_id,
             &item.name,
-            item.kind.clone(),
+            item.create_sql.clone(),
             item.owner_id,
             item.privileges.clone(),
+            item.versions.clone(),
         )
         .unwrap();
     }

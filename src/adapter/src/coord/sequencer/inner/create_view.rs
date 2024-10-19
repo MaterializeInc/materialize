@@ -285,7 +285,7 @@ impl Coordinator {
         }: CreateViewOptimize,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
         let item_id = self.catalog_mut().allocate_user_id().await?;
-        let collection_id = self.catalog_mut().allocate_user_global_id().await?;
+        let global_id = self.catalog_mut().allocate_user_global_id().await?;
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
@@ -316,7 +316,7 @@ impl Coordinator {
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 CreateViewStage::Explain(CreateViewExplain {
                                     validity,
-                                    id: collection_id,
+                                    id: global_id,
                                     plan,
                                     explain_ctx,
                                 })
@@ -324,7 +324,7 @@ impl Coordinator {
                                 CreateViewStage::Finish(CreateViewFinish {
                                     validity,
                                     item_id,
-                                    collection_id,
+                                    global_id,
                                     plan,
                                     optimized_expr,
                                     resolved_ids,
@@ -346,7 +346,7 @@ impl Coordinator {
                                 tracing::error!("error while handling EXPLAIN statement: {}", err);
                                 CreateViewStage::Explain(CreateViewExplain {
                                     validity,
-                                    id: collection_id,
+                                    id: global_id,
                                     plan,
                                     explain_ctx,
                                 })
@@ -369,7 +369,7 @@ impl Coordinator {
         session: &Session,
         CreateViewFinish {
             item_id,
-            collection_id,
+            global_id,
             plan:
                 plan::CreateViewPlan {
                     name,
@@ -402,7 +402,7 @@ impl Coordinator {
                 name: name.clone(),
                 item: CatalogItem::View(View {
                     create_sql: create_sql.clone(),
-                    collection_id,
+                    global_id,
                     raw_expr: raw_expr.into(),
                     desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
                     optimized_expr: optimized_expr.into(),

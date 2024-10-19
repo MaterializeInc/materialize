@@ -627,7 +627,7 @@ impl Coordinator {
                     };
 
                     collections.push((
-                        source.collection_id,
+                        source.global_id,
                         CollectionDescription::<Timestamp> {
                             desc: source.desc.clone(),
                             data_source,
@@ -796,13 +796,13 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let storage_id = self.catalog_mut().allocate_user_global_id().await?;
+        let global_id = self.catalog_mut().allocate_user_global_id().await?;
         let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
-                storage_id,
+                global_id,
                 details: plan.connection.details.clone(),
                 resolved_ids,
             }),
@@ -1118,7 +1118,7 @@ impl Coordinator {
 
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
-        let export_id = return_if_err!(self.catalog_mut().allocate_user_global_id().await, ctx);
+        let global_id = return_if_err!(self.catalog_mut().allocate_user_global_id().await, ctx);
 
         if let Some(cluster) = self.catalog().try_get_cluster(in_cluster) {
             mz_ore::soft_assert_or_log!(
@@ -1130,7 +1130,7 @@ impl Coordinator {
 
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
-            export_id,
+            global_id,
             from: sink.from,
             connection: sink.connection,
             partition_strategy: sink.partition_strategy,
@@ -1188,7 +1188,7 @@ impl Coordinator {
             }
         };
 
-        self.create_storage_export(export_id, &catalog_sink)
+        self.create_storage_export(global_id, &catalog_sink)
             .await
             .unwrap_or_terminate("cannot fail to create exports");
 
@@ -1240,8 +1240,11 @@ impl Coordinator {
         plan: plan::CreateTypePlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let id = self.catalog_mut().allocate_user_id().await?;
+        let global_id = self.catalog_mut().allocate_user_global_id().await?;
         let typ = Type {
             create_sql: Some(plan.typ.create_sql),
+            global_id,
             desc: plan.typ.inner.desc(&self.catalog().for_session(session))?,
             details: CatalogTypeDetails {
                 array_id: None,
@@ -1250,7 +1253,6 @@ impl Coordinator {
             },
             resolved_ids,
         };
-        let id = self.catalog_mut().allocate_user_id().await?;
         let op = catalog::Op::CreateItem {
             id,
             name: plan.name,
@@ -3264,7 +3266,7 @@ impl Coordinator {
         // the new `from` collection's read hold and the sink's write frontier.
         self.install_storage_watch_set(
             ctx.session().conn_id().clone(),
-            BTreeSet::from_iter([plan.export_id]),
+            BTreeSet::from_iter([plan.global_id]),
             read_ts,
             WatchSetResponse::AlterSinkReady(AlterSinkReadyContext {
                 ctx: Some(ctx),
@@ -3290,7 +3292,7 @@ impl Coordinator {
 
         let plan::AlterSinkPlan {
             item_id,
-            export_id,
+            global_id,
             sink,
             with_snapshot,
             in_cluster,
@@ -3300,7 +3302,7 @@ impl Coordinator {
         let write_frontier = &self
             .controller
             .storage
-            .export(export_id)
+            .export(global_id)
             .expect("sink known to exist")
             .write_frontier;
         let as_of = ctx.read_hold.least_valid_read();
@@ -3308,7 +3310,7 @@ impl Coordinator {
 
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
-            export_id,
+            global_id,
             from: sink.from,
             connection: sink.connection.clone(),
             envelope: sink.envelope,
@@ -3364,7 +3366,7 @@ impl Coordinator {
         self.controller
             .storage
             .alter_export(
-                export_id,
+                global_id,
                 ExportDescription {
                     sink: storage_sink_desc,
                     instance_id: in_cluster,
@@ -3476,7 +3478,7 @@ impl Coordinator {
 
             Ok(Connection {
                 create_sql: plan.connection.create_sql,
-                storage_id: cur_conn.storage_id,
+                global_id: cur_conn.global_id,
                 details: plan.connection.details,
                 resolved_ids: new_deps,
             })
@@ -3554,7 +3556,7 @@ impl Coordinator {
                 curr_conn
                     .details
                     .to_connection()
-                    .alter_compatible(curr_conn.storage_id, &connection.details.to_connection())
+                    .alter_compatible(curr_conn.global_id, &connection.details.to_connection())
                     .map_err(StorageError::from)?;
             }
             _ => unreachable!("known to be a connection"),
@@ -3606,12 +3608,12 @@ impl Coordinator {
                             _ => unreachable!("only ingestions reference connections"),
                         };
 
-                        source_connections.insert(source.collection_id, desc.connection);
+                        source_connections.insert(source.global_id, desc.connection);
                     }
                     CatalogItem::Sink(sink) => {
                         let export = entry.sink().expect("known to be sink");
                         sink_connections.insert(
-                            sink.export_id,
+                            sink.global_id,
                             export
                                 .connection
                                 .clone()
@@ -3864,7 +3866,7 @@ impl Coordinator {
                 // large task for an operation we have to cover in tests anyway.
                 let source = Source::new(
                     plan,
-                    cur_source.collection_id,
+                    cur_source.global_id,
                     resolved_ids,
                     cur_source.custom_logical_compaction_window,
                     cur_source.is_retained_metrics_object,
@@ -3951,7 +3953,7 @@ impl Coordinator {
                     };
 
                     collections.push((
-                        source.collection_id,
+                        source.global_id,
                         CollectionDescription {
                             desc: source.desc.clone(),
                             data_source,
