@@ -28,6 +28,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
@@ -178,6 +179,14 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId>;
 
     /// Resolves the named cluster.
+    /// Gets a network_policy by its ID.
+    ///
+    /// Panics if `id` does not specify a valid role.
+    fn get_network_policy(&self, id: &NetworkPolicyId) -> &dyn CatalogNetworkPolicy;
+
+    /// Gets all roles.
+    fn get_network_policies(&self) -> Vec<&dyn CatalogNetworkPolicy>;
+
     ///
     /// If the provided name is `None`, resolves the currently active cluster.
     fn resolve_cluster<'a, 'b>(
@@ -496,6 +505,21 @@ pub trait CatalogRole {
 
     /// Returns all variables that this role has a default value stored for.
     fn vars(&self) -> &BTreeMap<String, OwnedVarInput>;
+}
+
+/// A network policy in a [`SessionCatalog`].
+pub trait CatalogNetworkPolicy {
+    /// Returns a fully-specified name of the NetworkPolicy.
+    fn name(&self) -> &str;
+
+    /// Returns a stable ID for the NetworkPolicy.
+    fn id(&self) -> NetworkPolicyId;
+
+    /// Returns the ID of the owning NetworkPolicy.
+    fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the NetworkPolicy.
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 /// A cluster in a [`SessionCatalog`].
@@ -1181,6 +1205,8 @@ pub enum CatalogError {
     UnknownRole(String),
     /// Role already exists.
     RoleAlreadyExists(String),
+    /// Network Policy already exists.
+    NetworkPolicyAlreadyExists(String),
     /// Unknown cluster.
     UnknownCluster(String),
     /// Unexpected builtin cluster.
@@ -1211,6 +1237,8 @@ pub enum CatalogError {
     },
     /// Unknown connection.
     UnknownConnection(String),
+    /// Unknown network policy.
+    UnknownNetworkPolicy(String),
     /// Expected the catalog item to have the given type, but it did not.
     UnexpectedType {
         /// The item's name.
@@ -1255,7 +1283,9 @@ impl fmt::Display for CatalogError {
             Self::SchemaAlreadyExists(name) => write!(f, "schema '{name}' already exists"),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::RoleAlreadyExists(name) => write!(f, "role '{name}' already exists"),
+            Self::NetworkPolicyAlreadyExists(name) => write!(f, "network policy '{name}' already exists"),
             Self::UnknownCluster(name) => write!(f, "unknown cluster '{}'", name),
+            Self::UnknownNetworkPolicy(name) => write!(f, "unknown network policy '{}'", name),
             Self::UnexpectedBuiltinCluster(name) => write!(f, "Unexpected builtin cluster '{}'", name),
             Self::UnexpectedBuiltinClusterType(name) => write!(f, "Unexpected builtin cluster type'{}'", name),
             Self::ClusterAlreadyExists(name) => write!(f, "cluster '{name}' already exists"),
@@ -1334,6 +1364,7 @@ pub enum ObjectType {
     Schema,
     Func,
     ContinualTask,
+    NetworkPolicy,
 }
 
 impl ObjectType {
@@ -1355,7 +1386,8 @@ impl ObjectType {
             | ObjectType::Schema
             | ObjectType::Cluster
             | ObjectType::ClusterReplica
-            | ObjectType::Role => false,
+            | ObjectType::Role
+            | ObjectType::NetworkPolicy => false,
         }
     }
 }
@@ -1403,6 +1435,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Cluster(_) => ObjectType::Cluster,
             CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
             CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
+            CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
         }
     }
 }
@@ -1426,6 +1459,7 @@ impl Display for ObjectType {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
             ObjectType::ContinualTask => "CONTINUAL TASK",
+            ObjectType::NetworkPolicy => "NETWORK POLICY",
         })
     }
 }
@@ -1494,6 +1528,10 @@ impl ErrorMessageObjectDescription {
                 let name = catalog.get_item(id).name();
                 catalog.resolve_full_name(name).to_string()
             }
+            ObjectId::NetworkPolicy(network_policy_id) => catalog
+                .get_network_policy(network_policy_id)
+                .name()
+                .to_string(),
         };
         ErrorMessageObjectDescription::Object {
             object_type: catalog.get_object_type(object_id),

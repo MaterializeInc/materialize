@@ -39,6 +39,10 @@ pub enum ErrorKind {
     UngrantableRoleName(String),
     #[error("cluster name {} is reserved", .0.quoted())]
     ReservedClusterName(String),
+    #[error("network policy name {} is reserved", .0.quoted())]
+    ReservedNetworkPolicyName(String),
+    #[error("system network policy '{0}' cannot be modified")]
+    ReadOnlyNetworkPolicy(String),
     #[error("replica name {} is reserved", .0.quoted())]
     ReservedReplicaName(String),
     #[error("system cluster '{0}' cannot be modified")]
