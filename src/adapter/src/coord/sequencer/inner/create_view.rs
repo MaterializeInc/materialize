@@ -346,7 +346,7 @@ impl Coordinator {
                                 tracing::error!("error while handling EXPLAIN statement: {}", err);
                                 CreateViewStage::Explain(CreateViewExplain {
                                     validity,
-                                    id: item_id.to_global_id(),
+                                    id: collection_id,
                                     plan,
                                     explain_ctx,
                                 })

@@ -5808,7 +5808,7 @@ pub fn scalar_type_from_catalog(
                         *element_id,
                         element_modifiers,
                     )?),
-                    custom_id: Some(id.into()),
+                    custom_id: Some(id),
                 }),
                 CatalogType::Map {
                     key_reference: _,
@@ -5821,7 +5821,7 @@ pub fn scalar_type_from_catalog(
                         *value_id,
                         value_modifiers,
                     )?),
-                    custom_id: Some(id.into()),
+                    custom_id: Some(id),
                 }),
                 CatalogType::Range {
                     element_reference: element_id,
@@ -5848,7 +5848,7 @@ pub fn scalar_type_from_catalog(
                         .collect::<Result<Box<_>, PlanError>>()?;
                     Ok(ScalarType::Record {
                         fields: scalars,
-                        custom_id: Some(id.into()),
+                        custom_id: Some(id),
                     })
                 }
                 CatalogType::AclItem => Ok(ScalarType::AclItem),

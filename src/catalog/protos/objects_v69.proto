@@ -52,8 +52,8 @@ message GidMappingKey {
 }
 
 message GidMappingValue {
-  uint64 catalog_id = 1;
-  uint64 collection_id = 2;
+  SystemCatalogItemId catalog_id = 1;
+  SystemGlobalId global_id = 2;
   string fingerprint = 3;
 }
 
@@ -347,6 +347,11 @@ message CatalogItemId {
   }
 }
 
+/// A newtype wrapper for a `CatalogItemId` that is always in the "system" namespace.
+message SystemCatalogItemId {
+  uint64 value = 1;
+}
+
 message GlobalId {
   oneof value {
     uint64 system = 1;
@@ -354,6 +359,11 @@ message GlobalId {
     uint64 transient = 3;
     Empty explain = 4;
   }
+}
+
+/// A newtype wrapper for a `GlobalId` that is always in the "system" namespace.
+message SystemGlobalId {
+  uint64 value = 1;
 }
 
 message ClusterId {

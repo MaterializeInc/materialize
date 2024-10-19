@@ -177,7 +177,6 @@ pub enum Plan {
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
-    AlterItemSwap(AlterItemSwapPlan),
     AlterSchemaRename(AlterSchemaRenamePlan),
     AlterSchemaSwap(AlterSchemaSwapPlan),
     AlterSecret(AlterSecretPlan),
@@ -225,7 +224,6 @@ impl Plan {
             ],
             StatementKind::AlterObjectSwap => &[
                 PlanKind::AlterClusterSwap,
-                PlanKind::AlterItemSwap,
                 PlanKind::AlterSchemaSwap,
                 PlanKind::AlterNoop,
             ],
@@ -403,7 +401,6 @@ impl Plan {
             Plan::AlterConnection(_) => "alter connection",
             Plan::AlterSource(_) => "alter source",
             Plan::AlterItemRename(_) => "rename item",
-            Plan::AlterItemSwap(_) => "swap item",
             Plan::AlterSchemaRename(_) => "alter rename schema",
             Plan::AlterSchemaSwap(_) => "alter swap schema",
             Plan::AlterSecret(_) => "alter secret",
@@ -1088,7 +1085,7 @@ pub struct AlterNoopPlan {
 
 #[derive(Debug)]
 pub struct AlterSetClusterPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub set_cluster: ClusterId,
 }
 
@@ -1204,15 +1201,6 @@ pub struct AlterClusterSwapPlan {
 }
 
 #[derive(Debug)]
-pub struct AlterItemSwapPlan {
-    pub id_a: GlobalId,
-    pub id_b: GlobalId,
-    pub full_name_a: FullItemName,
-    pub full_name_b: FullItemName,
-    pub object_type: ObjectType,
-}
-
-#[derive(Debug)]
 pub struct AlterSecretPlan {
     pub id: CatalogItemId,
     pub secret_as: MirScalarExpr,
@@ -1248,7 +1236,7 @@ pub struct AlterOwnerPlan {
 
 #[derive(Debug)]
 pub struct AlterTablePlan {
-    pub relation_id: GlobalId,
+    pub relation_id: CatalogItemId,
     pub column_name: ColumnName,
     pub column_type: ResolvedDataType,
 }

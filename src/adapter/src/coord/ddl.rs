@@ -1203,7 +1203,7 @@ impl Coordinator {
                     entry.item().is_retained_metrics_object(),
                     entry.item().is_compute_object_on_cluster(),
                 ) {
-                    Some((cluster_id, entry.id(), policy.clone()))
+                    Some((cluster_id, entry.item_id(), policy.clone()))
                 } else {
                     None
                 }

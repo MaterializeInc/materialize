@@ -52,8 +52,8 @@ message GidMappingKey {
 }
 
 message GidMappingValue {
-  uint64 catalog_id = 1;
-  uint64 collection_id = 2;
+  SystemCatalogItemId catalog_id = 1;
+  SystemGlobalId global_id = 2;
   string fingerprint = 3;
 }
 
@@ -121,10 +121,17 @@ message ItemKey {
 message ItemValue {
   SchemaId schema_id = 1;
   string name = 2;
-  CatalogItemKind kind = 3;
+  CatalogItem definition = 3;
   RoleId owner_id = 4;
   repeated MzAclItem privileges = 5;
   uint32 oid = 6;
+  GlobalId global_id = 7;
+  repeated ItemVersion versions = 8;
+}
+
+message ItemVersion {
+  GlobalId global_id = 1;
+  Version version = 2;
 }
 
 message RoleKey {
@@ -247,6 +254,10 @@ message Timestamp {
   uint64 internal = 1;
 }
 
+message Version {
+  uint64 value = 2;
+}
+
 enum CatalogItemType {
   CATALOG_ITEM_TYPE_UNKNOWN = 0;
   CATALOG_ITEM_TYPE_TABLE = 1;
@@ -262,80 +273,13 @@ enum CatalogItemType {
   CATALOG_ITEM_TYPE_CONTINUAL_TASK = 11;
 }
 
-message Version {
-  uint64 value = 1;
-}
-
-message ItemCollection {
-  Version version = 1;
-  GlobalId id = 2;
-}
-
-message CatalogItemKind {
-  message Table {
+message CatalogItem {
+  message V1 {
     string create_sql = 1;
-    repeated ItemCollection collections = 2;
-  }
-
-  message Source {
-    string create_sql = 1;
-    GlobalId collection = 2;
-  }
-
-  message Sink {
-    string create_sql = 1;
-    GlobalId collection = 2;
-  }
-
-  message View {
-    string create_sql = 1;
-    GlobalId collection = 2;
-  }
-
-  message MaterializedView {
-    string create_sql = 1;
-    GlobalId collection = 2;
-  }
-
-  message Index {
-    string create_sql = 1;
-    GlobalId collection = 2;
-  }
-
-  message Type {
-    string create_sql = 1;
-  }
-
-  message Function {
-    string create_sql = 1;
-  }
-
-  message Secret {
-    string create_sql = 1;
-  }
-
-  message Connection {
-    string create_sql = 1;
-    GlobalId storage_id = 2;
-  }
-
-  message ContinualTask {
-    string create_sql = 1;
-    GlobalId collection = 2;
   }
 
   oneof value {
-    Table table = 1;
-    Source source = 2;
-    Sink sink = 3;
-    View view = 4;
-    MaterializedView materialized_view = 5;
-    Index index = 6;
-    Type type = 7;
-    Function function = 8;
-    Secret secret = 9;
-    Connection connection = 10;
-    ContinualTask continual_task = 11;
+    V1 v1 = 1;
   }
 }
 
@@ -347,6 +291,11 @@ message CatalogItemId {
   }
 }
 
+/// A newtype wrapper for a `CatalogItemId` that is always in the "system" namespace.
+message SystemCatalogItemId {
+  uint64 value = 1;
+}
+
 message GlobalId {
   oneof value {
     uint64 system = 1;
@@ -354,6 +303,11 @@ message GlobalId {
     uint64 transient = 3;
     Empty explain = 4;
   }
+}
+
+/// A newtype wrapper for a `GlobalId` that is always in the "system" namespace.
+message SystemGlobalId {
+  uint64 value = 1;
 }
 
 message ClusterId {

@@ -640,7 +640,8 @@ impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
 
     fn global_id(&self) -> GlobalId {
         // TODO(alter_table): Use the version here to get the correct GlobalId.
-        self.entry.item_id().to_global_id()
+        // self.entry.item_id().to_global_id()
+        todo!()
     }
 }
 
@@ -2265,11 +2266,6 @@ impl CatalogEntry {
     /// Returns the `CatalogItem` associated with this catalog entry.
     pub fn item(&self) -> &CatalogItem {
         &self.item
-    }
-
-    /// Returns the global ID of this catalog entry.
-    pub fn id(&self) -> GlobalId {
-        self.id.into()
     }
 
     /// Returns the [`CatalogItemId`] of this catalog entry.

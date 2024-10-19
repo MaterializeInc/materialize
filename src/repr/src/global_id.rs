@@ -77,11 +77,6 @@ impl GlobalId {
     pub fn is_transient(&self) -> bool {
         matches!(self, GlobalId::Transient(_))
     }
-
-    /// TODO(alter_table): Delete this method.
-    pub fn to_item_id(&self) -> CatalogItemId {
-        CatalogItemId::from(*self)
-    }
 }
 
 impl FromStr for GlobalId {

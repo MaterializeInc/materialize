@@ -621,10 +621,10 @@ impl Catalog {
         // First obtain a topological sorting of all migrated objects and their children.
         let mut visited_set = BTreeSet::new();
         let mut sorted_entries = Vec::new();
-        for id in migrated_ids {
-            if !visited_set.contains(&id) {
+        for item_id in migrated_ids {
+            if !visited_set.contains(&item_id) {
                 let migrated_topological_sort =
-                    Catalog::topological_sort(state, id, &mut visited_set);
+                    Catalog::topological_sort(state, item_id, &mut visited_set);
                 sorted_entries.extend(migrated_topological_sort);
             }
         }
@@ -1426,7 +1426,8 @@ mod builtin_migration_tests {
         // values.
         fn to_catalog_item(
             self,
-            id_mapping: &BTreeMap<String, CatalogItemId>,
+            item_id_mapping: &BTreeMap<String, CatalogItemId>,
+            global_id_mapping: &BTreeMap<String, GlobalId>,
         ) -> (String, ItemNamespace, CatalogItem) {
             let item = match self.item {
                 SimplifiedItem::Table => CatalogItem::Table(Table {
@@ -1435,7 +1436,6 @@ mod builtin_migration_tests {
                         .with_column("a", ScalarType::Int32.nullable(true))
                         .with_key(vec![0])
                         .finish(),
-                    // TODO(alter_table): Use a unique GlobalId.
                     collections: [(RelationVersion::root(), GlobalId::User(1))]
                         .into_iter()
                         .collect(),
@@ -1457,8 +1457,9 @@ mod builtin_migration_tests {
                         .enumerate()
                         .map(|(idx, _)| format!("a{idx}"))
                         .join(",");
-                    // TODO(alter_table): Use these below.
-                    let _resolved_ids = convert_names_to_ids(referenced_names, id_mapping);
+                    let resolved_ids =
+                        convert_names_to_ids(referenced_names, item_id_mapping, global_id_mapping);
+
                     CatalogItem::MaterializedView(MaterializedView {
                         // TODO(alter_table).
                         collection_id: GlobalId::User(1),
@@ -1484,8 +1485,7 @@ mod builtin_migration_tests {
                             .with_column("a", ScalarType::Int32.nullable(true))
                             .with_key(vec![0])
                             .finish(),
-                        // TODO(alter_table): Use the _resolved_ids from above.
-                        resolved_ids: ResolvedIds::empty(),
+                        resolved_ids: resolved_ids.into_iter().collect(),
                         cluster_id: ClusterId::User(1),
                         non_null_assertions: vec![],
                         custom_logical_compaction_window: None,
@@ -1494,15 +1494,15 @@ mod builtin_migration_tests {
                     })
                 }
                 SimplifiedItem::Index { on } => {
-                    let on_id = id_mapping[&on];
+                    let on_item_id = item_id_mapping[&on];
+                    let on_gid = global_id_mapping[&on];
                     CatalogItem::Index(Index {
                         create_sql: format!("CREATE INDEX idx ON materialize.public.{on} (a)"),
-                        // TODO(alter_table).
                         collection_id: GlobalId::User(1),
-                        on: on_id.to_global_id(),
+                        on: on_gid,
                         keys: Default::default(),
                         conn_id: None,
-                        resolved_ids: [(on_id, on_id.to_global_id())].into_iter().collect(),
+                        resolved_ids: [(on_item_id, on_gid)].into_iter().collect(),
                         cluster_id: ClusterId::User(1),
                         custom_logical_compaction_window: None,
                         is_retained_metrics_object: false,
@@ -1528,16 +1528,30 @@ mod builtin_migration_tests {
         name: String,
         item: CatalogItem,
         item_namespace: ItemNamespace,
-    ) -> CatalogItemId {
-        let id = match item_namespace {
-            ItemNamespace::User => catalog
-                .allocate_user_id()
-                .await
-                .expect("cannot fail to allocate user ids"),
-            ItemNamespace::System => catalog
-                .allocate_system_id()
-                .await
-                .expect("cannot fail to allocate system ids"),
+    ) -> (CatalogItemId, GlobalId) {
+        let (item_id, global_id) = match item_namespace {
+            ItemNamespace::User => {
+                let item_id = catalog
+                    .allocate_user_id()
+                    .await
+                    .expect("cannot fail to allocate user ids");
+                let global_id = catalog
+                    .allocate_user_global_id()
+                    .await
+                    .expect("cannot fail to allocate user ids");
+                (item_id, global_id)
+            }
+            ItemNamespace::System => {
+                let item_id = catalog
+                    .allocate_system_id()
+                    .await
+                    .expect("cannot fail to allocate system ids");
+                let global_id = catalog
+                    .allocate_user_global_id()
+                    .await
+                    .expect("cannot fail to allocate system ids");
+                (item_id, global_id)
+            }
         };
         let database_id = catalog
             .resolve_database(DEFAULT_DATABASE_NAME)
@@ -1549,13 +1563,14 @@ mod builtin_migration_tests {
             .expect("failed to resolve default schemas")
             .id
             .clone();
+
         catalog
             .transact(
                 None,
                 mz_repr::Timestamp::MIN,
                 None,
                 vec![Op::CreateItem {
-                    id,
+                    id: item_id,
                     name: QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec,
@@ -1569,14 +1584,23 @@ mod builtin_migration_tests {
             )
             .await
             .expect("failed to transact");
-        id
+
+        (item_id, global_id)
     }
 
     fn convert_names_to_ids(
         name_vec: Vec<String>,
-        id_lookup: &BTreeMap<String, CatalogItemId>,
-    ) -> BTreeSet<CatalogItemId> {
-        name_vec.into_iter().map(|name| id_lookup[&name]).collect()
+        item_id_lookup: &BTreeMap<String, CatalogItemId>,
+        global_id_lookup: &BTreeMap<String, GlobalId>,
+    ) -> BTreeMap<CatalogItemId, GlobalId> {
+        name_vec
+            .into_iter()
+            .map(|name| {
+                let item_id = item_id_lookup[&name];
+                let global_id = global_id_lookup[&name];
+                (item_id, global_id)
+            })
+            .collect()
     }
 
     fn convert_ids_to_names<I: IntoIterator<Item = CatalogItemId>>(
@@ -1588,21 +1612,27 @@ mod builtin_migration_tests {
 
     async fn run_test_case(test_case: BuiltinMigrationTestCase) {
         Catalog::with_debug(|mut catalog| async move {
-            let mut id_mapping = BTreeMap::new();
+            let mut item_id_mapping = BTreeMap::new();
+            let mut global_id_mapping = BTreeMap::new();
             let mut name_mapping = BTreeMap::new();
+
             for entry in test_case.initial_state {
-                let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
-                let id = add_item(&mut catalog, name.clone(), item, namespace).await;
-                id_mapping.insert(name.clone(), id);
-                name_mapping.insert(id, name);
+                let (name, namespace, item) =
+                    entry.to_catalog_item(&item_id_mapping, &global_id_mapping);
+                let (item_id, global_id) =
+                    add_item(&mut catalog, name.clone(), item, namespace).await;
+
+                item_id_mapping.insert(name.clone(), item_id);
+                global_id_mapping.insert(name.clone(), global_id);
+                name_mapping.insert(item_id, name);
             }
 
             let migrated_ids = test_case
                 .migrated_names
                 .into_iter()
-                .map(|name| id_mapping[&name])
+                .map(|name| item_id_mapping[&name])
                 .collect();
-            let id_fingerprint_map: BTreeMap<CatalogItemId, String> = id_mapping
+            let id_fingerprint_map: BTreeMap<CatalogItemId, String> = item_id_mapping
                 .iter()
                 .filter(|(_name, id)| id.is_system())
                 // We don't use the new fingerprint in this test, so we can just hard code it

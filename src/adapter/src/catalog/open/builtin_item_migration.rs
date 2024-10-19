@@ -22,7 +22,9 @@ use mz_catalog::durable::{
     SystemObjectMapping, Transaction,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
+use mz_catalog::memory::objects::CatalogItem;
 use mz_catalog::SYSTEM_CONN_ID;
+use mz_ore::collections::CollectionExt;
 use mz_ore::{halt, soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
 use mz_persist_client::critical::SinceHandle;
@@ -32,7 +34,7 @@ use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::codec_impls::ShardIdSchema;
 use mz_persist_types::ShardId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
-use mz_sql::catalog::CatalogItem;
+use mz_sql::catalog::CatalogItem as _;
 use mz_storage_client::controller::StorageTxn;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{debug, error};
@@ -190,9 +192,11 @@ async fn migrate_builtin_items_0dt(
         })
         .collect();
     let mut migrated_system_object_mappings = BTreeMap::new();
-    for id in &migrated_builtins {
-        let fingerprint = id_fingerprint_map.get(id).expect("missing fingerprint");
-        let entry = state.get_entry(id);
+    for item_id in &migrated_builtins {
+        let fingerprint = id_fingerprint_map
+            .get(item_id)
+            .expect("missing fingerprint");
+        let entry = state.get_entry(item_id);
         let schema_name = state
             .get_schema(
                 &entry.name().qualifiers.database_spec,
@@ -202,8 +206,11 @@ async fn migrate_builtin_items_0dt(
             .name
             .schema
             .as_str();
+        // Builtin Items can only be referenced by a single GlobalId.
+        let global_id = state.get_entry(item_id).global_ids().into_element();
+
         migrated_system_object_mappings.insert(
-            *id,
+            *item_id,
             SystemObjectMapping {
                 description: SystemObjectDescription {
                     schema_name: schema_name.to_string(),
@@ -211,8 +218,8 @@ async fn migrate_builtin_items_0dt(
                     object_name: entry.name().item.clone(),
                 },
                 unique_identifier: SystemObjectUniqueIdentifier {
-                    catalog_id: *id,
-                    collection_id: id.to_global_id(),
+                    catalog_id: *item_id,
+                    collection_id: global_id,
                     fingerprint: fingerprint.clone(),
                 },
             },
@@ -267,15 +274,31 @@ async fn migrate_builtin_items_0dt(
     // 2. Get the `GlobalId` of all migrated storage collections.
     let migrated_storage_collections: BTreeSet<_> = migrated_builtins
         .into_iter()
-        .filter_map(|id| {
-            if state.get_entry(&id).item().is_storage_collection() {
-                match id {
-                    CatalogItemId::System(id) => Some(id),
-                    _ => unreachable!("builtin objects must have system ID, found: {id:?}"),
+        .filter_map(|item_id| {
+            let gid = match state.get_entry(&item_id).item() {
+                CatalogItem::Table(table) => {
+                    let mut ids: Vec<_> = table.global_ids().collect();
+                    assert_eq!(ids.len(), 1, "{ids:?}");
+                    ids.pop().expect("checked length")
                 }
-            } else {
-                None
-            }
+                CatalogItem::Source(source) => source.global_id(),
+                CatalogItem::MaterializedView(mv) => mv.global_id(),
+                CatalogItem::ContinualTask(ct) => ct.global_id(),
+                CatalogItem::Log(_)
+                | CatalogItem::Sink(_)
+                | CatalogItem::View(_)
+                | CatalogItem::Index(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::Secret(_)
+                | CatalogItem::Connection(_) => return None,
+            };
+            let GlobalId::System(raw_gid) = gid else {
+                unreachable!(
+                    "builtin objects must have system ID, found: {item_id:?} with {gid:?}"
+                );
+            };
+            Some(raw_gid)
         })
         .collect();
 

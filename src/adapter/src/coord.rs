@@ -1978,13 +1978,13 @@ impl Coordinator {
                     } else {
                         let df_desc = self
                             .catalog()
-                            .try_get_physical_plan(&entry.id())
+                            .try_get_physical_plan(&idx.global_id())
                             .expect("added in `bootstrap_dataflow_plans`")
                             .clone();
 
                         let df_meta = self
                             .catalog()
-                            .try_get_dataflow_metainfo(&entry.id())
+                            .try_get_dataflow_metainfo(&idx.global_id())
                             .expect("added in `bootstrap_dataflow_plans`");
 
                         if self.catalog().state().system_config().enable_mz_notices() {
@@ -2531,10 +2531,12 @@ impl Coordinator {
         let mut collections = vec![];
         let mut new_builtin_continual_tasks = vec![];
         for entry in catalog.entries() {
-            let id = entry.id();
             match entry.item() {
                 CatalogItem::Source(source) => {
-                    collections.push((id, source_desc(&source.data_source, &source.desc)));
+                    collections.push((
+                        source.global_id(),
+                        source_desc(&source.data_source, &source.desc),
+                    ));
                 }
                 CatalogItem::Table(table) => {
                     let collection_desc = match &table.data_source {
@@ -2545,7 +2547,8 @@ impl Coordinator {
                             source_desc(data_source_desc, &table.desc)
                         }
                     };
-                    collections.push((id, collection_desc));
+                    collections
+                        .extend(table.global_ids().map(|gid| (gid, collection_desc.clone())));
                 }
                 CatalogItem::MaterializedView(mv) => {
                     let collection_desc = CollectionDescription {
@@ -2554,7 +2557,7 @@ impl Coordinator {
                         since: mv.initial_as_of.clone(),
                         status_collection_id: None,
                     };
-                    collections.push((id, collection_desc));
+                    collections.push((mv.global_id(), collection_desc));
                 }
                 CatalogItem::ContinualTask(ct) => {
                     let collection_desc = CollectionDescription {
@@ -2563,13 +2566,13 @@ impl Coordinator {
                         since: ct.initial_as_of.clone(),
                         status_collection_id: None,
                     };
-                    if id.is_system() && collection_desc.since.is_none() {
+                    if ct.global_id().is_system() && collection_desc.since.is_none() {
                         // We need a non-0 since to make as_of selection work. Fill it in below with
                         // the `bootstrap_builtin_continual_tasks` call, which can only be run after
                         // `create_collections_for_bootstrap`.
-                        new_builtin_continual_tasks.push((id, collection_desc));
+                        new_builtin_continual_tasks.push((ct.global_id(), collection_desc));
                     } else {
-                        collections.push((id, collection_desc));
+                        collections.push((ct.global_id(), collection_desc));
                     }
                 }
                 _ => (),
@@ -2679,8 +2682,6 @@ impl Coordinator {
         let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
 
         for entry in ordered_catalog_entries {
-            let id = entry.id();
-            let is_timeline_epoch_ms = self.get_timeline_context(id).is_timeline_epoch_ms();
             match entry.item() {
                 CatalogItem::Index(idx) => {
                     // Collect optimizer parameters.
@@ -2692,16 +2693,20 @@ impl Coordinator {
 
                     // The index may already be installed on the compute instance. For example,
                     // this is the case for introspection indexes.
-                    if compute_instance.contains_collection(&id) {
+                    if compute_instance.contains_collection(&idx.global_id()) {
                         continue;
                     }
 
                     let (optimized_plan, global_lir_plan) = {
+                        let is_timeline_epoch_ms = self
+                            .get_timeline_context(idx.global_id())
+                            .is_timeline_epoch_ms();
+
                         // Build an optimizer for this INDEX.
                         let mut optimizer = optimize::index::Optimizer::new(
                             self.owned_catalog(),
                             compute_instance.clone(),
-                            entry.id(),
+                            idx.global_id(),
                             optimizer_config.clone(),
                             self.optimizer_metrics(),
                         );
@@ -2734,11 +2739,11 @@ impl Coordinator {
                     };
 
                     let catalog = self.catalog_mut();
-                    catalog.set_optimized_plan(id, optimized_plan);
-                    catalog.set_physical_plan(id, physical_plan);
-                    catalog.set_dataflow_metainfo(id, metainfo);
+                    catalog.set_optimized_plan(idx.global_id(), optimized_plan);
+                    catalog.set_physical_plan(idx.global_id(), physical_plan);
+                    catalog.set_dataflow_metainfo(idx.global_id(), metainfo);
 
-                    compute_instance.insert_collection(id);
+                    compute_instance.insert_collection(idx.global_id());
                 }
                 CatalogItem::MaterializedView(mv) => {
                     // Collect optimizer parameters.
@@ -2754,11 +2759,15 @@ impl Coordinator {
                         .to_string();
 
                     let (optimized_plan, global_lir_plan) = {
+                        let is_timeline_epoch_ms = self
+                            .get_timeline_context(mv.global_id())
+                            .is_timeline_epoch_ms();
+
                         // Build an optimizer for this MATERIALIZED VIEW.
                         let mut optimizer = optimize::materialized_view::Optimizer::new(
                             self.owned_catalog().as_optimizer_catalog(),
                             compute_instance.clone(),
-                            entry.id(),
+                            mv.global_id(),
                             internal_view_id,
                             mv.desc.iter_names().cloned().collect(),
                             mv.non_null_assertions.clone(),
@@ -2792,11 +2801,11 @@ impl Coordinator {
                     };
 
                     let catalog = self.catalog_mut();
-                    catalog.set_optimized_plan(id, optimized_plan);
-                    catalog.set_physical_plan(id, physical_plan);
-                    catalog.set_dataflow_metainfo(id, metainfo);
+                    catalog.set_optimized_plan(mv.global_id(), optimized_plan);
+                    catalog.set_physical_plan(mv.global_id(), physical_plan);
+                    catalog.set_dataflow_metainfo(mv.global_id(), metainfo);
 
-                    compute_instance.insert_collection(id);
+                    compute_instance.insert_collection(mv.global_id());
                 }
                 CatalogItem::ContinualTask(ct) => {
                     let compute_instance =
@@ -2809,21 +2818,24 @@ impl Coordinator {
                         .catalog()
                         .resolve_full_name(entry.name(), None)
                         .to_string();
+                    let is_timeline_epoch_ms = self
+                        .get_timeline_context(ct.global_id())
+                        .is_timeline_epoch_ms();
                     let (optimized_plan, physical_plan, metainfo) = self
                         .optimize_create_continual_task(
                             ct,
-                            id,
+                            ct.global_id(),
                             self.owned_catalog(),
                             debug_name,
                             is_timeline_epoch_ms,
                         )?;
 
                     let catalog = self.catalog_mut();
-                    catalog.set_optimized_plan(id, optimized_plan);
-                    catalog.set_physical_plan(id, physical_plan);
-                    catalog.set_dataflow_metainfo(id, metainfo);
+                    catalog.set_optimized_plan(ct.global_id(), optimized_plan);
+                    catalog.set_physical_plan(ct.global_id(), physical_plan);
+                    catalog.set_dataflow_metainfo(ct.global_id(), metainfo);
 
-                    compute_instance.insert_collection(id);
+                    compute_instance.insert_collection(ct.global_id());
                 }
                 _ => (),
             }
@@ -2846,15 +2858,28 @@ impl Coordinator {
         let mut dataflows = Vec::new();
         let mut read_policies = BTreeMap::new();
         for entry in self.catalog.entries() {
-            let id = entry.id();
-            if let Some(plan) = self.catalog.try_get_physical_plan(&id) {
-                catalog_ids.push(id);
+            let gid = match entry.item() {
+                CatalogItem::Index(idx) => idx.global_id(),
+                CatalogItem::MaterializedView(mv) => mv.global_id(),
+                CatalogItem::ContinualTask(ct) => ct.global_id(),
+                CatalogItem::Table(_)
+                | CatalogItem::Source(_)
+                | CatalogItem::Log(_)
+                | CatalogItem::View(_)
+                | CatalogItem::Sink(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::Secret(_)
+                | CatalogItem::Connection(_) => continue,
+            };
+            if let Some(plan) = self.catalog.try_get_physical_plan(&gid) {
+                catalog_ids.push(gid);
                 dataflows.push(plan.clone());
 
                 if let Some(compaction_window) = entry.item().initial_logical_compaction_window() {
-                    read_policies.insert(id, compaction_window.into());
+                    read_policies.insert(gid, compaction_window.into());
                 }
-            };
+            }
         }
 
         let read_ts = self.get_local_read_ts().await;

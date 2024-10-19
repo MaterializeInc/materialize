@@ -48,7 +48,8 @@ use crate::durable::objects::{
     ItemValue, ItemValueKind, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
     ServerConfigurationValue, SettingKey, SettingValue, SourceReference, SourceReferencesKey,
     SourceReferencesValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
-    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey, SystemPrivilegesValue,
+    TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -326,16 +327,20 @@ impl RustType<proto::GidMappingKey> for GidMappingKey {
 impl RustType<proto::GidMappingValue> for GidMappingValue {
     fn into_proto(&self) -> proto::GidMappingValue {
         proto::GidMappingValue {
-            catalog_id: self.catalog_id,
-            collection_id: self.collection_id,
+            catalog_id: Some(self.catalog_id.into_proto()),
+            global_id: Some(self.collection_id.into_proto()),
             fingerprint: self.fingerprint.to_string(),
         }
     }
 
     fn from_proto(proto: proto::GidMappingValue) -> Result<Self, TryFromProtoError> {
         Ok(GidMappingValue {
-            catalog_id: proto.catalog_id,
-            collection_id: proto.collection_id,
+            catalog_id: proto
+                .catalog_id
+                .into_rust_if_some("GidMappingValue::catalog_id")?,
+            collection_id: proto
+                .global_id
+                .into_rust_if_some("GidMappingValue::global_id")?,
             fingerprint: proto.fingerprint,
         })
     }
@@ -1655,6 +1660,16 @@ impl RustType<proto::CatalogItemId> for CatalogItemId {
     }
 }
 
+impl RustType<proto::SystemCatalogItemId> for SystemCatalogItemId {
+    fn into_proto(&self) -> proto::SystemCatalogItemId {
+        proto::SystemCatalogItemId { value: self.0 }
+    }
+
+    fn from_proto(proto: proto::SystemCatalogItemId) -> Result<Self, TryFromProtoError> {
+        Ok(SystemCatalogItemId(proto.value))
+    }
+}
+
 impl RustType<proto::GlobalId> for GlobalId {
     fn into_proto(&self) -> proto::GlobalId {
         proto::GlobalId {
@@ -1675,6 +1690,16 @@ impl RustType<proto::GlobalId> for GlobalId {
             Some(proto::global_id::Value::Explain(_)) => Ok(GlobalId::Explain),
             None => Err(TryFromProtoError::missing_field("GlobalId::kind")),
         }
+    }
+}
+
+impl RustType<proto::SystemGlobalId> for SystemGlobalId {
+    fn into_proto(&self) -> proto::SystemGlobalId {
+        proto::SystemGlobalId { value: self.0 }
+    }
+
+    fn from_proto(proto: proto::SystemGlobalId) -> Result<Self, TryFromProtoError> {
+        Ok(SystemGlobalId(proto.value))
     }
 }
 

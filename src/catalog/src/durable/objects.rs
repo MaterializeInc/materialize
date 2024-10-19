@@ -559,6 +559,51 @@ impl DurableType for SourceReferences {
     }
 }
 
+/// A newtype wrapper for [`CatalogItemId`] that is only for the "system" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct SystemCatalogItemId(u64);
+
+impl TryFrom<CatalogItemId> for SystemCatalogItemId {
+    type Error = &'static str;
+
+    fn try_from(val: CatalogItemId) -> Result<Self, Self::Error> {
+        match val {
+            CatalogItemId::System(x) => Ok(SystemCatalogItemId(x)),
+            CatalogItemId::User(_) => Err("user"),
+            CatalogItemId::Transient(_) => Err("transient"),
+        }
+    }
+}
+
+impl From<SystemCatalogItemId> for CatalogItemId {
+    fn from(val: SystemCatalogItemId) -> Self {
+        CatalogItemId::System(val.0)
+    }
+}
+
+/// A newtype wrapper for [`GlobalId`] that is only for the "system" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct SystemGlobalId(u64);
+
+impl TryFrom<GlobalId> for SystemGlobalId {
+    type Error = &'static str;
+
+    fn try_from(val: GlobalId) -> Result<Self, Self::Error> {
+        match val {
+            GlobalId::System(x) => Ok(SystemGlobalId(x)),
+            GlobalId::User(_) => Err("user"),
+            GlobalId::Transient(_) => Err("transient"),
+            GlobalId::Explain => Err("explain"),
+        }
+    }
+}
+
+impl From<SystemGlobalId> for GlobalId {
+    fn from(val: SystemGlobalId) -> Self {
+        GlobalId::System(val.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct SystemObjectDescription {
     pub schema_name: String,
@@ -604,21 +649,16 @@ impl DurableType for SystemObjectMapping {
                 object_name: self.description.object_name,
             },
             GidMappingValue {
-                catalog_id: match self.unique_identifier.catalog_id {
-                    CatalogItemId::System(id) => id,
-                    CatalogItemId::User(_) => unreachable!("GID mapping cannot use a User ID"),
-                    CatalogItemId::Transient(_) => {
-                        unreachable!("GID mapping cannot use a Transient ID")
-                    }
-                },
-                collection_id: match self.unique_identifier.collection_id {
-                    GlobalId::System(id) => id,
-                    GlobalId::User(_) => unreachable!("GID mapping cannot use a User ID"),
-                    GlobalId::Transient(_) => {
-                        unreachable!("GID mapping cannot use a Transient ID")
-                    }
-                    GlobalId::Explain => unreachable!("GID mapping cannot use an Explain ID"),
-                },
+                catalog_id: self
+                    .unique_identifier
+                    .catalog_id
+                    .try_into()
+                    .expect("catalog_id to be in the system namespace"),
+                collection_id: self
+                    .unique_identifier
+                    .collection_id
+                    .try_into()
+                    .expect("collection_id to be in the system namespace"),
                 fingerprint: self.unique_identifier.fingerprint,
             },
         )
@@ -632,8 +672,8 @@ impl DurableType for SystemObjectMapping {
                 object_name: key.object_name,
             },
             unique_identifier: SystemObjectUniqueIdentifier {
-                catalog_id: CatalogItemId::System(value.catalog_id),
-                collection_id: GlobalId::System(value.collection_id),
+                catalog_id: value.catalog_id.into(),
+                collection_id: value.collection_id.into(),
                 fingerprint: value.fingerprint,
             },
         }
@@ -1063,8 +1103,8 @@ pub struct GidMappingKey {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct GidMappingValue {
-    pub(crate) catalog_id: u64,
-    pub(crate) collection_id: u64,
+    pub(crate) catalog_id: SystemCatalogItemId,
+    pub(crate) collection_id: SystemGlobalId,
     pub(crate) fingerprint: String,
 }
 

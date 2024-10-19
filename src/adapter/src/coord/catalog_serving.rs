@@ -115,7 +115,6 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AlterSource(_)
         | Plan::AlterSetCluster(_)
         | Plan::AlterItemRename(_)
-        | Plan::AlterItemSwap(_)
         | Plan::AlterRetainHistory(_)
         | Plan::AlterSchemaRename(_)
         | Plan::AlterSchemaSwap(_)

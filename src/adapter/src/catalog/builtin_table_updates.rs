@@ -721,7 +721,7 @@ impl CatalogState {
                         custom_id: Some(custom_id),
                         ..
                     } => {
-                        let entry = self.get_entry_by_global_id(custom_id);
+                        let entry = self.get_entry(custom_id);
                         // NOTE(benesch): the `mz_columns.type text` field is
                         // wrong. Types do not have a name that can be
                         // represented as a single textual field. There can be

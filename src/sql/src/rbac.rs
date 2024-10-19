@@ -620,23 +620,26 @@ fn generate_rbac_requirements(
             name,
             index,
             if_not_exists: _,
-        }) => RbacRequirements {
-            ownership: vec![ObjectId::from(index.on)],
-            privileges: vec![
-                (
-                    SystemObjectId::Object(name.qualifiers.clone().into()),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-                (
-                    SystemObjectId::Object(index.cluster_id.into()),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-            ],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
+        }) => {
+            let index_on_item = catalog.resolve_item_id(&index.on);
+            RbacRequirements {
+                ownership: vec![ObjectId::Item(index_on_item)],
+                privileges: vec![
+                    (
+                        SystemObjectId::Object(name.qualifiers.clone().into()),
+                        AclMode::CREATE,
+                        role_id,
+                    ),
+                    (
+                        SystemObjectId::Object(index.cluster_id.into()),
+                        AclMode::CREATE,
+                        role_id,
+                    ),
+                ],
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateType(plan::CreateTypePlan { name, typ: _ }) => RbacRequirements {
             privileges: vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
@@ -826,14 +829,7 @@ fn generate_rbac_requirements(
         }) => RbacRequirements {
             privileges: vec![
                 (
-                    SystemObjectId::Object(
-                        catalog
-                            .get_item(&id.into())
-                            .name()
-                            .qualifiers
-                            .clone()
-                            .into(),
-                    ),
+                    SystemObjectId::Object(catalog.get_item(id).name().qualifiers.clone().into()),
                     AclMode::USAGE,
                     role_id,
                 ),
@@ -927,7 +923,7 @@ fn generate_rbac_requirements(
                 .depends_on()
                 .into_iter()
                 .map(|id| {
-                    let item = catalog.get_item(&id.into());
+                    let item = catalog.get_item_by_global_id(&id);
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)
                 })
@@ -939,12 +935,7 @@ fn generate_rbac_requirements(
             values,
             returning,
         }) => {
-            let schema_id: ObjectId = catalog
-                .get_item(&id.into())
-                .name()
-                .qualifiers
-                .clone()
-                .into();
+            let schema_id: ObjectId = catalog.get_item(id).name().qualifiers.clone().into();
             let mut privileges = vec![
                 (
                     SystemObjectId::Object(schema_id.clone()),
@@ -1006,7 +997,7 @@ fn generate_rbac_requirements(
             ..Default::default()
         },
         Plan::AlterSetCluster(plan::AlterSetClusterPlan { id, set_cluster }) => RbacRequirements {
-            ownership: vec![ObjectId::from(*id)],
+            ownership: vec![ObjectId::Item(*id)],
             privileges: vec![(
                 SystemObjectId::Object(set_cluster.into()),
                 AclMode::CREATE,
@@ -1093,16 +1084,6 @@ fn generate_rbac_requirements(
             object_type: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::from(*id)],
-            ..Default::default()
-        },
-        Plan::AlterItemSwap(plan::AlterItemSwapPlan {
-            id_a,
-            id_b,
-            full_name_a: _,
-            full_name_b: _,
-            object_type: _,
-        }) => RbacRequirements {
-            ownership: vec![ObjectId::from(*id_a), ObjectId::from(*id_b)],
             ..Default::default()
         },
         Plan::AlterSchemaRename(plan::AlterSchemaRenamePlan {
@@ -1218,7 +1199,7 @@ fn generate_rbac_requirements(
             }
         }
         Plan::AlterTableAddColumn(plan::AlterTablePlan { relation_id, .. }) => RbacRequirements {
-            ownership: vec![ObjectId::from(*relation_id)],
+            ownership: vec![ObjectId::Item(*relation_id)],
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
@@ -1235,12 +1216,7 @@ fn generate_rbac_requirements(
                 MutationKind::Update => AclMode::UPDATE,
                 MutationKind::Delete => AclMode::DELETE,
             };
-            let schema_id: ObjectId = catalog
-                .get_item(&id.into())
-                .name()
-                .qualifiers
-                .clone()
-                .into();
+            let schema_id: ObjectId = catalog.get_item(id).name().qualifiers.clone().into();
             let mut privileges = vec![
                 (
                     SystemObjectId::Object(schema_id.clone()),
@@ -1431,12 +1407,7 @@ fn generate_rbac_requirements(
             }
         }
         Plan::ValidateConnection(plan::ValidateConnectionPlan { id, connection: _ }) => {
-            let schema_id: ObjectId = catalog
-                .get_item(&id.into())
-                .name()
-                .qualifiers
-                .clone()
-                .into();
+            let schema_id: ObjectId = catalog.get_item(id).name().qualifiers.clone().into();
             RbacRequirements {
                 privileges: vec![
                     (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id),

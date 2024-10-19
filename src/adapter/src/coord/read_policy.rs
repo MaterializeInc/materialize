@@ -308,14 +308,22 @@ impl crate::coord::Coordinator {
 
     pub(crate) fn update_compute_read_policies(
         &self,
-        mut policies: Vec<(ComputeInstanceId, GlobalId, ReadPolicy<Timestamp>)>,
+        mut policies: Vec<(ComputeInstanceId, CatalogItemId, ReadPolicy<Timestamp>)>,
     ) {
         policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
         for (cluster_id, group) in &policies
             .into_iter()
             .group_by(|&(cluster_id, _, _)| cluster_id)
         {
-            let group = group.map(|(_, id, policy)| (id, policy)).collect();
+            let group = group
+                .flat_map(|(_, item_id, policy)| {
+                    // Set the read policy for all GlobalIds associated with an item.
+                    self.catalog()
+                        .get_entry(&item_id)
+                        .global_ids()
+                        .map(move |gid| (gid, policy.clone()))
+                })
+                .collect();
             self.controller
                 .compute
                 .set_read_policy(cluster_id, group)
@@ -329,13 +337,7 @@ impl crate::coord::Coordinator {
         item_id: CatalogItemId,
         base_policy: ReadPolicy<Timestamp>,
     ) {
-        let policies = self
-            .catalog()
-            .get_entry(&item_id)
-            .global_ids()
-            .map(move |gid| (compute_instance, gid, base_policy.clone()))
-            .collect();
-        self.update_compute_read_policies(policies)
+        self.update_compute_read_policies(vec![(compute_instance, item_id, base_policy)])
     }
 
     /// Attempt to acquire read holds on the indicated collections at the

@@ -1143,7 +1143,10 @@ impl CatalogState {
                 // items collection and so get handled through the normal
                 // `StateUpdateKind::Item`.`
                 if !system_object_mapping.unique_identifier.runtime_alterable() {
-                    self.pack_item_update(system_object_mapping.unique_identifier.catalog_id, diff)
+                    self.pack_item_update(
+                        system_object_mapping.unique_identifier.catalog_id.into(),
+                        diff,
+                    )
                 } else {
                     vec![]
                 }
@@ -2060,7 +2063,7 @@ fn lookup_builtin_view_addition(
 
     (
         view,
-        mapping.unique_identifier.catalog_id,
-        mapping.unique_identifier.collection_id,
+        mapping.unique_identifier.catalog_id.into(),
+        mapping.unique_identifier.collection_id.into(),
     )
 }

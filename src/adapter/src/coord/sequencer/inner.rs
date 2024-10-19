@@ -1642,7 +1642,7 @@ impl Coordinator {
                         let dependants = self
                             .controller
                             .compute
-                            .collection_reverse_dependencies(index.cluster_id, id.into())
+                            .collection_reverse_dependencies(index.cluster_id, index.global_id())
                             .ok()
                             .into_iter()
                             .flatten()
@@ -1653,10 +1653,19 @@ impl Coordinator {
                                 // "There is an in-progress ad hoc SELECT that uses the dropped
                                 // index. The resources used by the index will be freed when all
                                 // such SELECTs complete."
-                                !matches!(dependant_id, GlobalId::Transient(..)) &&
+                                if dependant_id.is_transient() {
+                                    return false;
+                                }
+                                // The item should exist, but don't panic if it doesn't.
+                                let Some(dependent_id) = humanizer
+                                    .try_get_item_by_global_id(dependant_id)
+                                    .map(|item| item.item_id())
+                                else {
+                                    return false;
+                                };
                                 // If the dependent object is also being dropped, then there is no
                                 // problem, so we don't want a notice.
-                                !ids_set.contains(&ObjectId::from(*dependant_id))
+                                !ids_set.contains(&ObjectId::Item(dependent_id))
                             })
                             .flat_map(|dependant_id| {
                                 // If we are not able to find a name for this ID it probably means
@@ -1668,7 +1677,7 @@ impl Coordinator {
                         if !dependants.is_empty() {
                             dropped_in_use_indexes.push(DroppedInUseIndex {
                                 index_name: humanizer
-                                    .humanize_id(id.into())
+                                    .humanize_id(index.global_id())
                                     .unwrap_or(id.to_string()),
                                 dependant_objects: dependants,
                             });
@@ -4408,23 +4417,21 @@ impl Coordinator {
                 let dependent_index_ops = entry
                     .used_by()
                     .into_iter()
-                    .map(GlobalId::from)
-                    .filter(|id| self.catalog().get_entry_by_global_id(id).is_index())
+                    .filter(|id| self.catalog().get_entry(id).is_index())
                     .map(|id| catalog::Op::UpdateOwner {
-                        id: ObjectId::from(id),
+                        id: ObjectId::Item(*id),
                         new_owner,
                     });
                 ops.extend(dependent_index_ops);
 
                 // Alter owner cascades down to progress collections.
-                let dependent_subsources =
-                    entry
-                        .progress_id()
-                        .into_iter()
-                        .map(|id| catalog::Op::UpdateOwner {
-                            id: ObjectId::from(id),
-                            new_owner,
-                        });
+                let dependent_subsources = entry.progress_id().into_iter().map(|gid| {
+                    let item_id = self.catalog.resolve_item_id(&gid);
+                    catalog::Op::UpdateOwner {
+                        id: ObjectId::Item(item_id),
+                        new_owner,
+                    }
+                });
                 ops.extend(dependent_subsources);
             }
             ObjectId::Cluster(cluster_id) => {

@@ -59,6 +59,7 @@ async fn datadriven() {
                     match test_case.directive.as_str() {
                         "add-table" => {
                             let id = catalog.allocate_user_id().await.unwrap();
+                            let collection_id = catalog.allocate_user_global_id().await.unwrap();
                             let database = catalog.resolve_database(DEFAULT_DATABASE_NAME).unwrap();
                             let database_name = database.name.clone();
                             let database_id = database.id();
@@ -94,12 +95,9 @@ async fn datadriven() {
                                                 test_case.input.trim_end()
                                             )),
                                             desc: RelationDesc::empty(),
-                                            collections: [(
-                                                RelationVersion::root(),
-                                                id.to_global_id(),
-                                            )]
-                                            .into_iter()
-                                            .collect(),
+                                            collections: [(RelationVersion::root(), collection_id)]
+                                                .into_iter()
+                                                .collect(),
                                             conn_id: None,
                                             resolved_ids: ResolvedIds::empty(),
                                             custom_logical_compaction_window: None,

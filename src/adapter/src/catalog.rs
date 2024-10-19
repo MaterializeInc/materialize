@@ -1166,9 +1166,9 @@ impl Catalog {
         self.state.default_privileges.iter()
     }
 
-    pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
+    pub fn pack_item_update(&self, id: CatalogItemId, diff: Diff) -> Vec<BuiltinTableUpdate> {
         self.state
-            .resolve_builtin_table_updates(self.state.pack_item_update(id.into(), diff))
+            .resolve_builtin_table_updates(self.state.pack_item_update(id, diff))
     }
 
     pub fn pack_storage_usage_update(
@@ -1402,17 +1402,17 @@ impl ConnCatalog<'_> {
 
 impl ExprHumanizer for ConnCatalog<'_> {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        let entry = self.state.get_entry_by_global_id(&id);
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
         Some(self.resolve_full_name(entry.name()).to_string())
     }
 
     fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
-        let entry = self.state.get_entry_by_global_id(&id);
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
         Some(entry.name().item.clone())
     }
 
     fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>> {
-        let entry = self.state.get_entry_by_global_id(&id);
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
         Some(self.resolve_full_name(entry.name()).into_parts())
     }
 
@@ -1422,14 +1422,14 @@ impl ExprHumanizer for ConnCatalog<'_> {
         match typ {
             Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
             List {
-                custom_id: Some(gid),
+                custom_id: Some(item_id),
                 ..
             }
             | Map {
-                custom_id: Some(gid),
+                custom_id: Some(item_id),
                 ..
             } => {
-                let item = self.get_item_by_global_id(&gid);
+                let item = self.get_item(&item_id);
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
@@ -1441,10 +1441,10 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 self.humanize_scalar_type(value_type)
             ),
             Record {
-                custom_id: Some(gid),
+                custom_id: Some(item_id),
                 ..
             } => {
-                let item = self.get_item_by_global_id(&gid);
+                let item = self.get_item(&item_id);
                 self.minimal_qualification(item.name()).to_string()
             }
             Record { fields, .. } => format!(
@@ -1486,11 +1486,12 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
-        let entry = self.state.get_entry_by_global_id(&id);
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
 
         match entry.index() {
             Some(index) => {
-                let on_entry = self.state.get_entry_by_global_id(&index.on);
+                // TODO(alter_table): Use the correct RelationDesc here.
+                let on_entry = self.state.try_get_entry_by_global_id(&index.on)?;
                 let on_desc = on_entry
                     .desc(&self.resolve_full_name(on_entry.name()))
                     .ok()?;
@@ -1768,6 +1769,25 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn try_get_item(&self, id: &CatalogItemId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
         Some(self.state.try_get_entry(id)?)
+    }
+
+    fn try_get_item_by_global_id(
+        &self,
+        id: &GlobalId,
+    ) -> Option<Box<dyn mz_sql::catalog::CatalogCollectionItem>> {
+        let entry = self.state.try_get_entry_by_global_id(id)?;
+        let entry = match &entry.item {
+            CatalogItem::Table(table) => {
+                let (version, _gid) = table
+                    .collections
+                    .iter()
+                    .find(|(_version, gid)| *gid == id)
+                    .expect("catalog out of sync, mismatched GlobalId");
+                entry.at_version(RelationVersionSelector::Specific(*version))
+            }
+            _ => entry.at_version(RelationVersionSelector::Latest),
+        };
+        Some(entry)
     }
 
     fn get_item(&self, id: &CatalogItemId) -> &dyn mz_sql::catalog::CatalogItem {

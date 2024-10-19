@@ -605,7 +605,6 @@ impl ExecuteResponse {
             | AlterOwner
             | AlterItemRename
             | AlterRetainHistory
-            | AlterItemSwap
             | AlterNoop
             | AlterSchemaRename
             | AlterSchemaSwap

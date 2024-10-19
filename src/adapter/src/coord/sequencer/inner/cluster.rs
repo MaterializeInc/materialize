@@ -1571,7 +1571,7 @@ impl Coordinator {
 
         // Satisfy Clippy that this is an async func.
         async {}.await;
-        let entry = self.catalog().get_entry_by_global_id(&id);
+        let entry = self.catalog().get_entry(&id);
         match entry.item().typ() {
             _ => {
                 // Unexpected; planner permitted unsupported plan.

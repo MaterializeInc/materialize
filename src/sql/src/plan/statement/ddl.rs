@@ -38,7 +38,7 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    strconv, CatalogItemId, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType,
+    strconv, CatalogItemId, ColumnName, ColumnType, RelationDesc, RelationType,
     RelationVersionSelector, ScalarType, Timestamp,
 };
 use mz_sql_parser::ast::display::comma_separated;
@@ -2869,7 +2869,7 @@ pub fn plan_create_continual_task(
 
     // Check for an object in the catalog with this same name
     let name = match &ct_name {
-        ResolvedItemName::Item { id, .. } => scx.catalog.get_item(&id.into()).name().clone(),
+        ResolvedItemName::Item { id, .. } => scx.catalog.get_item(id).name().clone(),
         ResolvedItemName::ContinualTask { name, .. } => {
             let name = scx.allocate_qualified_name(name.clone())?;
             let full_name = scx.catalog.resolve_full_name(&name);
@@ -3191,7 +3191,7 @@ fn plan_sink(
             headers_index,
             desc.into_owned(),
             envelope,
-            from.global_id(),
+            from.item_id(),
         )?,
     };
 
@@ -3341,11 +3341,11 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
                             relation: ResolvedItemName::Item { id, .. },
                             column: ResolvedColumnReference::Column { name, index: _ },
                         }) => DocTarget::Field {
-                            object_id: id.to_global_id(),
+                            object_id: id,
                             column_name: name,
                         },
                         DocOnIdentifier::Type(ResolvedItemName::Item { id, .. }) => {
-                            DocTarget::Type(id.to_global_id())
+                            DocTarget::Type(id)
                         }
                         _ => unreachable!(),
                     };
@@ -3393,7 +3393,7 @@ fn kafka_sink_builder(
     headers_index: Option<usize>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-    sink_from: GlobalId,
+    sink_from: CatalogItemId,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     // Get Kafka connection.
     let connection_item = scx.get_item_by_resolved_name(&connection)?;
@@ -5169,16 +5169,9 @@ pub fn plan_drop_owned(
     for item in scx.catalog.get_items() {
         if role_ids.contains(&item.owner_id()) {
             if !cascade {
-                // When this item gets dropped it will also drop its progress source, so we need to
-                // check the users of those.
-                for sub_item in item
-                    .progress_id()
-                    .iter()
-                    .map(|id| scx.catalog.get_item(&id.into()))
-                    .chain(iter::once(item))
-                {
-                    let non_owned_dependencies: Vec<_> = sub_item
-                        .used_by()
+                // Checks if any items still depend on this one, returning an error if so.
+                let check_if_dependents_exist = |used_by: &[CatalogItemId]| {
+                    let non_owned_dependencies: Vec<_> = used_by
                         .into_iter()
                         .map(|item_id| scx.catalog.get_item(item_id))
                         .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
@@ -5188,13 +5181,13 @@ pub fn plan_drop_owned(
                         let names: Vec<_> = non_owned_dependencies
                             .into_iter()
                             .map(|item| {
-                                (
-                                    item.item_type().to_string(),
-                                    scx.catalog.resolve_full_name(item.name()).to_string(),
-                                )
+                                let item_typ = item.item_type().to_string();
+                                let item_name =
+                                    scx.catalog.resolve_full_name(item.name()).to_string();
+                                (item_typ, item_name)
                             })
                             .collect();
-                        return Err(PlanError::DependentObjectsStillExist {
+                        Err(PlanError::DependentObjectsStillExist {
                             object_type: item.item_type().to_string(),
                             object_name: scx
                                 .catalog
@@ -5202,9 +5195,19 @@ pub fn plan_drop_owned(
                                 .to_string()
                                 .to_string(),
                             dependents: names,
-                        });
+                        })
+                    } else {
+                        Ok(())
                     }
+                };
+
+                // When this item gets dropped it will also drop its progress source, so we need to
+                // check the users of those.
+                if let Some(id) = item.progress_id() {
+                    let progress_item = scx.catalog.get_item_by_global_id(&id);
+                    check_if_dependents_exist(progress_item.used_by())?;
                 }
+                check_if_dependents_exist(item.used_by())?;
             }
             drop_ids.push(item.item_id().into());
         }
@@ -5783,7 +5786,7 @@ pub fn plan_alter_item_set_cluster(
                 Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
             } else {
                 Ok(Plan::AlterSetCluster(AlterSetClusterPlan {
-                    id: entry.item_id().to_global_id(),
+                    id: entry.item_id(),
                     set_cluster: in_cluster.id(),
                 }))
             }
@@ -6477,6 +6480,8 @@ pub fn plan_alter_sink(
 
         return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
     };
+    // Always ALTER objects from their latest version.
+    let item = item.at_version(RelationVersionSelector::Latest);
 
     match action {
         AlterSinkAction::ChangeRelation(new_from) => {
@@ -6516,7 +6521,7 @@ pub fn plan_alter_sink(
 
             Ok(Plan::AlterSink(AlterSinkPlan {
                 item_id: item.item_id(),
-                export_id: item.item_id().to_global_id(),
+                export_id: item.global_id(),
                 sink: plan.sink,
                 with_snapshot: plan.with_snapshot,
                 in_cluster: plan.in_cluster,
@@ -6716,7 +6721,7 @@ pub fn plan_alter_table_add_column(
                 let item_name = scx.catalog.resolve_full_name(item.name());
                 let item = item.at_version(RelationVersionSelector::Latest);
                 let desc = item.desc(&item_name)?.into_owned();
-                (item.global_id(), item_name, desc)
+                (item.item_id(), item_name, desc)
             }
             None => {
                 scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {

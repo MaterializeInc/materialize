@@ -1353,7 +1353,7 @@ impl<'a> Transaction<'a> {
 
         let n = self.system_gid_mapping.update(
             |_k, v| {
-                if let Some(mapping) = mappings.get(&CatalogItemId::System(v.catalog_id)) {
+                if let Some(mapping) = mappings.get(&v.catalog_id.into()) {
                     let (_, new_value) = mapping.clone().into_key_value();
                     Some(new_value)
                 } else {

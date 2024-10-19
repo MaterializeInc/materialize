@@ -18,9 +18,14 @@ wire_compatible!(v68::SchemaId with v69::SchemaId);
 wire_compatible!(v68::RoleId with v69::RoleId);
 wire_compatible!(v68::MzAclItem with v69::MzAclItem);
 wire_compatible!(v68::SourceReferencesValue with v69::SourceReferencesValue);
+wire_compatible!(v68::GidMappingKey with v69::GidMappingKey);
 
-/// In v69 we migrated `create_sql` to be wrapped in a `oneof` so we can associate `GlobalId`s
-/// with a Catalog item. We also migrated `SourceReferencesKey` to use `CatalogItemId`.
+/// In v69 we migrated a few things:
+///
+/// * `create_sql` to be wrapped in a `oneof` so we can associate `GlobalId`s with a Catalog item.
+/// * `SourceReferencesKey` to use `CatalogItemId`.
+/// * `GidMappingValue` to include both a `CatalogItemId` and `GlobalId`.
+///
 pub fn upgrade(
     snapshot: Vec<v68::StateUpdateKind>,
 ) -> Vec<MigrationAction<v68::StateUpdateKind, v69::StateUpdateKind>> {
@@ -57,6 +62,28 @@ pub fn upgrade(
                 };
 
                 Some(MigrationAction::Update(old_reference, new_reference))
+            }
+            Some(v68::state_update_kind::Kind::GidMapping(old_mapping)) => {
+                let new_mapping = v69::state_update_kind::GidMapping {
+                    key: old_mapping
+                        .key
+                        .as_ref()
+                        .map(|old| v69::GidMappingKey::convert(old)),
+                    // ** MIGRATION **
+                    value: old_mapping
+                        .value
+                        .as_ref()
+                        .map(|old| v69::GidMappingValue::from(old.clone())),
+                };
+
+                let old_mapping = v68::StateUpdateKind {
+                    kind: Some(v68::state_update_kind::Kind::GidMapping(old_mapping)),
+                };
+                let new_mapping = v69::StateUpdateKind {
+                    kind: Some(v69::state_update_kind::Kind::GidMapping(new_mapping)),
+                };
+
+                Some(MigrationAction::Update(old_mapping, new_mapping))
             }
             _ => None,
         })
@@ -221,5 +248,15 @@ impl From<v68::GlobalId> for v69::CatalogItemId {
             None => None,
         };
         v69::CatalogItemId { value }
+    }
+}
+
+impl From<v68::GidMappingValue> for v69::GidMappingValue {
+    fn from(value: v68::GidMappingValue) -> Self {
+        v69::GidMappingValue {
+            catalog_id: Some(v69::SystemCatalogItemId { value: value.id }),
+            global_id: Some(v69::SystemGlobalId { value: value.id }),
+            fingerprint: value.fingerprint,
+        }
     }
 }

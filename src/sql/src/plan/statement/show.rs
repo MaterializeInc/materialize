@@ -18,7 +18,7 @@ use std::fmt::Write;
 
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
-use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
@@ -124,8 +124,7 @@ fn plan_show_create_item(
     if item.item_type() != expect_type {
         sql_bail!("{name} is not a {expect_type}");
     }
-    let create_sql =
-        humanize_sql_for_show_create(scx.catalog, item.global_id(), item.create_sql())?;
+    let create_sql = humanize_sql_for_show_create(scx.catalog, item.item_id(), item.create_sql())?;
     Ok(ShowCreatePlan {
         id: ObjectId::Item(item.item_id()),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -968,7 +967,7 @@ impl<'a> ShowColumnsSelect<'a> {
 /// is more amenable to human consumption.
 fn humanize_sql_for_show_create(
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     sql: &str,
 ) -> Result<String, PlanError> {
     use mz_sql_parser::ast::{CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName};
@@ -996,7 +995,7 @@ fn humanize_sql_for_show_create(
             // Collect all current subsource references.
             let mut curr_references: BTreeMap<UnresolvedItemName, Vec<UnresolvedItemName>> =
                 catalog
-                    .get_item(&id.into())
+                    .get_item(&id)
                     .used_by()
                     .into_iter()
                     .filter_map(|subsource| {

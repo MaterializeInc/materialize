@@ -1129,18 +1129,6 @@ impl From<&RoleId> for ObjectId {
     }
 }
 
-impl From<GlobalId> for ObjectId {
-    fn from(id: GlobalId) -> Self {
-        ObjectId::Item(id.into())
-    }
-}
-
-impl From<&GlobalId> for ObjectId {
-    fn from(id: &GlobalId) -> Self {
-        ObjectId::Item((*id).into())
-    }
-}
-
 impl From<CatalogItemId> for ObjectId {
     fn from(id: CatalogItemId) -> Self {
         ObjectId::Item(id)
@@ -1279,7 +1267,7 @@ impl<'a> NameResolver<'a> {
                             Some(CatalogTypeDetails {
                                 array_id: Some(array_id),
                                 ..
-                            }) => self.catalog.get_item(&array_id.into()),
+                            }) => self.catalog.get_item(array_id),
                             Some(_) => sql_bail!("type \"{}[]\" does not exist", name),
                             None => {
                                 // Resolution should never produce a
@@ -1349,7 +1337,7 @@ impl<'a> NameResolver<'a> {
                     ..
                 }) = item.type_details()
                 {
-                    self.ids.insert(element_reference.into(), BTreeSet::new());
+                    self.ids.insert(*element_reference, BTreeSet::new());
                 }
                 Ok(ResolvedDataType::Named {
                     id: item.item_id(),
@@ -1891,7 +1879,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let item_name = self.fold_item_name(secret);
                 match &item_name {
                     ResolvedItemName::Item { id, .. } => {
-                        let item = self.catalog.get_item(&id.into());
+                        let item = self.catalog.get_item(id);
                         if item.item_type() != CatalogItemType::Secret {
                             self.status =
                                 Err(PlanError::InvalidSecret(Box::new(item_name.clone())));

@@ -239,6 +239,12 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Gets an item by its ID.
     fn try_get_item(&self, id: &CatalogItemId) -> Option<&dyn CatalogItem>;
 
+    /// Tries to get an item by a [`GlobalId`], returning `None` if the [`GlobalId`] does not
+    /// exist.
+    ///
+    /// Note: A single Catalog Item can have multiple [`GlobalId`]s associated with it.
+    fn try_get_item_by_global_id(&self, id: &GlobalId) -> Option<Box<dyn CatalogCollectionItem>>;
+
     /// Gets an item by its ID.
     ///
     /// Panics if `id` does not specify a valid item.
@@ -246,7 +252,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
 
     /// Gets an item by a [`GlobalId`].
     ///
-    /// Returns an error if there is no item with the associated [`GlobalId`].
+    /// Panics if `id` does not specify a valid item.
     ///
     /// Note: A single Catalog Item can have multiple [`GlobalId`]s associated with it.
     fn get_item_by_global_id(&self, id: &GlobalId) -> Box<dyn CatalogCollectionItem>;

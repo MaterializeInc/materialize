@@ -16,8 +16,6 @@ use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::GlobalId;
-
 include!(concat!(env!("OUT_DIR"), "/mz_repr.catalog_item_id.rs"));
 
 /// The identifier for an item within the Catalog.
@@ -58,11 +56,6 @@ impl CatalogItemId {
     /// Reports whether this ID is for a transient item.
     pub fn is_transient(&self) -> bool {
         matches!(self, CatalogItemId::Transient(_))
-    }
-
-    /// TODO(alter_table): Delete this method.
-    pub fn to_global_id(&self) -> GlobalId {
-        GlobalId::from(*self)
     }
 }
 
@@ -113,57 +106,6 @@ impl RustType<ProtoCatalogItemId> for CatalogItemId {
             Some(Transient(x)) => Ok(CatalogItemId::Transient(x)),
             None => Err(TryFromProtoError::missing_field("ProtoCatalogItemId::kind")),
         }
-    }
-}
-
-// TODO(alter_table): Delete this impl.
-impl From<GlobalId> for CatalogItemId {
-    fn from(id: GlobalId) -> CatalogItemId {
-        match id {
-            GlobalId::System(x) => CatalogItemId::System(x),
-            GlobalId::User(x) => CatalogItemId::User(x),
-            GlobalId::Transient(x) => CatalogItemId::Transient(x),
-            other => panic!("Can't convert from {other:?} to CatalogItemId"),
-        }
-    }
-}
-
-// TODO(alter_table): Delete this impl.
-impl From<&GlobalId> for CatalogItemId {
-    fn from(id: &GlobalId) -> CatalogItemId {
-        CatalogItemId::from(*id)
-    }
-}
-
-// TODO(alter_table): Delete this impl.
-impl From<&&GlobalId> for CatalogItemId {
-    fn from(id: &&GlobalId) -> CatalogItemId {
-        CatalogItemId::from(*id)
-    }
-}
-
-// TODO(alter_table): Delete this impl.
-impl From<&CatalogItemId> for CatalogItemId {
-    fn from(value: &CatalogItemId) -> Self {
-        *value
-    }
-}
-
-// TODO(alter_table): Delete this impl.
-impl From<CatalogItemId> for GlobalId {
-    fn from(value: CatalogItemId) -> Self {
-        match value {
-            CatalogItemId::System(x) => GlobalId::System(x),
-            CatalogItemId::User(x) => GlobalId::User(x),
-            CatalogItemId::Transient(x) => GlobalId::Transient(x),
-        }
-    }
-}
-
-// TODO(alter_table): Delete this impl.
-impl From<&CatalogItemId> for GlobalId {
-    fn from(value: &CatalogItemId) -> GlobalId {
-        GlobalId::from(*value)
     }
 }
 

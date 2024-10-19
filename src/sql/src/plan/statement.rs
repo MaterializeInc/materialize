@@ -293,7 +293,7 @@ pub fn plan(
     if resolved_ids
         .items()
         // Filter out items that may not have been created yet, such as sub-sources.
-        .filter_map(|id| catalog.try_get_item(&id.into()))
+        .filter_map(|id| catalog.try_get_item(id))
         .any(|item| {
             item.func().is_ok()
                 && item.name().qualifiers.schema_spec

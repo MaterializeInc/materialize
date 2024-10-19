@@ -1676,7 +1676,7 @@ impl Catalog {
                     ))));
                 }
 
-                if entry.id().is_system() {
+                if entry.item_id().is_system() {
                     let name = state
                         .resolve_full_name(entry.name(), session.map(|session| session.conn_id()));
                     return Err(AdapterError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
