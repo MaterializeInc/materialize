@@ -654,7 +654,7 @@ pub trait CatalogItem {
     fn is_progress_source(&self) -> bool;
 
     /// If this catalog item is a source, it return the IDs of its progress collection.
-    fn progress_id(&self) -> Option<GlobalId>;
+    fn progress_id(&self) -> Option<CatalogItemId>;
 
     /// Returns the index details associated with the catalog item, if the
     /// catalog item is an index.

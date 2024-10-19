@@ -94,12 +94,7 @@ impl Coordinator {
             .is_timeline_epoch_ms();
 
         // Construct the CatalogItem for this CT and optimize it.
-        let mut item = crate::continual_task::ct_item_from_plan(
-            self.catalog().state(),
-            plan,
-            collection_id,
-            resolved_ids,
-        )?;
+        let mut item = crate::continual_task::ct_item_from_plan(plan, collection_id, resolved_ids)?;
         let full_name = bootstrap_catalog.resolve_full_name(&name, Some(session.conn_id()));
         let (optimized_plan, mut physical_plan, metainfo) = self.optimize_create_continual_task(
             &item,

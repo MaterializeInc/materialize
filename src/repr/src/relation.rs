@@ -414,6 +414,12 @@ impl RelationVersion {
     }
 }
 
+impl fmt::Display for RelationVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "v{}", self.0)
+    }
+}
+
 impl From<RelationVersion> for mz_sql_parser::ast::Version {
     fn from(value: RelationVersion) -> Self {
         mz_sql_parser::ast::Version::new(value.0)

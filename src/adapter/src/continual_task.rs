@@ -13,17 +13,15 @@ use std::sync::Arc;
 
 use mz_catalog::memory::objects::ContinualTask;
 use mz_expr::visit::Visit;
-use mz_expr::{CollectionPlan, Id};
+use mz_expr::Id;
 use mz_repr::GlobalId;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self, HirRelationExpr};
 use timely::progress::Antichain;
 
-use crate::catalog::CatalogState;
 use crate::AdapterError;
 
 pub fn ct_item_from_plan(
-    catalog: &CatalogState,
     plan: plan::CreateContinualTaskPlan,
     global_id: GlobalId,
     resolved_ids: ResolvedIds,
@@ -38,7 +36,7 @@ pub fn ct_item_from_plan(
                 create_sql,
                 cluster_id,
                 expr: mut raw_expr,
-                dependencies: _,
+                dependencies,
                 column_names: _,
                 non_null_assertions: _,
                 compaction_window: _,
@@ -56,12 +54,8 @@ pub fn ct_item_from_plan(
             _ => {}
         })?;
     }
-    // Re-resolve the dependencies after updating the raw_expr.
-    let dependencies = raw_expr
-        .depends_on()
-        .into_iter()
-        .map(|gid| catalog.get_entry_by_global_id(&gid).item_id())
-        .collect();
+    // TODO(alter_table): `dependencies` doesn't include the `CatalogItemId` for self and we can't
+    // look it up in the Catalog from it's `GlobalId` because we haven't yet added this item.
 
     Ok(ContinualTask {
         create_sql,

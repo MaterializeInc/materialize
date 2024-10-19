@@ -1521,6 +1521,7 @@ impl CatalogState {
                 .expect("key_parts is filled in during planning"),
             _ => unreachable!(),
         };
+        let on_item_id = self.get_entry_by_global_id(&index.on).item_id();
 
         updates.push(BuiltinTableUpdate {
             id: &*MZ_INDEXES,
@@ -1528,7 +1529,7 @@ impl CatalogState {
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
                 Datum::String(name),
-                Datum::String(&index.on.to_string()),
+                Datum::String(&on_item_id.to_string()),
                 Datum::String(&index.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
                 Datum::String(&index.create_sql),

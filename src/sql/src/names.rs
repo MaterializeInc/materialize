@@ -2150,6 +2150,7 @@ where
 /// resolved IDs with other collections of [`CatalogItemId`].
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ResolvedIds {
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     entries: BTreeMap<CatalogItemId, BTreeSet<GlobalId>>,
 }
 
@@ -2251,8 +2252,10 @@ impl<'a> DependencyVisitor<'a> {
 impl<'a, 'ast> Visit<'ast, Aug> for DependencyVisitor<'a> {
     fn visit_item_name(&mut self, item_name: &'ast <Aug as AstInfo>::ItemName) {
         if let ResolvedItemName::Item { id, version, .. } = item_name {
-            let item = self.catalog.get_item(id).at_version(*version);
-            self.ids.entry(*id).or_default().insert(item.global_id());
+            let global_ids = self.ids.entry(*id).or_default();
+            if let Some(item) = self.catalog.try_get_item(id) {
+                global_ids.insert(item.at_version(*version).global_id());
+            }
         }
     }
 

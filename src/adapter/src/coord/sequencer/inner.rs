@@ -587,6 +587,13 @@ impl Coordinator {
                             cluster_id,
                         } => {
                             let desc = desc.into_inline_connection(coord.catalog().state());
+                            // TODO(parkmycar): We should probably check the type here, but I'm not
+                            // sure if this will always be a Source or a Table.
+                            let progress_subsource = coord
+                                .catalog()
+                                .get_entry(&progress_subsource)
+                                .latest_global_id();
+
                             let ingestion = mz_storage_types::sources::IngestionDescription::new(
                                 desc,
                                 cluster_id,
@@ -4427,13 +4434,14 @@ impl Coordinator {
                 ops.extend(dependent_index_ops);
 
                 // Alter owner cascades down to progress collections.
-                let dependent_subsources = entry.progress_id().into_iter().map(|gid| {
-                    let item_id = self.catalog.resolve_item_id(&gid);
-                    catalog::Op::UpdateOwner {
-                        id: ObjectId::Item(item_id),
-                        new_owner,
-                    }
-                });
+                let dependent_subsources =
+                    entry
+                        .progress_id()
+                        .into_iter()
+                        .map(|item_id| catalog::Op::UpdateOwner {
+                            id: ObjectId::Item(item_id),
+                            new_owner,
+                        });
                 ops.extend(dependent_subsources);
             }
             ObjectId::Cluster(cluster_id) => {

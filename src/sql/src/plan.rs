@@ -1414,7 +1414,7 @@ pub enum DataSourceDesc {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Ingestion {
     pub desc: SourceDesc<ReferencedConnection>,
-    pub progress_subsource: GlobalId,
+    pub progress_subsource: CatalogItemId,
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -2489,6 +2489,10 @@ impl Coordinator {
                     cluster_id,
                 } => {
                     let desc = desc.into_inline_connection(catalog.state());
+                    // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                    // this will always be a Source or a Table.
+                    let progress_subsource =
+                        catalog.get_entry(&progress_subsource).latest_global_id();
                     let ingestion = mz_storage_types::sources::IngestionDescription::new(
                         desc,
                         cluster_id,

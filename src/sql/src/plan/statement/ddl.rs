@@ -1032,9 +1032,7 @@ pub fn plan_create_source(
     let progress_subsource = match progress_subsource {
         Some(name) => match name {
             DeferredItemName::Named(name) => match name {
-                ResolvedItemName::Item { id, version, .. } => {
-                    scx.catalog.get_item(id).at_version(*version).global_id()
-                }
+                ResolvedItemName::Item { id, .. } => *id,
                 ResolvedItemName::Cte { .. }
                 | ResolvedItemName::ContinualTask { .. }
                 | ResolvedItemName::Error => {
@@ -5204,7 +5202,7 @@ pub fn plan_drop_owned(
                 // When this item gets dropped it will also drop its progress source, so we need to
                 // check the users of those.
                 if let Some(id) = item.progress_id() {
-                    let progress_item = scx.catalog.get_item_by_global_id(&id);
+                    let progress_item = scx.catalog.get_item(&id);
                     check_if_dependents_exist(progress_item.used_by())?;
                 }
                 check_if_dependents_exist(item.used_by())?;

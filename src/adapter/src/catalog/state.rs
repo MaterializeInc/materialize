@@ -504,8 +504,7 @@ impl CatalogState {
             // for dropping. We have additional code in planning to create a
             // kind of special-case "CASCADE" for this dependency.
             if let Some(progress_id) = entry.progress_id() {
-                let progress_item = self.get_entry_by_global_id(&progress_id).item_id();
-                dependents.extend_from_slice(&self.item_dependents(progress_item, seen));
+                dependents.extend_from_slice(&self.item_dependents(progress_id, seen));
             }
         }
         dependents
@@ -993,7 +992,7 @@ impl CatalogState {
                 })
             }
             Plan::CreateContinualTask(plan) => CatalogItem::ContinualTask(
-                crate::continual_task::ct_item_from_plan(self, plan, global_id, resolved_ids)?,
+                crate::continual_task::ct_item_from_plan(plan, global_id, resolved_ids)?,
             ),
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,

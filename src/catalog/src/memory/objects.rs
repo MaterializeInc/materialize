@@ -755,7 +755,7 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
         self.entry.is_progress_source()
     }
 
-    fn progress_id(&self) -> Option<GlobalId> {
+    fn progress_id(&self) -> Option<CatalogItemId> {
         self.entry.progress_id()
     }
 
@@ -819,6 +819,7 @@ pub struct Table {
     /// [`RelationDesc`] of this table, derived from the `create_sql`.
     pub desc: RelationDesc,
     /// Versions of this table, and the [`GlobalId`]s that refer to them.
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub collections: BTreeMap<RelationVersion, GlobalId>,
     /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
     #[serde(skip)]
@@ -2291,7 +2292,7 @@ impl CatalogEntry {
     }
 
     /// Returns the `GlobalId` of all of this entry's progress ID.
-    pub fn progress_id(&self) -> Option<GlobalId> {
+    pub fn progress_id(&self) -> Option<CatalogItemId> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion { ingestion_desc, .. } => {
@@ -3091,7 +3092,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.is_progress_source()
     }
 
-    fn progress_id(&self) -> Option<GlobalId> {
+    fn progress_id(&self) -> Option<CatalogItemId> {
         self.progress_id()
     }
 
