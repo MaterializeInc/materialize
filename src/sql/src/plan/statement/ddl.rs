@@ -4165,7 +4165,8 @@ generate_extracted_config!(
     (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
     (EnableOuterJoinNullFilter, Option<bool>, Default(None)),
     (EnableValueWindowFunctionFusion, Option<bool>, Default(None)),
-    (EnableReduceUnnestListFusion, Option<bool>, Default(None))
+    (EnableReduceUnnestListFusion, Option<bool>, Default(None)),
+    (EnableWindowAggregationFusion, Option<bool>, Default(None))
 );
 
 /// Convert a [`CreateClusterStatement`] into a [`Plan`].
@@ -4305,6 +4306,7 @@ pub fn plan_create_cluster_inner(
             enable_outer_join_null_filter,
             enable_value_window_function_fusion,
             enable_reduce_unnest_list_fusion,
+            enable_window_aggregation_fusion,
             seen: _,
         } = ClusterFeatureExtracted::try_from(features)?;
         let optimizer_feature_overrides = OptimizerFeatureOverrides {
@@ -4316,6 +4318,7 @@ pub fn plan_create_cluster_inner(
             enable_outer_join_null_filter,
             enable_value_window_function_fusion,
             enable_reduce_unnest_list_fusion,
+            enable_window_aggregation_fusion,
             ..Default::default()
         };
 
@@ -4413,6 +4416,7 @@ pub fn unplan_create_cluster(
                 enable_outer_join_null_filter,
                 enable_value_window_function_fusion,
                 enable_reduce_unnest_list_fusion,
+                enable_window_aggregation_fusion,
             } = optimizer_feature_overrides;
             let features_extracted = ClusterFeatureExtracted {
                 // Seen is ignored when unplanning.
@@ -4425,6 +4429,7 @@ pub fn unplan_create_cluster(
                 enable_outer_join_null_filter,
                 enable_value_window_function_fusion,
                 enable_reduce_unnest_list_fusion,
+                enable_window_aggregation_fusion,
             };
             let features = features_extracted.into_values(scx.catalog);
             let availability_zones = if availability_zones.is_empty() {
