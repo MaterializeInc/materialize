@@ -337,7 +337,6 @@ public          trailing_space_nopk
 public          "\"\"\"literal_quotes\"\"\""
 conflict_schema conflict_table
 
-# TODO: database-issues#8511 (introspection tables)
 # Ensure all ingestion export subsources have an ID greater than the primary source ID
 > SELECT bool_and(primary_source_id < subsource_id)
   FROM
@@ -593,9 +592,8 @@ true
 2 two_two
 5 five
 
-# TODO: database-issues#8511 (introspection tables)
-# > SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table' AND type = 'table';
-# true
+> SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table' AND type = 'table';
+true
 
 > DROP SOURCE large_cluster_source CASCADE;
 

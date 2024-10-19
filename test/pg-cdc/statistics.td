@@ -72,19 +72,18 @@ SELECT
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 VALUES ('three');
 
-# TODO: database-issues#8511 (introspection tables)
-# > SELECT
-#     s.name,
-#     SUM(u.offset_committed) > ${previous-offset-committed},
-#     SUM(u.offset_known) >= SUM(u.offset_committed),
-#     SUM(u.snapshot_records_known),
-#     SUM(u.snapshot_records_staged)
-#   FROM mz_sources s
-#   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-#   WHERE s.name IN ('mz_source')
-#   GROUP BY s.name
-#   ORDER BY s.name
-# mz_source true true 2 2
+> SELECT
+    s.name,
+    SUM(u.offset_committed) > ${previous-offset-committed},
+    SUM(u.offset_known) >= SUM(u.offset_committed),
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('mz_source')
+  GROUP BY s.name
+  ORDER BY s.name
+mz_source true true 2 2
 
 $ set-from-sql var=pre-restart-offset-committed
 SELECT
@@ -137,17 +136,16 @@ true
   ORDER BY s.name
 mz_source 1 1
 
-# TODO: database-issues#8511 (introspection tables)
-# # Ensure subsource stats show up, and then are removed when we drop subsources.
-# > SELECT
-#     t.name,
-#     SUM(u.updates_committed) > 0
-#   FROM mz_sources t
-#   JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
-#   WHERE t.name IN ('alt')
-#   GROUP BY t.name
-#   ORDER BY t.name
-# alt true
+# Ensure subsource stats show up, and then are removed when we drop subsources.
+> SELECT
+    t.name,
+    SUM(u.updates_committed) > 0
+  FROM mz_sources t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('alt')
+  GROUP BY t.name
+  ORDER BY t.name
+alt true
 
 > DROP TABLE alt;
 

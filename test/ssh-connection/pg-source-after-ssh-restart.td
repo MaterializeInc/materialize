@@ -22,12 +22,11 @@ INSERT INTO t1 VALUES (3);
 3
 
 
-# TODO: database-issues#8511 (introspection tables)
-# > SELECT name, type, error
-#   FROM mz_internal.mz_source_statuses
-#   WHERE
-#       name
-#       IN (
-#       SELECT name FROM mz_tables WHERE source_id IS NOT NULL
-#       );
-# t1 table <null>
+> SELECT name, type, error
+  FROM mz_internal.mz_source_statuses
+  WHERE
+      name
+      IN (
+      SELECT name FROM mz_tables WHERE source_id IS NOT NULL
+      );
+t1 table <null>
