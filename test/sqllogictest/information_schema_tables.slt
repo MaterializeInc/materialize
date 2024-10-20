@@ -365,6 +365,10 @@ mz_hydration_statuses
 VIEW
 materialize
 mz_internal
+mz_index_advice
+VIEW
+materialize
+mz_internal
 mz_internal_cluster_replicas
 BASE TABLE
 materialize
