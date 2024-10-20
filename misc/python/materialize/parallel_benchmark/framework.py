@@ -237,7 +237,7 @@ class PooledQuery(Action):
                 print(f"Connection failed on query '{self.query}', reconnecting: {e}")
                 conn.close()
                 conn = self.conn_info.connect()
-                conn.autocommit = True
+                execute_query(cur, self.query)
         conns.task_done()
         conns.put(conn)
 
