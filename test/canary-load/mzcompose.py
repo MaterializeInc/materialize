@@ -114,10 +114,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             except (OperationalError, ReadTimeout, ConnectionError) as e:
                 error_msg_str = str(e)
-                if "Read timed out" in error_msg_str:
-                    print("Read timed out, retrying")
-                elif "closed connection" in error_msg_str:
-                    print("Remote end closed connection, retrying")
+                if (
+                    "Read timed out" in error_msg_str
+                    or "closed connection" in error_msg_str
+                    or "terminating connection due to idle-in-transaction timeout"
+                    in error_msg_str
+                ):
+                    print(f"Failed: {e}; retrying")
                 else:
                     raise
             except FailedTestExecutionError as e:
