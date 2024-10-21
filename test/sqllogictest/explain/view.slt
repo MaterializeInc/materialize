@@ -51,19 +51,20 @@ EXPLAIN LOCALLY OPTIMIZED PLAN FOR
 VIEW v;
 ----
 Return
-  Project (#0, #1, #3)
-    Union
-      Get l0
-      Project (#0, #3..=#5)
-        Map (100, null, null)
-          Join on=(#0 = #1)
-            Union
-              Negate
+  Project (#0, #4, #3)
+    Map (100)
+      Union
+        Get l0
+        Project (#0, #3..=#5)
+          Map (100, null, null)
+            Join on=(#0 = #1)
+              Union
+                Negate
+                  Distinct project=[#0]
+                    Get l0
                 Distinct project=[#0]
-                  Get l0
-              Distinct project=[#0]
-                Get l1
-            Get l1
+                  Get l1
+              Get l1
 With
   cte l1 =
     Filter (#1 = 100)
@@ -83,19 +84,20 @@ EXPLAIN LOCALLY OPTIMIZED PLAN FOR
 REPLAN VIEW v;
 ----
 Return
-  Project (#0, #1, #3)
-    Union
-      Get l0
-      Project (#0, #3..=#5)
-        Map (100, null, null)
-          Join on=(#0 = #1)
-            Union
-              Negate
+  Project (#0, #4, #3)
+    Map (100)
+      Union
+        Get l0
+        Project (#0, #3..=#5)
+          Map (100, null, null)
+            Join on=(#0 = #1)
+              Union
+                Negate
+                  Distinct project=[#0]
+                    Get l0
                 Distinct project=[#0]
-                  Get l0
-              Distinct project=[#0]
-                Get l1
-            Get l1
+                  Get l1
+              Get l1
 With
   cte l1 =
     Filter (#1 = 100)
@@ -116,21 +118,22 @@ EXPLAIN LOCALLY OPTIMIZED PLAN WITH(ENABLE NEW OUTER JOIN LOWERING = TRUE) FOR
 REPLAN VIEW v;
 ----
 Return
-  Project (#0, #1, #3)
-    Union
-      Map (null, null)
-        Union
-          Project (#0, #1)
-            Negate
-              Join on=(#2 = integer_to_bigint(#0))
-                Filter (#1 = 100) AND (#0) IS NOT NULL
-                  Get materialize.public.accounts
-                Distinct project=[#2]
-                  Get l0
-          Filter (#1 = 100)
-            Get materialize.public.accounts
-      Filter (#1 = 100)
-        Get l0
+  Project (#0, #4, #3)
+    Map (100)
+      Union
+        Map (null, null)
+          Union
+            Project (#0, #1)
+              Negate
+                Join on=(#2 = integer_to_bigint(#0))
+                  Filter (#1 = 100) AND (#0) IS NOT NULL
+                    Get materialize.public.accounts
+                  Distinct project=[#2]
+                    Get l0
+            Filter (#1 = 100)
+              Get materialize.public.accounts
+        Filter (#1 = 100)
+          Get l0
 With
   cte l0 =
     Join on=(#2 = integer_to_bigint(#0))
@@ -164,21 +167,22 @@ EXPLAIN LOCALLY OPTIMIZED PLAN FOR
 VIEW v;
 ----
 Return
-  Project (#0, #1, #3)
-    Union
-      Map (null, null)
-        Union
-          Project (#0, #1)
-            Negate
-              Join on=(#2 = integer_to_bigint(#0))
-                Filter (#1 = 100) AND (#0) IS NOT NULL
-                  Get materialize.public.accounts
-                Distinct project=[#2]
-                  Get l0
-          Filter (#1 = 100)
-            Get materialize.public.accounts
-      Filter (#1 = 100)
-        Get l0
+  Project (#0, #4, #3)
+    Map (100)
+      Union
+        Map (null, null)
+          Union
+            Project (#0, #1)
+              Negate
+                Join on=(#2 = integer_to_bigint(#0))
+                  Filter (#1 = 100) AND (#0) IS NOT NULL
+                    Get materialize.public.accounts
+                  Distinct project=[#2]
+                    Get l0
+            Filter (#1 = 100)
+              Get materialize.public.accounts
+        Filter (#1 = 100)
+          Get l0
 With
   cte l0 =
     Join on=(#2 = integer_to_bigint(#0))
@@ -195,19 +199,20 @@ EXPLAIN LOCALLY OPTIMIZED PLAN WITH(ENABLE NEW OUTER JOIN LOWERING = FALSE) FOR
 REPLAN VIEW v;
 ----
 Return
-  Project (#0, #1, #3)
-    Union
-      Get l0
-      Project (#0, #3..=#5)
-        Map (100, null, null)
-          Join on=(#0 = #1)
-            Union
-              Negate
+  Project (#0, #4, #3)
+    Map (100)
+      Union
+        Get l0
+        Project (#0, #3..=#5)
+          Map (100, null, null)
+            Join on=(#0 = #1)
+              Union
+                Negate
+                  Distinct project=[#0]
+                    Get l0
                 Distinct project=[#0]
-                  Get l0
-              Distinct project=[#0]
-                Get l1
-            Get l1
+                  Get l1
+              Get l1
 With
   cte l1 =
     Filter (#1 = 100)
