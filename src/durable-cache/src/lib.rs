@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use differential_dataflow::consolidation::consolidate_updates;
 use mz_ore::collections::AssociativeExt;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{ListenEvent, Subscribe};
@@ -24,7 +23,7 @@ use timely::progress::Antichain;
 
 pub trait DurableCacheCodec {
     type Key: Ord + Clone + Debug;
-    type Val: Ord + Debug;
+    type Val: Eq + Debug;
     type KeyCodec: Codec + Debug;
     type ValCodec: Codec + Debug;
 
@@ -36,6 +35,11 @@ pub trait DurableCacheCodec {
     fn encode_val(val: &Self::Val) -> Self::ValCodec;
     fn decode_key(key: Self::KeyCodec) -> Self::Key;
     fn decode_val(val: Self::ValCodec) -> Self::Val;
+}
+
+#[derive(Debug, Clone)]
+pub enum Error {
+    WriteConflict,
 }
 
 #[derive(Debug)]
@@ -173,51 +177,78 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         }
     }
 
+    /// Return all entries stored in the cache, without syncing with the durable store.
+    pub fn entries_local(&self) -> impl Iterator<Item = (&C::Key, &C::Val)> {
+        self.local.iter()
+    }
+
     /// Durably set `key` to `value`. A `value` of `None` deletes the entry from the cache.
+    ///
+    /// Failures will update the cache and retry until the cache is written successfully.
     pub async fn set(&mut self, key: &C::Key, value: Option<&C::Val>) {
-        self.set_many(&[(key, value)]).await
+        while self.try_set(key, value).await.is_err() {}
     }
 
     /// Durably set multiple key-value pairs in `entries`. Values of `None` deletes the
     /// corresponding entries from the cache.
+    ///
+    /// Failures will update the cache and retry until the cache is written successfully.
     pub async fn set_many(&mut self, entries: &[(&C::Key, Option<&C::Val>)]) {
-        let mut expected_upper = self.local_progress;
-        loop {
-            let mut updates = Vec::new();
+        while self.try_set_many(entries).await.is_err() {}
+    }
 
-            for (key, val) in entries {
-                if let Some(prev) = self.local.get(key) {
-                    updates.push(((key, prev), expected_upper, -1));
-                }
-                if let Some(val) = val {
-                    updates.push(((key, val), expected_upper, 1));
-                }
+    /// Tries to durably set `key` to `value`. A `value` of `None` deletes the entry from the cache.
+    ///
+    /// On both successes and failures, the cache will update its contents with the most recent
+    /// updates from the durable store.
+    pub async fn try_set(&mut self, key: &C::Key, value: Option<&C::Val>) -> Result<(), Error> {
+        self.try_set_many(&[(key, value)]).await
+    }
+
+    /// Tries to durably set multiple key-value pairs in `entries`. Values of `None` deletes the
+    /// corresponding entries from the cache.
+    ///
+    /// On both successes and failures, the cache will update its contents with the most recent
+    /// updates from the durable store.
+    pub async fn try_set_many(
+        &mut self,
+        entries: &[(&C::Key, Option<&C::Val>)],
+    ) -> Result<(), Error> {
+        let expected_upper = self.local_progress;
+        let mut updates = Vec::new();
+
+        for (key, val) in entries {
+            // TODO(jkosh44) This breaks with duplicate keys.
+            if let Some(prev) = self.local.get(key) {
+                updates.push(((key, prev), expected_upper, -1));
             }
-            consolidate_updates(&mut updates);
+            if let Some(val) = val {
+                updates.push(((key, val), expected_upper, 1));
+            }
+        }
 
-            let updates = updates
-                .into_iter()
-                .map(|((key, val), ts, d)| ((C::encode_key(key), C::encode_val(val)), ts, d));
+        let updates = updates
+            .into_iter()
+            .map(|((key, val), ts, d)| ((C::encode_key(key), C::encode_val(val)), ts, d));
 
-            let new_upper = expected_upper + 1;
-            let ret = self
-                .write
-                .compare_and_append(
-                    updates,
-                    Antichain::from_elem(expected_upper),
-                    Antichain::from_elem(new_upper),
-                )
-                .await
-                .expect("usage should be valid");
-            match ret {
-                Ok(()) => {
-                    self.sync_to(Some(new_upper)).await;
-                    return;
-                }
-                Err(err) => {
-                    expected_upper = self.sync_to(err.current.into_option()).await;
-                    continue;
-                }
+        let new_upper = expected_upper + 1;
+        let ret = self
+            .write
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(expected_upper),
+                Antichain::from_elem(new_upper),
+            )
+            .await
+            .expect("usage should be valid");
+        match ret {
+            Ok(()) => {
+                self.sync_to(Some(new_upper)).await;
+                Ok(())
+            }
+            Err(err) => {
+                self.sync_to(err.current.into_option()).await;
+                Err(Error::WriteConflict)
             }
         }
     }

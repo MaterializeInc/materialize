@@ -70,16 +70,7 @@ struct Expressions {
     physical_plan: DataflowDescription<mz_compute_types::plan::Plan>,
     dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
     notices: SmallVec<[Arc<OptimizerNotice>; 4]>,
-    optimizer_feature_overrides: OptimizerFeatures,
-}
-
-struct NewEntry {
-    /// `GlobalId` of the new expression.
-    id: GlobalId,
-    /// New `Expressions` to cache.
-    expressions: Expressions,
-    /// `GlobalId`s to invalidate as a result of the new entry.
-    invalidate_ids: BTreeSet<GlobalId>,
+    optimizer_feature: OptimizerFeatures,
 }
 
 struct ExpressionCache {
@@ -100,13 +91,12 @@ impl ExpressionCache {
     /// Returns all cached expressions in the current deploy generation, after reconciliation.
     fn open(&mut self, current_ids: &BTreeSet<GlobalId>, optimizer_features: &OptimizerFeatures, remove_prior_gens: bool) -> Vec<(GlobalId, Expressions)>;
 
-    /// Durably inserts `expressions` into current deploy generation. This may also invalidate
-    /// entries giving by `expressions`.
+    /// Durably removes all entries given by `invalidate_ids` and inserts `new_entries` into
+    /// current deploy generation.
     ///
-    /// Returns a [`Future`] that completes once the changes have been made durable.
-    ///
-    /// Panics if any `GlobalId` already exists in the cache.
-    fn insert_expressions(&mut self, expressions: Vec<NewEntry>) -> impl Future<Output=()>;
+    /// If there is a duplicate ID in both `invalidate_ids` and `new_entries`, then the final value
+    /// will be taken from `new_entries`.
+    fn insert_expressions(&mut self, new_entries: Vec<(GlobalId, Expressions)>, invalidate_ids: BTreeSet<GlobalId>);
 
     /// Durably remove and return all entries in current deploy generation that depend on an ID in
     /// `dropped_ids` .
