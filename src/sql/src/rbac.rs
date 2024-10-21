@@ -1076,16 +1076,6 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
         },
-        Plan::AlterItemSwap(plan::AlterItemSwapPlan {
-            id_a,
-            id_b,
-            full_name_a: _,
-            full_name_b: _,
-            object_type: _,
-        }) => RbacRequirements {
-            ownership: vec![ObjectId::Item(*id_a), ObjectId::Item(*id_b)],
-            ..Default::default()
-        },
         Plan::AlterSchemaRename(plan::AlterSchemaRenamePlan {
             cur_schema_spec,
             new_schema_name: _,
