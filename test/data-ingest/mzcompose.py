@@ -30,7 +30,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
+from materialize.mzcompose.services.postgres import CockroachOrPostgres, Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
@@ -48,7 +48,7 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(),
-    PostgresAsCockroach(),
+    CockroachOrPostgres(),
     Minio(setup_materialize=True),
     # Fixed port so that we keep the same port after restarting Mz in disruptions
     Materialized(
