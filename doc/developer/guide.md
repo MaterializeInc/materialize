@@ -216,9 +216,16 @@ and needs to be installed separately, as described above. Also, IDEs will not be
 dependencies unless they are started from within the `nix-shell` environment:
 
 ```bash
-code . # Linux
-/Applications/Visual\ Studio\ Code.app/Contents/MacOS/Electron # MacOS
+# Linux
+[nix-shell]$ code .
+# macOS
+[nix-shell]$ open -na "RustRover"
+[nix-shell]$ open -na "Visual Studio Code"
 ```
+
+Note that on macOS, the `mzcompose` tests fail to run from within `nix-shell`,
+as our config does not yet set up [cross-compilation support](/misc/python/materialize/xcompile.py)
+for `x86-64` needed to run `mzcompose`.
 
 ## Building Materialize
 
@@ -539,6 +546,8 @@ version = "0.26.0"
 
 In principle, any text editor can be used to edit Rust code.
 
+#### Visual Studio Code
+
 By default, we recommend that developers without a strong preference of an editor use
 [Visual Studio Code] with the [rust-analyzer] plugin.
 This is the most mainstream
@@ -570,13 +579,16 @@ If you are using Rust-Analyzer, you should configure it to conform to our
 * `imports.granularity.group` = `module`
 * `imports.prefix` = `crate`
 
+#### RustRover
+
 [RustRover] is another option for an IDE with good code navigation features.
-This is a good choice for developers who prefer
-the JetBrains ecosystem, but we no longer recommend it by default, since
-Rust-Analyzer has long since caught up to it in maturity. If you are a
-Materialize employee, ask Nikhil Benesch on Slack for access to our corporate
-JetBrains license. If you're not yet sure you want to use RustRover, you can
-use the 30-day free trial.
+This is a good choice for developers who prefer the JetBrains ecosystem. This
+folder provides some [example run configurations](/misc/editor/rustrover)
+to help get started with running and debugging Materialize in RustRover.
+
+If you are a Materialize employee, ask in the #jetbrains channel on Slack for
+access to a corporate JetBrains license. If you're not yet sure you want to use
+RustRover, you can use the 30-day free trial.
 
 ### Editor add-ons
 
