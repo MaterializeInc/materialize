@@ -175,7 +175,6 @@ pub enum Plan {
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
-    AlterItemSwap(AlterItemSwapPlan),
     AlterSchemaRename(AlterSchemaRenamePlan),
     AlterSchemaSwap(AlterSchemaSwapPlan),
     AlterSecret(AlterSecretPlan),
@@ -223,7 +222,6 @@ impl Plan {
             ],
             StatementKind::AlterObjectSwap => &[
                 PlanKind::AlterClusterSwap,
-                PlanKind::AlterItemSwap,
                 PlanKind::AlterSchemaSwap,
                 PlanKind::AlterNoop,
             ],
@@ -401,7 +399,6 @@ impl Plan {
             Plan::AlterConnection(_) => "alter connection",
             Plan::AlterSource(_) => "alter source",
             Plan::AlterItemRename(_) => "rename item",
-            Plan::AlterItemSwap(_) => "swap item",
             Plan::AlterSchemaRename(_) => "alter rename schema",
             Plan::AlterSchemaSwap(_) => "alter swap schema",
             Plan::AlterSecret(_) => "alter secret",
@@ -1186,15 +1183,6 @@ pub struct AlterClusterSwapPlan {
     pub name_a: String,
     pub name_b: String,
     pub name_temp: String,
-}
-
-#[derive(Debug)]
-pub struct AlterItemSwapPlan {
-    pub id_a: GlobalId,
-    pub id_b: GlobalId,
-    pub full_name_a: FullItemName,
-    pub full_name_b: FullItemName,
-    pub object_type: ObjectType,
 }
 
 #[derive(Debug)]

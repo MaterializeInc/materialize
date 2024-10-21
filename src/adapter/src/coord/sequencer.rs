@@ -426,11 +426,6 @@ impl Coordinator {
                         .await;
                     ctx.retire(result);
                 }
-                Plan::AlterItemSwap(_plan) => {
-                    // Note: we should never reach this point because we return an unsupported error in
-                    // planning.
-                    ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
-                }
                 Plan::AlterSchemaRename(plan) => {
                     let result = self
                         .sequence_alter_schema_rename(ctx.session_mut(), plan)
