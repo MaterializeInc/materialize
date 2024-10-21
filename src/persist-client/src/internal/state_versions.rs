@@ -1012,9 +1012,9 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
     /// The `inspect_diff_fn` callback can be used to inspect diffs directly as
     /// they are applied. The first call to `next` returns a
     /// [InspectDiff::FromInitial] representing a diff from the initial state.
-    pub fn next<F: for<'a> FnMut(InspectDiff<'a, T>)>(
+    pub fn next(
         &mut self,
-        mut inspect_diff_fn: F,
+        mut inspect_diff_fn: impl for<'a> FnMut(InspectDiff<'a, T>),
     ) -> Option<&State<T>> {
         let diff = match self.diffs.pop() {
             Some(x) => x,

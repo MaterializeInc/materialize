@@ -12,7 +12,7 @@
 use arrow::array::Array;
 use differential_dataflow::Hashable;
 use std::borrow::Cow;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
@@ -354,6 +354,7 @@ pub struct BatchBuilderConfig {
     pub(crate) record_run_meta: bool,
     pub(crate) expected_order: RunOrder,
     pub(crate) structured_key_lower_len: usize,
+    pub(crate) run_length_limit: usize,
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
@@ -487,6 +488,7 @@ impl BatchBuilderConfig {
             record_run_meta,
             expected_order,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
+            run_length_limit: 3,
         }
     }
 
@@ -967,6 +969,37 @@ impl BatchBuffer {
     }
 }
 
+#[derive(Debug)]
+struct Pending<T> {
+    writing: Option<JoinHandle<T>>,
+    finished: Option<T>,
+}
+
+impl<T: Send + 'static> Pending<T> {
+    fn new(handle: JoinHandle<T>) -> Self {
+        Self {
+            writing: Some(handle),
+            finished: None,
+        }
+    }
+
+    fn is_finished(&self) -> bool {
+        self.finished.is_some()
+    }
+
+    async fn into_result(mut self) -> T {
+        self.block_until_ready().await;
+        self.finished.expect("ready")
+    }
+
+    async fn block_until_ready(&mut self) {
+        if let Some(handle) = self.writing.take() {
+            let value = handle.wait_and_assert_finished().await;
+            self.finished = Some(value);
+        }
+    }
+}
+
 // TODO: If this is dropped, cancel (and delete?) any writing parts and delete
 // any finished ones.
 #[derive(Debug)]
@@ -978,8 +1011,7 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob>,
     isolated_runtime: Arc<IsolatedRuntime>,
-    writing_parts: VecDeque<JoinHandle<BatchPart<T>>>,
-    finished_parts: Vec<RunPart<T>>,
+    writing_parts: Vec<Vec<Pending<RunPart<T>>>>,
     batch_metrics: BatchWriteMetrics,
 }
 
@@ -1002,8 +1034,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             lower,
             blob,
             isolated_runtime,
-            writing_parts: VecDeque::new(),
-            finished_parts: Vec::new(),
+            writing_parts: vec![vec![]],
             batch_metrics: batch_metrics.clone(),
         }
     }
@@ -1019,7 +1050,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     ) {
         let desc = Description::new(self.lower.clone(), upper, since);
         let batch_metrics = self.batch_metrics.clone();
-        let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
+        let index = u64::cast_from(
+            self.writing_parts.iter().map(|r| r.len()).sum::<usize>() + self.writing_parts.len(),
+        );
         let ts_rewrite = None;
         let schema_id = write_schemas.id;
 
@@ -1076,11 +1109,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     batch_metrics
                         .step_inline
                         .inc_by(start.elapsed().as_secs_f64());
-                    BatchPart::Inline {
+                    RunPart::Single(BatchPart::Inline {
                         updates,
                         ts_rewrite,
                         schema_id,
-                    }
+                    })
                 }
                 .instrument(span),
             )
@@ -1108,22 +1141,19 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     D::encode(&diffs_sum),
                     write_schemas.clone(),
                 )
+                .map(RunPart::Single)
                 .instrument(write_span),
             )
         };
-        self.writing_parts.push_back(handle);
+        self.writing_parts[0].push(Pending::new(handle));
 
-        while self.writing_parts.len() > self.cfg.batch_builder_max_outstanding_parts {
-            batch_metrics.write_stalls.inc();
-            let handle = self
-                .writing_parts
-                .pop_front()
-                .expect("pop failed when len was just > some usize");
-            let part = handle
-                .instrument(debug_span!("batch::max_outstanding"))
-                .wait_and_assert_finished()
-                .await;
-            self.finished_parts.push(RunPart::Single(part));
+        for part in self.writing_parts[0]
+            .iter_mut()
+            .rev()
+            .skip(self.cfg.batch_builder_max_outstanding_parts)
+            .take_while(|p| !p.is_finished())
+        {
+            part.block_until_ready().await;
         }
     }
 
@@ -1280,14 +1310,62 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         })
     }
 
-    #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(self) -> Vec<RunPart<T>> {
-        let mut parts = self.finished_parts;
-        for handle in self.writing_parts {
-            let part = handle.wait_and_assert_finished().await;
-            parts.push(RunPart::Single(part));
+    fn push_part(&mut self, part: Pending<RunPart<T>>, depth: usize) {
+        if depth >= self.writing_parts.len() {
+            self.writing_parts.resize_with(depth + 1, Vec::new);
         }
-        parts
+        let parts = &mut self.writing_parts[depth];
+
+        parts.push(part);
+
+        // If we have too many parts at a given level, roll it up to the next level...
+        // unless this is an unordered batch, in which case we're later going to split
+        // all these parts up into separate runs later anyways.
+        if parts.len() >= self.cfg.run_length_limit
+            && self.cfg.expected_order != RunOrder::Unordered
+        {
+            let parts = mem::take(parts);
+            let shard_id = self.shard_id;
+            let blob = Arc::clone(&self.blob);
+            let writer_key = self.cfg.writer_key.clone();
+            let handle = mz_ore::task::spawn(
+                || "batch::inline_part",
+                async move {
+                    let parts = stream::iter(parts)
+                        .then(|p| p.into_result())
+                        .collect()
+                        .await;
+                    let run_ref = HollowRunRef::set(
+                        shard_id,
+                        blob.as_ref(),
+                        &writer_key,
+                        HollowRun { parts },
+                    )
+                    .await
+                    .expect("FIXME: retry");
+
+                    RunPart::Many(run_ref)
+                }
+                .instrument(debug_span!("batch::spill_run")),
+            );
+            self.push_part(Pending::new(handle), depth + 1)
+        }
+    }
+
+    #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
+    pub(crate) async fn finish(mut self) -> Vec<RunPart<T>> {
+        for depth in 0..(self.writing_parts.len() - 1) {
+            for part in mem::take(&mut self.writing_parts[depth]) {
+                self.push_part(part, depth + 1);
+            }
+        }
+
+        let parts = self.writing_parts.pop().expect("at least one level");
+        let mut output = Vec::with_capacity(parts.len());
+        for part in parts {
+            output.push(part.into_result().await);
+        }
+        output
     }
 }
 
@@ -1338,18 +1416,28 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
     Ok(())
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct PartDeletes(BTreeSet<PartialBatchKey>);
+#[derive(Debug)]
+pub(crate) struct PartDeletes<T> {
+    hollow_parts: BTreeSet<PartialBatchKey>,
+    hollow_runs: BTreeSet<HollowRunRef<T>>,
+}
 
-impl PartDeletes {
+impl<T> Default for PartDeletes<T> {
+    fn default() -> Self {
+        Self {
+            hollow_parts: Default::default(),
+            hollow_runs: Default::default(),
+        }
+    }
+}
+
+impl<T: Timestamp> PartDeletes<T> {
     // Adds the part to the set to be deleted and returns true if it was newly
     // inserted.
-    pub fn add<T>(&mut self, part: &RunPart<T>) -> bool {
+    pub fn add(&mut self, part: &RunPart<T>) -> bool {
         match part {
-            RunPart::Many(_) => {
-                todo!("walk the tree of parts and delete them individually.")
-            }
-            RunPart::Single(BatchPart::Hollow(x)) => self.0.insert(x.key.clone()),
+            RunPart::Many(r) => self.hollow_runs.insert(r.clone()),
+            RunPart::Single(BatchPart::Hollow(x)) => self.hollow_parts.insert(x.key.clone()),
             RunPart::Single(BatchPart::Inline { .. }) => {
                 // Nothing to delete.
                 true
@@ -1357,29 +1445,48 @@ impl PartDeletes {
         }
     }
 
-    pub async fn delete(
-        self,
-        blob: &Arc<dyn Blob>,
-        shard_id: ShardId,
-        metrics: &Arc<RetryMetrics>,
-    ) {
-        let deletes = FuturesUnordered::new();
-        for key in self.0 {
-            let metrics = Arc::clone(metrics);
-            let blob = Arc::clone(blob);
-            deletes.push(async move {
-                let key = key.complete(&shard_id);
-                retry_external(&metrics, || blob.delete(&key)).await;
-            });
+    pub fn contains(&mut self, part: &RunPart<T>) -> bool {
+        match part {
+            RunPart::Many(r) => self.hollow_runs.contains(r),
+            RunPart::Single(BatchPart::Hollow(x)) => self.hollow_parts.contains(&x.key),
+            RunPart::Single(BatchPart::Inline { .. }) => false,
         }
-        let () = deletes.collect().await;
     }
-}
 
-impl Deref for PartDeletes {
-    type Target = BTreeSet<PartialBatchKey>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    pub fn is_empty(&self) -> bool {
+        self.hollow_runs.is_empty() && self.hollow_parts.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.hollow_runs.len() + self.hollow_parts.len()
+    }
+
+    pub async fn delete(mut self, blob: &dyn Blob, shard_id: ShardId, metrics: &RetryMetrics)
+    where
+        T: Codec64,
+    {
+        loop {
+            let deletes = FuturesUnordered::new();
+            for key in std::mem::take(&mut self.hollow_parts) {
+                deletes.push(async move {
+                    let key = key.complete(&shard_id);
+                    retry_external(metrics, || blob.delete(&key)).await;
+                });
+            }
+            let () = deletes.collect().await;
+
+            let Some(run) = self.hollow_runs.pop_first() else {
+                break;
+            };
+
+            let runs = match run.get(shard_id, blob).await {
+                Some(runs) => runs,
+                None => continue,
+            };
+            for part in &runs.parts {
+                self.add(part);
+            }
+        }
     }
 }
 
@@ -1435,8 +1542,7 @@ mod tests {
         // A new builder has no writing or finished parts.
         let builder = write.builder(Antichain::from_elem(0));
         let mut builder = builder.builder;
-        assert_eq!(builder.parts.writing_parts.len(), 0);
-        assert_eq!(builder.parts.finished_parts.len(), 0);
+        assert_eq!(builder.parts.writing_parts[0].len(), 0);
 
         // We set blob_target_size to 0, so the first update gets forced out
         // into a batch.
@@ -1444,8 +1550,7 @@ mod tests {
         let key = k.encode_to_vec();
         let val = v.encode_to_vec();
         builder.add(&key, &val, t, d).await.expect("invalid usage");
-        assert_eq!(builder.parts.writing_parts.len(), 1);
-        assert_eq!(builder.parts.finished_parts.len(), 0);
+        assert_eq!(builder.parts.writing_parts[0].len(), 1);
 
         // We set batch_builder_max_outstanding_parts to 2, so we are allowed to
         // pipeline a second part.
@@ -1453,8 +1558,7 @@ mod tests {
         let key = k.encode_to_vec();
         let val = v.encode_to_vec();
         builder.add(&key, &val, t, d).await.expect("invalid usage");
-        assert_eq!(builder.parts.writing_parts.len(), 2);
-        assert_eq!(builder.parts.finished_parts.len(), 0);
+        assert_eq!(builder.parts.writing_parts[0].len(), 2);
 
         // But now that we have 3 parts, the add call back-pressures until the
         // first one finishes.
@@ -1462,8 +1566,14 @@ mod tests {
         let key = k.encode_to_vec();
         let val = v.encode_to_vec();
         builder.add(&key, &val, t, d).await.expect("invalid usage");
-        assert_eq!(builder.parts.writing_parts.len(), 2);
-        assert_eq!(builder.parts.finished_parts.len(), 1);
+        assert_eq!(builder.parts.writing_parts[0].len(), 3);
+        assert_eq!(
+            builder.parts.writing_parts[0]
+                .iter()
+                .filter(|p| !p.is_finished())
+                .count(),
+            2
+        );
 
         // Finish off the batch and verify that the keys and such get plumbed
         // correctly by reading the data back.

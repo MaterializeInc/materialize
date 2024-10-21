@@ -17,7 +17,6 @@ use crate::internal::state_versions::StateVersions;
 use crate::ShardId;
 use anyhow::anyhow;
 use mz_persist::location::Blob;
-use std::collections::VecDeque;
 use timely::Container;
 use tracing::info;
 
@@ -52,7 +51,7 @@ pub(crate) async fn restore_blob(
 
     for diff in diffs.0 {
         let mut diff: StateDiff<u64> = StateDiff::decode(build_version, diff.data);
-        let mut part_queue = VecDeque::new();
+        let mut part_queue = vec![];
 
         for rollup in std::mem::take(&mut diff.rollups) {
             // We never actually reference rollups from before the first live diff.
@@ -97,15 +96,21 @@ pub(crate) async fn restore_blob(
                 part_queue.extend(after.parts.iter().cloned())
             }
         }
-        while let Some(part) = part_queue.pop_front() {
+        while let Some(part) = part_queue.pop() {
             match part {
                 RunPart::Single(BatchPart::Inline { .. }) => {}
                 RunPart::Single(BatchPart::Hollow(part)) => {
                     let key = part.key.complete(&shard_id);
                     check_restored(&key, blob.restore(&key).await);
                 }
-                RunPart::Many(_) => {
-                    todo!("FIXME: restore the runs ref, then add the referenced parts to the queue")
+                RunPart::Many(runs) => {
+                    let key = runs.key.complete(&shard_id);
+                    check_restored(&key, blob.restore(&key).await);
+                    let runs = runs
+                        .get(shard_id, blob)
+                        .await
+                        .ok_or_else(|| anyhow!("fetching just-restored run"))?;
+                    part_queue.extend(runs.parts);
                 }
             }
         }

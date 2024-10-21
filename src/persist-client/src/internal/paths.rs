@@ -58,7 +58,8 @@ impl PartId {
 /// be linked into state, or whether it's junk that we can clean up.
 /// Note that the ordering is meaningful: all writer-id keys are considered smaller than
 /// all version keys.
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Clone)]
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Clone, Serialize)]
+#[serde(untagged)]
 pub enum WriterKey {
     Id(WriterId),
     Version(String),

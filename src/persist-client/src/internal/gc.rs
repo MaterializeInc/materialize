@@ -36,7 +36,7 @@ use crate::internal::machine::{retry_external, Machine};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{GcStepTimings, RetryMetrics};
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
-use crate::internal::state::{BatchPart, HollowBlobRef, RunPart};
+use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
 use crate::ShardId;
 
