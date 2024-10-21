@@ -9,7 +9,7 @@
 
 //! The crate provides a durable key-value cache abstraction implemented by persist.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -49,7 +49,7 @@ pub struct DurableCache<C: DurableCacheCodec> {
 
 impl<C: DurableCacheCodec> DurableCache<C> {
     /// Opens a [`DurableCache`] using shard `shard_id`.
-    pub async fn new(persist: &PersistClient, shard_id: ShardId, name: &str) -> Self {
+    pub async fn new(persist: &PersistClient, shard_id: ShardId, purpose: &str) -> Self {
         let use_critical_since = true;
         let (key_schema, val_schema) = C::schemas();
         let (mut write, read) = persist
@@ -57,7 +57,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 shard_id,
                 Arc::new(key_schema),
                 Arc::new(val_schema),
-                Diagnostics::from_purpose(&format!("durable persist cache: {name}")),
+                Diagnostics::from_purpose(&format!("durable persist cache: {purpose}")),
                 use_critical_since,
             )
             .await
@@ -184,13 +184,17 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         let mut expected_upper = self.local_progress;
         loop {
             let mut updates = Vec::new();
+            let mut seen_keys = BTreeSet::new();
 
             for (key, val) in entries {
-                if let Some(prev) = self.local.get(key) {
-                    updates.push(((key, prev), expected_upper, -1));
-                }
-                if let Some(val) = val {
-                    updates.push(((key, val), expected_upper, 1));
+                // If there are duplicate keys we ignore all but the first one.
+                if seen_keys.insert(key) {
+                    if let Some(prev) = self.local.get(key) {
+                        updates.push(((key, prev), expected_upper, -1));
+                    }
+                    if let Some(val) = val {
+                        updates.push(((key, val), expected_upper, 1));
+                    }
                 }
             }
             consolidate_updates(&mut updates);
@@ -294,6 +298,19 @@ mod tests {
         assert_eq!(cache0.get_local(&"k1".into()), Some(&"v10".into()));
         assert_none!(cache0.get_local(&"k2".into()));
         assert_none!(cache0.get_local(&"k3".into()));
+
+        cache0
+            .set_many(&[
+                (&"k4".into(), Some(&"v40".into())),
+                (&"k4".into(), Some(&"v41".into())),
+                (&"k4".into(), Some(&"v42".into())),
+                (&"k5".into(), Some(&"v50".into())),
+                (&"k5".into(), Some(&"v51".into())),
+                (&"k5".into(), Some(&"v52".into())),
+            ])
+            .await;
+        assert_eq!(cache0.get_local(&"k4".into()), Some(&"v40".into()));
+        assert_eq!(cache0.get_local(&"k5".into()), Some(&"v50".into()));
 
         let mut cache1 = DurableCache::<TestCodec>::new(&persist, shard_id, "test2").await;
         assert_eq!(cache1.get(&"foo".into(), || panic!("boom")).await, "bar");
