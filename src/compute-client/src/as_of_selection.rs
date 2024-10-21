@@ -944,7 +944,7 @@ mod tests {
                     .get(&id)
                     .ok_or(ReadHoldError::CollectionMissing(id))?;
                 let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-                holds.push(ReadHold::new(id, read.clone(), tx));
+                holds.push(ReadHold::with_channel(id, read.clone(), tx));
             }
             Ok(holds)
         }

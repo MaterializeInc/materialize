@@ -1177,7 +1177,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
             since
         });
 
-        let hold = ReadHold::new(id, since, self.read_holds_tx.clone());
+        let hold = ReadHold::with_channel(id, since, self.read_holds_tx.clone());
         Ok(hold)
     }
 

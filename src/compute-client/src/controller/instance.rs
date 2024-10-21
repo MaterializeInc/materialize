@@ -2182,8 +2182,8 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         // Initialize collection read holds.
         // Note that the implied read hold was already added to the `read_capabilities` when
         // `shared` was created, so we only need to add the warmup read hold here.
-        let implied_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx.clone());
-        let warmup_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx);
+        let implied_read_hold = ReadHold::with_channel(collection_id, since.clone(), read_holds_tx.clone());
+        let warmup_read_hold = ReadHold::with_channel(collection_id, since.clone(), read_holds_tx);
 
         let updates = warmup_read_hold.since().iter().map(|t| (t.clone(), 1));
         shared.lock_read_capabilities(|c| {
