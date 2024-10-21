@@ -32,8 +32,6 @@ spec:
   {{- if .forceRollout }}
   forceRollout: {{ .forceRollout }}
   {{- end }}
-  {{- if .inPlaceRollout }}
   inPlaceRollout: {{ .inPlaceRollout }}
-  {{- end }}
 {{- end }}
 {{- end }}

@@ -10,7 +10,7 @@
 operator:
   image:
     repository: materialize/orchestratord
-    tag: v0.121.0-dev.0--main.g0c02fecf8c5a05f697925366a1c2baae20472b81
+    tag: mzbuild-BSGIPDAFDCIMTKT2ECKNL7KBROG6BAPC
     pullPolicy: IfNotPresent
   args:
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
@@ -54,12 +54,6 @@ networkPolicies:
   enabled: false
   useNativeKubernetesPolicy: true
 
-# Users can add environment configurations here:
-# materializeEnvironments:
-#   - name: default-environment
-#     environmentdImageRef: materialize/environmentd:v0.119.2
-#     environmentdCpuAllocation: "500m"
-#     environmentdMemoryAllocation: "1Gi"
-#     requestRollout: 22222222-2222-2222-2222-222222222222
-#     forceRollout: 33333333-3333-3333-3333-333333333333
-#     inPlaceRollout: false
+namespace:
+  create: false
+  name: "materialize"

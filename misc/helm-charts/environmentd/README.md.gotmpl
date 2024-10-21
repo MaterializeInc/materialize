@@ -1,0 +1,99 @@
+{{- /*
+Copyright Materialize, Inc. and contributors. All rights reserved.
+
+Use of this software is governed by the Business Source License
+included in the LICENSE file at the root of this repository.
+
+As of the Change Date specified in that file, in accordance with
+the Business Source License, use of this software will be governed
+by the Apache License, Version 2.0.
+*/ -}}
+
+# {{ template "chart.description" . }}
+
+![Version: {{ .Version }}](https://img.shields.io/badge/Version-{{ .Version | replace "-" "--" }}-informational?style=flat-square) {{ if .Type }}![Type: {{ .Type }}](https://img.shields.io/badge/Type-{{ .Type }}-informational?style=flat-square) {{ end }}{{ if .AppVersion }}![AppVersion: {{ .AppVersion }}](https://img.shields.io/badge/AppVersion-{{ .AppVersion | replace "-" "--" }}-informational?style=flat-square) {{ end }}
+
+{{ template "chart.description" . }}
+
+This Helm chart deploys Materialize environments on a Kubernetes cluster. It requires the Materialize operator to be installed first.
+
+## Prerequisites
+
+- Kubernetes 1.19+
+- Helm 3.2.0+
+- Materialize operator installed in the cluster
+
+## Installing the Chart
+
+To install the chart with the release name `my-materialize-environments`:
+
+```shell
+helm install my-materialize-environments materialize/misc/helm-charts/environmentd
+```
+
+This command deploys Materialize environments on the Kubernetes cluster with default configuration. The [Parameters](#parameters) section lists the parameters that can be configured during installation.
+
+## Uninstalling the Chart
+
+To uninstall/delete the `my-materialize-environments` deployment:
+
+```shell
+helm delete my-materialize-environments
+```
+
+This command removes all the Kubernetes components associated with the chart and deletes the release.
+
+## Parameters
+
+The following table lists the configurable parameters of the Materialize environmentd chart and their default values.
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+{{- range .Values }}
+| `{{ .Key }}` | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} | {{ if .Default }}`{{ .Default }}`{{ else }}{{ .AutoDefault }}{{ end }} |
+{{- end }}
+
+Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example:
+
+```shell
+helm install my-materialize-environments \
+  --set materializeEnvironments[0].name=custom-env \
+  materialize/materialize-environmentd
+```
+
+Alternatively, a YAML file that specifies the values for the parameters can be provided while installing the chart. For example:
+
+```shell
+helm install my-materialize-environments -f values.yaml materialize/materialize-environmentd
+```
+
+## Configuration and Installation Details
+
+### Multiple Environments
+
+You can define multiple Materialize environments by adding more entries to the `materializeEnvironments` list in your `values.yaml` file or by using the `--set` flag multiple times.
+
+### Resource Allocation
+
+You can specify CPU and memory allocation for each environment using the `environmentdCpuAllocation` and `environmentdMemoryAllocation` parameters.
+
+### Rollout Configuration
+
+Use the `requestRollout`, `forceRollout`, and `inPlaceRollout` parameters to control how updates to your environments are rolled out.
+
+## Troubleshooting
+
+If you encounter issues with Materialize environments, check the environment logs:
+
+```shell
+kubectl logs -l app.kubernetes.io/name=materialize-environmentd
+```
+
+For more detailed information on using and troubleshooting Materialize environments, refer to the [Materialize documentation](https://materialize.com/docs).
+
+## Learn More
+
+- [Materialize Documentation](https://materialize.com/docs)
+- [Materialize GitHub Repository](https://github.com/MaterializeInc/materialize)
+
+{{ template "helm-docs.versionFooter" . }}

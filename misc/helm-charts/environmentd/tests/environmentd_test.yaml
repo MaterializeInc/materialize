@@ -1,0 +1,133 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+suite: test materialize environments
+templates:
+  - environmentd.yaml
+tests:
+  - it: should create a single Materialize environment with default values
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Materialize
+      - equal:
+          path: metadata.name
+          value: default-environment
+      - equal:
+          path: spec.environmentdImageRef
+          value: materialize/environmentd:v0.119.2
+      - equal:
+          path: spec.environmentdExtraArgs[0]
+          value: "--log-filter=info"
+      - equal:
+          path: spec.environmentdCpuAllocation
+          value: 1
+      - equal:
+          path: spec.environmentdMemoryAllocation
+          value: 1Gi
+      - equal:
+          path: spec.requestRollout
+          value: "22222222-2222-2222-2222-222222222222"
+      - equal:
+          path: spec.forceRollout
+          value: "33333333-3333-3333-3333-333333333333"
+      - equal:
+          path: spec.inPlaceRollout
+          value: false
+
+  - it: should create multiple Materialize environments when specified
+    set:
+      materializeEnvironments:
+        - name: env-1
+          environmentdImageRef: materialize/environmentd:v1.0.0
+          environmentdCpuAllocation: "2"
+          environmentdMemoryAllocation: 2Gi
+        - name: env-2
+          environmentdImageRef: materialize/environmentd:v1.1.0
+          environmentdCpuAllocation: "3"
+          environmentdMemoryAllocation: 3Gi
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: Materialize
+      - equal:
+          path: metadata.name
+          value: env-1
+        documentIndex: 0
+      - equal:
+          path: spec.environmentdImageRef
+          value: materialize/environmentd:v1.0.0
+        documentIndex: 0
+      - equal:
+          path: spec.environmentdCpuAllocation
+          value: 2
+        documentIndex: 0
+      - equal:
+          path: spec.environmentdMemoryAllocation
+          value: 2Gi
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: env-2
+        documentIndex: 1
+      - equal:
+          path: spec.environmentdImageRef
+          value: materialize/environmentd:v1.1.0
+        documentIndex: 1
+      - equal:
+          path: spec.environmentdCpuAllocation
+          value: 3
+        documentIndex: 1
+      - equal:
+          path: spec.environmentdMemoryAllocation
+          value: 3Gi
+        documentIndex: 1
+
+  - it: should not create any Materialize environments when list is empty
+    set:
+      materializeEnvironments: []
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should set optional fields when provided
+    set:
+      materializeEnvironments:
+        - name: custom-env
+          environmentdImageRef: materialize/environmentd:custom
+          environmentdExtraArgs:
+            - "--feature-flag=experimental"
+          requestRollout: 2023-06-01T00:00:00Z
+          forceRollout: true
+          inPlaceRollout: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Materialize
+      - equal:
+          path: metadata.name
+          value: custom-env
+      - equal:
+          path: spec.environmentdImageRef
+          value: materialize/environmentd:custom
+      - equal:
+          path: spec.environmentdExtraArgs[0]
+          value: "--feature-flag=experimental"
+      - equal:
+          path: spec.requestRollout
+          value: 2023-06-01T00:00:00Z
+      - equal:
+          path: spec.forceRollout
+          value: true
+      - equal:
+          path: spec.inPlaceRollout
+          value: true

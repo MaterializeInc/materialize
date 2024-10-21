@@ -1,0 +1,49 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+Thank you for installing {{ .Chart.Name }}.
+
+Your release is named {{ .Release.Name }}.
+
+To learn more about the release, try:
+
+  $ helm status {{ .Release.Name }}
+  $ helm get all {{ .Release.Name }}
+
+{{- if .Values.materializeEnvironments }}
+
+The following Materialize environments have been created:
+
+{{- range .Values.materializeEnvironments }}
+- {{ .name }}
+  Image: {{ .environmentdImageRef }}
+  CPU Allocation: {{ .environmentdCpuAllocation }}
+  Memory Allocation: {{ .environmentdMemoryAllocation }}
+{{- end }}
+
+To check the status of your environments, run:
+
+  $ kubectl get materialize
+
+{{- else }}
+
+No Materialize environments were created. To create environments, update your values.yaml file
+or use --set flag to specify materializeEnvironments.
+
+{{- end }}
+
+For more information on how to use and manage your Materialize environments, please refer to:
+https://materialize.com/docs
+
+If you encounter any issues, please check the Materialize operator logs:
+
+  $ kubectl logs -l app.kubernetes.io/name=materialize-operator -n {{ .Release.Namespace }}
+
+For additional help, visit the Materialize community:
+https://materialize.com/community
