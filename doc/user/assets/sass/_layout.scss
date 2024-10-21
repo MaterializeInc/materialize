@@ -322,6 +322,10 @@ table.inline-headings {
 
 .toc-wrapper {
     flex: 1;
+    position: sticky;
+    top: 90px;
+    height: 100vh;
+    overflow-y: auto;
 
     @media(max-width: 1050px) {
         display: none;
@@ -524,4 +528,14 @@ body.dark {
     a {
         color: var(--link);
     }
+}
+
+/*
+  Need for subheadings not handled by toc.html.
+  toc.html manually handles h2, h3 - since we only display h2 and h3
+  but if a page has other anchors, want to have the padding.
+  TODO: see about removing scroll logic in toc.html
+*/
+html {
+    scroll-padding-top: 80px;
 }
