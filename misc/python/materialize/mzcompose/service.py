@@ -168,6 +168,9 @@ class ServiceConfig(TypedDict, total=False):
     publish: bool | None
     """Override whether an image is publishable. Unpublishable images can be built during normal test runs in CI."""
 
+    stop_grace_period: str | None
+    """Time to wait when stopping a container."""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.
