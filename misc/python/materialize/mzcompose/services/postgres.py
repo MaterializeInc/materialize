@@ -81,6 +81,4 @@ class PostgresAsCockroach(Postgres):
         super().__init__(name="cockroach", setup_materialize=True, ports=["26257"])
 
 
-CockroachOrPostgres = (
-    Cockroach if os.getenv("BUILDKITE_TAG", "").startswith("v") else PostgresAsCockroach
-)
+CockroachOrPostgres = Cockroach
