@@ -57,7 +57,7 @@ use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    GenericSourceConnection, PostgresSourceConnection, SourceConnection,
+    GenericSourceConnection, PostgresSourceConnection, SourceConnection, SourceDesc,
     SourceExportStatementDetails,
 };
 use prost::Message;
@@ -211,6 +211,11 @@ pub enum PurifiedStatement {
         options: Vec<AlterSourceAddSubsourceOption<Aug>>,
         // Map of subsource names to external details
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
+    },
+    PurifiedAlterSourceRefreshReferences {
+        source_name: ResolvedItemName,
+        /// The updated available upstream references for the primary source.
+        available_source_references: SourceReferences,
     },
     PurifiedCreateSink(CreateSinkStatement<Aug>),
     PurifiedCreateTableFromSource {
@@ -1171,9 +1176,6 @@ async fn purify_create_source(
     })
 }
 
-// TODO(database-issues#8620): Remove once subsources are removed
-/// Equivalent to `purify_create_source` but for `AlterSourceStatement`.
-///
 /// On success, returns the details on new subsources and updated
 /// 'options' that sequencing expects for handling `ALTER SOURCE` statements.
 async fn purify_alter_source(
@@ -1220,9 +1222,55 @@ async fn purify_alter_source(
         print_id: true,
         version: RelationVersionSelector::Latest,
     };
-    let connection_name = desc.connection.name();
 
-    // Validate this is a source that can be altered.
+    let partial_name = scx.catalog.minimal_qualification(source_name);
+
+    match action {
+        AlterSourceAction::AddSubsources {
+            external_references,
+            options,
+        } => {
+            purify_alter_source_add_subsources(
+                external_references,
+                options,
+                desc,
+                partial_name,
+                unresolved_source_name,
+                resolved_source_name,
+                storage_configuration,
+            )
+            .await
+        }
+        AlterSourceAction::RefreshReferences => {
+            purify_alter_source_refresh_references(
+                desc,
+                resolved_source_name,
+                storage_configuration,
+            )
+            .await
+        }
+        _ => Ok(PurifiedStatement::PurifiedAlterSource {
+            alter_source_stmt: AlterSourceStatement {
+                source_name: unresolved_source_name,
+                action,
+                if_exists,
+            },
+        }),
+    }
+}
+
+// TODO(database-issues#8620): Remove once subsources are removed
+/// Equivalent to `purify_create_source` but for `AlterSourceStatement`.
+async fn purify_alter_source_add_subsources(
+    external_references: Vec<ExternalReferenceExport>,
+    mut options: Vec<AlterSourceAddSubsourceOption<Aug>>,
+    desc: SourceDesc,
+    partial_source_name: PartialItemName,
+    unresolved_source_name: UnresolvedItemName,
+    resolved_source_name: ResolvedItemName,
+    storage_configuration: &StorageConfiguration,
+) -> Result<PurifiedStatement, PlanError> {
+    // Validate this is a source that can have subsources added.
     match desc.connection {
         GenericSourceConnection::Postgres(PostgresSourceConnection {
             connection:
@@ -1235,24 +1283,11 @@ async fn purify_alter_source(
         GenericSourceConnection::MySql(_) => {}
         _ => sql_bail!(
             "source {} does not support ALTER SOURCE.",
-            scx.catalog.minimal_qualification(source_name),
+            partial_source_name
         ),
     };
 
-    // If we don't need to handle added subsources, early return.
-    let AlterSourceAction::AddSubsources {
-        external_references,
-        mut options,
-    } = action
-    else {
-        return Ok(PurifiedStatement::PurifiedAlterSource {
-            alter_source_stmt: AlterSourceStatement {
-                source_name: unresolved_source_name,
-                action,
-                if_exists,
-            },
-        });
-    };
+    let connection_name = desc.connection.name();
 
     let crate::plan::statement::ddl::AlterSourceAddSubsourceOptionExtracted {
         text_columns,
@@ -1295,7 +1330,7 @@ async fn purify_alter_source(
             if !exclude_columns.is_empty() {
                 sql_bail!(
                     "{} is a {} source, which does not support EXCLUDE COLUMNS.",
-                    scx.catalog.minimal_qualification(source_name),
+                    partial_source_name,
                     connection_name
                 )
             }
@@ -1399,6 +1434,79 @@ async fn purify_alter_source(
         source_name: resolved_source_name,
         options,
         subsources: requested_subsource_map,
+    })
+}
+
+async fn purify_alter_source_refresh_references(
+    desc: SourceDesc,
+    resolved_source_name: ResolvedItemName,
+    storage_configuration: &StorageConfiguration,
+) -> Result<PurifiedStatement, PlanError> {
+    let retrieved_source_references = match desc.connection {
+        GenericSourceConnection::Postgres(pg_source_connection) => {
+            // Get PostgresConnection for generating subsources.
+            let pg_connection = &pg_source_connection.connection;
+
+            let config = pg_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+
+            let client = config
+                .connect(
+                    "postgres_purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+            let reference_client = SourceReferenceClient::Postgres {
+                client: &client,
+                publication: &pg_source_connection.publication,
+                database: &pg_connection.database,
+            };
+            reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::MySql(mysql_source_connection) => {
+            let mysql_connection = &mysql_source_connection.connection;
+            let config = mysql_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+
+            let mut conn = config
+                .connect(
+                    "mysql purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            let reference_client = SourceReferenceClient::MySql {
+                conn: &mut conn,
+                include_system_schemas: false,
+            };
+            reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::LoadGenerator(load_gen_connection) => {
+            let reference_client = SourceReferenceClient::LoadGenerator {
+                generator: &load_gen_connection.load_generator,
+            };
+            reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::Kafka(kafka_conn) => {
+            let reference_client = SourceReferenceClient::Kafka {
+                topic: &kafka_conn.topic,
+            };
+            reference_client.get_source_references().await?
+        }
+    };
+    Ok(PurifiedStatement::PurifiedAlterSourceRefreshReferences {
+        source_name: resolved_source_name,
+        available_source_references: retrieved_source_references.available_source_references(),
     })
 }
 

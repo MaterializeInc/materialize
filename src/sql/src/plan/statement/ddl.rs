@@ -6591,6 +6591,9 @@ pub fn plan_alter_source(
         AlterSourceAction::AddSubsources { .. } => {
             unreachable!("ALTER SOURCE...ADD SUBSOURCE must be purified")
         }
+        AlterSourceAction::RefreshReferences => {
+            unreachable!("ALTER SOURCE...REFRESH REFERENCES must be purified")
+        }
     };
 }
 

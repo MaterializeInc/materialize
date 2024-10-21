@@ -3188,6 +3188,27 @@ ALTER SOURCE * SET CLUSTER
              ^
 
 parse-statement
+ALTER SOURCE src REFRESH REFERENCES db.clsname
+----
+error: Expected end of statement, found identifier "db"
+ALTER SOURCE src REFRESH REFERENCES db.clsname
+                                    ^
+
+parse-statement
+ALTER SOURCE db.src REFRESH REFERENCES
+----
+ALTER SOURCE db.src REFRESH REFERENCES
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("db"), Ident("src")]), if_exists: false, action: RefreshReferences })
+
+parse-statement
+ALTER SOURCE IF EXISTS src REFRESH REFERENCES
+----
+ALTER SOURCE IF EXISTS src REFRESH REFERENCES
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("src")]), if_exists: true, action: RefreshReferences })
+
+parse-statement
 ALTER SINK snk SET CLUSTER clsname
 ----
 ALTER SINK snk SET CLUSTER clsname

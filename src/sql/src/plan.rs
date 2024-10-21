@@ -1114,6 +1114,9 @@ pub enum AlterSourceAction {
         subsources: Vec<CreateSourcePlanBundle>,
         options: Vec<AlterSourceAddSubsourceOption<Aug>>,
     },
+    RefreshReferences {
+        references: SourceReferences,
+    },
 }
 
 #[derive(Debug)]

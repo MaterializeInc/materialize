@@ -2705,6 +2705,7 @@ pub enum AlterSourceAction<T: AstInfo> {
         cascade: bool,
         names: Vec<UnresolvedItemName>,
     },
+    RefreshReferences,
 }
 
 impl<T: AstInfo> AstDisplay for AlterSourceAction<T> {
@@ -2752,6 +2753,9 @@ impl<T: AstInfo> AstDisplay for AlterSourceAction<T> {
                     f.write_node(&display::comma_separated(options));
                     f.write_str(")");
                 }
+            }
+            AlterSourceAction::RefreshReferences => {
+                f.write_str("REFRESH REFERENCES");
             }
         }
     }

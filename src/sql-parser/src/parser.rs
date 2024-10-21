@@ -5161,7 +5161,7 @@ impl<'a> Parser<'a> {
 
         Ok(
             match self
-                .expect_one_of_keywords(&[ADD, DROP, RESET, SET, RENAME, OWNER])
+                .expect_one_of_keywords(&[ADD, DROP, RESET, SET, RENAME, OWNER, REFRESH])
                 .map_no_statement_parser_err()?
             {
                 ADD => {
@@ -5285,6 +5285,15 @@ impl<'a> Parser<'a> {
                         if_exists,
                         name: UnresolvedObjectName::Item(source_name),
                         new_owner,
+                    })
+                }
+                REFRESH => {
+                    self.expect_keyword(REFERENCES)
+                        .map_parser_err(StatementKind::AlterSource)?;
+                    Statement::AlterSource(AlterSourceStatement {
+                        source_name,
+                        if_exists,
+                        action: AlterSourceAction::RefreshReferences,
                     })
                 }
                 _ => unreachable!(),
