@@ -225,12 +225,11 @@ pub fn build_compute_dataflow<A: Allocate>(
                             .expect("Linear operators should always be valid")
                     });
 
-                    let ct_inserts_transformer = ct_ctx.get_ct_inserts_transformer(*source_id);
-                    let snapshot_mode = if ct_inserts_transformer.is_none() {
-                        SnapshotMode::Include
-                    } else {
-                        SnapshotMode::Exclude
-                    };
+                    let mut snapshot_mode = SnapshotMode::Include;
+                    let ct_source_transformer = ct_ctx.get_ct_source_transformer(*source_id);
+                    if let Some(x) = ct_source_transformer.as_ref() {
+                        snapshot_mode = x.snapshot_mode();
+                    }
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
@@ -269,13 +268,11 @@ pub fn build_compute_dataflow<A: Allocate>(
                     // The `suppress_early_progress` operator and the input
                     // probe both want to work on the untransformed ct input,
                     // make sure this stays after them.
-                    let (ok_stream, err_stream) = match ct_inserts_transformer {
+                    let (ok_stream, err_stream) = match ct_source_transformer {
                         None => (ok_stream, err_stream),
-                        Some(inserts_transformer_fn) => {
-                            let (oks, errs, ct_times) = inserts_transformer_fn(
-                                ok_stream.as_collection(),
-                                err_stream.as_collection(),
-                            );
+                        Some(ct_source_transformer) => {
+                            let (oks, errs, ct_times) = ct_source_transformer
+                                .transform(ok_stream.as_collection(), err_stream.as_collection());
                             // TODO(ct3): Ideally this would be encapsulated by
                             // ContinualTaskCtx, but the types are tricky.
                             ct_ctx.ct_times.push(ct_times.leave_region().leave_region());

@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A continual task presents as something like a `BEFORE TRIGGER`: it watches
-//! some _input_ and whenever it changes at time `T`, executes a SQL txn,
-//! writing to some _output_ at the same time `T`. It can also read anything in
-//! materialize as a _reference_, most notably including the output.
+//! A continual task presents as something like a `TRIGGER`: it watches some
+//! _input_ and whenever it changes at time `T`, executes a SQL txn, writing to
+//! some _output_ at the same time `T`. It can also read anything in materialize
+//! as a _reference_, most notably including the output.
 //!
 //! Only reacting to new inputs (and not the full history) makes a CT's
 //! rehydration time independent of the size of the inputs (NB this is not true
@@ -47,9 +47,9 @@
 //!   - NB: A full collection for the input can always be recovered by also
 //!     using the input as a "reference" (see below) and applying the diffs.
 //! - The task logic is expressed as a SQL transaction that does all reads at
-//!   time `T-1` and commits all writes at `T`
-//!   - Intuition is that the logic runs before the input is written, like a
-//!     `CREATE TRIGGER ... BEFORE`.
+//!   commits all writes at `T`
+//!   - The notable exception to this is self-referential reads of the CT
+//!     output. See below for how that works.
 //! - This logic can _reference_ any nameable object in the system, not just the
 //!   inputs.
 //!   - However, the logic/transaction can mutate only the outputs.
@@ -58,14 +58,48 @@
 //!     dataflow inputs today) but only changes for inputs.
 //!   - The task only produces output in response to changes in the inputs but
 //!     not in response to changes in the references.
-//!   - Inputs are reclocked by subtracting 1 from their timestamps, references
-//!     are not.
 //! - Instead of re-evaluating the task logic from scratch for each input time,
 //!   we maintain the collection representing desired writes to the output(s) as
 //!   a dataflow.
 //! - The task dataflow is tied to a `CLUSTER` and runs on each `REPLICA`.
 //!   - HA strategy: multi-replica clusters race to commit and the losers throw
 //!     away the result.
+//!
+//! ## Self-References
+//!
+//! Self-references must be handled differently from other reads. When computing
+//! the proposed write to some output at `T`, we can only know the contents of
+//! it through `T-1` (the exclusive upper is `T`).
+//!
+//! We address this by initially assuming that the output contains no changes at
+//! `T`, then evaluating each of the statements in order, allowing them to see
+//! the proposed output changes made by the previous statements. By default,
+//! this is stopped after one iteration and proposed output diffs are committed
+//! if possible. (We could also add options for iterating to a fixpoint,
+//! stop/error after N iters, etc.) Then to compute the changes at `T+1`, we
+//! read in what was actually written to the output at `T` (maybe some other
+//! replica wrote something different) and begin again.
+//!
+//! The above is very similar to how timely/differential dataflow iteration
+//! works, except that our feedback loop goes through persist and the loop
+//! timestamp is already `mz_repr::Timestamp`.
+//!
+//! This is implemented as follows:
+//! - `let I = persist_source(self-reference)`
+//! - Transform `I` such that the contents at `T-1` are presented at `T` (i.e.
+//!   initially assume `T` is unchanged from `T-1`).
+//! - TODO(ct3): Actually implement the following.
+//! - In an iteration sub-scope:
+//!   - Bring `I` into the sub-scope and `let proposed = Variable`.
+//!   - We need a collection that at `(T, 0)` is always the contents of `I` at
+//!     `T`, but at `(T, 1...)` contains the proposed diffs by the CT logic. We
+//!     can construct it by concatenating `I` with `proposed` except that we
+//!     also need to retract everything in `proposed` for the next `(T+1, 0)`
+//!     (because `I` is the source of truth for what actually committed).
+//!  - `let R = retract_at_next_outer_ts(proposed)`
+//!  - `let result = logic(concat(I, proposed, R))`
+//!  - `proposed.set(result)`
+//! - Then we return `proposed.leave()` for attempted write to persist.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -82,6 +116,7 @@ use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, ContinualT
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::error::UpperMismatch;
+use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -90,6 +125,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Button, Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::operator::CollectionExt;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, FrontierNotificator, Map, Operator};
@@ -108,18 +144,112 @@ pub(crate) struct ContinualTaskCtx<G: Scope<Timestamp = Timestamp>> {
     name: Option<String>,
     dataflow_as_of: Option<Antichain<Timestamp>>,
     ct_inputs: BTreeSet<GlobalId>,
+    ct_outputs: BTreeSet<GlobalId>,
     pub ct_times: Vec<Collection<G, (), Diff>>,
+}
+
+/// An encapsulation of the transformation logic necessary on data coming into a
+/// continual task.
+///
+/// NB: In continual task jargon, an "input" contains diffs and a "reference" is
+/// a normal source/collection.
+pub(crate) enum ContinualTaskSourceTransformer {
+    /// A collection containing, at each time T, exactly the inserts at time T
+    /// in the transformed collection.
+    ///
+    /// For example:
+    /// - Input: {} at 0, {1} at 1, {1} at 2, ...
+    /// - Output: {} at 0, {1} at 1, {} at 2, ...
+    ///
+    /// We'll presumably have the same for deletes eventually, but it's not
+    /// exposed in the SQL frontend yet.
+    InsertsInput,
+    /// A self-reference to the continual task's output. This is essentially a
+    /// timely feedback loop via the persist shard. See module rustdoc for how
+    /// this works.
+    SelfReference { source_id: GlobalId },
+    /// A normal collection (no-op transformation).
+    NormalReference,
+}
+
+impl ContinualTaskSourceTransformer {
+    /// The persist_source `SnapshotMode` to use when reading this source.
+    pub fn snapshot_mode(&self) -> SnapshotMode {
+        use ContinualTaskSourceTransformer::*;
+        match self {
+            InsertsInput => SnapshotMode::Exclude,
+            SelfReference { .. } | NormalReference => SnapshotMode::Include,
+        }
+    }
+
+    /// Performs the necessary transformation on the source collection.
+    ///
+    /// Returns the transformed "oks" and "errs" collections. Also returns the
+    /// appropriate `ct_times` collection used to inform the sink which times
+    /// were changed in the inputs.
+    pub fn transform<S: Scope<Timestamp = Timestamp>>(
+        &self,
+        oks: Collection<S, Row, Diff>,
+        errs: Collection<S, DataflowError, Diff>,
+    ) -> (
+        Collection<S, Row, Diff>,
+        Collection<S, DataflowError, Diff>,
+        Collection<S, (), Diff>,
+    ) {
+        use ContinualTaskSourceTransformer::*;
+        match self {
+            // Make a collection s.t, for each time T in the input, the output
+            // contains the inserts at T.
+            InsertsInput => {
+                // Keep only the inserts.
+                let oks = oks.inner.filter(|(_, _, diff)| *diff > 0);
+                // Grab the original times for use in the sink operator.
+                //
+                // TODO(ct2): This clones every Row just to throw it away,
+                // wasting work and potentially doubling memory usage. The fix
+                // is a specialized 2-input 1-output operator.
+                let times = oks.map(|(_row, ts, diff)| ((), ts, diff));
+                // Then retract everything at the next timestamp.
+                let oks = oks.flat_map(|(row, ts, diff)| {
+                    let retract_ts = ts.step_forward();
+                    let negation = -diff;
+                    [(row.clone(), ts, diff), (row, retract_ts, negation)]
+                });
+                (oks.as_collection(), errs, times.as_collection())
+            }
+            NormalReference => {
+                let times = Collection::empty(&oks.scope());
+                (oks, errs, times)
+            }
+            // When computing an self-referential output at `T`, start by
+            // assuming there are no changes from the contents at `T-1`. See the
+            // module rustdoc for how this fits into the larger picture.
+            SelfReference { source_id } => {
+                let name = source_id.to_string();
+                let times = Collection::empty(&oks.scope());
+                // step_forward will panic at runtime if it receives a data or
+                // capability with a time that cannot be stepped forward (i.e.
+                // because it is already the max). We're safe here because this
+                // is stepping `T-1` forward to `T`.
+                let oks = step_forward(&name, oks);
+                let errs = step_forward(&name, errs);
+                (oks, errs, times)
+            }
+        }
+    }
 }
 
 impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
     pub fn new<P, S>(dataflow: &DataflowDescription<P, S, Timestamp>) -> Self {
         let mut name = None;
         let mut ct_inputs = BTreeSet::new();
+        let mut ct_outputs = BTreeSet::new();
         for (sink_id, sink) in &dataflow.sink_exports {
             match &sink.connection {
                 ComputeSinkConnection::ContinualTask(ContinualTaskConnection {
                     input_id, ..
                 }) => {
+                    ct_outputs.insert(*sink_id);
                     ct_inputs.insert(*input_id);
                     // There's only one CT sink per dataflow at this point.
                     assert_eq!(name, None);
@@ -132,6 +262,7 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
             name,
             dataflow_as_of: None,
             ct_inputs,
+            ct_outputs,
             ct_times: Vec::new(),
         };
         // Only clone the as_of if we're in a CT dataflow.
@@ -144,50 +275,28 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
     }
 
     pub fn is_ct_dataflow(&self) -> bool {
-        !self.ct_inputs.is_empty()
+        // Inputs are non-empty iff outputs are non-empty.
+        assert_eq!(self.ct_inputs.is_empty(), self.ct_outputs.is_empty());
+        !self.ct_outputs.is_empty()
     }
 
-    pub fn get_ct_inserts_transformer<S: Scope<Timestamp = Timestamp>>(
+    pub fn get_ct_source_transformer(
         &self,
         source_id: GlobalId,
-    ) -> Option<
-        impl FnOnce(
-            Collection<S, Row, Diff>,
-            Collection<S, DataflowError, Diff>,
-        ) -> (
-            Collection<S, Row, Diff>,
-            Collection<S, DataflowError, Diff>,
-            Collection<S, (), Diff>,
-        ),
-    > {
-        if !self.ct_inputs.contains(&source_id) {
+    ) -> Option<ContinualTaskSourceTransformer> {
+        if !self.is_ct_dataflow() {
             return None;
         }
-
-        // Make a collection s.t, for each time T in the input, the output
-        // contains the inserts at T.
-        let inserts_source_fn =
-            move |oks: Collection<S, Row, Diff>, errs: Collection<S, DataflowError, Diff>| {
-                let name = source_id.to_string();
-                // Keep only the inserts.
-                //
-                // At some point this will become a user option to instead keep
-                // only deletes.
-                let oks = oks.inner.filter(|(_, _, diff)| *diff > 0);
-                // Grab the original times for use in the sink operator.
-                let times = oks.map(|(_row, ts, diff)| ((), ts, diff));
-                // SUBTLE: See the big module rustdoc for what's going on here.
-                let oks = step_backward(&name, oks.as_collection());
-                let errs = step_backward(&name, errs);
-                // Then retract everything at the next timestamp.
-                let oks = oks.inner.flat_map(|(row, ts, diff)| {
-                    let mut negation = diff.clone();
-                    differential_dataflow::Diff::negate(&mut negation);
-                    [(row.clone(), ts.step_forward(), negation), (row, ts, diff)]
-                });
-                (oks.as_collection(), errs, times.as_collection())
-            };
-        Some(inserts_source_fn)
+        let transformer = match (
+            self.ct_inputs.contains(&source_id),
+            self.ct_outputs.contains(&source_id),
+        ) {
+            (false, false) => ContinualTaskSourceTransformer::NormalReference,
+            (false, true) => ContinualTaskSourceTransformer::SelfReference { source_id },
+            (true, false) => ContinualTaskSourceTransformer::InsertsInput,
+            (true, true) => panic!("ct output is not allowed to be an input"),
+        };
+        Some(transformer)
     }
 
     pub fn input_times(&self, scope: &G) -> Option<Collection<G, (), Diff>> {
@@ -226,10 +335,6 @@ where
         append_times: Option<Collection<G, (), Diff>>,
     ) -> Option<Rc<dyn Any>> {
         let name = sink_id.to_string();
-
-        // SUBTLE: See the big module rustdoc for what's going on here.
-        let oks = step_forward(&name, oks);
-        let errs = step_forward(&name, errs);
 
         let to_append = oks
             .map(|x| SourceData(Ok(x)))
@@ -527,52 +632,6 @@ impl<D: Ord> SinkState<D, Timestamp> {
     }
 }
 
-// TODO(ct2): Write this as a non-async operator.
-//
-// Unfortunately, we can _almost_ use the stock `delay` operator, but not quite.
-// This must advance both data and the output frontier forward, while delay only
-// advances the data.
-fn step_backward<G, D, R>(name: &str, input: Collection<G, D, R>) -> Collection<G, D, R>
-where
-    G: Scope<Timestamp = Timestamp>,
-    D: Data,
-    R: Semigroup + 'static,
-{
-    let name = format!("ct_step_backward({})", name);
-    let mut builder = AsyncOperatorBuilder::new(name, input.scope());
-    let (output, output_stream) = builder.new_output();
-    let mut input = builder.new_input_for(&input.inner, Pipeline, &output);
-    builder.build(move |caps| async move {
-        let [mut cap]: [_; 1] = caps.try_into().expect("one capability per output");
-        loop {
-            let Some(event) = input.next().await else {
-                return;
-            };
-            match event {
-                Event::Data(_data_cap, mut data) => {
-                    for (_, ts, _) in &mut data {
-                        *ts = ts
-                            .step_back()
-                            .expect("should only receive data at times past the as_of");
-                    }
-                    output.give_container(&cap, &mut data);
-                }
-                Event::Progress(new_progress) => {
-                    let new_progress = new_progress.into_option().and_then(|x| x.step_back());
-                    let Some(new_progress) = new_progress else {
-                        continue;
-                    };
-                    if cap.time() < &new_progress {
-                        cap.downgrade(&new_progress);
-                    }
-                }
-            }
-        }
-    });
-
-    output_stream.as_collection()
-}
-
 /// Translates a collection one timestamp "forward" (i.e. `T` -> `T+1` as
 /// defined by `TimestampManipulation::step_forward`).
 ///
@@ -585,6 +644,8 @@ where
 /// The caller is responsible for ensuring that all data and capabilities given
 /// to this operator can be stepped forward without panicking, otherwise the
 /// operator will panic at runtime.
+///
+/// TODO(ct3): Convert `step_forward` to an extension trait on `Collection`.
 fn step_forward<G, D, R>(name: &str, input: Collection<G, D, R>) -> Collection<G, D, R>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -592,7 +653,7 @@ where
     R: Semigroup + 'static,
 {
     let name = format!("ct_step_forward({})", name);
-    let mut builder = OperatorBuilder::new(name.clone(), input.scope());
+    let mut builder = OperatorBuilder::new(name, input.scope());
     let (mut output, output_stream) = builder.new_output();
     // We step forward (by one) each data timestamp and capability. As a result
     // the output's frontier is guaranteed to be one past the input frontier, so
@@ -691,46 +752,6 @@ mod tests {
                 // We should get the data out advanced by `step_forward` and
                 // also, crucially, the output frontier should do the same (i.e.
                 // this is why we can't simply use `Collection::delay`).
-                worker.step_while(|| probe.less_than(&out_ts.step_forward()));
-                expected.push((i, out_ts, 1));
-            }
-            // Closing the input should allow the output to advance and the
-            // dataflow to shut down.
-            input.close();
-            while worker.step() {}
-
-            let actual = output
-                .extract()
-                .into_iter()
-                .flat_map(|x| x.1)
-                .collect::<Vec<_>>();
-            assert_eq!(actual, expected);
-        })
-        .unwrap();
-    }
-
-    #[mz_ore::test]
-    fn step_backward() {
-        timely::execute(Config::thread(), |worker| {
-            let (mut input, probe, output) = worker.dataflow(|scope| {
-                let (handle, input) = scope.new_input();
-                let mut probe = ProbeHandle::<Timestamp>::new();
-                let output = super::step_backward("test", input.as_collection())
-                    .probe_with(&mut probe)
-                    .inner
-                    .capture();
-                (handle, probe, output)
-            });
-
-            let mut expected = Vec::new();
-            for i in 0u64..10 {
-                // Notice that these are declared backward: out_ts < in_ts
-                let out_ts = Timestamp::new(i);
-                let in_ts = out_ts.step_forward();
-                input.send((i, in_ts, 1));
-                input.advance_to(in_ts.step_forward());
-
-                // We should get the data out regressed by `step_backward`.
                 worker.step_while(|| probe.less_than(&out_ts.step_forward()));
                 expected.push((i, out_ts, 1));
             }
