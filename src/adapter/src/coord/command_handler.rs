@@ -461,8 +461,7 @@ impl Coordinator {
                 extra
             } else {
                 // This is a new statement, log it and return the context
-                let maybe_uuid =
-                    self.begin_statement_execution(&mut session, params.clone(), &logging);
+                let maybe_uuid = self.begin_statement_execution(&mut session, &params, &logging);
 
                 ExecuteContextExtra::new(maybe_uuid)
             };
