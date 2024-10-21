@@ -26,6 +26,8 @@ use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use futures::FutureExt;
+use futures_util::stream;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
@@ -56,8 +58,8 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{
-    BatchPart, HollowBatch, HollowBatchPart, ProtoInlineBatchPart, RunMeta, RunOrder, RunPart,
-    WRITE_DIFFS_SUM,
+    BatchPart, HollowBatch, HollowBatchPart, HollowRun, HollowRunRef, ProtoInlineBatchPart,
+    RunMeta, RunOrder, RunPart, WRITE_DIFFS_SUM,
 };
 use crate::stats::{
     encode_updates, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
@@ -171,9 +173,9 @@ where
         }
         let () = deletes
             .delete(
-                &self.blob,
+                &*self.blob,
                 self.shard_id(),
-                &self.metrics.retries.external.batch_delete,
+                &*self.metrics.retries.external.batch_delete,
             )
             .await;
     }
