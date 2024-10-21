@@ -73,14 +73,14 @@ fig:fig
 $ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: timestamp=4 partition=2
 grape:grape
 
-> CREATE CLUSTER append_time_offset_0_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER append_time_offset_0_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE append_time_offset_0
   IN CLUSTER append_time_offset_0_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=0, TOPIC 'testdrive-t1-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
 
-> CREATE CLUSTER append_time_offset_1_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER append_time_offset_1_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE append_time_offset_1
   IN CLUSTER append_time_offset_1_cluster
   FROM KAFKA CONNECTION kafka_conn (
@@ -91,7 +91,7 @@ grape:grape
   FORMAT TEXT
   INCLUDE OFFSET
 
-> CREATE CLUSTER append_time_offset_2_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER append_time_offset_2_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE append_time_offset_2
   IN CLUSTER append_time_offset_2_cluster
   FROM KAFKA CONNECTION kafka_conn (
@@ -102,7 +102,7 @@ grape:grape
   FORMAT TEXT
   INCLUDE OFFSET
 
-> CREATE CLUSTER append_time_offset_3_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER append_time_offset_3_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE append_time_offset_3
   IN CLUSTER append_time_offset_3_cluster
   FROM KAFKA CONNECTION kafka_conn (
@@ -113,7 +113,7 @@ grape:grape
   FORMAT TEXT
   INCLUDE OFFSET
 
-> CREATE CLUSTER append_time_offset_4_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER append_time_offset_4_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE append_time_offset_4
   IN CLUSTER append_time_offset_4_cluster
   FROM KAFKA CONNECTION kafka_conn (
@@ -124,7 +124,7 @@ grape:grape
   FORMAT TEXT
   INCLUDE OFFSET
 
-> CREATE CLUSTER append_time_offset_5_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER append_time_offset_5_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE append_time_offset_5
   IN CLUSTER append_time_offset_5_cluster
   FROM KAFKA CONNECTION kafka_conn (
@@ -218,7 +218,7 @@ fig:fig
 $ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp=4 partition=2
 grape:grape
 
-> CREATE CLUSTER upsert_time_offset_0_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER upsert_time_offset_0_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE upsert_time_offset_0
   IN CLUSTER upsert_time_offset_0_cluster
   FROM KAFKA CONNECTION kafka_conn (
@@ -230,7 +230,7 @@ grape:grape
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> CREATE CLUSTER upsert_time_offset_1_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER upsert_time_offset_1_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE upsert_time_offset_1
   IN CLUSTER upsert_time_offset_1_cluster
   FROM KAFKA CONNECTION kafka_conn (
@@ -242,7 +242,7 @@ grape:grape
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> CREATE CLUSTER upsert_time_offset_2_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER upsert_time_offset_2_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE upsert_time_offset_2
   IN CLUSTER upsert_time_offset_2_cluster
   FROM KAFKA CONNECTION kafka_conn (
@@ -254,7 +254,7 @@ grape:grape
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> CREATE CLUSTER upsert_time_offset_3_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER upsert_time_offset_3_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE upsert_time_offset_3
   IN CLUSTER upsert_time_offset_3_cluster
   FROM KAFKA CONNECTION kafka_conn (
@@ -266,7 +266,7 @@ grape:grape
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> CREATE CLUSTER upsert_time_offset_4_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER upsert_time_offset_4_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE upsert_time_offset_4
   IN CLUSTER upsert_time_offset_4_cluster
   FROM KAFKA CONNECTION kafka_conn (
@@ -278,7 +278,7 @@ grape:grape
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> CREATE CLUSTER upsert_time_offset_5_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER upsert_time_offset_5_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE upsert_time_offset_5
   IN CLUSTER upsert_time_offset_5_cluster
   FROM KAFKA CONNECTION kafka_conn (
@@ -364,14 +364,14 @@ banana
 $ kafka-ingest format=bytes topic=t3 timestamp=4084108700000
 cherry
 
-> CREATE CLUSTER relative_time_offset_30_years_ago_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER relative_time_offset_30_years_ago_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE relative_time_offset_30_years_ago
   IN CLUSTER relative_time_offset_30_years_ago_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-946100000000, TOPIC 'testdrive-t3-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
 
-> CREATE CLUSTER relative_time_offset_today_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER relative_time_offset_today_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE relative_time_offset_today
   IN CLUSTER relative_time_offset_today_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-1, TOPIC 'testdrive-t3-${testdrive.seed}')
@@ -399,7 +399,7 @@ pie
 
 # A time offset of -1 specifies that we want to start from the end of the topic
 # (negative offsets are relative from the end).
-> CREATE CLUSTER verify_no_fetch_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER verify_no_fetch_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE verify_no_fetch
   IN CLUSTER verify_no_fetch_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-1, TOPIC 'testdrive-t4-${testdrive.seed}')
@@ -478,7 +478,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=7
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": {"row": {"id": 4, "creature": "chicken"}}}
 
-> CREATE CLUSTER upsert_time_skip_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER upsert_time_skip_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE upsert_time_skip
   IN CLUSTER upsert_time_skip_cluster
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=6, TOPIC 'testdrive-dbzupsert-${testdrive.seed}')

@@ -56,7 +56,7 @@ contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FO
   );
 
 # "Bare" format works when the key format is in a registry
-> CREATE CLUSTER bareformatconfluent_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER bareformatconfluent_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE bareformatconfluent
   IN CLUSTER bareformatconfluent_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -78,7 +78,7 @@ named         id       b
   INCLUDE KEY
 contains: column "id" specified more than once
 
-> CREATE CLUSTER avro_data_explicit_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_data_explicit_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_data_explicit (key_id, id, b)
   IN CLUSTER avro_data_explicit_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
@@ -91,7 +91,7 @@ key_id id b
 ------------
 1 2 3
 
-> CREATE CLUSTER include_partition_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER include_partition_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE include_partition
   IN CLUSTER include_partition_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
@@ -103,7 +103,7 @@ id b partition
 --------------
 2 3 0
 
-> CREATE CLUSTER avro_data_as_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_data_as_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_data_as
   IN CLUSTER avro_data_as_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
@@ -116,7 +116,7 @@ renamed_id id b
 ------------
 1 2 3
 
-> CREATE CLUSTER avro_avro_data_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_avro_data_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_avro_data (key_id, id, b)
   IN CLUSTER avro_avro_data_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
@@ -124,7 +124,7 @@ renamed_id id b
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
 
-> CREATE CLUSTER avro_data_upsert_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_data_upsert_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_data_upsert
   IN CLUSTER avro_data_upsert_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
@@ -161,7 +161,7 @@ $ kafka-ingest format=avro key-format=avro topic=avro-data-record key-schema=${m
 $ kafka-ingest format=avro topic=avro-data-record schema=${noconflictschema} timestamp=2 omit-key=true
 {"a": 88}
 
-> CREATE CLUSTER avro_key_record_flattened_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_key_record_flattened_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_key_record_flattened
   IN CLUSTER avro_key_record_flattened_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-record-${testdrive.seed}')
@@ -176,7 +176,7 @@ id     geo    a
 <null> <null> 88
 1      nyc    99
 
-> CREATE CLUSTER avro_key_record_renamed_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_key_record_renamed_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_key_record_renamed
   IN CLUSTER avro_key_record_renamed_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-record-${testdrive.seed}')
@@ -210,7 +210,7 @@ one,1:horse,apple
 two,2:bee,honey
 :cow,grass
 
-> CREATE CLUSTER textsrc_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER textsrc_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE textsrc
   IN CLUSTER textsrc_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
@@ -225,7 +225,7 @@ one,1  horse,apple
 two,2  bee,honey
 <null> cow,grass
 
-> CREATE CLUSTER regexvalue_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER regexvalue_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE regexvalue
   IN CLUSTER regexvalue_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
@@ -240,7 +240,7 @@ one,1  horse  apple
 two,2  bee    honey
 <null> cow    grass
 
-> CREATE CLUSTER regexboth_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER regexboth_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE regexboth
   IN CLUSTER regexboth_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
@@ -255,7 +255,7 @@ one     1      horse  apple
 two     2      bee    honey
 <null>  <null> cow    grass
 
-> CREATE CLUSTER regexbothnest_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER regexbothnest_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE regexbothnest
   IN CLUSTER regexbothnest_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
@@ -298,7 +298,7 @@ $ kafka-ingest topic=proto
 $ kafka-ingest topic=proto format=protobuf descriptor-file=test.proto message=Value omit-key=true
 {"measurement": 11}
 
-> CREATE CLUSTER input_proto_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER input_proto_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE input_proto
   IN CLUSTER input_proto_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-proto-${testdrive.seed}')
@@ -319,7 +319,7 @@ $ kafka-ingest topic=proto-structured
   format=protobuf descriptor-file=test.proto message=Value
 {"id1": 1, "id2": 2} {"measurement": 10}
 
-> CREATE CLUSTER input_proto_structured_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER input_proto_structured_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE input_proto_structured
   IN CLUSTER input_proto_structured_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-proto-structured-${testdrive.seed}')
@@ -360,7 +360,7 @@ Used Indexes:
 
 Target cluster: quickstart
 
-> CREATE CLUSTER envelope_none_with_key_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER envelope_none_with_key_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE envelope_none_with_key
   IN CLUSTER envelope_none_with_key_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC

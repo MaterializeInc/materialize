@@ -24,7 +24,7 @@ $ kafka-ingest format=avro topic=avro-decode-date schema=${date} timestamp=1
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE CLUSTER avro_decode_date_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_decode_date_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_decode_date
   IN CLUSTER avro_decode_date_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-date-${testdrive.seed}')
@@ -49,7 +49,7 @@ $ kafka-ingest format=avro topic=avro-decode-time-millis schema=${time-millis} t
 {"f1": 1}
 {"f1": 12345678}
 
-> CREATE CLUSTER avro_decode_time_millis_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_decode_time_millis_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_decode_time_millis
   IN CLUSTER avro_decode_time_millis_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-date-${testdrive.seed}')
@@ -80,7 +80,7 @@ $ kafka-ingest format=avro topic=avro-decode-timestamp-millis schema=${timestamp
 {"f1": 61000}
 {"f1": 1234567890}
 
-> CREATE CLUSTER avro_decode_timestamp_millis_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_decode_timestamp_millis_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_decode_timestamp_millis
   IN CLUSTER avro_decode_timestamp_millis_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-timestamp-millis-${testdrive.seed}')
@@ -115,7 +115,7 @@ $ kafka-ingest format=avro topic=avro-decode-timestamp-micros schema=${timestamp
 {"f1": 61000000}
 {"f1": 1234567890}
 
-> CREATE CLUSTER avro_decode_timestamp_micros_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_decode_timestamp_micros_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_decode_timestamp_micros
   IN CLUSTER avro_decode_timestamp_micros_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-timestamp-micros-${testdrive.seed}')
@@ -149,7 +149,7 @@ $ kafka-ingest format=avro topic=avro-decode-local-timestamp-millis schema=${loc
 {"f1": 10000}
 {"f1": 1234567890}
 
-> CREATE CLUSTER avro_decode_local_timestamp_millis_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER avro_decode_local_timestamp_millis_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE avro_decode_local_timestamp_millis
   IN CLUSTER avro_decode_local_timestamp_millis_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-local-timestamp-millis-${testdrive.seed}')

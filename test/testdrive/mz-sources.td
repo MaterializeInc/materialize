@@ -20,7 +20,7 @@ $ set-arg-default default-storage-size=1
 
 $ kafka-create-topic topic=none-topic partitions=1
 
-> CREATE CLUSTER none_source_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER none_source_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE none_source
   IN CLUSTER none_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-none-topic-${testdrive.seed}')
@@ -29,7 +29,7 @@ $ kafka-create-topic topic=none-topic partitions=1
   INCLUDE KEY
   ENVELOPE NONE
 
-> CREATE CLUSTER none_source_no_key_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER none_source_no_key_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE none_source_no_key
   IN CLUSTER none_source_no_key_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-none-topic-${testdrive.seed}')
@@ -116,7 +116,7 @@ $ kafka-create-topic topic=dbzupsert partitions=1
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=1
 {"id": 1} {"before": {"row": {"id": 1, "creature": "fish"}}, "after": {"row": {"id": 1, "creature": "mudskipper"}}, "op": "u", "source": {"file": "binlog1", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> CREATE CLUSTER debezium_source_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER debezium_source_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE debezium_source
   IN CLUSTER debezium_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -145,7 +145,7 @@ $ set schema={
 $ kafka-ingest format=avro topic=upsert-topic key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "fish", "f2": 1000}
 
-> CREATE CLUSTER upsert_source_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER upsert_source_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE upsert_source
   IN CLUSTER upsert_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-topic-${testdrive.seed}')

@@ -469,7 +469,10 @@ pub fn plan_create_webhook_source(
 ) -> Result<Plan, PlanError> {
     // We will rewrite the cluster if one is not provided, so we must use the `in_cluster` value
     // we plan to normalize when we canonicalize the create statement.
-    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster)?;
+    let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
+    if in_cluster.replica_ids().len() > 1 {
+        sql_bail!("cannot create source in cluster with more than one replica")
+    }
     let create_sql =
         normalize::create_statement(scx, Statement::CreateWebhookSource(stmt.clone()))?;
 
@@ -616,7 +619,7 @@ pub fn plan_create_webhook_source(
         },
         if_not_exists,
         timeline,
-        in_cluster: Some(in_cluster),
+        in_cluster: Some(in_cluster.id()),
     }))
 }
 
@@ -1066,7 +1069,17 @@ pub fn plan_create_source(
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
-    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster)?;
+    let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
+    match stmt.connection {
+        CreateSourceConnection::Postgres { .. } | CreateSourceConnection::Yugabyte { .. } => {
+            if in_cluster.replica_ids().len() > 1 {
+                sql_bail!("cannot create source in cluster with more than one replica")
+            }
+        }
+        CreateSourceConnection::Kafka { .. }
+        | CreateSourceConnection::MySql { .. }
+        | CreateSourceConnection::LoadGenerator { .. } => {}
+    }
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
@@ -1104,7 +1117,7 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         timeline,
-        in_cluster: Some(in_cluster),
+        in_cluster: Some(in_cluster.id()),
     }))
 }
 
@@ -2014,11 +2027,10 @@ fn get_encoding(
 /// If `in_cluster` is `None` we will update it to refer to the default cluster.
 /// Because of this, do not normalize/canonicalize the create SQL statement
 /// until after calling this function.
-fn source_sink_cluster_config(
-    scx: &StatementContext,
-    ty: &'static str,
+fn source_sink_cluster_config<'a, 'ctx>(
+    scx: &'a StatementContext<'ctx>,
     in_cluster: &mut Option<ResolvedClusterName>,
-) -> Result<ClusterId, PlanError> {
+) -> Result<&'a dyn CatalogCluster<'ctx>, PlanError> {
     let cluster = match in_cluster {
         None => {
             let cluster = scx.catalog.resolve_cluster(None)?;
@@ -2031,11 +2043,7 @@ fn source_sink_cluster_config(
         Some(in_cluster) => scx.catalog.get_cluster(in_cluster.id),
     };
 
-    if cluster.replica_ids().len() > 1 {
-        sql_bail!("cannot create {ty} in cluster with more than one replica")
-    }
-
-    Ok(cluster.id())
+    Ok(cluster)
 }
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
@@ -3193,7 +3201,10 @@ fn plan_sink(
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
-    let in_cluster = source_sink_cluster_config(scx, "sink", &mut stmt.in_cluster)?;
+    let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
+    if in_cluster.replica_ids().len() > 1 {
+        sql_bail!("cannot create sink in cluster with more than one replica")
+    }
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
@@ -3208,7 +3219,7 @@ fn plan_sink(
         },
         with_snapshot,
         if_not_exists,
-        in_cluster,
+        in_cluster: in_cluster.id(),
     }))
 }
 
