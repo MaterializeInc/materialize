@@ -126,6 +126,7 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
         tracing::debug!(
             replica_expiration = ?replica_expiration.elements(),
             dataflow_expiration_desc = ?dataflow_expiration_desc,
+            self_refresh_schedule = ?self.refresh_schedule,
             "computing dataflow expiration",
         );
 
