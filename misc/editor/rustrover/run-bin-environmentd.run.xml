@@ -1,6 +1,16 @@
+<!--
+Copyright Materialize, Inc. and contributors. All rights reserved.
+
+Use of this software is governed by the Business Source License
+included in the LICENSE file at the root of this repository.
+
+As of the Change Date specified in that file, in accordance with
+the Business Source License, use of this software will be governed
+by the Apache License, Version 2.0.
+-->
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="run-bin-environmentd" type="ShConfigurationType">
-    <option name="SCRIPT_TEXT" value="bin/environmentd --reset --enable-mac-codesigning" />
+    <option name="SCRIPT_TEXT" value="bin/environmentd --reset" />
     <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
     <option name="SCRIPT_PATH" value="" />
     <option name="SCRIPT_OPTIONS" value="" />
