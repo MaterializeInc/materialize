@@ -1,0 +1,26 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Default values for Materialize Environmentd chart
+materializeEnvironments:
+  - name: default-environment
+    environmentdImageRef: "materialize/environmentd:v0.119.2"
+    environmentdExtraArgs:
+      - "--log-filter=info"
+    environmentdCpuAllocation: "1"
+    environmentdMemoryAllocation: "1Gi"
+    requestRollout: 22222222-2222-2222-2222-222222222222
+    forceRollout: 33333333-3333-3333-3333-333333333333
+    inPlaceRollout: false
+
+# Additional environments can be added here
+
+# Global settings
+global:
+  operatorNamespace: "materialize-system"

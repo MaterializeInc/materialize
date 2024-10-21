@@ -53,13 +53,3 @@ observability:
 networkPolicies:
   enabled: false
   useNativeKubernetesPolicy: true
-
-# Users can add environment configurations here:
-# materializeEnvironments:
-#   - name: default-environment
-#     environmentdImageRef: materialize/environmentd:v0.119.2
-#     environmentdCpuAllocation: "500m"
-#     environmentdMemoryAllocation: "1Gi"
-#     requestRollout: 22222222-2222-2222-2222-222222222222
-#     forceRollout: 33333333-3333-3333-3333-333333333333
-#     inPlaceRollout: false
