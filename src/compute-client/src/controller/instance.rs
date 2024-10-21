@@ -129,7 +129,7 @@ impl From<CollectionMissing> for ReadPolicyError {
 pub type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
 
 /// A client for an [`Instance`] task.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Client<T: ComputeControllerTimestamp> {
     /// A sender for commands for the instance.
     command_tx: mpsc::UnboundedSender<Command<T>>,
@@ -158,8 +158,6 @@ where
         dyncfg: Arc<ConfigSet>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-        read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
@@ -177,8 +175,6 @@ where
                 command_rx,
                 response_tx,
                 introspection_tx,
-                read_holds_tx,
-                read_holds_rx,
             )
             .run(),
         );
@@ -729,6 +725,17 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .expect("Cannot error if target_replica_ids is None")
     }
 
+    /// Report an external read hold change.
+    ///
+    /// Changes to externally held read holds are sequenced through `command_rx`, to ensure that,
+    /// e.g., we don't receive changes for a collection before we have seen its creation command.
+    #[mz_ore::instrument(level = "debug")]
+    pub fn report_read_hold_change(&self, id: GlobalId, changes: ChangeBatch<T>) {
+        self.read_holds_tx
+            .send((id, changes))
+            .expect("rx is held by `self`");
+    }
+
     /// Clean up collection state that is not needed anymore.
     ///
     /// Three conditions need to be true before we can remove state for a collection:
@@ -872,9 +879,9 @@ where
         command_rx: mpsc::UnboundedReceiver<Command<T>>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-        read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
     ) -> Self {
+        let (read_holds_tx, read_holds_rx) = mpsc::unbounded_channel();
+
         let mut collections = BTreeMap::new();
         let mut log_sources = BTreeMap::new();
         for (log, id, shared) in arranged_logs {
@@ -2182,7 +2189,8 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         // Initialize collection read holds.
         // Note that the implied read hold was already added to the `read_capabilities` when
         // `shared` was created, so we only need to add the warmup read hold here.
-        let implied_read_hold = ReadHold::with_channel(collection_id, since.clone(), read_holds_tx.clone());
+        let implied_read_hold =
+            ReadHold::with_channel(collection_id, since.clone(), read_holds_tx.clone());
         let warmup_read_hold = ReadHold::with_channel(collection_id, since.clone(), read_holds_tx);
 
         let updates = warmup_read_hold.since().iter().map(|t| (t.clone(), 1));
