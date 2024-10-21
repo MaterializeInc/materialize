@@ -20,6 +20,7 @@ mz-ore = { path = "../ore", features = ["chrono", "async", "tracing_"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-client = { path = "../postgres-client" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
+postgres-protocol = { version = "0.6.5" }
 rand = "0.8.5"
 serde = "1.0.152"
 tokio = { version = "1.38.0", features = ["rt", "time"] }

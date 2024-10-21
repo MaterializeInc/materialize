@@ -117,7 +117,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     mz_ore::task::spawn(
         || "materialize controller",
-        k8s_controller::Controller::cluster(
+        k8s_controller::Controller::namespaced_all(
             client.clone(),
             mz_orchestratord::controller::materialize::Context::new(
                 args.materialize_controller_args,
