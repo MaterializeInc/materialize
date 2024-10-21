@@ -12,208 +12,6 @@ mode cockroach
 # Start from a pristine server
 reset-server
 
-# ---- materialized.tsx
-
-# Note(parkmycar): Here we wrap u.memory_percent in floor(...) and coalesce(...) to make the result
-# comparison deterministic.
-
-# useClusterReplicasWithUtilization(...)
-query TTTTI
-SELECT r.id, r.name as replica_name, r.cluster_id, r.size, coalesce(floor(u.memory_percent), 0)
-FROM mz_cluster_replicas r
-JOIN mz_internal.mz_cluster_replica_utilization u ON u.replica_id = r.id
-WHERE r.cluster_id = 'u1'
-ORDER BY r.id;
-----
-u1  r1  u1  2  0
-
-# useSinkErrors(...)
-query ITI
-SELECT MAX(extract(epoch from h.occurred_at) * 1000) as last_occurred, h.error, COUNT(h.occurred_at)
-FROM mz_internal.mz_sink_status_history h
-WHERE sink_id = 'u1'
-AND error IS NOT NULL
-AND h.occurred_at BETWEEN '2022-01-01T00:00:00.000Z' AND '2022-12-31T11:59:59.999Z'
-GROUP BY h.error
-ORDER BY last_occurred DESC
-LIMIT 10;
-----
-
-
-# useBucketedSinkErrors(...)
-query IT
-SELECT COUNT(error) count, EXTRACT(epoch FROM date_bin(interval '15 seconds', occurred_at, '2022-01-01T00:00:00.000Z')) * 1000 as bin_start
-FROM mz_internal.mz_sink_status_history
-WHERE sink_id = 'u1'
-AND occurred_at BETWEEN '2022-01-01T00:00:00.000Z' AND '2022-12-31T11:59:59.999Z'
-GROUP BY bin_start
-ORDER BY bin_start DESC;
-----
-
-# useSinks(...)
-query TTTTTTTT
-SELECT s.id, d.name as database_name, sc.name as schema_name, s.name, s.type, s.size, st.status, st.error
-FROM mz_sinks s
-INNER JOIN mz_schemas sc ON sc.id = s.schema_id
-INNER JOIN mz_databases d ON d.id = sc.database_id
-LEFT OUTER JOIN mz_internal.mz_sink_statuses st
-ON st.id = s.id
-WHERE s.id LIKE 'u%'
-AND CAST(d.id as text) = 'does_not_exist'
-AND CAST(sc.id as text) = 'does_not_exist';
-----
-
-# useMaterializedViews(...)
-query TTT
-SELECT id, name, definition
-FROM mz_materialized_views
-WHERE cluster_id = 'does_not_exist';
-----
-
-# useSecrets(...)
-query TTTTT
-SELECT s.id,  s.name,  events.occurred_at as created_at, d.name as database_name, sc.name as schema_name
-FROM mz_secrets s
-INNER JOIN mz_audit_events events ON events.details->>'id' = s.id AND event_type='create' AND object_type='secret'
-INNER JOIN mz_schemas sc ON sc.id = s.schema_id
-INNER JOIN mz_databases d ON d.id = sc.database_id AND CAST(d.id as text) = 'u2' AND CAST(sc.id as text) = 'u3'
-ORDER BY created_at DESC;
-----
-
-
-# ---- useAvailableClusterSizes.ts
-
-query T
-SHOW allowed_cluster_replica_sizes;
-----
-(empty)
-
-
-# ---- useBucketedSourceErrors.ts
-
-query IT
-SELECT COUNT(error) count, EXTRACT(epoch FROM date_bin(interval '15 seconds', occurred_at, '2023-06-01T00:00:00.000Z')) * 1000 as bin_start
-FROM mz_internal.mz_source_status_history
-JOIN mz_internal.mz_object_dependencies d ON source_id = d.referenced_object_id
-WHERE (d.object_id = 'u1' OR source_id = 'u1')
-AND occurred_at BETWEEN '2022-01-01T00:00:00.000Z' AND '2022-12-31T11:59:59.999Z'
-GROUP BY bin_start
-ORDER BY bin_start DESC
-----
-
-
-# ---- useClusters.ts
-
-query TTTTT
-SELECT c.id, c.name as cluster_name, r.id as replica_id, r.name as replica_name, r.size
-FROM mz_clusters c
-LEFT OUTER JOIN mz_cluster_replicas r ON c.id = r.cluster_id
-ORDER BY r.id
-----
-s1  mz_system  s1  r1  2
-s2  mz_catalog_server  s2  r1  2
-s3  mz_probe  s3  r1  2
-u1  quickstart  u1  r1  2
-s4  mz_support  NULL  NULL  NULL
-s5  mz_analytics  NULL  NULL  NULL
-
-
-# ---- useClusterUtilization.ts
-
-query TTT
-SELECT r.id, u.cpu_percent, u.memory_percent
-FROM mz_cluster_replicas r
-JOIN mz_internal.mz_cluster_replica_utilization u ON u.replica_id = r.id
-WHERE r.cluster_id = 'does_not_exist'
-AND r.id = 'does_not_exist'
-----
-
-
-# ---- useConnections.ts
-
-query TTTTTII
-SELECT connections.id, connections.name, schemas.name as schema_name, databases.name as database_name, connections.type, COUNT(sinks.id) AS num_sinks,  COUNT(sources.id) AS num_sources
-FROM mz_connections AS connections
-INNER JOIN mz_schemas schemas ON schemas.id = connections.schema_id
-INNER JOIN mz_databases databases ON databases.id = schemas.database_id
-LEFT JOIN mz_sinks AS sinks ON connections.id = sinks.connection_id
-LEFT JOIN mz_sources AS sources ON connections.id = sources.connection_id
-WHERE COALESCE(sources.type, '') <> 'subsource' AND CAST(databases.id as text) = 'u2' AND CAST(schemas.id as text) = 'u3'
-GROUP BY connections.id, connections.name, connections.type, schema_name, database_name
-----
-
-
-# ---- useDatabases.ts
-
-query TT
-SELECT id, name
-FROM mz_databases
-WHERE id = 'u1'
-ORDER BY name
-----
-u1 materialize
-
-
-# ---- useMaxReplicasPerCluster.ts
-
-query I
-SHOW max_replicas_per_cluster;
-----
-0
-
-
-# ---- useSchemas.tsx
-
-query TTTT
-SELECT s.id, s.name, d.id as database_id, d.name as database_name
-FROM mz_schemas s
-JOIN mz_databases d
-ON s.database_id = d.id
-WHERE CAST(database_id as text) = 'u1'
-ORDER BY s.name;
-----
-u3 public u1 materialize
-
-
-# ---- useSourceErrors.tsx
-
-query ITI
-SELECT MAX(extract(epoch from h.occurred_at) * 1000) as last_occurred, h.error, COUNT(h.occurred_at)
-FROM mz_internal.mz_source_status_history h
-JOIN mz_internal.mz_object_dependencies d ON h.source_id = d.referenced_object_id
-WHERE (d.object_id = 'does_not_exist' OR source_id = 'does_not_exist')
-AND error IS NOT NULL
-AND h.occurred_at BETWEEN '2022-01-01T00:00:00.000Z' AND '2022-12-31T11:59:59.999Z'
-GROUP BY h.error
-ORDER BY last_occurred DESC
-----
-
-
-# ---- useSources.ts
-
-query TTTTTTTT
-SELECT s.id, d.name as database_name, sc.name as schema_name, s.name, s.type, s.size, st.status, st.error
-FROM mz_sources s
-INNER JOIN mz_schemas sc ON sc.id = s.schema_id
-INNER JOIN mz_databases d ON d.id = sc.database_id
-LEFT OUTER JOIN mz_internal.mz_source_statuses st ON st.id = s.id
-WHERE s.id LIKE 'u%'
-AND s.type <> 'subsource'
-AND d.id = 'does_not_exist'
-AND sc.id = 'does_not_exist';
-----
-
-
-# ---- useSubsources.tsx
-
-query TT
-SELECT id, name
-FROM mz_sources s
-JOIN mz_internal.mz_object_dependencies d ON s.id = d.referenced_object_id
-WHERE d.object_id = 'does_not_exist';
-----
-
-
 # ---- NewClusterForm.tsx
 
 statement ok
@@ -226,29 +24,6 @@ u2
 
 statement ok
 DROP CLUSTER foo CASCADE;
-
-
-# ---- Schema.tsx
-
-query TT
-SHOW VIEWS;
-----
-
-query TT
-SHOW SOURCES;
-----
-
-
-query TT
-SHOW TABLES;
-----
-
-
-# ---- SecretsList.tsx
-
-statement ok
-CREATE SECRET my_secret AS 'abcd123';
-
 
 # ---- useDataflowStructure.ts
 
@@ -307,3 +82,43 @@ Used Indexes:
 Target cluster: mz_catalog_server
 
 EOF
+
+# ---- mz_object_history
+
+# Reset server to clear mz_object_history
+reset-server
+
+# Mock audit log timestamps to make test deterministic
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_mock_audit_event_timestamp = 666
+----
+COMPLETE 0
+
+statement ok
+CREATE MATERIALIZED VIEW temp_view AS SELECT 1;
+
+
+statement ok
+DROP MATERIALIZED VIEW temp_view;
+
+query TTTTT
+SELECT id, cluster_id, object_type, created_at, dropped_at FROM mz_internal.mz_object_history WHERE id LIKE 'u%';
+----
+u1  u1  materialized-view  1970-01-01␠00:00:00.666+00  1970-01-01␠00:00:00.666+00
+
+# ---- mz_cluster_replica_name_history
+
+statement ok
+CREATE CLUSTER foo REPLICAS ( weewoo1 (SIZE = '1') );
+
+statement ok
+ALTER CLUSTER REPLICA foo.weewoo1 RENAME TO weewoo2;
+
+query TTT
+SELECT id, previous_name, new_name FROM mz_internal.mz_cluster_replica_name_history WHERE new_name = 'weewoo1' OR new_name = 'weewoo2';
+----
+u2  NULL  weewoo1
+u2  weewoo1  weewoo2
+
+statement ok
+DROP CLUSTER foo;
