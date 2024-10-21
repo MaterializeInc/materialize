@@ -119,7 +119,7 @@ impl TimestampProvider for Frontiers {
 
         let mock_read_hold = |id, frontier| {
             let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-            ReadHold::new(id, frontier, tx)
+            ReadHold::with_channel(id, frontier, tx)
         };
 
         for (instance_id, ids) in id_bundle.compute_ids.iter() {
