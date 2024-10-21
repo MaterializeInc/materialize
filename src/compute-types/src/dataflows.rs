@@ -123,6 +123,12 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
     ) -> Antichain<mz_repr::Timestamp> {
         let dataflow_expiration_desc = &self.dataflow_expiration_desc;
 
+        tracing::debug!(
+            replica_expiration = ?replica_expiration.elements(),
+            dataflow_expiration_desc = ?dataflow_expiration_desc,
+            "computing dataflow expiration",
+        );
+
         // Disable dataflow expiration if `replica_expiration` is unset, the current dataflow has a
         // refresh schedule, has a transitive dependency with a refresh schedule, or the dataflow's
         // timeline is not `Timeline::EpochMilliSeconds`.
