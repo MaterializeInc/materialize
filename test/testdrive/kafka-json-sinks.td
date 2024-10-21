@@ -18,7 +18,7 @@ $ set-arg-default default-storage-size=1
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CLUSTER simple_view_sink_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER simple_view_sink_cluster SIZE '${arg.default-storage-size}';
 
 ! CREATE SINK simple_view_sink
   IN CLUSTER simple_view_sink_cluster
@@ -38,7 +38,7 @@ contains:JSON ARRAY format in sinks not yet supported
 $ kafka-verify-data format=json sink=materialize.public.simple_view_sink key=false
 {"before": null, "after": {"a": 1, "b": 2, "c": 3}}
 
-> CREATE CLUSTER simple_view_upsert_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER simple_view_upsert_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK simple_view_upsert
   IN CLUSTER simple_view_upsert_cluster
   FROM simple_view
@@ -52,7 +52,7 @@ $ kafka-verify-data format=json sink=materialize.public.simple_view_upsert key=t
 
 > CREATE MATERIALIZED VIEW complex_view AS SELECT LIST[1,3] AS a, 2 AS b, 3 AS c;
 
-> CREATE CLUSTER mixed_types_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER mixed_types_cluster SIZE '${arg.default-storage-size}';
 # this should error since binary encoding can't support complex types like lists
 ! CREATE SINK mixed_types
   IN CLUSTER mixed_types_cluster
@@ -105,7 +105,7 @@ $ kafka-verify-data key-format=text value-format=json sink=materialize.public.mi
   'текст'::bytea c13,
   '{"a": 2}'::jsonb c14
 
-> CREATE CLUSTER types_sink_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER types_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK types_sink
   IN CLUSTER types_sink_cluster
   FROM types_view
@@ -122,7 +122,7 @@ $ kafka-verify-data format=json sink=materialize.public.types_sink key=false
 > CREATE MATERIALIZED VIEW special_characters_view AS
   SELECT 'текст' c1, '"' c2, '''' c3, '\' c4, E'a\n\tb' c5
 
-> CREATE CLUSTER special_characters_sink_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER special_characters_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK special_characters_sink
   IN CLUSTER special_characters_sink_cluster
   FROM special_characters_view
@@ -137,7 +137,7 @@ $ kafka-verify-data format=json sink=materialize.public.special_characters_sink 
 
 > CREATE MATERIALIZED VIEW record_view AS SELECT simple_view FROM simple_view;
 
-> CREATE CLUSTER record_sink_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER record_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK record_sink
   IN CLUSTER record_sink_cluster
   FROM record_view
@@ -179,7 +179,7 @@ SELECT id FROM mz_objects WHERE name = '_text';
     ARRAY[]::[${int4_id} AS "pg_catalog"."_int4"] c4,
     ARRAY[ARRAY[ARRAY['a'], ARRAY['b']], ARRAY[ARRAY['c'], ARRAY['d']]]::[${text_id} AS "pg_catalog"."_text"] c5;
 
-> CREATE CLUSTER complex_type_sink_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER complex_type_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK complex_type_sink
   IN CLUSTER complex_type_sink_cluster
   FROM complex_type_view

@@ -20,7 +20,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 > INSERT INTO t VALUES ('key1', 'value')
 
 # Setup various sinks and sources
-> CREATE CLUSTER sink_size_cluster SIZE '2', REPLICATION FACTOR = 2;
+> CREATE CLUSTER sink_size_cluster SIZE '2';
 > CREATE SINK sink_size
   IN CLUSTER sink_size_cluster
   FROM simple_view
@@ -41,7 +41,7 @@ $ kafka-create-topic topic=upsert partitions=1
 $ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
 one:two
 
-> CREATE CLUSTER upsert_size_cluster SIZE '2', REPLICATION FACTOR = 2;
+> CREATE CLUSTER upsert_size_cluster SIZE '2';
 > CREATE SOURCE upsert_size
   IN CLUSTER upsert_size_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -62,7 +62,7 @@ one:two
 
 > CREATE SCHEMA subsources_size;
 > CREATE SCHEMA subsources_cluster;
-> CREATE CLUSTER subsource_size_s_cluster SIZE '2', REPLICATION FACTOR = 2;
+> CREATE CLUSTER subsource_size_s_cluster SIZE '2';
 > CREATE SOURCE subsources_size.s IN CLUSTER subsource_size_s_cluster FROM LOAD GENERATOR AUCTION (UP TO 100);
 > CREATE SOURCE subsources_cluster.s IN CLUSTER cluster1 FROM LOAD GENERATOR AUCTION (UP TO 100);
 

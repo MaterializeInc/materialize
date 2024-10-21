@@ -26,14 +26,14 @@ goofus,gallant
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CLUSTER src_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER src_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE src (a, b)
   IN CLUSTER src_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
 
-> CREATE CLUSTER src_materialized_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER src_materialized_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE src_materialized (a, b)
   IN CLUSTER src_materialized_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-test-${testdrive.seed}')
@@ -120,7 +120,7 @@ name               type   cluster   comment
 # N.B. it is important to test sinks that depend on sources directly vs. sinks
 # that depend on views, as the code paths are different.
 
-> CREATE CLUSTER snk1_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER snk1_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk1
   IN CLUSTER snk1_cluster
   FROM src
@@ -128,7 +128,7 @@ name               type   cluster   comment
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER snk2_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER snk2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk2
   IN CLUSTER snk2_cluster
   FROM src_materialized
@@ -136,7 +136,7 @@ name               type   cluster   comment
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE CLUSTER snk3_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER snk3_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk3
   IN CLUSTER snk3_cluster
   FROM v3
@@ -166,7 +166,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk3 sort-messages=true
 # Test Avro serialization of unsigned values.
 > CREATE MATERIALIZED VIEW unsigned (a, b, c, d, e, f) AS
   VALUES ('1'::uint2, '2'::uint2, '3'::uint4, '4'::uint4, '5'::uint8, '6'::uint8)
-> CREATE CLUSTER snk_unsigned_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER snk_unsigned_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk_unsigned
   IN CLUSTER snk_unsigned_cluster
   FROM unsigned
@@ -181,7 +181,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk_unsigned sort-messag
 > CREATE MATERIALIZED VIEW v4 AS
   SELECT true AS c FROM src
 
-> CREATE CLUSTER snk4_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER snk4_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk4
   IN CLUSTER snk4_cluster
   FROM v4
@@ -200,7 +200,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk4
 # timestamp.  Without that, WITH (SNAPSHOT = false) could correct either include or
 # exclude the old rows.
 
-> CREATE CLUSTER snk5_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER snk5_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk5
   IN CLUSTER snk5_cluster
   FROM src_materialized
@@ -209,7 +209,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk4
   ENVELOPE DEBEZIUM
   WITH (SNAPSHOT = false)
 
-> CREATE CLUSTER snk6_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER snk6_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk6
   IN CLUSTER snk6_cluster
   FROM src_materialized
@@ -233,7 +233,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk6 sort-messages=true
 # frontier
 > CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);
 
-> CREATE CLUSTER snk7_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER snk7_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk7
   IN CLUSTER snk7_cluster
   FROM foo
@@ -242,7 +242,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk6 sort-messages=true
   ENVELOPE DEBEZIUM
   WITH (SNAPSHOT = false)
 
-> CREATE CLUSTER snk8_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER snk8_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk8
   IN CLUSTER snk8_cluster
   FROM foo
@@ -259,7 +259,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk8 sort-messages=true
 # test already existing topic with non-default partition count
 $ kafka-create-topic topic=snk9 partitions=4
 
-> CREATE CLUSTER snk9_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER snk9_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK snk9
   IN CLUSTER snk9_cluster
   FROM foo
@@ -287,7 +287,7 @@ $ kafka-create-topic topic=snk9 partitions=4
 contains:Expected one of PARTITION or SNAPSHOT or VERSION, found SIZE
 
 # create sink with SNAPSHOT set
-> CREATE CLUSTER sink_with_options_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
+> CREATE CLUSTER sink_with_options_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK sink_with_options
   IN CLUSTER sink_with_options_cluster
   FROM src
