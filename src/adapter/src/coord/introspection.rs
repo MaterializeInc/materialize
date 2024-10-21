@@ -128,7 +128,7 @@ impl Coordinator {
         replica_id: ReplicaId,
         spec: &'static SubscribeSpec,
     ) {
-        let id = self.allocate_transient_id();
+        let (_, id) = self.allocate_transient_id();
         info!(
             %id,
             %replica_id,
@@ -199,7 +199,7 @@ impl Coordinator {
         } = stage;
 
         let compute_instance = self.instance_snapshot(cluster_id).expect("must exist");
-        let view_id = self.allocate_transient_id();
+        let (_, view_id) = self.allocate_transient_id();
 
         let vars = self.catalog().system_config();
         let overrides = self.catalog.get_cluster(cluster_id).config.features();
@@ -391,7 +391,7 @@ impl Coordinator {
             ..
         } = subscribe;
         let old_id = id;
-        let new_id = self.allocate_transient_id();
+        let (_, new_id) = self.allocate_transient_id();
 
         info!(
             %old_id, %new_id, %replica_id,

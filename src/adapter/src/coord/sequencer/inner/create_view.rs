@@ -284,8 +284,7 @@ impl Coordinator {
             explain_ctx,
         }: CreateViewOptimize,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
-        let item_id = self.catalog_mut().allocate_user_id().await?;
-        let global_id = self.catalog_mut().allocate_user_global_id().await?;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())

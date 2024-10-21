@@ -275,7 +275,7 @@ impl Coordinator {
             .filter_map(
                 |plan::CreateSourcePlanBundle {
                      item_id,
-                     collection_id: _,
+                     global_id: _,
                      plan,
                      resolved_ids: _,
                      available_source_references: _,
@@ -291,7 +291,7 @@ impl Coordinator {
 
         for plan::CreateSourcePlanBundle {
             item_id,
-            collection_id,
+            global_id,
             mut plan,
             resolved_ids,
             available_source_references,
@@ -342,7 +342,7 @@ impl Coordinator {
                 });
             }
 
-            let source = Source::new(plan, collection_id, resolved_ids, None, false);
+            let source = Source::new(plan, global_id, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: item_id,
                 name,
@@ -374,8 +374,7 @@ impl Coordinator {
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
         let catalog = self.catalog().for_session(session);
         let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
-        let item_id = self.catalog_mut().allocate_user_id().await?;
-        let collection_id = self.catalog_mut().allocate_user_global_id().await?;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
 
         let plan = self.plan_statement(
             session,
@@ -389,7 +388,7 @@ impl Coordinator {
         };
         Ok(CreateSourcePlanBundle {
             item_id,
-            collection_id,
+            global_id,
             plan,
             resolved_ids,
             available_source_references: None,
@@ -499,8 +498,7 @@ impl Coordinator {
             p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
         };
 
-        let item_id = self.catalog_mut().allocate_user_id().await?;
-        let collection_id = self.catalog_mut().allocate_user_global_id().await?;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
 
         let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
         let of_source = ResolvedItemName::Item {
@@ -520,7 +518,7 @@ impl Coordinator {
 
         create_source_plans.push(CreateSourcePlanBundle {
             item_id,
-            collection_id,
+            global_id,
             plan: source_plan,
             resolved_ids: resolved_ids.clone(),
             available_source_references: Some(available_source_references),
@@ -700,7 +698,7 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
-        let connection_gid = match self.catalog_mut().allocate_user_id().await {
+        let (connection_id, connection_gid) = match self.catalog_mut().allocate_user_id().await {
             Ok(item_id) => item_id,
             Err(err) => return ctx.retire(Err(err.into())),
         };
@@ -727,11 +725,7 @@ impl Coordinator {
 
                 let key_set = SshKeyPairSet::from_parts(key_1, key_2);
                 let secret = key_set.to_bytes();
-                if let Err(err) = self
-                    .secrets_controller
-                    .ensure(connection_gid, &secret)
-                    .await
-                {
+                if let Err(err) = self.secrets_controller.ensure(connection_id, &secret).await {
                     return ctx.retire(Err(err.into()));
                 }
             }
@@ -754,7 +748,7 @@ impl Coordinator {
             let current_storage_parameters = self.controller.storage.config().clone();
             task::spawn(|| format!("validate_connection:{conn_id}"), async move {
                 let result = match connection
-                    .validate(connection_gid, &current_storage_parameters)
+                    .validate(connection_id, &current_storage_parameters)
                     .await
                 {
                     Ok(()) => Ok(plan),
@@ -766,6 +760,7 @@ impl Coordinator {
                     CreateConnectionValidationReady {
                         ctx,
                         result,
+                        connection_id,
                         connection_gid,
                         plan_validity: PlanValidity::new(
                             transient_revision,
@@ -786,6 +781,7 @@ impl Coordinator {
             let result = self
                 .sequence_create_connection_stage_finish(
                     ctx.session_mut(),
+                    connection_id,
                     connection_gid,
                     plan,
                     resolved_ids,
@@ -799,17 +795,17 @@ impl Coordinator {
     pub(crate) async fn sequence_create_connection_stage_finish(
         &mut self,
         session: &mut Session,
-        connection_gid: CatalogItemId,
+        connection_id: CatalogItemId,
+        connection_gid: GlobalId,
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let global_id = self.catalog_mut().allocate_user_global_id().await?;
         let ops = vec![catalog::Op::CreateItem {
-            id: connection_gid,
+            id: connection_id,
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
-                global_id,
+                global_id: connection_gid,
                 details: plan.connection.details.clone(),
                 resolved_ids,
             }),
@@ -833,7 +829,7 @@ impl Coordinator {
                                 }
                             };
                         if let Err(err) = cloud_resource_controller
-                            .ensure_vpc_endpoint(connection_gid, spec)
+                            .ensure_vpc_endpoint(connection_id, spec)
                             .await
                         {
                             tracing::warn!(?err, "failed to ensure vpc endpoint!");
@@ -933,12 +929,9 @@ impl Coordinator {
         } else {
             None
         };
-        let table_id = self.catalog_mut().allocate_user_id().await?;
-        let collection_id = self.catalog_mut().allocate_user_global_id().await?;
+        let (table_id, global_id) = self.catalog_mut().allocate_user_id().await?;
 
-        let collections = [(RelationVersion::root(), collection_id)]
-            .into_iter()
-            .collect();
+        let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
         let data_source = match table.data_source {
             plan::TableDataSource::TableWrites { defaults } => {
@@ -1012,7 +1005,7 @@ impl Coordinator {
                             .create_collections(
                                 storage_metadata,
                                 Some(register_ts),
-                                vec![(collection_id, collection_desc)],
+                                vec![(global_id, collection_desc)],
                             )
                             .await
                             .unwrap_or_terminate("cannot fail to create collections");
@@ -1066,7 +1059,7 @@ impl Coordinator {
                                     .create_collections(
                                         storage_metadata,
                                         None,
-                                        vec![(collection_id, collection_desc)],
+                                        vec![(global_id, collection_desc)],
                                     )
                                     .await
                                     .unwrap_or_terminate("cannot fail to create collections");
@@ -1124,8 +1117,7 @@ impl Coordinator {
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
-        let global_id = return_if_err!(self.catalog_mut().allocate_user_global_id().await, ctx);
+        let (item_id, global_id) = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
 
         if let Some(cluster) = self.catalog().try_get_cluster(in_cluster) {
             mz_ore::soft_assert_or_log!(
@@ -1149,7 +1141,7 @@ impl Coordinator {
         };
 
         let ops = vec![catalog::Op::CreateItem {
-            id,
+            id: item_id,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
             owner_id: *ctx.session().current_role_id(),
@@ -1247,8 +1239,7 @@ impl Coordinator {
         plan: plan::CreateTypePlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let id = self.catalog_mut().allocate_user_id().await?;
-        let global_id = self.catalog_mut().allocate_user_global_id().await?;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
         let typ = Type {
             create_sql: Some(plan.typ.create_sql),
             global_id,
@@ -1261,7 +1252,7 @@ impl Coordinator {
             resolved_ids,
         };
         let op = catalog::Op::CreateItem {
-            id,
+            id: item_id,
             name: plan.name,
             item: CatalogItem::Type(typ),
             owner_id: *session.current_role_id(),
@@ -3417,6 +3408,7 @@ impl Coordinator {
     ) {
         let cur_entry = self.catalog().get_entry(&id);
         let cur_conn = cur_entry.connection().expect("known to be connection");
+        let connection_gid = cur_conn.global_id();
 
         let inner = || -> Result<Connection, AdapterError> {
             // Parse statement.
@@ -3526,7 +3518,8 @@ impl Coordinator {
                         AlterConnectionValidationReady {
                             ctx,
                             result,
-                            connection_gid: id,
+                            connection_id: id,
+                            connection_gid,
                             plan_validity: PlanValidity::new(
                                 transient_revision,
                                 dependency_ids.clone(),

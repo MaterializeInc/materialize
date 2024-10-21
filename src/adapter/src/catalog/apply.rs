@@ -1150,10 +1150,7 @@ impl CatalogState {
                 // items collection and so get handled through the normal
                 // `StateUpdateKind::Item`.`
                 if !system_object_mapping.unique_identifier.runtime_alterable() {
-                    self.pack_item_update(
-                        system_object_mapping.unique_identifier.catalog_id,
-                        diff,
-                    )
+                    self.pack_item_update(system_object_mapping.unique_identifier.catalog_id, diff)
                 } else {
                     vec![]
                 }
@@ -1508,6 +1505,9 @@ impl CatalogState {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
                 dep_metadata.used_by.retain(|u| *u != metadata.item_id())
             }
+        }
+        for gid in metadata.global_ids() {
+            self.entry_by_global_id.remove(&gid);
         }
 
         let conn_id = metadata.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);

@@ -190,8 +190,8 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
-        let view_id = self.allocate_transient_id();
-        let sink_id = self.allocate_transient_id();
+        let (_, view_id) = self.allocate_transient_id();
+        let (_, sink_id) = self.allocate_transient_id();
         let conn_id = session.conn_id().clone();
         let up_to = up_to
             .as_ref()

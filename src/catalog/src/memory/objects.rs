@@ -1377,6 +1377,13 @@ pub struct Connection {
     pub resolved_ids: ResolvedIds,
 }
 
+impl Connection {
+    /// The single [`GlobalId`] used to reference this connection.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ContinualTask {
     /// Parse-able SQL that defines this continual task.

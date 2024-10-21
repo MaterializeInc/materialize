@@ -389,7 +389,8 @@ pub struct ValidationReady<T> {
     pub ctx: ExecuteContext,
     pub result: Result<T, AdapterError>,
     pub dependency_ids: ResolvedIds,
-    pub connection_gid: CatalogItemId,
+    pub connection_id: CatalogItemId,
+    pub connection_gid: GlobalId,
     pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
 }
@@ -2736,6 +2737,7 @@ impl Coordinator {
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+                            .map(|(_item_id, gid)| gid)
                             .take(metainfo.optimizer_notices.len())
                             .collect::<Vec<_>>();
                         // Return a metainfo with rendered notices.
@@ -2757,7 +2759,7 @@ impl Coordinator {
                             self.instance_snapshot(mv.cluster_id)
                                 .expect("compute instance exists")
                         });
-                    let internal_view_id = self.allocate_transient_id();
+                    let (_, internal_view_id) = self.allocate_transient_id();
                     let debug_name = self
                         .catalog()
                         .resolve_full_name(entry.name(), None)
@@ -2798,6 +2800,7 @@ impl Coordinator {
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+                            .map(|(_item_id, global_id)| global_id)
                             .take(metainfo.optimizer_notices.len())
                             .collect::<Vec<_>>();
                         // Return a metainfo with rendered notices.

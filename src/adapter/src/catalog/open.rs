@@ -643,16 +643,8 @@ impl Catalog {
             let id = entry.item_id();
 
             let (new_item_id, new_global_id) = match id {
-                CatalogItemId::System(_) => {
-                    let item_id = txn.allocate_system_item_ids(1)?.into_element();
-                    let gid = txn.allocate_system_global_ids(1)?.into_element();
-                    (item_id, gid)
-                }
-                CatalogItemId::User(_) => {
-                    let item_id = txn.allocate_user_item_ids(1)?.into_element();
-                    let gid = txn.allocate_user_global_ids(1)?.into_element();
-                    (item_id, gid)
-                }
+                CatalogItemId::System(_) => txn.allocate_system_item_ids(1)?.into_element(),
+                CatalogItemId::User(_) => txn.allocate_user_item_ids(1)?.into_element(),
                 _ => unreachable!("can't migrate id: {id}"),
             };
 
@@ -938,11 +930,8 @@ fn add_new_remove_old_builtin_items_migration(
         .iter()
         .filter(|(desc, _)| !system_object_mappings.contains_key(desc))
         .count();
-    let mut new_item_ids = txn
+    let mut new_ids = txn
         .allocate_system_item_ids(usize_to_u64(new_builtin_amount))?
-        .into_iter();
-    let mut new_gids = txn
-        .allocate_system_global_ids(usize_to_u64(new_builtin_amount))?
         .into_iter();
 
     // Look for new and migrated builtins.
@@ -982,8 +971,7 @@ fn add_new_remove_old_builtin_items_migration(
                 }
             }
             None => {
-                let item_id = new_item_ids.next().expect("not enough global IDs");
-                let collection_id = new_gids.next().expect("not enough global IDs");
+                let (item_id, collection_id) = new_ids.next().expect("not enough global IDs");
 
                 new_builtins.push(SystemObjectMapping {
                     description: SystemObjectDescription {
@@ -1129,13 +1117,11 @@ fn add_new_remove_old_builtin_introspection_source_migration(
             }
         }
 
-        let new_item_ids = txn.allocate_system_item_ids(usize_to_u64(new_logs.len()))?;
-        let new_gids = txn.allocate_system_global_ids(usize_to_u64(new_logs.len()))?;
+        let new_ids = txn.allocate_system_item_ids(usize_to_u64(new_logs.len()))?;
         let new_entries = new_logs
             .into_iter()
-            .zip_eq(new_item_ids)
-            .zip_eq(new_gids)
-            .map(|((log, item_id), gid)| (log, item_id, gid));
+            .zip_eq(new_ids)
+            .map(|(log, (item_id, gid))| (log, item_id, gid));
 
         for (log, item_id, gid) in new_entries {
             new_indexes.push((cluster.id, log.name.to_string(), item_id, gid));
@@ -1549,28 +1535,14 @@ mod builtin_migration_tests {
         item_namespace: ItemNamespace,
     ) -> (CatalogItemId, GlobalId) {
         let (item_id, global_id) = match item_namespace {
-            ItemNamespace::User => {
-                let item_id = catalog
-                    .allocate_user_id()
-                    .await
-                    .expect("cannot fail to allocate user ids");
-                let global_id = catalog
-                    .allocate_user_global_id()
-                    .await
-                    .expect("cannot fail to allocate user ids");
-                (item_id, global_id)
-            }
-            ItemNamespace::System => {
-                let item_id = catalog
-                    .allocate_system_id()
-                    .await
-                    .expect("cannot fail to allocate system ids");
-                let global_id = catalog
-                    .allocate_user_global_id()
-                    .await
-                    .expect("cannot fail to allocate system ids");
-                (item_id, global_id)
-            }
+            ItemNamespace::User => catalog
+                .allocate_user_id()
+                .await
+                .expect("cannot fail to allocate user ids"),
+            ItemNamespace::System => catalog
+                .allocate_system_id()
+                .await
+                .expect("cannot fail to allocate system ids"),
         };
         let database_id = catalog
             .resolve_database(DEFAULT_DATABASE_NAME)

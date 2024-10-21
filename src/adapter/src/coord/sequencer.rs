@@ -140,16 +140,14 @@ impl Coordinator {
 
             match plan {
                 Plan::CreateSource(plan) => {
-                    let item_id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
-                    let collection_id =
-                        return_if_err!(self.catalog_mut().allocate_user_global_id().await, ctx);
-
+                    let (item_id, global_id) =
+                        return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
                     let result = self
                         .sequence_create_source(
                             ctx.session_mut(),
                             vec![CreateSourcePlanBundle {
                                 item_id,
-                                collection_id,
+                                global_id,
                                 plan,
                                 resolved_ids,
                                 available_source_references: None,
@@ -711,12 +709,8 @@ impl Coordinator {
         self.sequence_create_role(None, plan).await
     }
 
-    pub(crate) fn allocate_transient_id(&self) -> GlobalId {
+    pub(crate) fn allocate_transient_id(&self) -> (CatalogItemId, GlobalId) {
         self.transient_id_gen.allocate_id()
-    }
-
-    pub(crate) fn allocate_transient_item_id(&self) -> CatalogItemId {
-        self.transient_id_gen.allocate_item_id()
     }
 
     fn should_emit_rbac_notice(&self, session: &Session) -> Option<AdapterNotice> {

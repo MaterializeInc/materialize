@@ -853,16 +853,13 @@ impl Catalog {
                 let privileges: Vec<_> =
                     merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                         .collect();
-                let introspection_source_item_ids =
+                let introspection_source_ids =
                     tx.allocate_system_item_ids(usize_to_u64(introspection_sources.len()))?;
-                let introspection_source_gids =
-                    tx.allocate_system_global_ids(usize_to_u64(introspection_sources.len()))?;
 
                 let introspection_sources = introspection_sources
                     .into_iter()
-                    .zip_eq(introspection_source_item_ids.into_iter())
-                    .zip_eq(introspection_source_gids.into_iter())
-                    .map(|((log, item_id), gid)| (log, item_id, gid))
+                    .zip_eq(introspection_source_ids.into_iter())
+                    .map(|(log, (item_id, gid))| (log, item_id, gid))
                     .collect();
 
                 tx.insert_user_cluster(

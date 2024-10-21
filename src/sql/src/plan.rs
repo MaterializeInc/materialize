@@ -655,7 +655,7 @@ pub struct CreateSourcePlanBundle {
     /// ID of this source in the Catalog.
     pub item_id: CatalogItemId,
     /// ID used to reference this source from outside the catalog, e.g. compute.
-    pub collection_id: GlobalId,
+    pub global_id: GlobalId,
     /// Details of the source to create.
     pub plan: CreateSourcePlan,
     /// Other catalog objects that are referenced by this source, determined at name resolution.

@@ -295,32 +295,19 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     async fn allocate_system_ids(
         &mut self,
         amount: u64,
-    ) -> Result<Vec<CatalogItemId>, CatalogError> {
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         let id = self.allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount).await?;
-        Ok(id.into_iter().map(CatalogItemId::System).collect())
+        Ok(id
+            .into_iter()
+            .map(|id| (CatalogItemId::System(id), GlobalId::System(id)))
+            .collect())
     }
 
-    async fn allocate_system_global_ids(
-        &mut self,
-        amount: u64,
-    ) -> Result<Vec<GlobalId>, CatalogError> {
-        // TODO(alter_table): Use a different ID allocator.
-        let id = self.allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount).await?;
-        Ok(id.into_iter().map(GlobalId::System).collect())
-    }
-
-    /// Allocates and returns a user [`CatalogItemId`].
-    async fn allocate_user_id(&mut self) -> Result<CatalogItemId, CatalogError> {
+    /// Allocates and returns both a user [`CatalogItemId`] and [`GlobalId`].
+    async fn allocate_user_id(&mut self) -> Result<(CatalogItemId, GlobalId), CatalogError> {
         let id = self.allocate_id(USER_ITEM_ALLOC_KEY, 1).await?;
         let id = id.into_element();
-        Ok(CatalogItemId::User(id))
-    }
-
-    async fn allocate_user_global_id(&mut self) -> Result<GlobalId, CatalogError> {
-        // TODO(alter_table): Use a different ID allocator.
-        let id = self.allocate_id(USER_ITEM_ALLOC_KEY, 1).await?;
-        let id = id.into_element();
-        Ok(GlobalId::User(id))
+        Ok((CatalogItemId::User(id), GlobalId::User(id)))
     }
 
     /// Allocates and returns a user [`ClusterId`].

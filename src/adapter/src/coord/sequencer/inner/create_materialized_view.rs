@@ -435,16 +435,12 @@ impl Coordinator {
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
         let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
-            let item_id = self.catalog_mut().allocate_user_id().await?;
-            let global_id = self.catalog_mut().allocate_user_global_id().await?;
-            (item_id, global_id)
+            self.catalog_mut().allocate_user_id().await?
         } else {
-            let item_id = self.allocate_transient_item_id();
-            let global_id = self.allocate_transient_id();
-            (item_id, global_id)
+            self.allocate_transient_id()
         };
 
-        let view_id = self.allocate_transient_id();
+        let (_, view_id) = self.allocate_transient_id();
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
@@ -663,6 +659,7 @@ impl Coordinator {
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+            .map(|(_item_id, global_id)| global_id)
             .take(global_lir_plan.df_meta().optimizer_notices.len())
             .collect::<Vec<_>>();
 

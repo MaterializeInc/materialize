@@ -608,7 +608,7 @@ impl Catalog {
         self.storage.lock().await
     }
 
-    pub async fn allocate_user_id(&self) -> Result<CatalogItemId, Error> {
+    pub async fn allocate_user_id(&self) -> Result<(CatalogItemId, GlobalId), Error> {
         self.storage()
             .await
             .allocate_user_id()
@@ -626,17 +626,8 @@ impl Catalog {
             .err_into()
     }
 
-    pub async fn allocate_user_global_id(&self) -> Result<GlobalId, Error> {
-        self.storage()
-            .await
-            .allocate_user_global_id()
-            .await
-            .maybe_terminate("allocating user global ids")
-            .err_into()
-    }
-
     #[cfg(test)]
-    pub async fn allocate_system_id(&self) -> Result<CatalogItemId, Error> {
+    pub async fn allocate_system_id(&self) -> Result<(CatalogItemId, GlobalId), Error> {
         use mz_ore::collections::CollectionExt;
         self.storage()
             .await
@@ -3285,14 +3276,10 @@ mod tests {
             let schema_spec = schema.id().clone();
             let schema_name = &schema.name().schema;
             let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
-            let mv_id = catalog
+            let (mv_id, mv_gid) = catalog
                 .allocate_user_id()
                 .await
                 .expect("unable to allocate id");
-            let mv_gid = catalog
-                .allocate_user_global_id()
-                .await
-                .expect("unable to allocate gid");
             let mv = catalog
                 .state()
                 .deserialize_item(

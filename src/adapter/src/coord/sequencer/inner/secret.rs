@@ -117,8 +117,7 @@ impl Coordinator {
         session: &Session,
         CreateSecretEnsure { validity, mut plan }: CreateSecretEnsure,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
-        let item_id = self.catalog_mut().allocate_user_id().await?;
-        let global_id = self.catalog_mut().allocate_user_global_id().await?;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
 
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let payload = self.extract_secret(session, &mut plan.secret.secret_as)?;

@@ -639,9 +639,7 @@ impl<'a> Transaction<'a> {
             self.op_id,
         ) {
             Ok(_) => Ok(()),
-            Err(_) => {
-                Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into())
-            }
+            Err(_) => Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into()),
         }
     }
 
@@ -680,43 +678,24 @@ impl<'a> Transaction<'a> {
     pub fn allocate_system_item_ids(
         &mut self,
         amount: u64,
-    ) -> Result<Vec<CatalogItemId>, CatalogError> {
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         Ok(self
             .get_and_increment_id_by(SYSTEM_ITEM_ALLOC_KEY.to_string(), amount)?
             .into_iter()
-            .map(CatalogItemId::System)
-            .collect())
-    }
-
-    pub fn allocate_system_global_ids(
-        &mut self,
-        amount: u64,
-    ) -> Result<Vec<GlobalId>, CatalogError> {
-        // TODO(alter_table): Use a new GlobalId allocator.
-        Ok(self
-            .get_and_increment_id_by(SYSTEM_ITEM_ALLOC_KEY.to_string(), amount)?
-            .into_iter()
-            .map(GlobalId::System)
+            // TODO(alter_table): Use separate ID allocators.
+            .map(|x| (CatalogItemId::System(x), GlobalId::System(x)))
             .collect())
     }
 
     pub fn allocate_user_item_ids(
         &mut self,
         amount: u64,
-    ) -> Result<Vec<CatalogItemId>, CatalogError> {
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         Ok(self
             .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), amount)?
             .into_iter()
-            .map(CatalogItemId::User)
-            .collect())
-    }
-
-    pub fn allocate_user_global_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
-        // TODO(alter_table): Use a new GlobalId allocator.
-        Ok(self
-            .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), amount)?
-            .into_iter()
-            .map(GlobalId::User)
+            // TODO(alter_table): Use separate ID allocators.
+            .map(|x| (CatalogItemId::User(x), GlobalId::User(x)))
             .collect())
     }
 
