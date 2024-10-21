@@ -33,7 +33,7 @@ use std::collections::BTreeMap;
 use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
 use mz_repr::Datum;
 
-use crate::analysis::equivalences::{EquivalenceClasses, Equivalences};
+use crate::analysis::equivalences::{EquivalenceClasses, Equivalences, ExpressionReducer};
 use crate::analysis::{Arity, DerivedView, RelationType};
 
 use crate::{TransformCtx, TransformError};
@@ -118,9 +118,10 @@ impl EquivalencePropagation {
 
         // Optimize `outer_equivalences` in the context of `expr_type`.
         // If it ends up unsatisfiable, we can replace `expr` with an empty constant of the same relation type.
+        let reducer = expr_equivalences.reducer();
         for class in outer_equivalences.classes.iter_mut() {
             for expr in class.iter_mut() {
-                expr_equivalences.reduce_expr(expr);
+                reducer.reduce_expr(expr);
             }
         }
 
@@ -208,8 +209,9 @@ impl EquivalencePropagation {
                     .expect("Equivalences required");
 
                 if let Some(input_equivalences) = input_equivalences {
+                    let reducer = input_equivalences.reducer();
                     for expr in scalars.iter_mut() {
-                        input_equivalences.reduce_expr(expr);
+                        reducer.reduce_expr(expr);
                     }
                     let input_arity = *derived
                         .last_child()
@@ -232,8 +234,9 @@ impl EquivalencePropagation {
                     .expect("Equivalences required");
 
                 if let Some(input_equivalences) = input_equivalences {
+                    let reducer = input_equivalences.reducer();
                     for expr in exprs.iter_mut() {
-                        input_equivalences.reduce_expr(expr);
+                        reducer.reduce_expr(expr);
                     }
                     let input_arity = *derived
                         .last_child()
@@ -261,8 +264,9 @@ impl EquivalencePropagation {
                         .last_child()
                         .value::<RelationType>()
                         .expect("RelationType required");
+                    let reducer = input_equivalences.reducer();
                     for expr in predicates.iter_mut() {
-                        input_equivalences.reduce_expr(expr);
+                        reducer.reduce_expr(expr);
                     }
                     // Incorporate `predicates` into `outer_equivalences`.
                     let mut class = predicates.clone();
@@ -349,12 +353,13 @@ impl EquivalencePropagation {
 
                 // Reduce join equivalences by the input equivalences.
                 for input_equivs in input_equivalences.iter() {
+                    let reducer = input_equivs.reducer();
                     for class in join_equivalences.classes.iter_mut() {
                         for expr in class.iter_mut() {
                             // Semijoin elimination currently fails if you do more advanced simplification than
                             // literal substitution.
                             let old = expr.clone();
-                            input_equivs.reduce_expr(expr);
+                            reducer.reduce_expr(expr);
                             expr.reduce(input_types.as_ref().unwrap());
                             if !expr.is_literal() {
                                 expr.clone_from(&old);
@@ -411,18 +416,19 @@ impl EquivalencePropagation {
                         .last_child()
                         .value::<RelationType>()
                         .expect("RelationType required");
+                    let reducer = input_equivalences.reducer();
                     for key in group_key.iter_mut() {
                         // Semijoin elimination currently fails if you do more advanced simplification than
                         // literal substitution.
                         let old_key = key.clone();
-                        input_equivalences.reduce_expr(key);
+                        reducer.reduce_expr(key);
                         key.reduce(input_type.as_ref().unwrap());
                         if !key.is_literal() {
                             key.clone_from(&old_key);
                         }
                     }
                     for aggr in aggregates.iter_mut() {
-                        input_equivalences.reduce_expr(&mut aggr.expr);
+                        reducer.reduce_expr(&mut aggr.expr);
                     }
                 }
 

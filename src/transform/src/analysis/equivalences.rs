@@ -683,7 +683,7 @@ impl EquivalenceClasses {
     }
 
     /// Perform any simplification, report if effective.
-    pub fn reduce_expr(&self, expr: &mut MirScalarExpr) -> bool {
+    fn reduce_expr(&self, expr: &mut MirScalarExpr) -> bool {
         let mut simplified = false;
         simplified = simplified || self.reduce_child(expr);
         simplified = simplified || self.replace(expr);
@@ -691,7 +691,7 @@ impl EquivalenceClasses {
     }
 
     /// Perform any simplification on children, report if effective.
-    pub fn reduce_child(&self, expr: &mut MirScalarExpr) -> bool {
+    fn reduce_child(&self, expr: &mut MirScalarExpr) -> bool {
         let mut simplified = false;
         match expr {
             MirScalarExpr::CallBinary { expr1, expr2, .. } => {
@@ -735,22 +735,26 @@ impl EquivalenceClasses {
     }
 
     /// Returns a map that can be used to replace (sub-)expressions.
-    pub fn reducer(&self) -> BTreeMap<&MirScalarExpr, &MirScalarExpr> {
-        self.classes
-            .iter()
-            .flat_map(|c| c.iter().map(|e| (e, &c[0])))
-            .collect()
+    pub fn reducer(&self) -> &BTreeMap<MirScalarExpr, MirScalarExpr> {
+        &self.remap
     }
 }
 
-trait ExpressionReducer {
+/// A type capable of simplifying `MirScalarExpr`s.
+pub trait ExpressionReducer {
+    /// Attempt to replace `expr` itself with another expression.
+    /// Returns true if it does so.
     fn replace(&self, expr: &mut MirScalarExpr) -> bool;
+    /// Attempt to replace any subexpressions of `expr` with other expressions.
+    /// Returns true if it does so.
     fn reduce_expr(&self, expr: &mut MirScalarExpr) -> bool {
         let mut simplified = false;
         simplified = simplified || self.reduce_child(expr);
         simplified = simplified || self.replace(expr);
         simplified
     }
+    /// Attempt to replace any subexpressions of `expr`'s children with other expressions.
+    /// Returns true if it does so.
     fn reduce_child(&self, expr: &mut MirScalarExpr) -> bool {
         let mut simplified = false;
         match expr {
