@@ -21,7 +21,7 @@ from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    Cockroach(),
     Minio(setup_materialize=True),
     Mc(),
     Materialized(external_minio=True, external_cockroach=True, sanity_restart=False),

@@ -33,6 +33,7 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 
@@ -115,6 +116,7 @@ SERVICES = [
             "secrets:/secrets",
         ],
     ),
+    CockroachOrPostgres(),
     Materialized(
         options=[
             # Enable TLS on the public port to verify that balancerd is connecting to the balancerd

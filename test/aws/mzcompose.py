@@ -24,10 +24,12 @@ from psycopg.errors import SystemError
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 
 AWS_EXTERNAL_ID_PREFIX = "eb5cb59b-e2fe-41f3-87ca-d2176a495345"
 
 SERVICES = [
+    CockroachOrPostgres(),
     Materialized(),
 ]
 

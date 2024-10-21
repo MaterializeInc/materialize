@@ -153,7 +153,9 @@ class Composition:
             for python_service in getattr(module, "SERVICES", []):
                 name = python_service.name
                 if name in self.compose["services"]:
-                    raise UIError(f"service {name!r} specified more than once")
+                    raise UIError(
+                        f"{mzcompose_py}: service {name!r} specified more than once"
+                    )
                 self.compose["services"][name] = python_service.config
 
         # Add default volumes

@@ -35,6 +35,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
+    CockroachOrPostgres(),
     Materialized(),
     Testdrive(
         entrypoint_extra=[
@@ -42,7 +43,6 @@ SERVICES = [
         ],
     ),
     testdrive_no_reset,
-    CockroachOrPostgres(),
 ]
 
 

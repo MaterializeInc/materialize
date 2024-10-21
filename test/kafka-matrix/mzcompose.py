@@ -18,6 +18,7 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.redpanda import REDPANDA_VERSION, Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -46,6 +47,7 @@ CONFLUENT_PLATFORM_VERSIONS = [
 ]
 
 SERVICES = [
+    CockroachOrPostgres(),
     Materialized(),
     # Occasional timeouts in CI with 60s timeout
     Testdrive(

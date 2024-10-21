@@ -18,10 +18,12 @@ from typing import Dict, List, Optional
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.dbt import Dbt
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
+    CockroachOrPostgres(),
     Materialized(),
     Redpanda(),
     Dbt(),

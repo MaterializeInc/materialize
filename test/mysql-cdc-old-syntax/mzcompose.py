@@ -23,6 +23,7 @@ from materialize.mysql_util import (
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 
@@ -45,6 +46,7 @@ def create_mysql_replica(mysql_version: str) -> MySql:
 
 
 SERVICES = [
+    CockroachOrPostgres(),
     Materialized(
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::mysql=trace,info"
