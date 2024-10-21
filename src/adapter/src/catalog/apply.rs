@@ -1450,12 +1450,8 @@ impl CatalogState {
             CatalogItem::Func(_) => schema
                 .functions
                 .insert(entry.name().item.clone(), entry.id()),
-            CatalogItem::Type(_) => schema
-                .types
-                .insert(entry.name().item.clone(), entry.id()),
-            _ => schema
-                .items
-                .insert(entry.name().item.clone(), entry.id()),
+            CatalogItem::Type(_) => schema.types.insert(entry.name().item.clone(), entry.id()),
+            _ => schema.items.insert(entry.name().item.clone(), entry.id()),
         };
 
         assert!(
@@ -1496,9 +1492,7 @@ impl CatalogState {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
         for u in metadata.references().items() {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
-                dep_metadata
-                    .referenced_by
-                    .retain(|u| *u != metadata.id())
+                dep_metadata.referenced_by.retain(|u| *u != metadata.id())
             }
         }
         for u in metadata.uses() {

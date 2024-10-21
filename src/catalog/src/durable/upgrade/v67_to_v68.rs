@@ -28,14 +28,14 @@ wire_compatible!(v67::GidMappingKey with v68::GidMappingKey);
 wire_compatible!(v67::ClusterIntrospectionSourceIndexKey with v68::ClusterIntrospectionSourceIndexKey);
 
 /// In v68 we switched catalog items to be keyed on a `CatalogItemId`, this required a few changes:
-/// 
+///
 /// * `ItemKey` switched from containing a single `GlobalId` to a `CatalogItemId`.
 /// * `ItemValue` added `global_id: GlobalId` and `extra_versions: BTreeMap<Version, GlobalId>` fields.
 /// * `CommentKey` switched from using `GlobalId` to `CatalogItemId`.
 /// * `SourceReferencesKey` switched from `GlobalId` to `CatalogItemId`
 /// * `GidMappingValue` switched from using raw `uint64` for an id to newtype
 ///   `SystemCatalogItemId` and `SystemGlobalId` wrappers.
-/// 
+///
 /// All switches from `GlobalId` to `CatalogItemId` we re-use the inner value of the ID.
 pub fn upgrade(
     snapshot: Vec<v67::StateUpdateKind>,
