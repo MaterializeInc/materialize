@@ -557,9 +557,8 @@ true
 2 two_two
 5 five
 
-# TODO: database-issues#8511 (introspection tables)
-# > SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table' and type = 'table';
-# true
+> SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table' and type = 'table';
+true
 
 > DROP SOURCE large_cluster_source CASCADE;
 
