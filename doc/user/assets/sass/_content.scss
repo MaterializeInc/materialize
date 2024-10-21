@@ -542,7 +542,7 @@ p+p {
     .public-preview {
         background: var(--public-preview);
         border: 1px solid var(--public-preview-border);
-        color: var(--black);
+        color: var(--public-preview-text);
 
         &::after {
             border-color: var(--bg) var(--bg) var(--public-preview-after) var(--public-preview-after);
