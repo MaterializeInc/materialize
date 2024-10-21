@@ -120,6 +120,7 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
     pub fn expire_dataflow_at(
         &self,
         replica_expiration: &Antichain<mz_repr::Timestamp>,
+        dataflow_debug_name: &str,
     ) -> Antichain<mz_repr::Timestamp> {
         let dataflow_expiration_desc = &self.dataflow_expiration_desc;
 
@@ -134,12 +135,23 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
             return Antichain::default();
         }
 
-        if let Some(upper) = &dataflow_expiration_desc.transitive_upper {
+        let dataflow_expiration = if let Some(upper) = &dataflow_expiration_desc.transitive_upper {
             // Returns empty if `upper` is empty, else the max of `upper` and `replica_expiration`.
             upper.join(replica_expiration)
         } else {
             replica_expiration.clone()
-        }
+        };
+
+        tracing::debug!(
+            dataflow_name = %dataflow_debug_name,
+            replica_expiration = ?replica_expiration.elements(),
+            dataflow_expiration_desc = ?dataflow_expiration_desc,
+            self_refresh_schedule = ?self.refresh_schedule,
+            output_dataflow_expiration = ?dataflow_expiration.elements(),
+            "computing dataflow expiration",
+        );
+
+        dataflow_expiration
     }
 }
 
