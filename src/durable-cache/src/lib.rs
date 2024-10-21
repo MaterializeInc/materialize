@@ -9,7 +9,7 @@
 
 //! The crate provides a durable key-value cache abstraction implemented by persist.
 
-use std::collections::BTreeMap;d
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
