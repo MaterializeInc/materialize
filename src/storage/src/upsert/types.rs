@@ -651,6 +651,9 @@ where
     /// Whether this backend supports the `multi_merge` operation.
     fn supports_merge(&self) -> bool;
 
+    /// Clear out all key-value state.
+    async fn clear(&mut self) -> Result<(), anyhow::Error>;
+
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
     ///
@@ -1050,6 +1053,8 @@ where
 
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
+    // TODO: While we only have feedback upsert.
+    #[allow(unused)]
     pub async fn multi_put<P>(&mut self, puts: P) -> Result<(), anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<Value<O>>)>,
@@ -1089,6 +1094,58 @@ where
         Ok(())
     }
 
+    /// Insert or delete for all `puts` keys, prioritizing the last value for
+    /// repeated keys.
+    ///
+    /// Version of `multi_put` that uses the given stats, for when the caller
+    /// has a better way of correctly computing those stats.
+    pub async fn multi_put_with_stats<P>(
+        &mut self,
+        puts: P,
+        precomputed_stats: PutStats,
+    ) -> Result<(), anyhow::Error>
+    where
+        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
+    {
+        fail::fail_point!("fail_state_multi_put", |_| {
+            Err(anyhow::anyhow!("Error putting values into state"))
+        });
+        let now = Instant::now();
+        let stats = self
+            .inner
+            .multi_put(puts.into_iter().map(|(k, pv)| (k, pv)))
+            .await?;
+
+        self.metrics
+            .multi_put_latency
+            .observe(now.elapsed().as_secs_f64());
+
+        // We use `processed_puts`, because the backend has special knowledge
+        // here.
+        self.worker_metrics
+            .multi_put_size
+            .inc_by(stats.processed_puts);
+
+        self.worker_metrics
+            .upsert_inserts
+            .inc_by(precomputed_stats.inserts);
+        self.worker_metrics
+            .upsert_updates
+            .inc_by(precomputed_stats.updates);
+        self.worker_metrics
+            .upsert_deletes
+            .inc_by(precomputed_stats.deletes);
+
+        self.stats
+            .update_bytes_indexed_by(precomputed_stats.size_diff);
+        self.stats
+            .update_records_indexed_by(precomputed_stats.values_diff);
+        self.stats
+            .update_envelope_state_tombstones_by(precomputed_stats.tombstones_diff);
+
+        Ok(())
+    }
+
     /// Get the `gets` keys, which must be unique, placing the results in `results_out`.
     ///
     /// Panics if `gets` and `results_out` are not the same length.
@@ -1122,6 +1179,21 @@ where
             .inc_by(stats.processed_gets_size);
 
         Ok(())
+    }
+
+    /// Clear out all key-value state.
+    pub async fn clear(&mut self) -> Result<(), anyhow::Error> {
+        fail::fail_point!("fail_state_clear", |_| {
+            Err(anyhow::anyhow!("Error clearing state"))
+        });
+
+        // Manually reset these back to zero, because we're clearing out our
+        // state.
+        self.stats.set_records_indexed(0);
+        self.stats.set_bytes_indexed(0);
+        self.stats.set_envelope_state_tombstones(0);
+
+        self.inner.clear().await
     }
 }
 

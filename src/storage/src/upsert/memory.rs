@@ -64,6 +64,12 @@ where
         false
     }
 
+    async fn clear(&mut self) -> Result<(), anyhow::Error> {
+        self.state.clear();
+
+        Ok(())
+    }
+
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
