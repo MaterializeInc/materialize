@@ -100,3 +100,10 @@ Create the Metadata database connection string
 {{- define "materialize-operator.metadatadbConnectionString" -}}
 postgresql://{{ .Values.metadatadb.username }}:{{ .Values.metadatadb.password }}@{{ .Values.metadatadb.endpoint }}:{{ .Values.metadatadb.port }}/defaultdb?sslmode=verify-full&sslrootcert=/metadata/metadata-certs/ca.crt
 {{- end }}
+
+{{/*
+Create the name of the namespace to use
+*/}}
+{{- define "materialize-operator.namespaceName" -}}
+{{- default .Release.Namespace .Values.namespace.name }}
+{{- end }}

@@ -42,6 +42,8 @@ The following table lists the configurable parameters of the Materialize operato
 | `metadatadb.password` |  | ``"password"`` |
 | `metadatadb.port` |  | ``26257`` |
 | `metadatadb.username` |  | ``"environment-controller"`` |
+| `namespace.create` |  | ``false`` |
+| `namespace.name` |  | ``"materialize"`` |
 | `networkPolicies.enabled` |  | ``false`` |
 | `networkPolicies.useNativeKubernetesPolicy` |  | ``true`` |
 | `observability.enabled` |  | ``false`` |
@@ -54,7 +56,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
 | `operator.image.repository` |  | ``"materialize/orchestratord"`` |
-| `operator.image.tag` |  | ``"v0.121.0-dev.0--main.g0c02fecf8c5a05f697925366a1c2baae20472b81"`` |
+| `operator.image.tag` |  | ``"mzbuild-BSGIPDAFDCIMTKT2ECKNL7KBROG6BAPC"`` |
 | `operator.resources.limits.cpu` |  | ``"500m"`` |
 | `operator.resources.limits.memory` |  | ``"512Mi"`` |
 | `operator.resources.requests.cpu` |  | ``"100m"`` |

@@ -12,6 +12,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "materialize-operator.fullname" . }}
+  namespace: {{ .Values.namespace.name }}
   labels:
     {{- include "materialize-operator.labels" . | nindent 4 }}
 spec:

@@ -47,6 +47,11 @@ The following table lists the configurable parameters of the Materialize environ
 | `materializeEnvironments[0].inPlaceRollout` |  | ``false`` |
 | `materializeEnvironments[0].name` |  | ``"default-environment"`` |
 | `materializeEnvironments[0].requestRollout` |  | ``"22222222-2222-2222-2222-222222222222"`` |
+| `materializeEnvironments[0].secret.metadataBackendUrl` |  | ``"postgres://user:pass@cockroachdb-public.cockroachdb.svc.cluster.local:26257/db?sslmode=verify-full&sslrootcert_inline=ca_cert"`` |
+| `materializeEnvironments[0].secret.name` |  | ``"materialize-backend-12345678-1234-1234-1234-123456789012"`` |
+| `materializeEnvironments[0].secret.persistBackendUrl` |  | ``"s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.minio.svc.cluster.local%3A9000&region=minio"`` |
+| `namespace.create` |  | ``true`` |
+| `namespace.name` |  | ``"materialize-environment"`` |
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example:
 

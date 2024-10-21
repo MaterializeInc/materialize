@@ -10,7 +10,7 @@
 operator:
   image:
     repository: materialize/orchestratord
-    tag: v0.121.0-dev.0--main.g0c02fecf8c5a05f697925366a1c2baae20472b81
+    tag: mzbuild-BSGIPDAFDCIMTKT2ECKNL7KBROG6BAPC
     pullPolicy: IfNotPresent
   args:
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
@@ -53,3 +53,7 @@ observability:
 networkPolicies:
   enabled: false
   useNativeKubernetesPolicy: true
+
+namespace:
+  create: false
+  name: "materialize"
