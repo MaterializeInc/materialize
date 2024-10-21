@@ -1040,7 +1040,7 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
     URL '${{testdrive.schema-registry-url}}'
   );
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 2;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
@@ -1084,7 +1084,7 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
   /* A */
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 2;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
@@ -1131,7 +1131,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 2;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
@@ -1210,7 +1210,7 @@ class KafkaRestartBig(ScenarioBig):
 >[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 2;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
@@ -1333,7 +1333,7 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${{testdrive.schema-registry-url}}';
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 2;
 
 > CREATE SOURCE source1
   IN CLUSTER source_cluster
@@ -1426,7 +1426,7 @@ ALTER SYSTEM SET max_sources = {self.n() * 2};
   URL '${{testdrive.schema-registry-url}}';
 
 > DROP CLUSTER IF EXISTS kafka_source_cluster CASCADE;
-> CREATE CLUSTER kafka_source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER kafka_source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 2;
 """
         )
 
