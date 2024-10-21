@@ -138,7 +138,10 @@ pub struct Config {
     pub enable_variadic_left_join_lowering: bool,
     /// Enable the extra null filter implemented in materialize#28018.
     pub enable_outer_join_null_filter: bool,
+    /// See the feature flag of the same name.
     pub enable_value_window_function_fusion: bool,
+    /// See the feature flag of the same name.
+    pub enable_window_aggregation_fusion: bool,
 }
 
 impl From<&SystemVars> for Config {
@@ -148,6 +151,7 @@ impl From<&SystemVars> for Config {
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
             enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
+            enable_window_aggregation_fusion: vars.enable_window_aggregation_fusion(),
         }
     }
 }

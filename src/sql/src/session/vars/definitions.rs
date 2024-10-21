@@ -2133,6 +2133,12 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_window_aggregation_fusion,
+        desc: "Enables the window aggregation fusion optimization",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_reduce_unnest_list_fusion,
         desc: "Enables fusing `Reduce` with `FlatMap UnnestList` for better window function performance",
         default: true,
@@ -2159,6 +2165,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
             enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
             enable_reduce_unnest_list_fusion: vars.enable_reduce_unnest_list_fusion(),
+            enable_window_aggregation_fusion: vars.enable_window_aggregation_fusion(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
         }
