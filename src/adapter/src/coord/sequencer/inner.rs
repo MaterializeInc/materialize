@@ -430,6 +430,28 @@ impl Coordinator {
         ))
     }
 
+    /// Prepares an `ALTER SOURCE...REFRESH REFERENCES`.
+    pub(crate) fn plan_purified_alter_source_refresh_references(
+        &self,
+        _session: &Session,
+        _params: Params,
+        source_name: ResolvedItemName,
+        available_source_references: plan::SourceReferences,
+    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        let source_id = *source_name.item_id();
+        let action = mz_sql::plan::AlterSourceAction::RefreshReferences {
+            references: available_source_references,
+        };
+
+        Ok((
+            Plan::AlterSource(mz_sql::plan::AlterSourcePlan {
+                id: source_id,
+                action,
+            }),
+            ResolvedIds(BTreeSet::new()),
+        ))
+    }
+
     /// Prepares a `CREATE SOURCE` statement to create its progress subsource,
     /// the primary source, and any ingestion export subsources (e.g. PG
     /// tables).
@@ -3906,6 +3928,16 @@ impl Coordinator {
                     source_compaction_window.unwrap_or(CompactionWindow::Default),
                 )
                 .await;
+            }
+            plan::AlterSourceAction::RefreshReferences { references } => {
+                self.catalog_transact(
+                    Some(session),
+                    vec![catalog::Op::UpdateSourceReferences {
+                        source_id: id,
+                        references: references.into(),
+                    }],
+                )
+                .await?;
             }
         }
 

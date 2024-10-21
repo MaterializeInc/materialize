@@ -75,8 +75,8 @@ use crate::ast::{
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
-    Aug, FullItemName, PartialItemName, QualifiedItemName, ResolvedColumnReference,
-    ResolvedDataType, ResolvedIds, ResolvedItemName,
+    Aug, FullItemName, PartialItemName, ResolvedColumnReference, ResolvedDataType, ResolvedIds,
+    ResolvedItemName,
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
@@ -211,6 +211,11 @@ pub enum PurifiedStatement {
         options: Vec<AlterSourceAddSubsourceOption<Aug>>,
         // Map of subsource names to external details
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
+    },
+    PurifiedAlterSourceRefreshReferences {
+        source_name: ResolvedItemName,
+        /// The updated available upstream references for the primary source.
+        available_source_references: SourceReferences,
     },
     PurifiedCreateSink(CreateSinkStatement<Aug>),
     PurifiedCreateTableFromSource {
@@ -1218,18 +1223,27 @@ async fn purify_alter_source(
         version: RelationVersionSelector::Latest,
     };
 
+    let partial_name = scx.catalog.minimal_qualification(source_name);
+
     match action {
         AlterSourceAction::AddSubsources {
             external_references,
             options,
         } => {
             purify_alter_source_add_subsources(
-                &scx,
                 external_references,
                 options,
                 desc,
-                source_name,
+                partial_name,
                 unresolved_source_name,
+                resolved_source_name,
+                storage_configuration,
+            )
+            .await
+        }
+        AlterSourceAction::RefreshReferences => {
+            purify_alter_source_refresh_references(
+                desc,
                 resolved_source_name,
                 storage_configuration,
             )
@@ -1248,11 +1262,10 @@ async fn purify_alter_source(
 // TODO(database-issues#8620): Remove once subsources are removed
 /// Equivalent to `purify_create_source` but for `AlterSourceStatement`.
 async fn purify_alter_source_add_subsources(
-    scx: &StatementContext<'_>,
     external_references: Vec<ExternalReferenceExport>,
     mut options: Vec<AlterSourceAddSubsourceOption<Aug>>,
     desc: SourceDesc,
-    source_name: &QualifiedItemName,
+    partial_source_name: PartialItemName,
     unresolved_source_name: UnresolvedItemName,
     resolved_source_name: ResolvedItemName,
     storage_configuration: &StorageConfiguration,
@@ -1270,7 +1283,7 @@ async fn purify_alter_source_add_subsources(
         GenericSourceConnection::MySql(_) => {}
         _ => sql_bail!(
             "source {} does not support ALTER SOURCE.",
-            scx.catalog.minimal_qualification(source_name),
+            partial_source_name
         ),
     };
 
@@ -1317,7 +1330,7 @@ async fn purify_alter_source_add_subsources(
             if !exclude_columns.is_empty() {
                 sql_bail!(
                     "{} is a {} source, which does not support EXCLUDE COLUMNS.",
-                    scx.catalog.minimal_qualification(source_name),
+                    partial_source_name,
                     connection_name
                 )
             }
@@ -1421,6 +1434,79 @@ async fn purify_alter_source_add_subsources(
         source_name: resolved_source_name,
         options,
         subsources: requested_subsource_map,
+    })
+}
+
+async fn purify_alter_source_refresh_references(
+    desc: SourceDesc,
+    resolved_source_name: ResolvedItemName,
+    storage_configuration: &StorageConfiguration,
+) -> Result<PurifiedStatement, PlanError> {
+    let retrieved_source_references = match desc.connection {
+        GenericSourceConnection::Postgres(pg_source_connection) => {
+            // Get PostgresConnection for generating subsources.
+            let pg_connection = &pg_source_connection.connection;
+
+            let config = pg_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+
+            let client = config
+                .connect(
+                    "postgres_purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+            let reference_client = SourceReferenceClient::Postgres {
+                client: &client,
+                publication: &pg_source_connection.publication,
+                database: &pg_connection.database,
+            };
+            reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::MySql(mysql_source_connection) => {
+            let mysql_connection = &mysql_source_connection.connection;
+            let config = mysql_connection
+                .config(
+                    &storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                    InTask::No,
+                )
+                .await?;
+
+            let mut conn = config
+                .connect(
+                    "mysql purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            let reference_client = SourceReferenceClient::MySql {
+                conn: &mut conn,
+                include_system_schemas: false,
+            };
+            reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::LoadGenerator(load_gen_connection) => {
+            let reference_client = SourceReferenceClient::LoadGenerator {
+                generator: &load_gen_connection.load_generator,
+            };
+            reference_client.get_source_references().await?
+        }
+        GenericSourceConnection::Kafka(kafka_conn) => {
+            let reference_client = SourceReferenceClient::Kafka {
+                topic: &kafka_conn.topic,
+            };
+            reference_client.get_source_references().await?
+        }
+    };
+    Ok(PurifiedStatement::PurifiedAlterSourceRefreshReferences {
+        source_name: resolved_source_name,
+        available_source_references: retrieved_source_references.available_source_references(),
     })
 }
 

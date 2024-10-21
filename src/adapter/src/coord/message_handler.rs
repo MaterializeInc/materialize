@@ -531,6 +531,15 @@ impl Coordinator {
                 )
                 .await
             }
+            PurifiedStatement::PurifiedAlterSourceRefreshReferences {
+                source_name,
+                available_source_references,
+            } => self.plan_purified_alter_source_refresh_references(
+                ctx.session(),
+                params,
+                source_name,
+                available_source_references,
+            ),
             o @ (PurifiedStatement::PurifiedAlterSource { .. }
             | PurifiedStatement::PurifiedCreateSink(..)
             | PurifiedStatement::PurifiedCreateTableFromSource { .. }) => {
@@ -544,7 +553,8 @@ impl Coordinator {
                     }
                     PurifiedStatement::PurifiedCreateSink(stmt) => Statement::CreateSink(stmt),
                     PurifiedStatement::PurifiedCreateSource { .. }
-                    | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. } => {
+                    | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
+                    | PurifiedStatement::PurifiedAlterSourceRefreshReferences { .. } => {
                         unreachable!("not part of exterior match stmt")
                     }
                 };
