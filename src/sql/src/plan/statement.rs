@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::namespaces::is_system_schema;
-use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationVersionSelector, ScalarType};
+use mz_repr::{CatalogItemId, ColumnType, RelationDesc, RelationVersionSelector, ScalarType};
 use mz_sql_parser::ast::{
     ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
     RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
@@ -26,8 +26,8 @@ use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunne
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, ObjectType,
-    SessionCatalog, SystemObjectType,
+    CatalogCluster, CatalogCollectionItem, CatalogDatabase, CatalogItem, CatalogItemType,
+    CatalogSchema, ObjectType, SessionCatalog, SystemObjectType,
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
@@ -291,8 +291,7 @@ pub fn plan(
     };
 
     if resolved_ids
-        .0
-        .iter()
+        .items()
         // Filter out items that may not have been created yet, such as sub-sources.
         .filter_map(|id| catalog.try_get_item(id))
         .any(|item| {
@@ -433,7 +432,7 @@ pub fn plan(
 pub fn plan_copy_from(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<super::HirRelationExpr, PlanError> {
@@ -623,7 +622,7 @@ impl<'a> StatementContext<'a> {
     // `UnresolvedItemName`.
     pub fn allocate_resolved_item_name(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         name: UnresolvedItemName,
     ) -> Result<ResolvedItemName, PlanError> {
         let partial = normalize::unresolved_item_name(name)?;
@@ -720,16 +719,18 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem {
+    pub fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem {
         self.catalog.get_item(id)
     }
 
     pub fn get_item_by_resolved_name(
         &self,
         name: &ResolvedItemName,
-    ) -> Result<&dyn CatalogItem, PlanError> {
+    ) -> Result<Box<dyn CatalogCollectionItem>, PlanError> {
         match name {
-            ResolvedItemName::Item { id, .. } => Ok(self.get_item(id)),
+            ResolvedItemName::Item { id, version, .. } => {
+                Ok(self.get_item(id).at_version(*version))
+            }
             ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
             ResolvedItemName::ContinualTask { .. } => sql_bail!("non-user item"),
             ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
@@ -739,10 +740,13 @@ impl<'a> StatementContext<'a> {
     pub fn get_column_by_resolved_name(
         &self,
         name: &ColumnName<Aug>,
-    ) -> Result<(&dyn CatalogItem, usize), PlanError> {
+    ) -> Result<(Box<dyn CatalogCollectionItem>, usize), PlanError> {
         match (&name.relation, &name.column) {
-            (ResolvedItemName::Item { id, .. }, ResolvedColumnReference::Column { index, .. }) => {
-                let item = self.get_item(id);
+            (
+                ResolvedItemName::Item { id, version, .. },
+                ResolvedColumnReference::Column { index, .. },
+            ) => {
+                let item = self.get_item(id).at_version(*version);
                 Ok((item, *index))
             }
             _ => unreachable!(
@@ -865,7 +869,7 @@ impl<'a> StatementContext<'a> {
         match (ssh_tunnel, aws_privatelink) {
             (None, None) => Ok(Tunnel::Direct),
             (Some(ssh_tunnel), None) => {
-                let id = GlobalId::from(ssh_tunnel);
+                let id = CatalogItemId::from(ssh_tunnel);
                 let ssh_tunnel = self.catalog.get_item(&id);
                 match ssh_tunnel.connection()? {
                     Connection::Ssh(_connection) => Ok(Tunnel::Ssh(SshTunnel {
@@ -876,11 +880,11 @@ impl<'a> StatementContext<'a> {
                 }
             }
             (None, Some(aws_privatelink)) => {
-                let id = aws_privatelink.connection.item_id().clone();
-                let entry = self.catalog.get_item(&id);
+                let id = aws_privatelink.connection.item_id();
+                let entry = self.catalog.get_item(id);
                 match entry.connection()? {
                     Connection::AwsPrivatelink(_) => Ok(Tunnel::AwsPrivatelink(AwsPrivatelink {
-                        connection_id: id,
+                        connection_id: *id,
                         // By default we do not specify an availability zone for the tunnel.
                         availability_zone: None,
                         // We always use the port as specified by the top-level connection.
@@ -977,7 +981,7 @@ impl<'a> StatementContext<'a> {
         let full_name = self.allocate_full_name(partial).unwrap();
 
         ResolvedItemName::Item {
-            id: entry.id(),
+            id: entry.item_id(),
             qualifiers: entry.name().qualifiers.clone(),
             full_name,
             print_id: true,

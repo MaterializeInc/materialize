@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_secrets::{SecretsController, SecretsReader};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
@@ -23,7 +23,7 @@ use crate::ProcessOrchestrator;
 
 #[async_trait]
 impl SecretsController for ProcessOrchestrator {
-    async fn ensure(&self, id: GlobalId, contents: &[u8]) -> Result<(), anyhow::Error> {
+    async fn ensure(&self, id: CatalogItemId, contents: &[u8]) -> Result<(), anyhow::Error> {
         let file_path = self.secrets_dir.join(id.to_string());
         let mut file = OpenOptions::new()
             .mode(0o600)
@@ -42,20 +42,20 @@ impl SecretsController for ProcessOrchestrator {
         Ok(())
     }
 
-    async fn delete(&self, id: GlobalId) -> Result<(), anyhow::Error> {
+    async fn delete(&self, id: CatalogItemId) -> Result<(), anyhow::Error> {
         fs::remove_file(self.secrets_dir.join(id.to_string()))
             .await
             .with_context(|| format!("deleting secret {id}"))?;
         Ok(())
     }
 
-    async fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error> {
+    async fn list(&self) -> Result<Vec<CatalogItemId>, anyhow::Error> {
         let mut ids = Vec::new();
         let mut entries = fs::read_dir(&self.secrets_dir)
             .await
             .context("listing secrets")?;
         while let Some(dir) = entries.next_entry().await? {
-            let id: GlobalId = dir.file_name().to_string_lossy().parse()?;
+            let id: CatalogItemId = dir.file_name().to_string_lossy().parse()?;
             ids.push(id);
         }
         Ok(ids)
@@ -84,7 +84,7 @@ impl ProcessSecretsReader {
 
 #[async_trait]
 impl SecretsReader for ProcessSecretsReader {
-    async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
+    async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
         let contents = fs::read(self.secrets_dir.join(id.to_string()))
             .await
             .with_context(|| format!("reading secret {id}"))?;

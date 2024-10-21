@@ -37,7 +37,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
@@ -275,6 +275,7 @@ pub struct ClusterVariantManaged {
 pub struct IntrospectionSourceIndex {
     pub cluster_id: ClusterId,
     pub name: String,
+    pub item_id: CatalogItemId,
     pub index_id: GlobalId,
     pub oid: u32,
 }
@@ -284,6 +285,15 @@ impl DurableType for IntrospectionSourceIndex {
     type Value = ClusterIntrospectionSourceIndexValue;
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
+        let item_id = match self.item_id {
+            CatalogItemId::System(id) => id,
+            CatalogItemId::User(_) => {
+                unreachable!("cluster introspection source index mapping cannot use a User ID")
+            }
+            CatalogItemId::Transient(_) => {
+                unreachable!("cluster introspection source index mapping cannot use a Transient ID")
+            }
+        };
         let index_id = match self.index_id {
             GlobalId::System(id) => id,
             GlobalId::User(_) => {
@@ -302,6 +312,7 @@ impl DurableType for IntrospectionSourceIndex {
                 name: self.name,
             },
             ClusterIntrospectionSourceIndexValue {
+                item_id,
                 index_id,
                 oid: self.oid,
             },
@@ -312,6 +323,7 @@ impl DurableType for IntrospectionSourceIndex {
         Self {
             cluster_id: key.cluster_id,
             name: key.name,
+            item_id: CatalogItemId::System(value.item_id),
             index_id: GlobalId::System(value.index_id),
             oid: value.oid,
         }
@@ -457,13 +469,15 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Item {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub oid: u32,
+    pub global_id: GlobalId,
     pub schema_id: SchemaId,
     pub name: String,
     pub create_sql: String,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
+    pub versions: BTreeMap<RelationVersion, GlobalId>,
 }
 
 impl DurableType for Item {
@@ -472,38 +486,42 @@ impl DurableType for Item {
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
-            ItemKey { gid: self.id },
+            ItemKey { id: self.id },
             ItemValue {
                 oid: self.oid,
+                global_id: self.global_id,
                 schema_id: self.schema_id,
                 name: self.name,
                 create_sql: self.create_sql,
                 owner_id: self.owner_id,
                 privileges: self.privileges,
+                versions: self.versions,
             },
         )
     }
 
     fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
-            id: key.gid,
+            id: key.id,
             oid: value.oid,
+            global_id: value.global_id,
             schema_id: value.schema_id,
             name: value.name,
             create_sql: value.create_sql,
             owner_id: value.owner_id,
             privileges: value.privileges,
+            versions: value.versions,
         }
     }
 
     fn key(&self) -> Self::Key {
-        ItemKey { gid: self.id }
+        ItemKey { id: self.id }
     }
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SourceReferences {
-    pub source_id: GlobalId,
+    pub source_id: CatalogItemId,
     pub updated_at: u64,
     pub references: Vec<SourceReference>,
 }
@@ -546,6 +564,51 @@ impl DurableType for SourceReferences {
     }
 }
 
+/// A newtype wrapper for [`CatalogItemId`] that is only for the "system" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct SystemCatalogItemId(u64);
+
+impl TryFrom<CatalogItemId> for SystemCatalogItemId {
+    type Error = &'static str;
+
+    fn try_from(val: CatalogItemId) -> Result<Self, Self::Error> {
+        match val {
+            CatalogItemId::System(x) => Ok(SystemCatalogItemId(x)),
+            CatalogItemId::User(_) => Err("user"),
+            CatalogItemId::Transient(_) => Err("transient"),
+        }
+    }
+}
+
+impl From<SystemCatalogItemId> for CatalogItemId {
+    fn from(val: SystemCatalogItemId) -> Self {
+        CatalogItemId::System(val.0)
+    }
+}
+
+/// A newtype wrapper for [`GlobalId`] that is only for the "system" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct SystemGlobalId(u64);
+
+impl TryFrom<GlobalId> for SystemGlobalId {
+    type Error = &'static str;
+
+    fn try_from(val: GlobalId) -> Result<Self, Self::Error> {
+        match val {
+            GlobalId::System(x) => Ok(SystemGlobalId(x)),
+            GlobalId::User(_) => Err("user"),
+            GlobalId::Transient(_) => Err("transient"),
+            GlobalId::Explain => Err("explain"),
+        }
+    }
+}
+
+impl From<SystemGlobalId> for GlobalId {
+    fn from(val: SystemGlobalId) -> Self {
+        GlobalId::System(val.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct SystemObjectDescription {
     pub schema_name: String,
@@ -555,7 +618,8 @@ pub struct SystemObjectDescription {
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SystemObjectUniqueIdentifier {
-    pub id: GlobalId,
+    pub catalog_id: CatalogItemId,
+    pub collection_id: GlobalId,
     pub fingerprint: String,
 }
 
@@ -590,12 +654,16 @@ impl DurableType for SystemObjectMapping {
                 object_name: self.description.object_name,
             },
             GidMappingValue {
-                id: match self.unique_identifier.id {
-                    GlobalId::System(id) => id,
-                    GlobalId::User(_) => unreachable!("GID mapping cannot use a User ID"),
-                    GlobalId::Transient(_) => unreachable!("GID mapping cannot use a Transient ID"),
-                    GlobalId::Explain => unreachable!("GID mapping cannot use an Explain ID"),
-                },
+                catalog_id: self
+                    .unique_identifier
+                    .catalog_id
+                    .try_into()
+                    .expect("catalog_id to be in the system namespace"),
+                collection_id: self
+                    .unique_identifier
+                    .collection_id
+                    .try_into()
+                    .expect("collection_id to be in the system namespace"),
                 fingerprint: self.unique_identifier.fingerprint,
             },
         )
@@ -609,7 +677,8 @@ impl DurableType for SystemObjectMapping {
                 object_name: key.object_name,
             },
             unique_identifier: SystemObjectUniqueIdentifier {
-                id: GlobalId::System(value.id),
+                catalog_id: value.catalog_id.into(),
+                collection_id: value.collection_id.into(),
                 fingerprint: value.fingerprint,
             },
         }
@@ -1039,7 +1108,8 @@ pub struct GidMappingKey {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct GidMappingValue {
-    pub(crate) id: u64,
+    pub(crate) catalog_id: SystemCatalogItemId,
+    pub(crate) collection_id: SystemGlobalId,
     pub(crate) fingerprint: String,
 }
 
@@ -1064,6 +1134,7 @@ pub struct ClusterIntrospectionSourceIndexKey {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterIntrospectionSourceIndexValue {
+    pub(crate) item_id: u64,
     pub(crate) index_id: u64,
     pub(crate) oid: u32,
 }
@@ -1096,7 +1167,7 @@ pub struct DatabaseValue {
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct SourceReferencesKey {
-    pub(crate) source_id: GlobalId,
+    pub(crate) source_id: CatalogItemId,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
@@ -1121,7 +1192,7 @@ pub struct SchemaValue {
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug, Arbitrary)]
 pub struct ItemKey {
-    pub(crate) gid: GlobalId,
+    pub(crate) id: CatalogItemId,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
@@ -1132,6 +1203,8 @@ pub struct ItemValue {
     pub(crate) owner_id: RoleId,
     pub(crate) privileges: Vec<MzAclItem>,
     pub(crate) oid: u32,
+    pub(crate) global_id: GlobalId,
+    pub(crate) versions: BTreeMap<RelationVersion, GlobalId>,
 }
 
 impl ItemValue {

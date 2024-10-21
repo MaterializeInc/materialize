@@ -11,7 +11,7 @@
 
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::S3UploadInfo;
@@ -197,7 +197,7 @@ pub struct CopyToS3OneshotSinkConnection {
     pub aws_connection: AwsConnection,
     /// The ID of the Connection object, used to generate the External ID when
     /// using AssumeRole with AWS connection.
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     /// The number of batches the COPY TO output will be divided into
     /// where each worker will process 0 or more batches of data.
     pub output_batch_count: u64,

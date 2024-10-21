@@ -116,6 +116,7 @@ filegroup(
         "src/adt/timestamp.proto",
         "src/adt/varchar.proto",
         "src/antichain.proto",
+        "src/catalog_item_id.proto",
         "src/global_id.proto",
         "src/refresh_schedule.proto",
         "src/relation_and_scalar.proto",

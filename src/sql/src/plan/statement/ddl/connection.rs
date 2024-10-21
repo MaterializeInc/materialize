@@ -18,7 +18,7 @@ use maplit::btreemap;
 use mz_ore::num::NonNeg;
 use mz_ore::str::StrExt;
 use mz_postgres_util::tunnel::PostgresFlavor;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ConnectionOptionName::*;
 use mz_sql_parser::ast::{
@@ -537,12 +537,12 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     )?;
 
                     let id = match &aws_privatelink.connection {
-                        ResolvedItemName::Item { id, .. } => id,
+                        ResolvedItemName::Item { id, .. } => *id,
                         _ => sql_bail!(
                             "internal error: Kafka PrivateLink connection was not resolved"
                         ),
                     };
-                    let entry = scx.catalog.get_item(id);
+                    let entry = scx.catalog.get_item(&id);
                     match entry.connection()? {
                         Connection::AwsPrivatelink(connection) => {
                             if let Some(az) = &availability_zone {
@@ -554,7 +554,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                                 }
                             }
                             Tunnel::AwsPrivatelink(AwsPrivatelink {
-                                connection_id: *id,
+                                connection_id: id,
                                 availability_zone,
                                 port,
                             })
@@ -566,16 +566,16 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                 }
                 KafkaBrokerTunnel::SshTunnel(ssh) => {
                     let id = match &ssh {
-                        ResolvedItemName::Item { id, .. } => id,
+                        ResolvedItemName::Item { id, .. } => *id,
                         _ => sql_bail!(
                             "internal error: Kafka SSH tunnel connection was not resolved"
                         ),
                     };
-                    let ssh_tunnel = scx.catalog.get_item(id);
+                    let ssh_tunnel = scx.catalog.get_item(&id);
                     match ssh_tunnel.connection()? {
                         Connection::Ssh(_connection) => Tunnel::Ssh(SshTunnel {
-                            connection_id: *id,
-                            connection: *id,
+                            connection_id: id,
+                            connection: id,
                         }),
                         _ => {
                             sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item)
@@ -678,7 +678,7 @@ fn plan_kafka_security(
             match &v.aws_connection {
                 Some(id) => {
                     scx.require_feature_flag(&ENABLE_AWS_MSK_IAM_AUTH)?;
-                    let id = GlobalId::from(id);
+                    let id = CatalogItemId::from(id);
                     let item = scx.catalog.get_item(&id);
                     let aws = match item.connection()? {
                         Connection::Aws(_) => AwsConnectionReference {

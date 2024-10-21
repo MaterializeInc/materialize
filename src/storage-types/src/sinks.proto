@@ -16,6 +16,7 @@ import "google/protobuf/empty.proto";
 import "pgcopy/src/copy.proto";
 import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
+import "repr/src/catalog_item_id.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
 import "storage-types/src/connections.proto";
@@ -104,7 +105,7 @@ message ProtoKafkaSinkConnectionV2 {
 
   reserved 7 to 10, 12, 13, 21, 24;
 
-  mz_repr.global_id.ProtoGlobalId connection_id = 1;
+  mz_repr.catalog_item_id.ProtoCatalogItemId connection_id = 1;
   mz_storage_types.connections.ProtoKafkaConnection connection = 2;
   string topic = 3;
   optional ProtoKeyDescAndIndices key_desc_and_indices = 4;

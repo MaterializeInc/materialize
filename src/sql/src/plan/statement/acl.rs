@@ -207,7 +207,7 @@ fn plan_alter_item_owner(
 
     match resolved {
         Some(item) => {
-            if item.id().is_system() {
+            if item.item_id().is_system() {
                 sql_bail!(
                     "cannot alter item {} because it is required by the database system",
                     scx.catalog.resolve_full_name(item.name()),
@@ -220,7 +220,7 @@ fn plan_alter_item_owner(
             }
 
             Ok(Plan::AlterOwner(AlterOwnerPlan {
-                id: ObjectId::Item(item.id()),
+                id: ObjectId::Item(item.item_id()),
                 object_type,
                 new_owner,
             }))
@@ -428,7 +428,7 @@ fn plan_update_privilege(
                         .catalog
                         .get_items()
                         .into_iter()
-                        .map(|item| item.id().into());
+                        .map(|item| item.item_id().into());
                     cluster_ids
                         .chain(database_ids)
                         .chain(schema_ids)
@@ -744,7 +744,7 @@ pub fn plan_reassign_owned(
     // Items
     for item in scx.catalog.get_items() {
         if old_roles.contains(&item.owner_id()) {
-            reassign_ids.push(item.id().into());
+            reassign_ids.push(item.item_id().into());
         }
     }
     // Schemas

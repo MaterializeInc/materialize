@@ -83,7 +83,7 @@ impl<'a> FuncRewriter<'a> {
             .expect("data type known to be valid");
         let full_name = self.scx.catalog.resolve_full_name(item.name());
         ResolvedDataType::Named {
-            id: item.id(),
+            id: item.item_id(),
             qualifiers: item.name().qualifiers.clone(),
             full_name,
             modifiers: vec![],

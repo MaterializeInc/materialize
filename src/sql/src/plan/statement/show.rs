@@ -18,7 +18,7 @@ use std::fmt::Write;
 
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
-use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
@@ -109,7 +109,7 @@ fn plan_show_create_item(
 ) -> Result<ShowCreatePlan, PlanError> {
     let item = scx.get_item_by_resolved_name(name)?;
     let name = name.full_name_str();
-    if item.id().is_system()
+    if item.item_id().is_system()
         && matches!(
             expect_type,
             CatalogItemType::Table | CatalogItemType::Source
@@ -124,9 +124,9 @@ fn plan_show_create_item(
     if item.item_type() != expect_type {
         sql_bail!("{name} is not a {expect_type}");
     }
-    let create_sql = humanize_sql_for_show_create(scx.catalog, item.id(), item.create_sql())?;
+    let create_sql = humanize_sql_for_show_create(scx.catalog, item.item_id(), item.create_sql())?;
     Ok(ShowCreatePlan {
-        id: ObjectId::Item(item.id()),
+        id: ObjectId::Item(item.item_id()),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
     })
 }
@@ -422,7 +422,7 @@ fn show_subsources<'a>(
                 on_item.item_type(),
             );
         }
-        query_filter.push(format!("sources.id = '{}'", on_item.id()));
+        query_filter.push(format!("sources.id = '{}'", on_item.item_id()));
     }
 
     if let Some(schema) = from_schema {
@@ -578,7 +578,7 @@ pub fn show_indexes<'a>(
                 on_item.item_type(),
             );
         }
-        query_filter.push(format!("on_id = '{}'", on_item.id()));
+        query_filter.push(format!("on_id = '{}'", on_item.item_id()));
     }
 
     if let Some(schema) = from_schema {
@@ -633,7 +633,7 @@ pub fn show_columns<'a>(
         "SELECT name, nullable, type, position, comment
          FROM mz_internal.mz_show_columns columns
          WHERE columns.id = '{}'",
-        entry.id(),
+        entry.item_id(),
     );
     let (show_select, new_resolved_ids) = ShowSelect::new_with_resolved_ids(
         scx,
@@ -643,7 +643,7 @@ pub fn show_columns<'a>(
         Some(&["name", "nullable", "type", "comment"]),
     )?;
     Ok(ShowColumnsSelect {
-        id: entry.id(),
+        id: entry.item_id(),
         show_select,
         new_resolved_ids,
     })
@@ -928,7 +928,7 @@ impl<'a> ShowSelect<'a> {
 }
 
 pub struct ShowColumnsSelect<'a> {
-    id: GlobalId,
+    id: CatalogItemId,
     new_resolved_ids: ResolvedIds,
     show_select: ShowSelect<'a>,
 }
@@ -967,7 +967,7 @@ impl<'a> ShowColumnsSelect<'a> {
 /// is more amenable to human consumption.
 fn humanize_sql_for_show_create(
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     sql: &str,
 ) -> Result<String, PlanError> {
     use mz_sql_parser::ast::{CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName};

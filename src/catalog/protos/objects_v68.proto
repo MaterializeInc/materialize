@@ -19,7 +19,7 @@
 
 syntax = "proto3";
 
-package objects;
+package objects_v68;
 
 message ConfigKey {
   string key = 1;
@@ -52,9 +52,8 @@ message GidMappingKey {
 }
 
 message GidMappingValue {
-  SystemCatalogItemId catalog_id = 1;
-  SystemGlobalId global_id = 2;
-  string fingerprint = 3;
+  uint64 id = 1;
+  string fingerprint = 2;
 }
 
 message ClusterKey {
@@ -75,9 +74,8 @@ message ClusterIntrospectionSourceIndexKey {
 }
 
 message ClusterIntrospectionSourceIndexValue {
-  uint64 item_id = 1;
-  uint64 index_id = 2;
-  uint32 oid = 3;
+  uint64 index_id = 1;
+  uint32 oid = 2;
 }
 
 message ClusterReplicaKey {
@@ -125,13 +123,6 @@ message ItemValue {
   RoleId owner_id = 4;
   repeated MzAclItem privileges = 5;
   uint32 oid = 6;
-  GlobalId global_id = 7;
-  repeated ItemVersion versions = 8;
-}
-
-message ItemVersion {
-  GlobalId global_id = 1;
-  Version version = 2;
 }
 
 message RoleKey {
@@ -189,7 +180,7 @@ message CommentValue {
 }
 
 message SourceReferencesKey {
-  CatalogItemId source = 1;
+  GlobalId source = 1;
 }
 
 message SourceReferencesValue {
@@ -254,10 +245,6 @@ message Timestamp {
   uint64 internal = 1;
 }
 
-message Version {
-  uint64 value = 2;
-}
-
 enum CatalogItemType {
   CATALOG_ITEM_TYPE_UNKNOWN = 0;
   CATALOG_ITEM_TYPE_TABLE = 1;
@@ -291,11 +278,6 @@ message CatalogItemId {
   }
 }
 
-/// A newtype wrapper for a `CatalogItemId` that is always in the "system" namespace.
-message SystemCatalogItemId {
-  uint64 value = 1;
-}
-
 message GlobalId {
   oneof value {
     uint64 system = 1;
@@ -303,11 +285,6 @@ message GlobalId {
     uint64 transient = 3;
     Empty explain = 4;
   }
-}
-
-/// A newtype wrapper for a `GlobalId` that is always in the "system" namespace.
-message SystemGlobalId {
-  uint64 value = 1;
 }
 
 message ClusterId {

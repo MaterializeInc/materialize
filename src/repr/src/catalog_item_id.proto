@@ -7,17 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// buf breaking: ignore (currently does not require backward-compatibility)
-
 syntax = "proto3";
 
-package mz_storage_types.connections.string_or_secret;
+package mz_repr.catalog_item_id;
 
-import "repr/src/catalog_item_id.proto";
+import "google/protobuf/empty.proto";
 
-message ProtoStringOrSecret {
+message ProtoCatalogItemId {
   oneof kind {
-    string string = 1;
-    mz_repr.catalog_item_id.ProtoCatalogItemId secret = 2;
+    uint64 system = 1;
+    uint64 user = 2;
+    uint64 transient = 3;
   }
 }

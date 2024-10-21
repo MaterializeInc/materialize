@@ -38,7 +38,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType, Timestamp,
+    strconv, CatalogItemId, ColumnName, ColumnType, RelationDesc, RelationType,
+    RelationVersionSelector, ScalarType, Timestamp,
 };
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
@@ -789,8 +790,8 @@ pub fn plan_create_source(
                 .collect();
 
             let connection = KafkaSourceConnection::<ReferencedConnection> {
-                connection: connection_item.id(),
-                connection_id: connection_item.id(),
+                connection: connection_item.item_id(),
+                connection_id: connection_item.item_id(),
                 topic,
                 start_offsets,
                 group_id_prefix,
@@ -848,8 +849,8 @@ pub fn plan_create_source(
 
             let connection =
                 GenericSourceConnection::<ReferencedConnection>::from(PostgresSourceConnection {
-                    connection: connection_item.id(),
-                    connection_id: connection_item.id(),
+                    connection: connection_item.item_id(),
+                    connection_id: connection_item.item_id(),
                     publication: publication.expect("validated exists during purification"),
                     publication_details,
                 });
@@ -888,8 +889,8 @@ pub fn plan_create_source(
 
             let connection =
                 GenericSourceConnection::<ReferencedConnection>::from(MySqlSourceConnection {
-                    connection: connection_item.id(),
-                    connection_id: connection_item.id(),
+                    connection: connection_item.item_id(),
+                    connection_id: connection_item.item_id(),
                     details,
                 });
 
@@ -1445,7 +1446,9 @@ pub fn plan_create_subsource(
     let data_source = if let Some(source_reference) = of_source {
         // This is a subsource with the "natural" dependency order, i.e. it is
         // not a legacy subsource with the inverted structure.
-        let ingestion_id = *source_reference.item_id();
+        let ingestion_id = scx
+            .catalog
+            .resolve_global_id(source_reference.item_id(), *source_reference.version());
         let external_reference = external_reference.unwrap();
 
         // Decode the details option stored on the subsource statement, which contains information
@@ -1564,7 +1567,7 @@ pub fn plan_create_table_from_source(
     } = with_options.clone().try_into()?;
 
     let source_item = scx.get_item_by_resolved_name(source)?;
-    let ingestion_id = source_item.id();
+    let ingestion_id = source_item.global_id();
 
     // Decode the details option stored on the statement, which contains information
     // created during the purification process.
@@ -2090,7 +2093,7 @@ fn get_encoding_inner(
                 } => {
                     let item = scx.get_item_by_resolved_name(&connection.connection)?;
                     let csr_connection = match item.connection()? {
-                        Connection::Csr(_) => item.id(),
+                        Connection::Csr(_) => item.item_id(),
                         _ => {
                             sql_bail!(
                                 "{} is not a schema registry connection",
@@ -2329,6 +2332,11 @@ pub fn plan_view(
     assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
+    let dependencies = expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
+        .collect();
 
     let name = if temporary {
         scx.allocate_temporary_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
@@ -2350,6 +2358,7 @@ pub fn plan_view(
     let view = View {
         create_sql,
         expr,
+        dependencies,
         column_names: names,
         temporary,
     };
@@ -2376,20 +2385,29 @@ pub fn plan_create_view(
     let replace = if *if_exists == IfExistsBehavior::Replace && !ignore_if_exists_errors {
         let if_exists = true;
         let cascade = false;
-        if let Some(id) = plan_drop_item(
+        let maybe_item_to_drop = plan_drop_item(
             scx,
             ObjectType::View,
             if_exists,
             definition.name.clone(),
             cascade,
-        )? {
-            if view.expr.depends_on().contains(&id) {
+        )?;
+
+        // Check if the new View depends on the item that we would be replacing.
+        if let Some(id) = maybe_item_to_drop {
+            let dependencies = view.expr.depends_on();
+            let invalid_drop = scx
+                .get_item(&id)
+                .global_ids()
+                .any(|gid| dependencies.contains(&gid));
+            if invalid_drop {
                 let item = scx.catalog.get_item(&id);
                 sql_bail!(
                     "cannot replace view {0}: depended upon by new {0} definition",
                     scx.catalog.resolve_full_name(item.name())
                 );
             }
+
             Some(id)
         } else {
             None
@@ -2655,8 +2673,15 @@ pub fn plan_create_materialized_view(
                 partial_name.into(),
                 cascade,
             )?;
+
+            // Check if the new Materialized View depends on the item that we would be replacing.
             if let Some(id) = replace_id {
-                if expr.depends_on().contains(&id) {
+                let dependencies = expr.depends_on();
+                let invalid_drop = scx
+                    .get_item(&id)
+                    .global_ids()
+                    .any(|gid| dependencies.contains(&gid));
+                if invalid_drop {
                     let item = scx.catalog.get_item(&id);
                     sql_bail!(
                         "cannot replace materialized view {0}: depended upon by new {0} definition",
@@ -2678,6 +2703,11 @@ pub fn plan_create_materialized_view(
                 .collect()
         })
         .unwrap_or_default();
+    let dependencies = expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
+        .collect();
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -2698,6 +2728,7 @@ pub fn plan_create_materialized_view(
         materialized_view: MaterializedView {
             create_sql,
             expr,
+            dependencies,
             column_names,
             cluster_id,
             non_null_assertions,
@@ -2823,6 +2854,11 @@ pub fn plan_create_continual_task(
         .into_iter()
         .reduce(|acc, expr| acc.union(expr))
         .ok_or_else(|| sql_err!("TODO(ct2)"))?;
+    let dependencies = expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
+        .collect();
 
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
     if let Some(dup) = column_names.iter().duplicates().next() {
@@ -2855,10 +2891,11 @@ pub fn plan_create_continual_task(
         name,
         placeholder_id,
         desc,
-        input_id: input.id(),
+        input_id: input.global_id(),
         continual_task: MaterializedView {
             create_sql,
             expr,
+            dependencies,
             column_names,
             cluster_id,
             non_null_assertions: Vec::new(),
@@ -3014,7 +3051,7 @@ fn plan_sink(
 
     let from_name = &from;
     let from = scx.get_item_by_resolved_name(&from)?;
-    if from.id().is_system() {
+    if from.item_id().is_system() {
         bail_unsupported!("creating a sink directly on a catalog object");
     }
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
@@ -3152,7 +3189,7 @@ fn plan_sink(
             headers_index,
             desc.into_owned(),
             envelope,
-            from.id(),
+            from.item_id(),
         )?,
     };
 
@@ -3200,7 +3237,7 @@ fn plan_sink(
         name,
         sink: Sink {
             create_sql,
-            from: from.id(),
+            from: from.global_id(),
             connection: connection_builder,
             partition_strategy,
             envelope,
@@ -3354,11 +3391,11 @@ fn kafka_sink_builder(
     headers_index: Option<usize>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-    sink_from: GlobalId,
+    sink_from: CatalogItemId,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     // Get Kafka connection.
     let connection_item = scx.get_item_by_resolved_name(&connection)?;
-    let connection_id = connection_item.id();
+    let connection_id = connection_item.item_id();
     match connection_item.connection()? {
         Connection::Kafka(_) => (),
         _ => sql_bail!(
@@ -3444,7 +3481,7 @@ fn kafka_sink_builder(
 
         let item = scx.get_item_by_resolved_name(&connection)?;
         let csr_connection = match item.connection()? {
-            Connection::Csr(_) => item.id(),
+            Connection::Csr(_) => item.item_id(),
             _ => {
                 sql_bail!(
                     "{} is not a schema registry connection",
@@ -3771,7 +3808,7 @@ pub fn plan_create_index(
         name: index_name,
         index: Index {
             create_sql,
-            on: on.id(),
+            on: on.global_id(),
             keys,
             cluster_id,
             compaction_window,
@@ -3799,7 +3836,7 @@ pub fn plan_create_type(
         data_type: ResolvedDataType,
         as_type: &str,
         key: &str,
-    ) -> Result<(GlobalId, Vec<i64>), PlanError> {
+    ) -> Result<(CatalogItemId, Vec<i64>), PlanError> {
         let (id, modifiers) = match data_type {
             ResolvedDataType::Named { id, modifiers, .. } => (id, modifiers),
             _ => sql_bail!(
@@ -4965,13 +5002,14 @@ fn plan_drop_cluster_replica(
     Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
 
+/// Returns the [`CatalogItemId`] of the item we should drop, if it exists.
 fn plan_drop_item(
     scx: &StatementContext,
     object_type: ObjectType,
     if_exists: bool,
     name: UnresolvedItemName,
     cascade: bool,
-) -> Result<Option<GlobalId>, PlanError> {
+) -> Result<Option<CatalogItemId>, PlanError> {
     let resolved = match resolve_item_or_type(scx, object_type, name, if_exists) {
         Ok(r) => r,
         // Return a more helpful error on `DROP VIEW <materialized-view>`.
@@ -4987,7 +5025,7 @@ fn plan_drop_item(
 
     Ok(match resolved {
         Some(catalog_item) => {
-            if catalog_item.id().is_system() {
+            if catalog_item.item_id().is_system() {
                 sql_bail!(
                     "cannot drop {} {} because it is required by the database system",
                     catalog_item.item_type(),
@@ -5015,7 +5053,7 @@ fn plan_drop_item(
                 // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
                 //  relies on entry. Unfortunately, we don't have that information readily available.
             }
-            Some(catalog_item.id())
+            Some(catalog_item.item_id())
         }
         None => None,
     })
@@ -5095,7 +5133,7 @@ pub fn plan_drop_owned(
                 let non_owned_bound_objects: Vec<_> = cluster
                     .bound_objects()
                     .into_iter()
-                    .map(|global_id| scx.catalog.get_item(global_id))
+                    .map(|item_id| scx.catalog.get_item(item_id))
                     .filter(|item| !role_ids.contains(&item.owner_id()))
                     .collect();
                 if !non_owned_bound_objects.is_empty() {
@@ -5129,18 +5167,11 @@ pub fn plan_drop_owned(
     for item in scx.catalog.get_items() {
         if role_ids.contains(&item.owner_id()) {
             if !cascade {
-                // When this item gets dropped it will also drop its progress source, so we need to
-                // check the users of those.
-                for sub_item in item
-                    .progress_id()
-                    .iter()
-                    .map(|id| scx.catalog.get_item(id))
-                    .chain(iter::once(item))
-                {
-                    let non_owned_dependencies: Vec<_> = sub_item
-                        .used_by()
+                // Checks if any items still depend on this one, returning an error if so.
+                let check_if_dependents_exist = |used_by: &[CatalogItemId]| {
+                    let non_owned_dependencies: Vec<_> = used_by
                         .into_iter()
-                        .map(|global_id| scx.catalog.get_item(global_id))
+                        .map(|item_id| scx.catalog.get_item(item_id))
                         .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
                         .filter(|item| !role_ids.contains(&item.owner_id()))
                         .collect();
@@ -5148,13 +5179,13 @@ pub fn plan_drop_owned(
                         let names: Vec<_> = non_owned_dependencies
                             .into_iter()
                             .map(|item| {
-                                (
-                                    item.item_type().to_string(),
-                                    scx.catalog.resolve_full_name(item.name()).to_string(),
-                                )
+                                let item_typ = item.item_type().to_string();
+                                let item_name =
+                                    scx.catalog.resolve_full_name(item.name()).to_string();
+                                (item_typ, item_name)
                             })
                             .collect();
-                        return Err(PlanError::DependentObjectsStillExist {
+                        Err(PlanError::DependentObjectsStillExist {
                             object_type: item.item_type().to_string(),
                             object_name: scx
                                 .catalog
@@ -5162,14 +5193,24 @@ pub fn plan_drop_owned(
                                 .to_string()
                                 .to_string(),
                             dependents: names,
-                        });
+                        })
+                    } else {
+                        Ok(())
                     }
+                };
+
+                // When this item gets dropped it will also drop its progress source, so we need to
+                // check the users of those.
+                if let Some(id) = item.progress_id() {
+                    let progress_item = scx.catalog.get_item(&id);
+                    check_if_dependents_exist(progress_item.used_by())?;
                 }
+                check_if_dependents_exist(item.used_by())?;
             }
-            drop_ids.push(item.id().into());
+            drop_ids.push(item.item_id().into());
         }
         update_privilege_revokes(
-            SystemObjectId::Object(item.id().into()),
+            SystemObjectId::Object(item.item_id().into()),
             item.privileges(),
             &role_ids,
             &mut privilege_revokes,
@@ -5183,7 +5224,7 @@ pub fn plan_drop_owned(
                 if !cascade {
                     let non_owned_dependencies: Vec<_> = schema
                         .item_ids()
-                        .map(|global_id| scx.catalog.get_item(&global_id))
+                        .map(|item_id| scx.catalog.get_item(&item_id))
                         .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
                         .filter(|item| !role_ids.contains(&item.owner_id()))
                         .collect();
@@ -5743,7 +5784,7 @@ pub fn plan_alter_item_set_cluster(
                 Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
             } else {
                 Ok(Plan::AlterSetCluster(AlterSetClusterPlan {
-                    id: entry.id(),
+                    id: entry.item_id(),
                     set_cluster: in_cluster.id(),
                 }))
             }
@@ -5935,7 +5976,7 @@ pub fn plan_alter_item_rename(
             }
 
             Ok(Plan::AlterItemRename(AlterItemRenamePlan {
-                id: entry.id(),
+                id: entry.item_id(),
                 current_full_name: full_name,
                 to_name: normalize::ident(to_item_name),
                 object_type,
@@ -6171,7 +6212,7 @@ fn alter_retain_history(
             let window = plan_retain_history(scx, lcw)?;
 
             Ok(Plan::AlterRetainHistory(AlterRetainHistoryPlan {
-                id: entry.id(),
+                id: entry.item_id(),
                 value,
                 window,
                 object_type,
@@ -6206,7 +6247,7 @@ pub fn plan_alter_secret(
     } = stmt;
     let object_type = ObjectType::Secret;
     let id = match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
-        Some(entry) => entry.id(),
+        Some(entry) => entry.item_id(),
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
                 name: name.to_string(),
@@ -6282,7 +6323,7 @@ pub fn plan_alter_connection(
         }
 
         return Ok(Plan::AlterConnection(AlterConnectionPlan {
-            id: entry.id(),
+            id: entry.item_id(),
             action: crate::plan::AlterConnectionAction::RotateKeys,
         }));
     }
@@ -6400,7 +6441,7 @@ pub fn plan_alter_connection(
     }
 
     Ok(Plan::AlterConnection(AlterConnectionPlan {
-        id: entry.id(),
+        id: entry.item_id(),
         action: crate::plan::AlterConnectionAction::AlterOptions {
             set_options,
             drop_options,
@@ -6437,6 +6478,8 @@ pub fn plan_alter_sink(
 
         return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
     };
+    // Always ALTER objects from their latest version.
+    let item = item.at_version(RelationVersionSelector::Latest);
 
     match action {
         AlterSinkAction::ChangeRelation(new_from) => {
@@ -6475,7 +6518,8 @@ pub fn plan_alter_sink(
             };
 
             Ok(Plan::AlterSink(AlterSinkPlan {
-                id: item.id(),
+                item_id: item.item_id(),
+                global_id: item.global_id(),
                 sink: plan.sink,
                 with_snapshot: plan.with_snapshot,
                 in_cluster: plan.in_cluster,
@@ -6671,9 +6715,11 @@ pub fn plan_alter_table_add_column(
     let (relation_id, item_name, desc) =
         match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
             Some(item) => {
+                // Always add columns to the latest version of the item.
                 let item_name = scx.catalog.resolve_full_name(item.name());
-                let desc = item.desc(&item_name)?;
-                (item.id(), item_name, desc)
+                let item = item.at_version(RelationVersionSelector::Latest);
+                let desc = item.desc(&item_name)?.into_owned();
+                (item.item_id(), item_name, desc)
             }
             None => {
                 scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
@@ -6748,34 +6794,34 @@ pub fn plan_comment(
             let item = scx.get_item_by_resolved_name(name)?;
             match (com_ty, item.item_type()) {
                 (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
-                    (CommentObjectId::Table(item.id()), None)
+                    (CommentObjectId::Table(item.item_id()), None)
                 }
                 (CommentObjectType::View { .. }, CatalogItemType::View) => {
-                    (CommentObjectId::View(item.id()), None)
+                    (CommentObjectId::View(item.item_id()), None)
                 }
                 (CommentObjectType::MaterializedView { .. }, CatalogItemType::MaterializedView) => {
-                    (CommentObjectId::MaterializedView(item.id()), None)
+                    (CommentObjectId::MaterializedView(item.item_id()), None)
                 }
                 (CommentObjectType::Index { .. }, CatalogItemType::Index) => {
-                    (CommentObjectId::Index(item.id()), None)
+                    (CommentObjectId::Index(item.item_id()), None)
                 }
                 (CommentObjectType::Func { .. }, CatalogItemType::Func) => {
-                    (CommentObjectId::Func(item.id()), None)
+                    (CommentObjectId::Func(item.item_id()), None)
                 }
                 (CommentObjectType::Connection { .. }, CatalogItemType::Connection) => {
-                    (CommentObjectId::Connection(item.id()), None)
+                    (CommentObjectId::Connection(item.item_id()), None)
                 }
                 (CommentObjectType::Source { .. }, CatalogItemType::Source) => {
-                    (CommentObjectId::Source(item.id()), None)
+                    (CommentObjectId::Source(item.item_id()), None)
                 }
                 (CommentObjectType::Sink { .. }, CatalogItemType::Sink) => {
-                    (CommentObjectId::Sink(item.id()), None)
+                    (CommentObjectId::Sink(item.item_id()), None)
                 }
                 (CommentObjectType::Secret { .. }, CatalogItemType::Secret) => {
-                    (CommentObjectId::Secret(item.id()), None)
+                    (CommentObjectId::Secret(item.item_id()), None)
                 }
                 (CommentObjectType::ContinualTask { .. }, CatalogItemType::ContinualTask) => {
-                    (CommentObjectId::ContinualTask(item.id()), None)
+                    (CommentObjectId::ContinualTask(item.item_id()), None)
                 }
                 (com_ty, cat_ty) => {
                     let expected_type = match com_ty {
@@ -6814,13 +6860,14 @@ pub fn plan_comment(
         CommentObjectType::Column { name } => {
             let (item, pos) = scx.get_column_by_resolved_name(name)?;
             match item.item_type() {
-                CatalogItemType::Table => (CommentObjectId::Table(item.id()), Some(pos + 1)),
-                CatalogItemType::Source => (CommentObjectId::Source(item.id()), Some(pos + 1)),
-                CatalogItemType::View => (CommentObjectId::View(item.id()), Some(pos + 1)),
-                CatalogItemType::MaterializedView => {
-                    (CommentObjectId::MaterializedView(item.id()), Some(pos + 1))
-                }
-                CatalogItemType::Type => (CommentObjectId::Type(item.id()), Some(pos + 1)),
+                CatalogItemType::Table => (CommentObjectId::Table(item.item_id()), Some(pos + 1)),
+                CatalogItemType::Source => (CommentObjectId::Source(item.item_id()), Some(pos + 1)),
+                CatalogItemType::View => (CommentObjectId::View(item.item_id()), Some(pos + 1)),
+                CatalogItemType::MaterializedView => (
+                    CommentObjectId::MaterializedView(item.item_id()),
+                    Some(pos + 1),
+                ),
+                CatalogItemType::Type => (CommentObjectId::Type(item.item_id()), Some(pos + 1)),
                 r => {
                     return Err(PlanError::Unsupported {
                         feature: format!("Specifying comments on a column of {r}"),

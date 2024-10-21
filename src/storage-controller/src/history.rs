@@ -206,7 +206,7 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::url::SensitiveUrl;
     use mz_persist_types::PersistLocation;
-    use mz_repr::{GlobalId, RelationDesc, RelationType};
+    use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationType};
     use mz_storage_client::client::{RunIngestionCommand, RunSinkCommand};
     use mz_storage_client::metrics::StorageControllerMetrics;
     use mz_storage_types::connections::inline::InlinedConnection;
@@ -326,7 +326,7 @@ mod tests {
                 Vec::<String>::new(),
             ),
             connection: StorageSinkConnection::Kafka(KafkaSinkConnection {
-                connection_id: GlobalId::System(2),
+                connection_id: CatalogItemId::System(2),
                 connection: KafkaConnection {
                     brokers: Default::default(),
                     default_tunnel: Tunnel::Direct,

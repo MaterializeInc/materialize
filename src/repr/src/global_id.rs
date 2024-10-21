@@ -18,6 +18,8 @@ use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::CatalogItemId;
+
 include!(concat!(env!("OUT_DIR"), "/mz_repr.global_id.rs"));
 
 /// The identifier for an item/object.
@@ -145,7 +147,8 @@ impl TransientIdGen {
         Self(inner)
     }
 
-    pub fn allocate_id(&self) -> GlobalId {
-        GlobalId::Transient(self.0.allocate_id())
+    pub fn allocate_id(&self) -> (CatalogItemId, GlobalId) {
+        let inner = self.0.allocate_id();
+        (CatalogItemId::Transient(inner), GlobalId::Transient(inner))
     }
 }

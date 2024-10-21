@@ -12,7 +12,7 @@
 use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, ScalarType};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ include!(concat!(
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct PostgresSourceConnection<C: ConnectionAccess = InlinedConnection> {
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     pub connection: C::Pg,
     pub publication: String,
     pub publication_details: PostgresSourcePublicationDetails,
@@ -119,7 +119,7 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
         PG_PROGRESS_DESC.clone()
     }
 
-    fn connection_id(&self) -> Option<GlobalId> {
+    fn connection_id(&self) -> Option<CatalogItemId> {
         Some(self.connection_id)
     }
 
@@ -327,7 +327,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
 }
 
 impl AlterCompatible for PostgresSourcePublicationDetails {
-    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let PostgresSourcePublicationDetails {
             slot,
             timeline_id,
