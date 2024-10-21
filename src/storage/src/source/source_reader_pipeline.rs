@@ -42,7 +42,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
@@ -553,7 +553,10 @@ where
                     });
                 prev_probe = new_probe;
                 let probe = prev_probe.clone().unwrap();
-                (probe.probe_ts, probe.upstream_frontier)
+                (
+                    probe.probe_ts.step_forward_by(&1000.into()),
+                    probe.upstream_frontier,
+                )
             } else {
                 ticker.tick().await;
                 // We only proceed if the source upper frontier is not the minimum frontier. This
