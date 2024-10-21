@@ -1902,19 +1902,37 @@ impl<'a> Parser<'a> {
             let index = self.index;
 
             // go over optional modifiers
-            let _ = self.parse_keywords(&[OR, REPLACE]);
-            let _ = self.parse_one_of_keywords(&[TEMP, TEMPORARY]);
+            let parsed_or_replace = self.parse_keywords(&[OR, REPLACE]);
+            let parsed_temporary = self.parse_one_of_keywords(&[TEMP, TEMPORARY]).is_some();
 
             if self.parse_keyword(VIEW) {
                 self.index = index;
                 self.parse_create_view()
                     .map_parser_err(StatementKind::CreateView)
             } else {
-                self.expected(
-                    self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE",
-                    self.peek_token(),
-                ).map_no_statement_parser_err()
+                if parsed_or_replace {
+                    if parsed_temporary {
+                        self.expected(
+                            self.peek_pos(),
+                            "VIEW after CREATE OR REPLACE TEMPORARY",
+                            self.peek_token(),
+                        )
+                        .map_no_statement_parser_err()
+                    } else {
+                        self.expected(
+                            self.peek_pos(),
+                            "[TEMPORARY] VIEW, or MATERIALIZED VIEW after CREATE OR REPLACE",
+                            self.peek_token(),
+                        )
+                        .map_no_statement_parser_err()
+                    }
+                } else {
+                    self.expected(
+                        self.peek_pos(),
+                        "DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE",
+                        self.peek_token(),
+                    ).map_no_statement_parser_err()
+                }
             }
         }
     }
