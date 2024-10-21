@@ -73,6 +73,7 @@ impl TimelineContext {
 
     /// Whether the context contains a timeline of type [`Timeline::EpochMilliseconds`].
     pub fn is_timeline_epoch_ms(&self) -> bool {
+        debug!(timeline_ctx = ?self, "checking if timeline context is EpochMilliseconds");
         matches!(self, &Self::TimelineDependent(Timeline::EpochMilliseconds))
     }
 }
