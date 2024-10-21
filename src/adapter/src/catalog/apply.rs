@@ -873,11 +873,13 @@ impl CatalogState {
                 let mz_catalog::durable::Item {
                     id,
                     oid,
+                    global_id,
                     schema_id,
                     name,
                     create_sql,
                     owner_id,
                     privileges,
+                    extra_versions,
                 } = item;
                 let schema = self.find_non_temp_schema(&schema_id);
                 let name = QualifiedItemName {
@@ -895,9 +897,11 @@ impl CatalogState {
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
                         if retraction.create_sql() != create_sql {
-                            let item = self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
-                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                            });
+                            let item = self
+                                .deserialize_item(global_id, &create_sql, &extra_versions)
+                                .unwrap_or_else(|e| {
+                                    panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                                });
                             retraction.item = item;
                         }
                         retraction.id = id;
@@ -909,8 +913,9 @@ impl CatalogState {
                         retraction
                     }
                     None => {
-                        let catalog_item =
-                            self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
+                        let catalog_item = self
+                            .deserialize_item(global_id, &create_sql, &extra_versions)
+                            .unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
                         CatalogEntry {
@@ -1147,7 +1152,7 @@ impl CatalogState {
         }
     }
 
-    fn get_entry_mut(&mut self, id: &GlobalId) -> &mut CatalogEntry {
+    fn get_entry_mut(&mut self, id: &CatalogItemId) -> &mut CatalogEntry {
         self.entry_by_id
             .get_mut(id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
@@ -1366,7 +1371,7 @@ impl CatalogState {
             };
         }
 
-        for u in &entry.references().0 {
+        for u in entry.references().items() {
             match self.entry_by_id.get_mut(u) {
                 Some(metadata) => metadata.referenced_by.push(entry.id()),
                 None => panic!(
@@ -1391,6 +1396,9 @@ impl CatalogState {
                 ),
             }
         }
+        for gid in entry.item.global_ids() {
+            self.entry_by_global_id.insert(gid, entry.id());
+        }
         let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema = self.get_schema_mut(
             &entry.name().qualifiers.database_spec,
@@ -1402,8 +1410,12 @@ impl CatalogState {
             CatalogItem::Func(_) => schema
                 .functions
                 .insert(entry.name().item.clone(), entry.id()),
-            CatalogItem::Type(_) => schema.types.insert(entry.name().item.clone(), entry.id()),
-            _ => schema.items.insert(entry.name().item.clone(), entry.id()),
+            CatalogItem::Type(_) => schema
+                .types
+                .insert(entry.name().item.clone(), entry.id()),
+            _ => schema
+                .items
+                .insert(entry.name().item.clone(), entry.id()),
         };
 
         assert!(
@@ -1415,10 +1427,10 @@ impl CatalogState {
         self.entry_by_id.insert(entry.id(), entry.clone());
     }
 
-    /// Associates a name, `GlobalId`, and entry.
+    /// Associates a name, [`CatalogItemId`], and entry.
     fn insert_item(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         name: QualifiedItemName,
         item: CatalogItem,
@@ -1440,17 +1452,22 @@ impl CatalogState {
     }
 
     #[mz_ore::instrument(level = "trace")]
-    fn drop_item(&mut self, id: GlobalId) -> CatalogEntry {
+    fn drop_item(&mut self, id: CatalogItemId) -> CatalogEntry {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
-        for u in &metadata.references().0 {
+        for u in metadata.references().items() {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
-                dep_metadata.referenced_by.retain(|u| *u != metadata.id())
+                dep_metadata
+                    .referenced_by
+                    .retain(|u| *u != metadata.id())
             }
         }
         for u in metadata.uses() {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
                 dep_metadata.used_by.retain(|u| *u != metadata.id())
             }
+        }
+        for gid in metadata.global_ids() {
+            self.entry_by_global_id.remove(&gid);
         }
 
         let conn_id = metadata.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
@@ -1718,7 +1735,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             // we can just always move sinks to the end.
             .sorted_by_key(|(item, _ts, _diff)| {
                 if item.create_sql.starts_with("CREATE SINK") {
-                    GlobalId::User(u64::MAX)
+                    CatalogItemId::User(u64::MAX)
                 } else {
                     item.id
                 }
@@ -1739,7 +1756,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             // and can never depend upon one another, to fix the topological sort,
             // we can just always move sinks to the end.
             .sorted_by_key(|(item, _ts, _diff)| match item.item.typ() {
-                CatalogItemType::Sink => GlobalId::User(u64::MAX),
+                CatalogItemType::Sink => CatalogItemId::User(u64::MAX),
                 _ => item.id,
             })
             .collect()

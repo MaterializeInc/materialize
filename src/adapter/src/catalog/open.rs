@@ -216,6 +216,7 @@ impl Catalog {
             database_by_name: BTreeMap::new(),
             database_by_id: BTreeMap::new(),
             entry_by_id: BTreeMap::new(),
+            entry_by_global_id: BTreeMap::new(),
             ambient_schemas_by_name: BTreeMap::new(),
             ambient_schemas_by_id: BTreeMap::new(),
             clusters_by_name: BTreeMap::new(),
@@ -518,12 +519,16 @@ impl Catalog {
     async fn initialize_storage_controller_state(
         &mut self,
         storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
-        storage_collections_to_drop: BTreeSet<GlobalId>,
+        storage_collections_to_drop: BTreeSet<CatalogItemId>,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
         let collections = self
             .entries()
             .filter(|entry| entry.item().is_storage_collection())
-            .map(|entry| entry.id())
+            .flat_map(|entry| entry.global_ids())
+            .collect();
+        let collections_to_drop = storage_collections_to_drop
+            .into_iter()
+            .flat_map(|item_id| self.get_entry(&item_id).global_ids())
             .collect();
 
         // Clone the state so that any errors that occur do not leak any
@@ -534,7 +539,7 @@ impl Catalog {
         let mut txn = storage.transaction().await?;
 
         storage_controller
-            .initialize_state(&mut txn, collections, storage_collections_to_drop)
+            .initialize_state(&mut txn, collections, collections_to_drop)
             .await
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
@@ -556,7 +561,7 @@ impl Catalog {
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
-        storage_collections_to_drop: BTreeSet<GlobalId>,
+        storage_collections_to_drop: BTreeSet<CatalogItemId>,
     ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
     {
         let controller_start = Instant::now();

@@ -17,7 +17,7 @@ use futures::FutureExt;
 use inner::return_if_err;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Diff, GlobalId, RowCollection};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RowCollection};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
@@ -140,13 +140,14 @@ impl Coordinator {
 
             match plan {
                 Plan::CreateSource(plan) => {
-                    let source_id =
+                    let (item_id, global_id) =
                         return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
                     let result = self
                         .sequence_create_source(
                             ctx.session_mut(),
                             vec![CreateSourcePlanBundle {
-                                source_id,
+                                item_id,
+                                global_id,
                                 plan,
                                 resolved_ids,
                                 available_source_references: None,
@@ -157,7 +158,7 @@ impl Coordinator {
                 }
                 Plan::CreateSources(plans) => {
                     assert!(
-                        resolved_ids.0.is_empty(),
+                        resolved_ids.is_empty(),
                         "each plan has separate resolved_ids"
                     );
                     let result = self.sequence_create_source(ctx.session_mut(), plans).await;
@@ -425,11 +426,6 @@ impl Coordinator {
                         .sequence_alter_item_rename(ctx.session_mut(), plan)
                         .await;
                     ctx.retire(result);
-                }
-                Plan::AlterItemSwap(_plan) => {
-                    // Note: we should never reach this point because we return an unsupported error in
-                    // planning.
-                    ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
                 }
                 Plan::AlterSchemaRename(plan) => {
                     let result = self
@@ -713,7 +709,7 @@ impl Coordinator {
         self.sequence_create_role(None, plan).await
     }
 
-    pub(crate) fn allocate_transient_id(&self) -> GlobalId {
+    pub(crate) fn allocate_transient_id(&self) -> (CatalogItemId, GlobalId) {
         self.transient_id_gen.allocate_id()
     }
 
@@ -728,7 +724,7 @@ impl Coordinator {
     pub(crate) fn insert_constant(
         catalog: &Catalog,
         session: &mut Session,
-        id: GlobalId,
+        id: CatalogItemId,
         constants: MirRelationExpr,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Insert can be queued, so we need to re-verify the id exists.

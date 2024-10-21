@@ -9,6 +9,8 @@
 
 //! This module is responsible for serializing catalog objects into Protobuf.
 
+use std::time::Duration;
+
 use mz_audit_log::{
     AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
     CreateClusterReplicaV1, CreateClusterReplicaV2, CreateIndexV1, CreateMaterializedViewV1,
@@ -26,7 +28,7 @@ use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
@@ -34,7 +36,6 @@ use mz_sql::names::{
 use mz_sql::plan::ClusterSchedule;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_types::instances::StorageInstanceId;
-use std::time::Duration;
 
 use crate::durable::objects::serialization::proto::{
     cluster_schedule, ClusterScheduleRefreshOptions, Empty,
@@ -48,7 +49,8 @@ use crate::durable::objects::{
     ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
     ServerConfigurationValue, SettingKey, SettingValue, SourceReference, SourceReferencesKey,
     SourceReferencesValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
-    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey, SystemPrivilegesValue,
+    TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -326,14 +328,20 @@ impl RustType<proto::GidMappingKey> for GidMappingKey {
 impl RustType<proto::GidMappingValue> for GidMappingValue {
     fn into_proto(&self) -> proto::GidMappingValue {
         proto::GidMappingValue {
-            id: self.id,
+            catalog_id: Some(self.catalog_id.into_proto()),
+            global_id: Some(self.collection_id.into_proto()),
             fingerprint: self.fingerprint.to_string(),
         }
     }
 
     fn from_proto(proto: proto::GidMappingValue) -> Result<Self, TryFromProtoError> {
         Ok(GidMappingValue {
-            id: proto.id,
+            catalog_id: proto
+                .catalog_id
+                .into_rust_if_some("GidMappingValue::catalog_id")?,
+            collection_id: proto
+                .global_id
+                .into_rust_if_some("GidMappingValue::global_id")?,
             fingerprint: proto.fingerprint,
         })
     }
@@ -398,6 +406,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
 {
     fn into_proto(&self) -> proto::ClusterIntrospectionSourceIndexValue {
         proto::ClusterIntrospectionSourceIndexValue {
+            item_id: self.item_id,
             index_id: self.index_id,
             oid: self.oid,
         }
@@ -407,6 +416,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
         proto: proto::ClusterIntrospectionSourceIndexValue,
     ) -> Result<Self, TryFromProtoError> {
         Ok(ClusterIntrospectionSourceIndexValue {
+            item_id: proto.item_id,
             index_id: proto.index_id,
             oid: proto.oid,
         })
@@ -528,13 +538,13 @@ impl RustType<proto::SchemaValue> for SchemaValue {
 impl RustType<proto::ItemKey> for ItemKey {
     fn into_proto(&self) -> proto::ItemKey {
         proto::ItemKey {
-            gid: Some(self.gid.into_proto()),
+            id: Some(self.id.into_proto()),
         }
     }
 
     fn from_proto(proto: proto::ItemKey) -> Result<Self, TryFromProtoError> {
         Ok(ItemKey {
-            gid: proto.gid.into_rust_if_some("ItemKey::gid")?,
+            id: proto.id.into_rust_if_some("ItemKey::id")?,
         })
     }
 }
@@ -553,6 +563,15 @@ impl RustType<proto::ItemValue> for ItemValue {
             owner_id: Some(self.owner_id.into_proto()),
             privileges: self.privileges.into_proto(),
             oid: self.oid,
+            global_id: Some(self.global_id.into_proto()),
+            extra_versions: self
+                .extra_versions
+                .iter()
+                .map(|(version, global_id)| proto::ItemVersion {
+                    global_id: Some(global_id.into_proto()),
+                    version: Some(version.into_proto()),
+                })
+                .collect(),
         }
     }
 
@@ -565,6 +584,19 @@ impl RustType<proto::ItemValue> for ItemValue {
         let create_sql = match create_sql_value {
             proto::catalog_item::Value::V1(c) => c.create_sql,
         };
+        let extra_versions = proto
+            .extra_versions
+            .into_iter()
+            .map(|item_version| {
+                let version = item_version
+                    .version
+                    .into_rust_if_some("ItemVersion::version")?;
+                let global_id = item_version
+                    .global_id
+                    .into_rust_if_some("ItemVersion::global_id")?;
+                Ok::<_, TryFromProtoError>((version, global_id))
+            })
+            .collect::<Result<_, _>>()?;
         Ok(ItemValue {
             schema_id: proto.schema_id.into_rust_if_some("ItemValue::schema_id")?,
             name: proto.name,
@@ -572,7 +604,21 @@ impl RustType<proto::ItemValue> for ItemValue {
             owner_id: proto.owner_id.into_rust_if_some("ItemValue::owner_id")?,
             privileges: proto.privileges.into_rust()?,
             oid: proto.oid,
+            global_id: proto.global_id.into_rust_if_some("ItemValue::global_id")?,
+            extra_versions,
         })
+    }
+}
+
+impl RustType<proto::Version> for RelationVersion {
+    fn into_proto(&self) -> proto::Version {
+        proto::Version {
+            value: self.into_raw(),
+        }
+    }
+
+    fn from_proto(proto: proto::Version) -> Result<Self, TryFromProtoError> {
+        Ok(RelationVersion::from_raw(proto.value))
     }
 }
 
@@ -1460,6 +1506,37 @@ impl RustType<proto::Timestamp> for Timestamp {
     }
 }
 
+impl RustType<proto::CatalogItemId> for CatalogItemId {
+    fn into_proto(&self) -> proto::CatalogItemId {
+        proto::CatalogItemId {
+            value: Some(match self {
+                CatalogItemId::System(x) => proto::catalog_item_id::Value::System(*x),
+                CatalogItemId::User(x) => proto::catalog_item_id::Value::User(*x),
+                CatalogItemId::Transient(x) => proto::catalog_item_id::Value::Transient(*x),
+            }),
+        }
+    }
+
+    fn from_proto(proto: proto::CatalogItemId) -> Result<Self, TryFromProtoError> {
+        match proto.value {
+            Some(proto::catalog_item_id::Value::System(x)) => Ok(CatalogItemId::System(x)),
+            Some(proto::catalog_item_id::Value::User(x)) => Ok(CatalogItemId::User(x)),
+            Some(proto::catalog_item_id::Value::Transient(x)) => Ok(CatalogItemId::Transient(x)),
+            None => Err(TryFromProtoError::missing_field("CatalogItemId::kind")),
+        }
+    }
+}
+
+impl RustType<proto::SystemCatalogItemId> for SystemCatalogItemId {
+    fn into_proto(&self) -> proto::SystemCatalogItemId {
+        proto::SystemCatalogItemId { value: self.0 }
+    }
+
+    fn from_proto(proto: proto::SystemCatalogItemId) -> Result<Self, TryFromProtoError> {
+        Ok(SystemCatalogItemId(proto.value))
+    }
+}
+
 impl RustType<proto::GlobalId> for GlobalId {
     fn into_proto(&self) -> proto::GlobalId {
         proto::GlobalId {
@@ -1480,6 +1557,16 @@ impl RustType<proto::GlobalId> for GlobalId {
             Some(proto::global_id::Value::Explain(_)) => Ok(GlobalId::Explain),
             None => Err(TryFromProtoError::missing_field("GlobalId::kind")),
         }
+    }
+}
+
+impl RustType<proto::SystemGlobalId> for SystemGlobalId {
+    fn into_proto(&self) -> proto::SystemGlobalId {
+        proto::SystemGlobalId { value: self.0 }
+    }
+
+    fn from_proto(proto: proto::SystemGlobalId) -> Result<Self, TryFromProtoError> {
+        Ok(SystemGlobalId(proto.value))
     }
 }
 

@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
@@ -304,15 +305,15 @@ impl Catalog {
         !item.is_temporary()
     }
 
-    /// Gets GlobalIds of temporary items to be created, checks for name collisions
+    /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
     /// within a connection id.
     fn temporary_ids(
         &self,
         ops: &[Op],
         temporary_drops: BTreeSet<(&ConnectionId, String)>,
-    ) -> Result<Vec<GlobalId>, Error> {
+    ) -> Result<BTreeSet<CatalogItemId>, Error> {
         let mut creating = BTreeSet::new();
-        let mut temporary_ids = Vec::with_capacity(ops.len());
+        let mut temporary_ids = BTreeSet::new();
         for op in ops.iter() {
             if let Op::CreateItem {
                 id,
@@ -331,7 +332,7 @@ impl Catalog {
                         );
                     } else {
                         creating.insert((conn_id, &name.item));
-                        temporary_ids.push(id.clone());
+                        temporary_ids.insert(id.clone());
                     }
                 }
             }
@@ -356,7 +357,7 @@ impl Catalog {
             )))
         });
 
-        let drop_ids: BTreeSet<GlobalId> = ops
+        let drop_ids: BTreeSet<CatalogItemId> = ops
             .iter()
             .filter_map(|op| match op {
                 Op::DropObjects(drop_object_infos) => {
@@ -381,6 +382,11 @@ impl Catalog {
                 }
             })
             .collect();
+        let dropped_global_ids = drop_ids
+            .iter()
+            .flat_map(|item_id| self.get_global_ids(item_id))
+            .collect();
+
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
         let mut audit_events = vec![];
@@ -420,7 +426,7 @@ impl Catalog {
         self.transient_revision += 1;
 
         // Drop in-memory planning metadata.
-        let dropped_notices = self.drop_plans_and_metainfos(&drop_ids);
+        let dropped_notices = self.drop_plans_and_metainfos(&dropped_global_ids);
         if self.state.system_config().enable_mz_notices() {
             // Generate retractions for the Builtin tables.
             self.state().pack_optimizer_notices(
@@ -448,7 +454,7 @@ impl Catalog {
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         mut ops: Vec<Op>,
-        temporary_ids: Vec<GlobalId>,
+        temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
@@ -554,7 +560,7 @@ impl Catalog {
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         op: Op,
-        temporary_ids: &Vec<GlobalId>,
+        temporary_ids: &BTreeSet<CatalogItemId>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &CatalogState,
@@ -849,9 +855,11 @@ impl Catalog {
                         .collect();
                 let introspection_source_ids =
                     tx.allocate_system_item_ids(usize_to_u64(introspection_sources.len()))?;
+
                 let introspection_sources = introspection_sources
                     .into_iter()
-                    .zip(introspection_source_ids.into_iter())
+                    .zip_eq(introspection_source_ids.into_iter())
+                    .map(|(log, (item_id, gid))| (log, item_id, gid))
                     .collect();
 
                 tx.insert_user_cluster(
@@ -936,8 +944,29 @@ impl Catalog {
             } => {
                 state.check_unstable_dependencies(&item)?;
 
-                if item.is_storage_collection() {
-                    storage_collections_to_create.insert(id);
+                match &item {
+                    CatalogItem::Table(table) => {
+                        let gids: Vec<_> = table.global_ids().collect();
+                        assert_eq!(gids.len(), 1);
+                        storage_collections_to_create.extend(gids);
+                    }
+                    CatalogItem::Source(source) => {
+                        storage_collections_to_create.insert(source.global_id());
+                    }
+                    CatalogItem::MaterializedView(mv) => {
+                        storage_collections_to_create.insert(mv.global_id());
+                    }
+                    CatalogItem::ContinualTask(ct) => {
+                        storage_collections_to_create.insert(ct.global_id());
+                    }
+                    CatalogItem::Log(_)
+                    | CatalogItem::Sink(_)
+                    | CatalogItem::View(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Connection(_) => (),
                 }
 
                 let system_user = session.map_or(false, |s| s.user().is_system_user());
@@ -1000,10 +1029,12 @@ impl Catalog {
                     temporary_item_updates.push((item, StateDiff::Addition));
                 } else {
                     if let Some(temp_id) =
-                        item.uses().iter().find(|id| match state.try_get_entry(id) {
-                            Some(entry) => entry.item().is_temporary(),
-                            None => temporary_ids.contains(id),
-                        })
+                        item.uses()
+                            .iter()
+                            .find(|id| match state.try_get_entry(*id) {
+                                Some(entry) => entry.item().is_temporary(),
+                                None => temporary_ids.contains(id),
+                            })
                     {
                         let temp_item = state.get_entry(temp_id);
                         return Err(AdapterError::Catalog(Error::new(
@@ -1022,15 +1053,17 @@ impl Catalog {
                     }
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
-                    let serialized_item = item.to_serialized();
+                    let (create_sql, global_id, versions) = item.to_serialized();
                     tx.insert_user_item(
                         id,
+                        global_id,
                         schema_id,
                         &name.item,
-                        serialized_item,
+                        create_sql,
                         owner_id,
                         privileges.clone(),
                         &temporary_oids,
+                        versions,
                     )?;
                     info!(
                         "create {} {} ({})",
@@ -1050,7 +1083,7 @@ impl Catalog {
                                 // Ingestion exports don't have their own cluster, but
                                 // run on their ingestion's cluster.
                                 DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                                    match state.get_entry(&ingestion_id).cluster_id() {
+                                    match state.get_entry_by_global_id(&ingestion_id).cluster_id() {
                                         Some(cluster_id) => Some(cluster_id.to_string()),
                                         None => None,
                                     }
@@ -1167,8 +1200,8 @@ impl Catalog {
                     delta
                         .items
                         .iter()
-                        .copied()
-                        .partition(|id| !state.get_entry(id).item().is_temporary());
+                        .map(|id| id)
+                        .partition(|id| !state.get_entry(*id).item().is_temporary());
                 tx.remove_items(&durable_items_to_drop)?;
                 temporary_item_updates.extend(temporary_items_to_drop.into_iter().map(|id| {
                     let entry = state.get_entry(&id);
@@ -1178,8 +1211,27 @@ impl Catalog {
                 for item_id in delta.items {
                     let entry = state.get_entry(&item_id);
 
-                    if entry.item().is_storage_collection() {
-                        storage_collections_to_drop.insert(item_id);
+                    match entry.item() {
+                        CatalogItem::Table(table) => {
+                            storage_collections_to_drop.extend(table.global_ids());
+                        }
+                        CatalogItem::Source(source) => {
+                            storage_collections_to_drop.insert(source.global_id());
+                        }
+                        CatalogItem::MaterializedView(mv) => {
+                            storage_collections_to_drop.insert(mv.global_id());
+                        }
+                        CatalogItem::ContinualTask(ct) => {
+                            storage_collections_to_drop.insert(ct.global_id());
+                        }
+                        CatalogItem::Log(_)
+                        | CatalogItem::Sink(_)
+                        | CatalogItem::View(_)
+                        | CatalogItem::Index(_)
+                        | CatalogItem::Type(_)
+                        | CatalogItem::Func(_)
+                        | CatalogItem::Secret(_)
+                        | CatalogItem::Connection(_) => (),
                     }
 
                     if state.source_references.contains_key(&item_id) {

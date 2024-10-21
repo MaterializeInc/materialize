@@ -22,7 +22,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::optimize::OverrideFrom;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, RelationVersion, Timestamp};
 use mz_sql::ast::{ContinualTaskStmt, RawItemName};
 use mz_sql::names::{FullItemName, PartialItemName, ResolvedIds};
 use mz_sql::plan;
@@ -56,14 +56,18 @@ impl Coordinator {
 
         // Put a placeholder in the catalog so the optimizer can find something
         // for the sink_id.
-        let sink_id = self.catalog_mut().allocate_user_id().await?;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
+
+        let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+
         let bootstrap_catalog = ContinualTaskCatalogBootstrap {
             delegate: self.owned_catalog().as_optimizer_catalog(),
-            sink_id,
+            sink_id: global_id,
             entry: CatalogEntry {
                 item: CatalogItem::Table(Table {
                     create_sql: None,
                     desc: desc.clone(),
+                    collections,
                     conn_id: None,
                     resolved_ids: resolved_ids.clone(),
                     custom_logical_compaction_window: None,
@@ -74,7 +78,7 @@ impl Coordinator {
                 }),
                 referenced_by: Vec::new(),
                 used_by: Vec::new(),
-                id: sink_id,
+                id: item_id,
                 oid: 0,
                 name: name.clone(),
                 owner_id: *session.current_role_id(),
@@ -83,15 +87,15 @@ impl Coordinator {
         };
 
         let is_timeline_epoch_ms = self
-            .validate_timeline_context(resolved_ids.0.clone())?
+            .validate_timeline_context(resolved_ids.collections().copied())?
             .is_timeline_epoch_ms();
 
         // Construct the CatalogItem for this CT and optimize it.
-        let mut item = crate::continual_task::ct_item_from_plan(plan, sink_id, resolved_ids)?;
+        let mut item = crate::continual_task::ct_item_from_plan(plan, global_id, resolved_ids)?;
         let full_name = bootstrap_catalog.resolve_full_name(&name, Some(session.conn_id()));
         let (optimized_plan, mut physical_plan, metainfo) = self.optimize_create_continual_task(
             &item,
-            sink_id,
+            global_id,
             Arc::new(bootstrap_catalog),
             full_name.to_string(),
             is_timeline_epoch_ms,
@@ -106,7 +110,7 @@ impl Coordinator {
         // coordinator only to ensure inputs don't get compacted until the
         // compute controller has installed its own read holds, which happens
         // below with the `ship_dataflow` call.
-        id_bundle.storage_ids.remove(&sink_id);
+        id_bundle.storage_ids.remove(&global_id);
         let read_holds = self.acquire_read_holds(&id_bundle);
         let as_of = read_holds.least_valid_read();
         physical_plan.set_as_of(as_of.clone());
@@ -117,7 +121,7 @@ impl Coordinator {
         item.create_sql = update_create_sql(&item.create_sql, &full_name, as_of.as_option());
 
         let ops = vec![catalog::Op::CreateItem {
-            id: sink_id,
+            id: item_id,
             name: name.clone(),
             item: CatalogItem::ContinualTask(item),
             owner_id: *session.current_role_id(),
@@ -126,9 +130,9 @@ impl Coordinator {
         let () = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 let catalog = coord.catalog_mut();
-                catalog.set_optimized_plan(sink_id, optimized_plan);
-                catalog.set_physical_plan(sink_id, physical_plan.clone());
-                catalog.set_dataflow_metainfo(sink_id, metainfo);
+                catalog.set_optimized_plan(global_id, optimized_plan);
+                catalog.set_physical_plan(global_id, physical_plan.clone());
+                catalog.set_dataflow_metainfo(global_id, metainfo);
 
                 coord
                     .controller
@@ -137,7 +141,7 @@ impl Coordinator {
                         coord.catalog.state().storage_metadata(),
                         None,
                         vec![(
-                            sink_id,
+                            global_id,
                             CollectionDescription {
                                 desc,
                                 data_source: DataSource::Other,
@@ -172,7 +176,7 @@ impl Coordinator {
     > {
         let catalog = Arc::new(NoIndexCatalog { delegate: catalog });
 
-        let view_id = self.allocate_transient_id();
+        let (_, view_id) = self.allocate_transient_id();
         let compute_instance = self
             .instance_snapshot(ct.cluster_id)
             .expect("compute instance does not exist");
@@ -226,6 +230,7 @@ impl Coordinator {
         // Create a metainfo with rendered notices, preallocating a transient
         // GlobalId for each.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+            .map(|(_item_id, global_id)| global_id)
             .take(metainfo.optimizer_notices.len())
             .collect();
         let metainfo = self

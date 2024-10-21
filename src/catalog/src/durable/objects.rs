@@ -37,7 +37,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
@@ -457,13 +457,15 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Item {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub oid: u32,
+    pub global_id: GlobalId,
     pub schema_id: SchemaId,
     pub name: String,
     pub create_sql: String,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
+    pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
 }
 
 impl DurableType for Item {
@@ -472,38 +474,42 @@ impl DurableType for Item {
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
-            ItemKey { gid: self.id },
+            ItemKey { id: self.id },
             ItemValue {
                 oid: self.oid,
+                global_id: self.global_id,
                 schema_id: self.schema_id,
                 name: self.name,
                 create_sql: self.create_sql,
                 owner_id: self.owner_id,
                 privileges: self.privileges,
+                extra_versions: self.extra_versions,
             },
         )
     }
 
     fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
-            id: key.gid,
+            id: key.id,
             oid: value.oid,
+            global_id: value.global_id,
             schema_id: value.schema_id,
             name: value.name,
             create_sql: value.create_sql,
             owner_id: value.owner_id,
             privileges: value.privileges,
+            extra_versions: value.extra_versions,
         }
     }
 
     fn key(&self) -> Self::Key {
-        ItemKey { gid: self.id }
+        ItemKey { id: self.id }
     }
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SourceReferences {
-    pub source_id: GlobalId,
+    pub source_id: CatalogItemId,
     pub updated_at: u64,
     pub references: Vec<SourceReference>,
 }
@@ -1064,6 +1070,7 @@ pub struct ClusterIntrospectionSourceIndexKey {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterIntrospectionSourceIndexValue {
+    pub(crate) item_id: u64,
     pub(crate) index_id: u64,
     pub(crate) oid: u32,
 }
@@ -1096,7 +1103,7 @@ pub struct DatabaseValue {
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct SourceReferencesKey {
-    pub(crate) source_id: GlobalId,
+    pub(crate) source_id: CatalogItemId,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
@@ -1121,7 +1128,7 @@ pub struct SchemaValue {
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug, Arbitrary)]
 pub struct ItemKey {
-    pub(crate) gid: GlobalId,
+    pub(crate) id: CatalogItemId,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
@@ -1132,6 +1139,8 @@ pub struct ItemValue {
     pub(crate) owner_id: RoleId,
     pub(crate) privileges: Vec<MzAclItem>,
     pub(crate) oid: u32,
+    pub(crate) global_id: GlobalId,
+    pub(crate) extra_versions: BTreeMap<RelationVersion, GlobalId>,
 }
 
 impl ItemValue {

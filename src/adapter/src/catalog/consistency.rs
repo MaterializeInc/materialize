@@ -335,7 +335,7 @@ impl CatalogState {
         let mut dependency_inconsistencies = vec![];
 
         for (id, entry) in &self.entry_by_id {
-            for referenced_id in &entry.references().0 {
+            for referenced_id in entry.references().items() {
                 let Some(referenced_entry) = self.entry_by_id.get(referenced_id) else {
                     dependency_inconsistencies.push(ObjectDependencyInconsistency::MissingUses {
                         object_a: *id,
@@ -378,7 +378,7 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !referenced_by_entry.references().0.contains(id) {
+                if !referenced_by_entry.references().contains_item(id) {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUses {
                             object_a: *id,

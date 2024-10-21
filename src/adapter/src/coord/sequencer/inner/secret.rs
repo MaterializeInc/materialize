@@ -14,7 +14,7 @@ use mz_catalog::memory::objects::{CatalogItem, Secret};
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
-use mz_repr::{Datum, GlobalId, RowArena};
+use mz_repr::{CatalogItemId, Datum, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{ConnectionOption, ConnectionOptionName, Statement, Value, WithOptionValue};
 use mz_sql::catalog::{CatalogError, ObjectType};
@@ -117,15 +117,21 @@ impl Coordinator {
         session: &Session,
         CreateSecretEnsure { validity, mut plan }: CreateSecretEnsure,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
-        let id = self.catalog_mut().allocate_user_id().await?;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
+
         let secrets_controller = Arc::clone(&self.secrets_controller);
         let payload = self.extract_secret(session, &mut plan.secret.secret_as)?;
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "create secret ensure",
             async move {
-                secrets_controller.ensure(id, &payload).await?;
-                let stage = SecretStage::CreateFinish(CreateSecretFinish { validity, id, plan });
+                secrets_controller.ensure(item_id, &payload).await?;
+                let stage = SecretStage::CreateFinish(CreateSecretFinish {
+                    validity,
+                    item_id,
+                    global_id,
+                    plan,
+                });
                 Ok(Box::new(stage))
             }
             .instrument(span),
@@ -187,7 +193,8 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateSecretFinish {
-            id,
+            item_id,
+            global_id,
             plan,
             validity: _,
         }: CreateSecretFinish,
@@ -199,10 +206,11 @@ impl Coordinator {
         } = plan;
         let secret = Secret {
             create_sql: secret.create_sql,
+            global_id,
         };
 
         let ops = vec![catalog::Op::CreateItem {
-            id,
+            id: item_id,
             name: name.clone(),
             item: CatalogItem::Secret(secret),
             owner_id: *session.current_role_id(),
@@ -221,7 +229,7 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedSecret)
             }
             Err(err) => {
-                if let Err(e) = self.secrets_controller.delete(id).await {
+                if let Err(e) = self.secrets_controller.delete(item_id).await {
                     warn!(
                         "Dropping newly created secrets has encountered an error: {}",
                         e
