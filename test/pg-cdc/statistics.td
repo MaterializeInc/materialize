@@ -140,7 +140,7 @@ mz_source 1 1
 > SELECT
     t.name,
     SUM(u.updates_committed) > 0
-  FROM mz_sources t
+  FROM mz_tables t
   JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
   WHERE t.name IN ('alt')
   GROUP BY t.name

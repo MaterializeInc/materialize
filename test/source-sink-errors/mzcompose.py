@@ -418,7 +418,9 @@ class PgDisruption:
                 # check that the latest stall has the error we expect.
                 > SELECT error ~* '{error}'
                     FROM mz_internal.mz_source_status_history
-                    JOIN mz_sources ON mz_sources.id = source_id
+                    JOIN (
+                      SELECT name, id FROM mz_sources UNION SELECT name, id FROM mz_tables
+                    ) ON id = source_id
                     WHERE (
                         name = 'source1' OR name = 'pg_source'
                     ) AND (status = 'stalled' OR status = 'ceased')
