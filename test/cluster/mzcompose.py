@@ -40,7 +40,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
+from materialize.mzcompose.services.postgres import CockroachOrPostgres, Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -62,7 +62,7 @@ SERVICES = [
         propagate_crashes=False,
         external_cockroach=True,
     ),
-    PostgresAsCockroach(),
+    CockroachOrPostgres(),
     Postgres(),
     Redpanda(),
     Toxiproxy(),

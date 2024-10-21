@@ -27,7 +27,7 @@ from materialize.mzcompose.services.materialized import (
     Materialized,
 )
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.postgres import Postgres, PostgresAsCockroach
+from materialize.mzcompose.services.postgres import CockroachOrPostgres, Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -43,7 +43,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    PostgresAsCockroach(),
+    CockroachOrPostgres(),
     Materialized(
         name="mz_old",
         sanity_restart=False,
