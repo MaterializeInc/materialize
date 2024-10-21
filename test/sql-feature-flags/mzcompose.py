@@ -16,12 +16,14 @@ from textwrap import dedent, indent
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.util import all_subclasses
 
 SERVICES = [
     Redpanda(),
+    CockroachOrPostgres(),
     Materialized(unsafe_mode=False),
     Testdrive(no_reset=True, seed=1),
 ]

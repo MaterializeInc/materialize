@@ -13,9 +13,11 @@ Test that `CREATE SECRET` and using secrets works using a local file for storage
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
+    CockroachOrPostgres(),
     Materialized(),
     Testdrive(),
 ]

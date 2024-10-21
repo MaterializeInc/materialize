@@ -18,10 +18,10 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    CockroachOrPostgres(),
     Service(
         "maelstrom-persist",
         {"mzbuild": "maelstrom-persist", "volumes": ["./maelstrom:/store"]},

@@ -17,10 +17,12 @@ import requests
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 
 SENTRY_DSN = os.getenv("BUILDKITE_SENTRY_DSN")
 
 SERVICES = [
+    CockroachOrPostgres(),
     Materialized(
         options=[
             "--opentelemetry-endpoint=whatever:7777",

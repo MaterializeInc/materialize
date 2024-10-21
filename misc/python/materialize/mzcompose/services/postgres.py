@@ -15,6 +15,7 @@ from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
 )
+from materialize.mzcompose.services.cockroach import Cockroach
 
 
 class Postgres(Service):
@@ -78,3 +79,6 @@ class PostgresAsCockroach(Postgres):
         self,
     ) -> None:
         super().__init__(name="cockroach", setup_materialize=True, ports=["26257"])
+
+
+CockroachOrPostgres = Cockroach

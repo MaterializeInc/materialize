@@ -26,6 +26,7 @@ from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -36,6 +37,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Localstack(),
+    CockroachOrPostgres(),
     Materialized(
         additional_system_parameter_defaults={
             "log_filter": "mz_cluster::server=debug,info",

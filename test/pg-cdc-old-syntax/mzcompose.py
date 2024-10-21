@@ -21,7 +21,7 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service, ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import CockroachOrPostgres, Postgres
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
@@ -83,6 +83,7 @@ def create_postgres(
 
 
 SERVICES = [
+    CockroachOrPostgres(),
     Materialized(
         volumes_extra=["secrets:/share/secrets"],
         additional_system_parameter_defaults={

@@ -20,12 +20,11 @@ import requests
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import CockroachOrPostgres, Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -33,7 +32,7 @@ from materialize.parallel_workload.parallel_workload import parse_common_args, r
 from materialize.parallel_workload.settings import Complexity, Scenario
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    CockroachOrPostgres(),
     Postgres(),
     MySql(),
     Zookeeper(),

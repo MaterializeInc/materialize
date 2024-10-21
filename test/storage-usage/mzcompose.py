@@ -18,7 +18,7 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import CockroachOrPostgres, Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 
@@ -62,6 +62,7 @@ KAFKA_SETUP = dedent(
 SERVICES = [
     Redpanda(),
     Postgres(),
+    CockroachOrPostgres(),
     Materialized(
         environment_extra=[
             f"MZ_STORAGE_USAGE_COLLECTION_INTERVAL={COLLECTION_INTERVAL_SECS}s"

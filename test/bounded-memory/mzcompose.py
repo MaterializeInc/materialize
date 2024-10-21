@@ -22,7 +22,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import CockroachOrPostgres, Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 
@@ -35,6 +35,7 @@ REPEAT = 16 * 1024
 ITERATIONS = 128
 
 SERVICES = [
+    CockroachOrPostgres(),
     Materialized(),  # overridden below
     Testdrive(
         no_reset=True,

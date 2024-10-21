@@ -79,7 +79,7 @@ from materialize.version_list import (
 )
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    Cockroach(),
     Materialized(
         image="materialize/materialized:latest",
         sanity_restart=False,

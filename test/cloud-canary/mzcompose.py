@@ -35,7 +35,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import PostgresAsCockroach
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.redpanda_cloud import RedpandaCloud
 from materialize.ui import UIError
@@ -193,7 +193,7 @@ class Redpanda:
 
 
 SERVICES = [
-    PostgresAsCockroach(),
+    CockroachOrPostgres(),
     Materialized(
         # We use materialize/environmentd and not materialize/materialized here
         # in order to ensure a perfect match to the container that should be

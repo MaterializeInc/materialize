@@ -13,8 +13,10 @@ Basic test for Postgres-compatible connections from Ruby programming language.
 
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 
 SERVICES = [
+    CockroachOrPostgres(),
     Materialized(),
     Service(
         name="ruby",

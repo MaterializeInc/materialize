@@ -17,6 +17,7 @@ import time
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -29,6 +30,7 @@ SERVICES = [
     SchemaRegistry(
         kafka_servers=[("kafka1", "9092"), ("kafka2", "9092"), ("kafka3", "9092")]
     ),
+    CockroachOrPostgres(),
     Materialized(),
     Testdrive(
         entrypoint_extra=[

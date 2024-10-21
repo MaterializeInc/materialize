@@ -19,6 +19,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -29,6 +30,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    CockroachOrPostgres(),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
     Materialized(propagate_crashes=False),
     Clusterd(name="clusterd_1_1"),

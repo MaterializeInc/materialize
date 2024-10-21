@@ -10,7 +10,7 @@
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import CockroachOrPostgres, Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 
@@ -19,6 +19,7 @@ SERVICES = [
     Postgres(),
     MySql(),
     Testdrive(),
+    CockroachOrPostgres(),
     Materialized(),
 ]
 
