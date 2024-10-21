@@ -30,7 +30,7 @@ CREATE TABLE parallel_benchmark_result (
    p99_9999 DOUBLE,
    p99_99999 DOUBLE,
    p99_999999 DOUBLE,
-   std DOUBLE NOT NULL,
+   std DOUBLE,
    slope DOUBLE NOT NULL
 );
 
