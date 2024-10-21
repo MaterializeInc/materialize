@@ -93,7 +93,7 @@ SERVICES = [
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
-    Cockroach(setup_materialize=True),
+    Cockroach(),
     Minio(setup_materialize=True),
     KgenService(),
     Postgres(),

@@ -15,6 +15,7 @@ plaintext, ssl, mssl, sasl_plaintext, sasl_ssl, sasl_mssl
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
@@ -157,6 +158,7 @@ SERVICES = [
             "./schema-registry.user.properties:/etc/schema-registry/user.properties",
         ],
     ),
+    CockroachOrPostgres(),
     Materialized(
         volumes_extra=["secrets:/share/secrets"],
     ),

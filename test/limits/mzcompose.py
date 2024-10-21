@@ -28,7 +28,7 @@ from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import CockroachOrPostgres, Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -1616,6 +1616,7 @@ SERVICES = [
             "secrets:/secrets",
         ],
     ),
+    CockroachOrPostgres(),
     Materialized(
         memory="8G",
         default_size=1,

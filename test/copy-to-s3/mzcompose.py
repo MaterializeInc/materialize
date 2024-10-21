@@ -25,6 +25,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc
 from materialize.mzcompose.services.minio import Minio as MinioService
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
@@ -33,6 +34,7 @@ SERVICES = [
         ports=["9000:9000", "9001:9001"],
         allow_host_ports=True,
     ),
+    CockroachOrPostgres(),
     Materialized(
         additional_system_parameter_defaults={
             "log_filter": "mz_storage_operators::s3_oneshot_sink=trace,debug,info,warn"

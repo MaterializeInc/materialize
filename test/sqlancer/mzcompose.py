@@ -23,8 +23,10 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 
 SERVICES = [
+    CockroachOrPostgres(),
     # Auto-restart so we can keep testing even after we ran into a panic
     Materialized(
         restart="on-failure",

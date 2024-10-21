@@ -57,12 +57,12 @@ SERVICES = [
     Clusterd(name="clusterd2"),
     Clusterd(name="clusterd3"),
     Clusterd(name="clusterd4"),
+    CockroachOrPostgres(),
     Materialized(
         # We use mz_panic() in some test scenarios, so environmentd must stay up.
         propagate_crashes=False,
         external_cockroach=True,
     ),
-    CockroachOrPostgres(),
     Postgres(),
     Redpanda(),
     Toxiproxy(),

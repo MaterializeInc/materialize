@@ -24,11 +24,13 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.alpine import Alpine
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql, create_mysql_server_args
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Alpine(),
+    CockroachOrPostgres(),
     Materialized(),
     MySql(),
     MySql(

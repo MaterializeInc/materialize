@@ -22,7 +22,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import CockroachOrPostgres, Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -36,6 +36,7 @@ SERVICES = [
     Postgres(),
     MySql(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    CockroachOrPostgres(),
     Materialized(external_minio=True),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_minio=True),

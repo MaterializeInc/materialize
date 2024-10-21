@@ -43,7 +43,9 @@ class Materialized(Service):
         default_size: int | str = Size.DEFAULT_SIZE,
         environment_id: str | None = None,
         propagate_crashes: bool = True,
-        external_cockroach: str | bool = False,
+        external_cockroach: str | bool = True,
+        # TODO
+        # external_cockroach: str | bool = os.getenv("BUILDKITE_TAG", "").startswith("v"),
         external_minio: str | bool = False,
         unsafe_mode: bool = True,
         restart: str | None = None,

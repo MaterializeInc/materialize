@@ -24,7 +24,7 @@ from materialize.version_list import (
 mz_options: dict[MzVersion, str] = {}
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    Cockroach(),
     Materialized(external_cockroach=True),
     Testdrive(no_reset=True),
 ]

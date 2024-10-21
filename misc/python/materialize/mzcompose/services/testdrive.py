@@ -47,7 +47,9 @@ class Testdrive(Service):
         aws_access_key_id: str | None = "minioadmin",
         aws_secret_access_key: str | None = "minioadmin",
         no_consistency_checks: bool = False,
-        external_cockroach: bool = False,
+        external_cockroach: bool = True,
+        # TODO
+        # external_cockroach: str | bool = os.getenv("BUILDKITE_TAG", "").startswith("v"),
         external_minio: bool = False,
         fivetran_destination: bool = False,
         fivetran_destination_url: str = "http://fivetran-destination:6874",

@@ -19,6 +19,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metabase import Metabase
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
@@ -28,6 +29,7 @@ SERVICES = [
     SchemaRegistry(),
     Debezium(),
     MySql(root_password="rootpw"),
+    CockroachOrPostgres(),
     Materialized(),
     Metabase(),
     Service(

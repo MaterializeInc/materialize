@@ -17,12 +17,14 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.util import selected_by_name
 
 SERVICES = [
+    CockroachOrPostgres(),
     Materialized(options=["--persist-pubsub-url=http://toxiproxy:6879"]),
     Redpanda(),
     Toxiproxy(),

@@ -26,6 +26,7 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 from materialize.sqlsmith import known_errors
 
 TOTAL_MEMORY = 8
@@ -44,6 +45,7 @@ SERVICES = [
     )
     for mz_server in MZ_SERVERS
 ] + [
+    CockroachOrPostgres(),
     Service(
         "sqlsmith",
         {
