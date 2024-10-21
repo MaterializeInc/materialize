@@ -91,6 +91,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Button, Event, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, FrontierNotificator, Map, Operator};
 use timely::dataflow::{ProbeHandle, Scope};
 use timely::progress::frontier::AntichainRef;
@@ -572,7 +573,18 @@ where
     output_stream.as_collection()
 }
 
-// TODO(ct2): Write this as a non-async operator.
+/// Translates a collection one timestamp "forward" (i.e. `T` -> `T+1` as
+/// defined by `TimestampManipulation::step_forward`).
+///
+/// This includes:
+/// - The differential timestamps in each data.
+/// - The capabilities paired with that data.
+/// - (As a consequence of the previous) the output frontier is one step forward
+///   of the input frontier.
+///
+/// The caller is responsible for ensuring that all data and capabilities given
+/// to this operator can be stepped forward without panicking, otherwise the
+/// operator will panic at runtime.
 fn step_forward<G, D, R>(name: &str, input: Collection<G, D, R>) -> Collection<G, D, R>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -580,27 +592,29 @@ where
     R: Semigroup + 'static,
 {
     let name = format!("ct_step_forward({})", name);
-    let mut builder = AsyncOperatorBuilder::new(name.clone(), input.scope());
-    let mut input = builder.new_disconnected_input(&input.inner, Pipeline);
-    let (output, output_stream) = builder.new_output();
-    builder.build(move |caps| async move {
-        let [mut cap]: [_; 1] = caps.try_into().expect("one capability per output");
-        loop {
-            let Some(event) = input.next().await else {
-                return;
-            };
-            match event {
-                Event::Data(_data_cap, mut data) => {
-                    for (_, ts, _) in &mut data {
-                        *ts = ts.step_forward();
-                    }
-                    output.give_container(&cap, &mut data);
+    let mut builder = OperatorBuilder::new(name.clone(), input.scope());
+    let (mut output, output_stream) = builder.new_output();
+    // We step forward (by one) each data timestamp and capability. As a result
+    // the output's frontier is guaranteed to be one past the input frontier, so
+    // make this promise to timely.
+    let step_forward_summary = Timestamp::from(1);
+    let mut input = builder.new_input_connection(
+        &input.inner,
+        Pipeline,
+        vec![Antichain::from_elem(step_forward_summary)],
+    );
+    builder.set_notify(false);
+    builder.build(move |_caps| {
+        let mut buf = Vec::new();
+        move |_frontiers| {
+            let mut output = output.activate();
+            while let Some((cap, data)) = input.next() {
+                data.swap(&mut buf);
+                for (_, ts, _) in &mut buf {
+                    *ts = ts.step_forward();
                 }
-                Event::Progress(progress) => {
-                    if let Some(progress) = progress.into_option() {
-                        cap.downgrade(&progress.step_forward());
-                    }
-                }
+                let cap = cap.delayed(&cap.time().step_forward());
+                output.session(&cap).give_container(&mut buf);
             }
         }
     });
