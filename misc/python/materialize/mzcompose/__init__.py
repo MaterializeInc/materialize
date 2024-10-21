@@ -152,6 +152,7 @@ def get_default_system_parameters(
         "storage_source_decode_fuel": "100000",
         "storage_use_reclock_v2": "true",
         "storage_reclock_to_latest": "true",
+        "source_time_offset": "1000",
         "timestamp_oracle": "postgres",
         "wait_catalog_consolidation_on_startup": "true",
         "with_0dt_deployment_max_wait": "900s",
