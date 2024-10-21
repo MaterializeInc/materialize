@@ -9,12 +9,13 @@
 
 //! The crate provides a durable key-value cache abstraction implemented by persist.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;d
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate_updates;
-use mz_ore::collections::AssociativeExt;
+use mz_ore::collections::{AssociativeExt, HashSet};
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{ListenEvent, Subscribe};
 use mz_persist_client::write::WriteHandle;
@@ -23,7 +24,7 @@ use mz_persist_types::{Codec, ShardId};
 use timely::progress::Antichain;
 
 pub trait DurableCacheCodec {
-    type Key: Ord + Clone + Debug;
+    type Key: Ord + Hash + Clone + Debug;
     type Val: Ord + Debug;
     type KeyCodec: Codec + Debug;
     type ValCodec: Codec + Debug;
@@ -184,7 +185,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         let mut expected_upper = self.local_progress;
         loop {
             let mut updates = Vec::new();
-            let mut seen_keys = BTreeSet::new();
+            let mut seen_keys = HashSet::new();
 
             for (key, val) in entries {
                 // If there are duplicate keys we ignore all but the first one.
