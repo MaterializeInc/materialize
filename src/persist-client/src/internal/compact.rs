@@ -368,8 +368,13 @@ where
                         }
                         let () = part_deletes
                             .delete(
-                                &machine.applier.state_versions.blob,
+                                machine.applier.state_versions.blob.as_ref(),
                                 machine.shard_id(),
+                                machine
+                                    .applier
+                                    .cfg
+                                    .dynamic
+                                    .gc_blob_delete_concurrency_limit(),
                                 &metrics.retries.external.compaction_noop_delete,
                             )
                             .await;
