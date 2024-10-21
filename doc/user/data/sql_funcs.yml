@@ -771,7 +771,7 @@
       version-added: v0.114
     - signature: 'seahash(data: text) -> bigint'
       description: |
-        Computes the [SeaHash](https://docs.rs/seahash) hash of the given bytea `data`.
+        Computes the [SeaHash](https://docs.rs/seahash) hash of the given text `data`.
       version-added: v0.114
     - signature: 'sha224(data: bytea) -> bytea'
       description: |

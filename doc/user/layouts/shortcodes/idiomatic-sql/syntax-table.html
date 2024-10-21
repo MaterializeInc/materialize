@@ -119,9 +119,8 @@ condition.
 
 ```mzsql
 SELECT t1.fieldA, t2.fieldB
-FROM tableA t1
-LEFT JOIN tableA t2
-ON t1.fieldA = t2.fieldA -  ...
+FROM tableA t1, tableA t2
+WHERE t1.fieldA = t2.fieldA - ...
 ORDER BY fieldA;
 ```
 
@@ -129,8 +128,9 @@ ORDER BY fieldA;
 
 ```mzsql
 SELECT t1.fieldA, t2.fieldB
-FROM tableA t1, tableA t2
-WHERE t1.fieldA = t2.fieldA - ...
+FROM tableA t1
+LEFT JOIN tableA t2
+ON t1.fieldA = t2.fieldA -  ...
 ORDER BY fieldA;
 ```
 

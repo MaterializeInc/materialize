@@ -89,9 +89,8 @@ ORDER BY fieldA;
 
 <red>
 
-Avoid the use of [`LAG(fieldZ) OVER (ORDER BY ...) window
-function`](/sql/functions/#lag) when the order by field increases in a regular
-pattern.
+Avoid the use of [`LAG(fieldZ) OVER (ORDER BY ...)`](/sql/functions/#lag) window
+function when the order by field increases in a regular pattern.
 
 </red>
 
