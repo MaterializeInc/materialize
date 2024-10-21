@@ -442,7 +442,6 @@ impl Coordinator {
 
         // Collect properties for `DataflowExpirationDesc`.
         let transitive_upper = self.least_valid_write(&id_bundle);
-        let has_transitive_refresh_schedule = self.catalog.item_has_transitive_refresh_schedule(on);
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -477,9 +476,6 @@ impl Coordinator {
                 df_desc.set_as_of(since);
 
                 df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
-                df_desc
-                    .dataflow_expiration_desc
-                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
 
                 coord
                     .ship_dataflow_and_notice_builtin_table_updates(
