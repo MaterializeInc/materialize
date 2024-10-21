@@ -14,7 +14,7 @@
 
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_repr::role_id::RoleId;
-use mz_repr::CatalogItemId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::catalog::{CatalogItem, DefaultPrivilegeObject};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
@@ -113,6 +113,26 @@ impl CatalogState {
         for (source_id, _references) in &self.source_references {
             if !self.entry_by_id.contains_key(source_id) {
                 inconsistencies.push(InternalFieldsInconsistency::SourceReferences(*source_id));
+            }
+        }
+
+        for (item_id, entry) in &self.entry_by_id {
+            let missing_gids: Vec<_> = entry
+                .global_ids()
+                .filter(|gid| !self.entry_by_global_id.contains_key(gid))
+                .collect();
+            if !missing_gids.is_empty() {
+                inconsistencies.push(InternalFieldsInconsistency::EntryMissingGlobalIds(
+                    *item_id,
+                    missing_gids,
+                ));
+            }
+        }
+        for (gid, item_id) in &self.entry_by_global_id {
+            if !self.entry_by_id.contains_key(item_id) {
+                inconsistencies.push(InternalFieldsInconsistency::GlobalIdsMissingEntry(
+                    *gid, *item_id,
+                ));
             }
         }
 
@@ -594,6 +614,8 @@ enum InternalFieldsInconsistency {
     Cluster(String, ClusterId),
     Role(String, RoleId),
     SourceReferences(CatalogItemId),
+    EntryMissingGlobalIds(CatalogItemId, Vec<GlobalId>),
+    GlobalIdsMissingEntry(GlobalId, CatalogItemId),
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]

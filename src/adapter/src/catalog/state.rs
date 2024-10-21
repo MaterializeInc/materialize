@@ -1848,6 +1848,26 @@ impl CatalogState {
                     serde_json::json!(unfinalized_shards),
                 );
         }
+        // Remove GlobalIds for temporary objects from the mapping.
+        //
+        // Post-test consistency checks with the durable catalog don't know about temporary items
+        // since they're kept entirely in memory.
+        let temporary_gids: Vec<_> = self
+            .entry_by_global_id
+            .iter()
+            .filter(|(_gid, item_id)| self.get_entry(item_id).conn_id().is_some())
+            .map(|(gid, _item_id)| *gid)
+            .collect();
+        if !temporary_gids.is_empty() {
+            let gids = dump_obj
+                .get_mut("entry_by_global_id")
+                .expect("known_to_exist")
+                .as_object_mut()
+                .expect("entry_by_global_id is an object");
+            for gid in temporary_gids {
+                gids.remove(&gid.to_string());
+            }
+        }
 
         // Emit as pretty-printed JSON.
         Ok(serde_json::to_string_pretty(&dump).expect("cannot fail on serde_json::Value"))
@@ -2121,7 +2141,7 @@ impl CatalogState {
                     // For subsources, look up the parent source and propagate the compaction
                     // window.
                     let ingestion = self
-                        .get_entry_by_global_id(&ingestion_id)
+                        .get_entry(&ingestion_id)
                         .source()
                         .expect("must be source");
                     let cw = ingestion
@@ -2233,6 +2253,9 @@ impl OptimizerCatalog for CatalogState {
     fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
         CatalogState::get_entry_by_global_id(self, id)
     }
+    fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry {
+        CatalogState::get_entry(self, id)
+    }
     fn resolve_full_name(
         &self,
         name: &QualifiedItemName,
@@ -2252,6 +2275,10 @@ impl OptimizerCatalog for CatalogState {
 impl OptimizerCatalog for Catalog {
     fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
         self.state.get_entry_by_global_id(id)
+    }
+
+    fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry {
+        self.state.get_entry(id)
     }
 
     fn resolve_full_name(
