@@ -2502,9 +2502,10 @@ impl Coordinator {
                         TableDataSource::TableWrites { defaults: _ } => {
                             CollectionDescription::for_table(table.desc.clone())
                         }
-                        TableDataSource::DataSource(data_source_desc) => {
-                            source_desc(data_source_desc, &table.desc)
-                        }
+                        TableDataSource::DataSource {
+                            desc: data_source_desc,
+                            timeline: _,
+                        } => source_desc(data_source_desc, &table.desc),
                     };
                     collections.push((id, collection_desc));
                 }

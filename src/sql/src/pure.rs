@@ -1452,6 +1452,7 @@ async fn purify_create_table_from_source(
         text_columns,
         exclude_columns,
         details,
+        timeline: _,
         seen: _,
     } = with_options.clone().try_into()?;
     assert_none!(details, "details cannot be explicitly set");
