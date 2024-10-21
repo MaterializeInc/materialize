@@ -19,6 +19,7 @@ use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
+use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::{Object, PoolError};
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
@@ -26,6 +27,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::url::SensitiveUrl;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
+use postgres_protocol::escape::escape_identifier;
 use tokio_postgres::error::SqlState;
 use tracing::{info, warn};
 
@@ -55,7 +57,7 @@ const CRDB_SCHEMA_OPTIONS: &str = "WITH (sql_stats_automatic_collection_enabled 
 //
 // See: https://github.com/MaterializeInc/database-issues/issues/4001
 // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-const CRDB_CONFIGURE_ZONE: &str = "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;";
+const CRDB_CONFIGURE_ZONE: &str = "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600";
 
 impl ToSql for SeqNo {
     fn to_sql(
@@ -197,14 +199,22 @@ impl PostgresConsensus {
     /// Open a Postgres [Consensus] instance with `config`, for the collection
     /// named `shard`.
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
+        // don't need to unredact here because we just want to pull out the username
+        let pg_config: Config = config.url.to_string().parse()?;
+        let role = pg_config.get_user().unwrap();
+        let create_schema = format!(
+            "CREATE SCHEMA IF NOT EXISTS consensus AUTHORIZATION {}",
+            escape_identifier(role),
+        );
+
         let postgres_client = PostgresClient::open(config.into())?;
 
         let client = postgres_client.get_connection().await?;
 
         let crdb_mode = match client
             .batch_execute(&format!(
-                "{}{}; {}",
-                SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
+                "{}; {}{}; {};",
+                create_schema, SCHEMA, CRDB_SCHEMA_OPTIONS, CRDB_CONFIGURE_ZONE,
             ))
             .await
         {
@@ -224,7 +234,9 @@ impl PostgresConsensus {
         };
 
         if !crdb_mode {
-            client.execute(SCHEMA, &[]).await?;
+            client
+                .batch_execute(&format!("{}; {};", create_schema, SCHEMA))
+                .await?;
         }
 
         Ok(PostgresConsensus { postgres_client })

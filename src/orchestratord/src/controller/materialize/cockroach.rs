@@ -19,8 +19,6 @@ use crate::k8s::{apply_resource, get_resource};
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_ore::instrument;
 
-const SCHEMAS: &[&str] = &["consensus", "tsoracle"];
-
 // TODO: we should not be passing in cockroach connection info through cli
 // flags - this will work for testing in kind for now, but we'll want to move
 // this to a kubernetes secret or something like that
@@ -66,20 +64,6 @@ pub async fn create_database(
             &[],
         )
         .await?;
-
-    let connection = make_connection(cockroach_info, &mz.cockroach_database_name()).await?;
-    for schema in SCHEMAS {
-        trace!("creating schema {schema}");
-        connection
-            .execute(
-                &format!(
-                    r#"CREATE SCHEMA IF NOT EXISTS "{schema}" AUTHORIZATION "{}""#,
-                    mz.cockroach_role_name(),
-                ),
-                &[],
-            )
-            .await?;
-    }
 
     trace!("done creating database");
 
