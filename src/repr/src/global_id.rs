@@ -84,6 +84,9 @@ impl FromStr for GlobalId {
         if s.len() < 2 {
             return Err(anyhow!("couldn't parse id {}", s));
         }
+        if s == "Explained Query" {
+            return Ok(GlobalId::Explain);
+        }
         let val: u64 = s[1..].parse()?;
         match s.chars().next().unwrap() {
             's' => Ok(GlobalId::System(val)),
