@@ -294,6 +294,13 @@ pub struct EquivalenceClasses {
     /// can be replaced by.
     /// These classes are unified whenever possible, to minimize the number of classes.
     pub classes: Vec<Vec<MirScalarExpr>>,
+
+    /// An expression simplification map.
+    ///
+    /// This map reflects an equivalence relation based on a prior version of `self.classes`.
+    /// As users may add to `self.classes`, `self.remap` may become stale. We refresh `remap`
+    /// in `self.refresh()`, to the equivalence relation that derives from `self.classes`.
+    remap: BTreeMap<MirScalarExpr, MirScalarExpr>,
 }
 
 impl EquivalenceClasses {
@@ -324,31 +331,59 @@ impl EquivalenceClasses {
         }
     }
 
-    /// Restores equivalence class structure, in roughly linear time.
-    /// Returns true iff any merging of equivalence classes occurs.
-    fn tidy(&mut self) -> bool {
-        // Remove all literal errors, as they cannot be equated to other things.
+    /// Sorts and deduplicates each class, removing literal errors.
+    ///
+    /// This method does not ensure equivalence relation structure, but instead performs
+    /// only minimal structural clean-up.
+    fn tidy(&mut self) {
         for class in self.classes.iter_mut() {
+            // Remove all literal errors, as they cannot be equated to other things.
             class.retain(|e| !e.is_literal_err());
-        }
-
-        // Restore representation as sorted lists.
-        for class in self.classes.iter_mut() {
             class.sort_by(Self::mir_scalar_expr_complexity);
             class.dedup();
         }
         self.classes.retain(|c| c.len() > 1);
         self.classes.sort();
         self.classes.dedup();
+    }
 
-        // 3. Restore equivalence class structure using Union-Find
-        // Optimistically start by building the remap we would use.
+    /// Restore equivalence relation structure to `self.classes` and refresh `self.remap`.
+    ///
+    /// This method takes roughly linear time, and returns true iff `remap` has changed.
+    fn refresh(&mut self) -> bool {
+        self.tidy();
+
+        // remap may already be the correct answer, and if so we should avoid the work of rebuilding it.
+        // If it contains the same number of expressions as `self.classes`, and for every expression in
+        // `self.classes` the two agree on the representative, the are identical.
+        if self.remap.len() == self.classes.iter().map(|c| c.len()).sum::<usize>()
+            && self
+                .classes
+                .iter()
+                .all(|c| c.iter().all(|e| self.remap.get(e) == Some(&c[0])))
+        {
+            // No change, so return false.
+            return false;
+        }
+
+        // Optimistically build the `remap` we would want.
+        // Note if any unions would be required, in which case we have further work to do,
+        // including re-forming `self.classes`.
         let mut union_find = BTreeMap::default();
         let mut dirtied = false;
         for class in self.classes.iter() {
             for expr in class.iter() {
                 if let Some(other) = union_find.insert(expr.clone(), class[0].clone()) {
-                    union_find.union(&other, &class[0]);
+                    // A merge is required, but have the more complex expression point at the simpler one.
+                    // This allows `union_find` to end as the `remap` for the new `classes` we form, with
+                    // the only required work being compressing all the paths.
+                    if Self::mir_scalar_expr_complexity(&other, &class[0])
+                        == std::cmp::Ordering::Less
+                    {
+                        union_find.union(&class[0], &other);
+                    } else {
+                        union_find.union(&other, &class[0]);
+                    }
                     dirtied = true;
                 }
             }
@@ -362,17 +397,12 @@ impl EquivalenceClasses {
                 }
             }
             self.classes = classes.into_values().collect();
-            // Restore representation as sorted lists.
-            for class in self.classes.iter_mut() {
-                class.sort_by(Self::mir_scalar_expr_complexity);
-                class.dedup();
-            }
-            self.classes.retain(|c| c.len() > 1);
-            self.classes.sort();
-            self.classes.dedup();
+            self.tidy();
         }
 
-        dirtied
+        let changed = self.remap != union_find;
+        self.remap = union_find;
+        changed
     }
 
     /// Update `self` to maintain the same equivalences which potentially reducing along `Ord::le`.
@@ -383,9 +413,9 @@ impl EquivalenceClasses {
         // This should strictly reduce complexity, and reach a fixed point.
         // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
 
-        // Tidy expressions to put them in equivalence class form.
-        // Users are allowed to mutate `self.classes`, so we must perform this normalization once.
-        self.tidy();
+        // Ensure `self.classes` and `self.refresh` are equivalence relations.
+        // Users are allowed to mutate `self.classes`, so we must perform this normalization at least once.
+        self.refresh();
 
         // We should not rely on nullability information present in `column_types`. (Doing this
         // every time just before calling `reduce` was found to be a bottleneck during incident-217,
@@ -405,7 +435,7 @@ impl EquivalenceClasses {
         // An expression can be simplified, a duplication found, or two classes unified.
         let mut stable = false;
         while !stable {
-            stable = self.minimize_once(&columns);
+            stable = !self.minimize_once(&columns);
         }
     }
 
@@ -417,19 +447,13 @@ impl EquivalenceClasses {
     ///   2. Applies idiom detection to e.g. unpack expressions equivalence to literal true or false.
     ///   3. Restores the equivalence class invariants.
     fn minimize_once(&mut self, columns: &Option<Vec<ColumnType>>) -> bool {
-        let remap: BTreeMap<MirScalarExpr, MirScalarExpr> = self
-            .classes
-            .iter()
-            .flat_map(|c| c.iter().map(move |e| (e.clone(), c[0].clone())))
-            .collect();
-
         // 1. Reduce each expression
         //
         // This reduction first looks for subexpression substitutions that can be performed,
         // and then applies expression reduction if column type information is provided.
         for class in self.classes.iter_mut() {
             for expr in class.iter_mut() {
-                remap.reduce_child(expr);
+                self.remap.reduce_child(expr);
                 if let Some(columns) = columns {
                     expr.reduce(columns);
                 }
@@ -521,16 +545,7 @@ impl EquivalenceClasses {
 
         // Tidy up classes, restore representative.
         // Specifically, we want to remove literal errors before restoring the equivalence class structure.
-        self.tidy();
-
-        // The state is stable if every expression is present in `remap` with the same representative, and their sizes are the same.
-        if remap.len() == self.classes.iter().map(|c| c.len()).sum::<usize>() {
-            self.classes
-                .iter()
-                .all(|c| c.iter().all(|e| remap.get(e) == Some(&c[0])))
-        } else {
-            false
-        }
+        self.refresh()
     }
 
     /// Produce the equivalences present in both inputs.
@@ -542,6 +557,7 @@ impl EquivalenceClasses {
         // For each pair of equivalence classes, their intersection.
         let mut equivalences = EquivalenceClasses {
             classes: Vec::new(),
+            remap: Default::default(),
         };
         for class1 in self.classes.iter() {
             for class2 in other.classes.iter() {
