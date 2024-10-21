@@ -157,7 +157,7 @@ impl CatalogItemRebuilder {
                     is_retained_metrics_object,
                     custom_logical_compaction_window,
                 )
-                .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")),
+                .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")).0,
         }
     }
 }
@@ -198,6 +198,8 @@ impl Catalog {
         config: StateConfig,
         storage: &'a mut Box<dyn mz_catalog::durable::DurableCatalogState>,
     ) -> Result<InitializeStateResult, AdapterError> {
+        let preamble_start = Instant::now();
+
         for builtin_role in BUILTIN_ROLES {
             assert!(
                 is_reserved_name(builtin_role.name),
@@ -270,7 +272,13 @@ impl Catalog {
         assert!(!updates.is_empty(), "initial catalog snapshot is missing");
         let mut txn = storage.transaction().await?;
 
+        info!(
+            "STARTUP LOOK: initialize state preamble took: {:?}",
+            preamble_start.elapsed()
+        );
+
         // Migrate/update durable data before we start loading the in-memory catalog.
+        let durable_migration_start = Instant::now();
         let (migrated_builtins, new_builtins) = {
             migrate::durable_migrate(&mut txn, config.boot_ts)?;
             // Overwrite and persist selected parameter values in `remote_system_parameters` that
@@ -305,7 +313,12 @@ impl Catalog {
 
         let op_updates = txn.get_and_commit_op_updates();
         updates.extend(op_updates);
+        info!(
+            "STARTUP LOOK: initialize state durable migrations took: {:?}",
+            durable_migration_start.elapsed()
+        );
 
+        let default_config_start = Instant::now();
         // Seed the in-memory catalog with values that don't come from the durable catalog.
         {
             // Set defaults from configuration passed in the provided `system_parameter_defaults`
@@ -323,7 +336,12 @@ impl Catalog {
             }
             state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
         }
+        info!(
+            "STARTUP LOOK: initialize state default server configs took: {:?}",
+            default_config_start.elapsed()
+        );
 
+        let consolidate_and_partition_start = Instant::now();
         let mut builtin_table_updates = Vec::new();
 
         // Make life easier by consolidating all updates, so that we end up with only positive
@@ -376,16 +394,34 @@ impl Catalog {
             }
         }
 
-        let builtin_table_update = state.apply_updates_for_bootstrap(pre_item_updates).await;
-        builtin_table_updates.extend(builtin_table_update);
+        info!(
+            "STARTUP LOOK: initialize state consolidate and partition updates took: {:?}",
+            consolidate_and_partition_start.elapsed()
+        );
 
+        let pre_item_start = Instant::now();
+        let (builtin_table_update, apply_timings) =
+            state.apply_updates_for_bootstrap(pre_item_updates).await;
+        builtin_table_updates.extend(builtin_table_update);
+        info!(
+            "STARTUP LOOK: initialize state apply pre_item updates took: {:?}; {:?}",
+            pre_item_start.elapsed(),
+            apply_timings,
+        );
+
+        let ast_migrate_start = Instant::now();
         let last_seen_version = txn
             .get_catalog_content_version()
             .unwrap_or_else(|| "new".to_string());
+        info!(
+            "STARTUP LOOK: initialize state AST migration get catalog version took: {:?}",
+            ast_migrate_start.elapsed()
+        );
 
         // Migrate item ASTs.
         let builtin_table_update = if !config.skip_migrations {
-            migrate::migrate(
+            let migrate_start = Instant::now();
+            let res = migrate::migrate(
                 &mut state,
                 &mut txn,
                 item_updates,
@@ -399,15 +435,43 @@ impl Catalog {
                     this_version: config.build_info.version,
                     cause: e.to_string(),
                 })
-            })?
+            })?;
+            info!(
+                "STARTUP LOOK: initialize state AST migrations actual migrations took: {:?}",
+                migrate_start.elapsed()
+            );
+            res
         } else {
-            state.apply_updates_for_bootstrap(item_updates).await
+            let item_updates_start = Instant::now();
+            let (builtin_table_update, apply_timings) =
+                state.apply_updates_for_bootstrap(item_updates).await;
+            info!(
+                "STARTUP LOOK: initialize state apply item updates took: {:?}; {:?}",
+                item_updates_start.elapsed(),
+                apply_timings,
+            );
+            builtin_table_update
         };
-        builtin_table_updates.extend(builtin_table_update);
 
-        let builtin_table_update = state.apply_updates_for_bootstrap(post_item_updates).await;
+        let item_updates_start = Instant::now();
         builtin_table_updates.extend(builtin_table_update);
+        info!(
+            "STARTUP LOOK: initialize state apply item updates took: {:?}; {:?}",
+            item_updates_start.elapsed(),
+            apply_timings,
+        );
 
+        let post_item_start = Instant::now();
+        let (builtin_table_update, apply_timings) =
+            state.apply_updates_for_bootstrap(post_item_updates).await;
+        builtin_table_updates.extend(builtin_table_update);
+        info!(
+            "STARTUP LOOK: initialize state apply post item updates: {:?}; {:?}",
+            post_item_start.elapsed(),
+            apply_timings,
+        );
+
+        let builtin_migrate_start = Instant::now();
         // Migrate builtin items.
         let BuiltinItemMigrationResult {
             builtin_table_updates: builtin_table_update,
@@ -423,10 +487,21 @@ impl Catalog {
         .await?;
         builtin_table_updates.extend(builtin_table_update);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
+        info!(
+            "STARTUP LOOK: initialize state builtin migrations took: {:?}",
+            builtin_migrate_start.elapsed()
+        );
+
+        let postamble_start = Instant::now();
 
         txn.commit().await?;
 
         cleanup_action.await;
+
+        info!(
+            "STARTUP LOOK: initialize state postamble took: {:?}",
+            postamble_start.elapsed()
+        );
 
         Ok(InitializeStateResult {
             state,
@@ -452,6 +527,8 @@ impl Catalog {
     pub fn open(config: Config<'_>) -> BoxFuture<'static, Result<OpenCatalogResult, AdapterError>> {
         async move {
             let mut storage = config.storage;
+
+            let init_start = Instant::now();
             let InitializeStateResult {
                 state,
                 storage_collections_to_drop,
@@ -467,6 +544,12 @@ impl Catalog {
                     .instrument(tracing::info_span!("catalog::initialize_state"))
                     .boxed()
                     .await?;
+            info!(
+                "STARTUP LOOK: initialize state took: {:?}",
+                init_start.elapsed()
+            );
+
+            let postamble_start = Instant::now();
 
             let catalog = Catalog {
                 state,
@@ -497,6 +580,11 @@ impl Catalog {
                         .resolve_builtin_table_update(catalog.state.pack_egress_ip_update(ip)?),
                 );
             }
+
+            info!(
+                "STARTUP LOOK: open postamble took: {:?}",
+                postamble_start.elapsed()
+            );
 
             Ok(OpenCatalogResult {
                 catalog,
@@ -808,7 +896,12 @@ impl Catalog {
                 }),
         )?;
         let updates = txn.get_and_commit_op_updates();
-        let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
+        let (builtin_table_update, apply_timings) =
+            state.apply_updates_for_bootstrap(updates).await;
+        info!(
+            "STARTUP LOOK: apply builtin migrations1 took: {:?}",
+            apply_timings,
+        );
         builtin_table_updates.extend(builtin_table_update);
         for CreateOp {
             id,
@@ -832,8 +925,13 @@ impl Catalog {
                 privileges.all_values_owned().collect(),
             )?;
             let updates = txn.get_and_commit_op_updates();
-            let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
+            let (builtin_table_update, apply_timings) =
+                state.apply_updates_for_bootstrap(updates).await;
             builtin_table_updates.extend(builtin_table_update);
+            info!(
+                "STARTUP LOOK: apply builtin migrations2 took: {:?}",
+                apply_timings,
+            );
         }
         Ok(builtin_table_updates)
     }
