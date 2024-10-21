@@ -51,15 +51,14 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
-use mz_storage_types::read_holds::ReadHold;
+use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
-use tracing::debug_span;
 use uuid::Uuid;
 
 use crate::controller::error::{
@@ -555,8 +554,6 @@ where
             logs.push((log, id, shared));
         }
 
-        let (read_holds_tx, read_holds_rx) = mpsc::unbounded_channel();
-
         let client = instance::Client::spawn(
             id,
             self.build_info,
@@ -569,11 +566,9 @@ where
             Arc::clone(&self.dyncfg),
             self.response_tx.clone(),
             self.introspection_tx.clone(),
-            read_holds_tx.clone(),
-            read_holds_rx,
         );
 
-        let instance = InstanceState::new(client, collections, read_holds_tx);
+        let instance = InstanceState::new(client, collections);
         self.instances.insert(id, instance);
 
         self.instance_workload_classes
@@ -1064,7 +1059,8 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(derivative::Derivative)]
+#[derivative(Debug)]
 struct InstanceState<T: ComputeControllerTimestamp> {
     client: instance::Client<T>,
     replicas: BTreeSet<ReplicaId>,
@@ -1073,15 +1069,20 @@ struct InstanceState<T: ComputeControllerTimestamp> {
     ///
     /// Copies of this sender are given to [`ReadHold`]s that are created in
     /// [`InstanceState::acquire_read_hold`].
-    read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
+    #[derivative(Debug = "ignore")]
+    read_holds_tx: read_holds::ChangeTx<T>,
 }
 
 impl<T: ComputeControllerTimestamp> InstanceState<T> {
-    fn new(
-        client: instance::Client<T>,
-        collections: BTreeMap<GlobalId, Collection<T>>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-    ) -> Self {
+    fn new(client: instance::Client<T>, collections: BTreeMap<GlobalId, Collection<T>>) -> Self {
+        let read_holds_tx = {
+            let client = client.clone();
+            Arc::new(move |id, change| {
+                client.call(move |i| i.report_read_hold_change(id, change));
+                Ok(())
+            })
+        };
+
         Self {
             client,
             replicas: Default::default(),
@@ -1098,13 +1099,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
     where
         F: FnOnce(&mut Instance<T>) + Send + 'static,
     {
-        let otel_ctx = OpenTelemetryContext::obtain();
-        self.client.send(Box::new(move |instance| {
-            let _span = debug_span!("instance::call").entered();
-            otel_ctx.attach_as_parent();
-
-            f(instance)
-        }));
+        self.client.call(f);
     }
 
     pub async fn call_sync<F, R>(&self, f: F) -> R
@@ -1112,17 +1107,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        let otel_ctx = OpenTelemetryContext::obtain();
-        self.client.send(Box::new(move |instance| {
-            let _span = debug_span!("instance::call_sync").entered();
-            otel_ctx.attach_as_parent();
-
-            let result = f(instance);
-            let _ = tx.send(result);
-        }));
-
-        rx.await.expect("instance not dropped")
+        self.client.call_sync(f).await
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
@@ -1143,7 +1128,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
             since
         });
 
-        let hold = ReadHold::with_channel(id, since, self.read_holds_tx.clone());
+        let hold = ReadHold::new(id, since, Arc::clone(&self.read_holds_tx));
         Ok(hold)
     }
 

@@ -46,6 +46,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
+use tracing::debug_span;
 use uuid::Uuid;
 
 use crate::controller::error::{
@@ -129,15 +130,46 @@ impl From<CollectionMissing> for ReadPolicyError {
 pub type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
 
 /// A client for an [`Instance`] task.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Client<T: ComputeControllerTimestamp> {
     /// A sender for commands for the instance.
     command_tx: mpsc::UnboundedSender<Command<T>>,
 }
 
 impl<T: ComputeControllerTimestamp> Client<T> {
-    pub fn send(&self, command: Command<T>) {
+    fn send(&self, command: Command<T>) {
         self.command_tx.send(command).expect("instance not dropped");
+    }
+
+    pub fn call<F>(&self, f: F)
+    where
+        F: FnOnce(&mut Instance<T>) + Send + 'static,
+    {
+        let otel_ctx = OpenTelemetryContext::obtain();
+        self.send(Box::new(move |instance| {
+            let _span = debug_span!("instance::call").entered();
+            otel_ctx.attach_as_parent();
+
+            f(instance)
+        }));
+    }
+
+    pub async fn call_sync<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        let otel_ctx = OpenTelemetryContext::obtain();
+        self.send(Box::new(move |instance| {
+            let _span = debug_span!("instance::call_sync").entered();
+            otel_ctx.attach_as_parent();
+
+            let result = f(instance);
+            let _ = tx.send(result);
+        }));
+
+        rx.await.expect("instance not dropped")
     }
 }
 
@@ -158,8 +190,6 @@ where
         dyncfg: Arc<ConfigSet>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-        read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
@@ -177,8 +207,6 @@ where
                 command_rx,
                 response_tx,
                 introspection_tx,
-                read_holds_tx,
-                read_holds_rx,
             )
             .run(),
         );
@@ -720,6 +748,17 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .expect("Cannot error if target_replica_ids is None")
     }
 
+    /// Report an external read hold change.
+    ///
+    /// Changes to externally held read holds are sequenced through `command_rx`, to ensure that,
+    /// e.g., we don't receive changes for a collection before we have seen its creation command.
+    #[mz_ore::instrument(level = "debug")]
+    pub fn report_read_hold_change(&self, id: GlobalId, changes: ChangeBatch<T>) {
+        self.read_holds_tx
+            .send((id, changes))
+            .expect("rx is held by `self`");
+    }
+
     /// Clean up collection state that is not needed anymore.
     ///
     /// Three conditions need to be true before we can remove state for a collection:
@@ -857,9 +896,9 @@ where
         command_rx: mpsc::UnboundedReceiver<Command<T>>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-        read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
     ) -> Self {
+        let (read_holds_tx, read_holds_rx) = mpsc::unbounded_channel();
+
         let mut collections = BTreeMap::new();
         let mut log_sources = BTreeMap::new();
         for (log, id, shared) in arranged_logs {
@@ -2136,7 +2175,8 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         // Initialize collection read holds.
         // Note that the implied read hold was already added to the `read_capabilities` when
         // `shared` was created, so we only need to add the warmup read hold here.
-        let implied_read_hold = ReadHold::with_channel(collection_id, since.clone(), read_holds_tx.clone());
+        let implied_read_hold =
+            ReadHold::with_channel(collection_id, since.clone(), read_holds_tx.clone());
         let warmup_read_hold = ReadHold::with_channel(collection_id, since.clone(), read_holds_tx);
 
         let updates = warmup_read_hold.since().iter().map(|t| (t.clone(), 1));
