@@ -8,12 +8,20 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use mz_repr::GlobalId;
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedSender;
+
+pub type ChangeTx<T> = Arc<
+    dyn Fn(GlobalId, ChangeBatch<T>) -> Result<(), SendError<(GlobalId, ChangeBatch<T>)>>
+        + Send
+        + Sync,
+>;
 
 /// Token that represents a hold on a collection. This prevents the since of the
 /// collection from progressing beyond the hold. In other words, it cannot
@@ -29,7 +37,7 @@ pub struct ReadHold<T: TimelyTimestamp> {
     since: Antichain<T>,
 
     /// For communicating changes to this read hold back to whoever issued it.
-    holds_tx: UnboundedSender<(GlobalId, ChangeBatch<T>)>,
+    change_tx: ChangeTx<T>,
 }
 
 impl<T: TimelyTimestamp> Debug for ReadHold<T> {
@@ -55,16 +63,21 @@ pub enum ReadHoldDowngradeError<T> {
 }
 
 impl<T: TimelyTimestamp> ReadHold<T> {
-    pub fn new(
-        id: GlobalId,
-        since: Antichain<T>,
-        holds_tx: UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-    ) -> Self {
+    pub fn new(id: GlobalId, since: Antichain<T>, change_tx: ChangeTx<T>) -> Self {
         Self {
             id,
             since,
-            holds_tx,
+            change_tx,
         }
+    }
+
+    pub fn with_channel(
+        id: GlobalId,
+        since: Antichain<T>,
+        channel_tx: UnboundedSender<(GlobalId, ChangeBatch<T>)>,
+    ) -> Self {
+        let tx = Arc::new(move |id, changes| channel_tx.send((id, changes)));
+        Self::new(id, since, tx)
     }
 
     /// Returns the [GlobalId] of the collection that this [ReadHold] is for.
@@ -83,24 +96,19 @@ impl<T: TimelyTimestamp> ReadHold<T> {
     /// Merges `other` into `self`, keeping the overall read hold.
     ///
     /// # Panics
+    ///
     /// Panics when trying to merge a [ReadHold] for a different collection
-    /// (different [GlobalId]) or when trying to merge a [ReadHold] from a
-    /// different issuer.
+    /// (different [GlobalId]).
     pub fn merge_assign(&mut self, mut other: ReadHold<T>) {
         assert_eq!(
             self.id, other.id,
             "can only merge ReadHolds for the same ID"
         );
-        assert!(
-            self.holds_tx.same_channel(&other.holds_tx),
-            "can only merge ReadHolds that come from the same issuer"
-        );
 
         let mut changes = ChangeBatch::new();
-
         changes.extend(self.since.iter().map(|t| (t.clone(), -1)));
-
         changes.extend(other.since.iter().map(|t| (t.clone(), -1)));
+
         // It's very important that we clear the since of other. Otherwise, it's
         // Drop impl would try and drop it again, by sending another ChangeBatch
         // on drop.
@@ -113,7 +121,7 @@ impl<T: TimelyTimestamp> ReadHold<T> {
         // in one go.
         changes.extend(self.since.iter().map(|t| (t.clone(), 1)));
 
-        match self.holds_tx.send((self.id.clone(), changes)) {
+        match (self.change_tx)(self.id, changes) {
             Ok(_) => (),
             Err(e) => {
                 panic!("cannot merge ReadHold: {}", e);
@@ -143,7 +151,7 @@ impl<T: TimelyTimestamp> ReadHold<T> {
 
         if !changes.is_empty() {
             // If the other side already hung up, that's ok.
-            let _ = self.holds_tx.send((self.id.clone(), changes));
+            let _ = (self.change_tx)(self.id, changes);
         }
 
         Ok(())
@@ -170,7 +178,7 @@ impl<T: TimelyTimestamp> Clone for ReadHold<T> {
         if !changes.is_empty() {
             // We do care about sending here. If the other end hung up we don't
             // really have a read hold anymore.
-            match self.holds_tx.send((self.id.clone(), changes)) {
+            match (self.change_tx)(self.id.clone(), changes) {
                 Ok(_) => (),
                 Err(e) => {
                     panic!("cannot clone ReadHold: {}", e);
@@ -181,7 +189,7 @@ impl<T: TimelyTimestamp> Clone for ReadHold<T> {
         Self {
             id: self.id.clone(),
             since: self.since.clone(),
-            holds_tx: self.holds_tx.clone(),
+            change_tx: Arc::clone(&self.change_tx),
         }
     }
 }
