@@ -64,6 +64,7 @@
 /src/compute-types                  @MaterializeInc/cluster
 /src/controller                     @MaterializeInc/cluster
 /src/controller-types               @MaterializeInc/cluster
+/src/durable-cache                  @MaterializeInc/adapter
 /src/dyncfg                         @danhhz
 /src/dyncfgs                        @danhhz
 /src/environmentd                   @MaterializeInc/adapter

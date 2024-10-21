@@ -4157,6 +4157,7 @@ dependencies = [
  "mz-compute-types",
  "mz-controller",
  "mz-controller-types",
+ "mz-durable-cache",
  "mz-dyncfg",
  "mz-expr",
  "mz-kafka-util",
@@ -4839,6 +4840,30 @@ dependencies = [
  "mz-cluster-client",
  "mz-compute-types",
  "mz-dyncfg",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-durable-cache"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "differential-dataflow",
+ "futures",
+ "itertools 0.10.5",
+ "mz-dyncfg",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-timely-util",
+ "prometheus",
+ "prost",
+ "serde",
+ "timely",
+ "tokio",
+ "tracing",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -6953,6 +6978,7 @@ dependencies = [
  "ordered-float 4.2.0",
  "paste",
  "proc-macro2",
+ "serde",
  "serde_json",
  "tracing",
  "workspace-hack",

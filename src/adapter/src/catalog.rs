@@ -96,6 +96,7 @@ mod migrate;
 
 mod apply;
 mod dataflow_expiration;
+mod expr_cache;
 mod open;
 mod state;
 mod transact;
