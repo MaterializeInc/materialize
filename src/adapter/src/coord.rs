@@ -1765,7 +1765,7 @@ impl Coordinator {
     pub(crate) async fn bootstrap(
         &mut self,
         boot_ts: Timestamp,
-        migrated_storage_collections_0dt: BTreeSet<GlobalId>,
+        migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         let bootstrap_start = Instant::now();
@@ -1896,6 +1896,7 @@ impl Coordinator {
 
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog().resolve_builtin_log(log))
+            .flat_map(|item_id| self.catalog().get_global_ids(&item_id))
             .collect();
 
         let mut privatelink_connections = BTreeMap::new();
@@ -2155,11 +2156,12 @@ impl Coordinator {
             let min_timestamp = Timestamp::minimum();
             let migrated_builtin_table_updates: Vec<_> = builtin_table_updates
                 .drain_filter_swapping(|update| {
+                    let gid = self.catalog().get_entry(&update.id).latest_global_id();
                     migrated_storage_collections_0dt.contains(&update.id)
                         && self
                             .controller
                             .storage_collections
-                            .collection_frontiers(update.id)
+                            .collection_frontiers(gid)
                             .expect("all tables are registered")
                             .write_frontier
                             .elements()
@@ -2171,8 +2173,9 @@ impl Coordinator {
             } else {
                 let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
                 for update in migrated_builtin_table_updates {
+                    let gid = self.catalog().get_entry(&update.id).latest_global_id();
                     appends
-                        .entry(update.id)
+                        .entry(gid)
                         .or_default()
                         .push((update.row, update.diff));
                 }
@@ -2252,7 +2255,7 @@ impl Coordinator {
             // things using secrets. Today, SECRET and CONNECTION objects use
             // secrets_controller.ensure, but more things could in the future
             // that would be easy to miss adding here.
-            let catalog_ids: BTreeSet<GlobalId> =
+            let catalog_ids: BTreeSet<CatalogItemId> =
                 catalog.entries().map(|entry| entry.id()).collect();
             let secrets_controller = Arc::clone(secrets_controller);
 
@@ -2265,14 +2268,14 @@ impl Coordinator {
 
                 match secrets_controller.list().await {
                     Ok(controller_secrets) => {
-                        let controller_secrets: BTreeSet<GlobalId> =
+                        let controller_secrets: BTreeSet<CatalogItemId> =
                             controller_secrets.into_iter().collect();
                         let orphaned = controller_secrets.difference(&catalog_ids);
                         for id in orphaned {
                             let id_too_large = match id {
-                                GlobalId::System(id) => *id >= next_system_item_id,
-                                GlobalId::User(id) => *id >= next_user_item_id,
-                                GlobalId::Transient(_) | GlobalId::Explain => false,
+                                CatalogItemId::System(id) => *id >= next_system_item_id,
+                                CatalogItemId::User(id) => *id >= next_user_item_id,
+                                CatalogItemId::Transient(_) => false,
                             };
                             if id_too_large {
                                 info!(

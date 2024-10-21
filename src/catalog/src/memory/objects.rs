@@ -607,6 +607,178 @@ pub struct CatalogEntry {
     pub privileges: PrivilegeMap,
 }
 
+/// A [`CatalogEntry`] that is associated with a specific "collection" of data.
+/// A single item in the catalog may be associated with multiple "collections".
+///
+/// Here "collection" generally means a pTVC, e.g. a Persist Shard, an Index, a
+/// currently running dataflow, etc.
+///
+/// Items in the Catalog have a stable name -> ID mapping, in other words for
+/// the entire lifetime of an object its [`CatalogItemId`] will _never_ change.
+/// Similarly, we need to maintain a stable mapping from [`GlobalId`] to pTVC.
+/// This presents a challenge when `ALTER`-ing an object, e.g. adding columns
+/// to a table. We can't just change the schema of the underlying Persist Shard
+/// because that would be rebinding the [`GlobalId`] of the pTVC. Instead we
+/// allocate a new [`GlobalId`] to refer to the new version of the table, and
+/// then the [`CatalogEntry`] tracks the [`GlobalId`] for each version.
+///
+/// TODO(ct): Add a note here if we end up using this for associating continual
+/// tasks with a single catalog item.
+#[derive(Clone, Debug)]
+pub struct CatalogCollectionEntry {
+    entry: CatalogEntry,
+    #[allow(dead_code)]
+    version: RelationVersionSelector,
+}
+
+impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
+    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        // TODO(alter_table): Versioned Relation Desc
+        self.entry.desc(name)
+    }
+
+    fn global_id(&self) -> GlobalId {
+        match self.entry.item() {
+            CatalogItem::Source(source) => source.global_id,
+            CatalogItem::Log(log) => log.global_id,
+            CatalogItem::View(view) => view.global_id,
+            CatalogItem::MaterializedView(mv) => mv.global_id,
+            CatalogItem::Sink(sink) => sink.global_id,
+            CatalogItem::Index(index) => index.global_id,
+            CatalogItem::Type(ty) => ty.global_id,
+            CatalogItem::Func(func) => func.global_id,
+            CatalogItem::Secret(secret) => secret.global_id,
+            CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::ContinualTask(ct) => ct.global_id,
+            CatalogItem::Table(table) => match self.version {
+                RelationVersionSelector::Latest => {
+                    let (_version, gid) = table
+                        .collections
+                        .last_key_value()
+                        .expect("at least one version");
+                    *gid
+                }
+                RelationVersionSelector::Specific(version) => table
+                    .collections
+                    .get(&version)
+                    .expect("catalog corruption, missing version!")
+                    .clone(),
+            },
+        }
+    }
+}
+
+impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
+    fn name(&self) -> &QualifiedItemName {
+        self.entry.name()
+    }
+
+    fn id(&self) -> CatalogItemId {
+        self.entry.id()
+    }
+
+    fn global_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_> {
+        Box::new(self.entry.global_ids())
+    }
+
+    fn oid(&self) -> u32 {
+        self.entry.oid()
+    }
+
+    fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
+        self.entry.func()
+    }
+
+    fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
+        self.entry.source_desc()
+    }
+
+    fn connection(
+        &self,
+    ) -> Result<mz_storage_types::connections::Connection<ReferencedConnection>, SqlCatalogError>
+    {
+        mz_sql::catalog::CatalogItem::connection(&self.entry)
+    }
+
+    fn create_sql(&self) -> &str {
+        self.entry.create_sql()
+    }
+
+    fn item_type(&self) -> SqlCatalogItemType {
+        self.entry.item_type()
+    }
+
+    fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)> {
+        self.entry.index_details()
+    }
+
+    fn writable_table_details(&self) -> Option<&[Expr<Aug>]> {
+        self.entry.writable_table_details()
+    }
+
+    fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>> {
+        self.entry.type_details()
+    }
+
+    fn references(&self) -> &ResolvedIds {
+        self.entry.references()
+    }
+
+    fn uses(&self) -> BTreeSet<CatalogItemId> {
+        self.entry.uses()
+    }
+
+    fn referenced_by(&self) -> &[CatalogItemId] {
+        self.entry.referenced_by()
+    }
+
+    fn used_by(&self) -> &[CatalogItemId] {
+        self.entry.used_by()
+    }
+
+    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
+        self.entry.subsource_details()
+    }
+
+    fn source_export_details(
+        &self,
+    ) -> Option<(
+        GlobalId,
+        &UnresolvedItemName,
+        &SourceExportDetails,
+        &SourceExportDataConfig<ReferencedConnection>,
+    )> {
+        self.entry.source_export_details()
+    }
+
+    fn is_progress_source(&self) -> bool {
+        self.entry.is_progress_source()
+    }
+
+    fn progress_id(&self) -> Option<CatalogItemId> {
+        self.entry.progress_id()
+    }
+
+    fn owner_id(&self) -> RoleId {
+        *self.entry.owner_id()
+    }
+
+    fn privileges(&self) -> &PrivilegeMap {
+        self.entry.privileges()
+    }
+
+    fn cluster_id(&self) -> Option<ClusterId> {
+        self.entry.item().cluster_id()
+    }
+
+    fn at_version(
+        &self,
+        version: RelationVersionSelector,
+    ) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
+        self.entry.at_version(version)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub enum CatalogItem {
     Table(Table),
@@ -2941,6 +3113,16 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn cluster_id(&self) -> Option<ClusterId> {
         self.item().cluster_id()
+    }
+
+    fn at_version(
+        &self,
+        version: RelationVersionSelector,
+    ) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
+        Box::new(CatalogCollectionEntry {
+            entry: self.clone(),
+            version,
+        })
     }
 }
 

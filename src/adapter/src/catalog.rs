@@ -732,17 +732,20 @@ impl Catalog {
     }
 
     /// Resolves a `BuiltinTable`.
-    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
+    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> CatalogItemId {
         self.state.resolve_builtin_table(builtin)
     }
 
     /// Resolves a `BuiltinLog`.
-    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
-        self.state.resolve_builtin_log(builtin)
+    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> CatalogItemId {
+        self.state.resolve_builtin_log(builtin).0
     }
 
     /// Resolves a `BuiltinSource`.
-    pub fn resolve_builtin_storage_collection(&self, builtin: &'static BuiltinSource) -> GlobalId {
+    pub fn resolve_builtin_storage_collection(
+        &self,
+        builtin: &'static BuiltinSource,
+    ) -> CatalogItemId {
         self.state.resolve_builtin_source(builtin)
     }
 
@@ -1025,7 +1028,7 @@ impl Catalog {
     }
 
     /// Return the ids of all log sources the given object depends on.
-    pub fn introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+    pub fn introspection_dependencies(&self, id: CatalogItemId) -> Vec<CatalogItemId> {
         self.state.introspection_dependencies(id)
     }
 

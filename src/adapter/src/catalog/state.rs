@@ -1342,33 +1342,38 @@ impl CatalogState {
     /// Optimized lookup for a builtin table.
     ///
     /// Panics if the builtin table doesn't exist in the catalog.
-    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
+    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> CatalogItemId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Table(builtin))
     }
 
     /// Optimized lookup for a builtin log.
     ///
     /// Panics if the builtin log doesn't exist in the catalog.
-    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
-        self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin))
+    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> (CatalogItemId, GlobalId) {
+        let item_id = self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin));
+        let log = match self.get_entry(&item_id).item() {
+            CatalogItem::Log(log) => log,
+            other => unreachable!("programming error, expected BuiltinLog, found {other:?}"),
+        };
+        (item_id, log.global_id)
     }
 
     /// Optimized lookup for a builtin storage collection.
     ///
     /// Panics if the builtin storage collection doesn't exist in the catalog.
-    pub fn resolve_builtin_source(&self, builtin: &'static BuiltinSource) -> GlobalId {
+    pub fn resolve_builtin_source(&self, builtin: &'static BuiltinSource) -> CatalogItemId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Source(builtin))
     }
 
     /// Optimized lookup for a builtin object.
     ///
     /// Panics if the builtin object doesn't exist in the catalog.
-    pub fn resolve_builtin_object<T: TypeReference>(&self, builtin: &Builtin<T>) -> GlobalId {
+    pub fn resolve_builtin_object<T: TypeReference>(&self, builtin: &Builtin<T>) -> CatalogItemId {
         let schema_id = &self.ambient_schemas_by_name[builtin.schema()];
         let schema = &self.ambient_schemas_by_id[schema_id];
         match builtin.catalog_item_type() {
-            CatalogItemType::Type => schema.types[builtin.name()].clone(),
-            CatalogItemType::Func => schema.functions[builtin.name()].clone(),
+            CatalogItemType::Type => schema.types[builtin.name()],
+            CatalogItemType::Func => schema.functions[builtin.name()],
             CatalogItemType::Table
             | CatalogItemType::Source
             | CatalogItemType::Sink
@@ -1377,7 +1382,7 @@ impl CatalogState {
             | CatalogItemType::Index
             | CatalogItemType::Secret
             | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => schema.items[builtin.name()].clone(),
+            | CatalogItemType::ContinualTask => schema.items[builtin.name()],
         }
     }
 

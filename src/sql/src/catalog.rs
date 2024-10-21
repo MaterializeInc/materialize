@@ -676,6 +676,23 @@ pub trait CatalogItem {
 
     /// Returns the cluster the item belongs to.
     fn cluster_id(&self) -> Option<ClusterId>;
+
+    /// Returns the [`CatalogCollectionItem`] for a specific version of this
+    /// [`CatalogItem`].
+    fn at_version(&self, version: RelationVersionSelector) -> Box<dyn CatalogCollectionItem>;
+}
+
+/// An item in a [`SessionCatalog`] and the specific "collection"/pTVC that it
+/// refers to.
+pub trait CatalogCollectionItem: CatalogItem + Send + Sync {
+    /// Returns a description of the result set produced by the catalog item.
+    ///
+    /// If the catalog item is not of a type that produces data (i.e., a sink or
+    /// an index), it returns an error.
+    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
+
+    /// The [`GlobalId`] for this item.
+    fn global_id(&self) -> GlobalId;
 }
 
 /// The type of a [`CatalogItem`].
