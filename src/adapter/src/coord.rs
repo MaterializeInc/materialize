@@ -128,7 +128,7 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
@@ -421,7 +421,7 @@ pub struct CopyToContext {
     /// Connection information required to connect to the external service to copy the data.
     pub connection: StorageConnection<ReferencedConnection>,
     /// The ID of the CONNECTION object to be used for copying the data.
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     /// Format params to format the data.
     pub format: S3SinkFormat,
     /// Approximate max file size of each uploaded file.
@@ -1629,7 +1629,7 @@ pub struct Coordinator {
     /// A map from the compute sink ID to it's state description.
     active_compute_sinks: BTreeMap<GlobalId, ActiveComputeSink>,
     /// A map from active webhooks to their invalidation handle.
-    active_webhooks: BTreeMap<GlobalId, WebhookAppenderInvalidator>,
+    active_webhooks: BTreeMap<CatalogItemId, WebhookAppenderInvalidator>,
     /// A map from connection ids to a watch channel that is set to `true` if the connection
     /// received a cancel request.
     staged_cancellation: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,

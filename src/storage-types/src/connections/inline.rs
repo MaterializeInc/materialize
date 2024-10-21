@@ -18,7 +18,7 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use proptest::prelude::Arbitrary;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -27,16 +27,16 @@ use crate::AlterCompatible;
 
 use super::Connection;
 
-/// Permits any struct to take a `GlobalId` into an inlined connection.
+/// Permits any struct to take a [`CatalogItemId`] into an inlined connection.
 ///
 /// It is safe to assume that if this `id` does not refer to a catalog
 /// connection, this function will panic.
 pub trait ConnectionResolver {
-    fn resolve_connection(&self, id: GlobalId) -> Connection<InlinedConnection>;
+    fn resolve_connection(&self, id: CatalogItemId) -> Connection<InlinedConnection>;
 }
 
 impl<R: ConnectionResolver + ?Sized> ConnectionResolver for &R {
-    fn resolve_connection(&self, id: GlobalId) -> Connection<InlinedConnection> {
+    fn resolve_connection(&self, id: CatalogItemId) -> Connection<InlinedConnection> {
         (*self).resolve_connection(id)
     }
 }
@@ -120,12 +120,12 @@ pub trait ConnectionAccess:
 pub struct ReferencedConnection;
 
 impl ConnectionAccess for ReferencedConnection {
-    type Kafka = GlobalId;
-    type Pg = GlobalId;
-    type Aws = GlobalId;
-    type Ssh = GlobalId;
-    type Csr = GlobalId;
-    type MySql = GlobalId;
+    type Kafka = CatalogItemId;
+    type Pg = CatalogItemId;
+    type Aws = CatalogItemId;
+    type Ssh = CatalogItemId;
+    type Csr = CatalogItemId;
+    type MySql = CatalogItemId;
 }
 
 /// Expresses that the struct contains an inlined definition of a connection.

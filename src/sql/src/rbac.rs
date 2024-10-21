@@ -1561,7 +1561,7 @@ fn generate_required_source_privileges(
 /// For more details see: <https://www.postgresql.org/docs/15/rules-privileges.html>
 fn generate_read_privileges(
     catalog: &impl SessionCatalog,
-    ids: impl Iterator<Item = GlobalId>,
+    ids: impl Iterator<Item = CatalogItemId>,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     generate_read_privileges_inner(catalog, ids, role_id, &mut BTreeSet::new())
@@ -1569,7 +1569,7 @@ fn generate_read_privileges(
 
 fn generate_read_privileges_inner(
     catalog: &impl SessionCatalog,
-    ids: impl Iterator<Item = GlobalId>,
+    ids: impl Iterator<Item = CatalogItemId>,
     role_id: RoleId,
     seen: &mut BTreeSet<(ObjectId, RoleId)>,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {

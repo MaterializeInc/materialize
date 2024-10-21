@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
-use mz_repr::{strconv, GlobalId, RelationVersionSelector};
+use mz_repr::{strconv, CatalogItemId, RelationVersionSelector};
 use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Expr,
     Ident, KafkaBroker, RefreshOptionValue, ReplicaDefinition,
@@ -40,9 +40,9 @@ pub trait ImpliedValue: Sized {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Secret(GlobalId);
+pub struct Secret(CatalogItemId);
 
-impl From<Secret> for GlobalId {
+impl From<Secret> for CatalogItemId {
     fn from(secret: Secret) -> Self {
         secret.0
     }
@@ -80,15 +80,15 @@ impl ImpliedValue for Secret {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Object(GlobalId);
+pub struct Object(CatalogItemId);
 
-impl From<Object> for GlobalId {
+impl From<Object> for CatalogItemId {
     fn from(obj: Object) -> Self {
         obj.0
     }
 }
 
-impl From<&Object> for GlobalId {
+impl From<&Object> for CatalogItemId {
     fn from(obj: &Object) -> Self {
         obj.0
     }

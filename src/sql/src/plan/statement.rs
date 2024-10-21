@@ -433,7 +433,7 @@ pub fn plan(
 pub fn plan_copy_from(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<super::HirRelationExpr, PlanError> {
@@ -623,7 +623,7 @@ impl<'a> StatementContext<'a> {
     // `UnresolvedItemName`.
     pub fn allocate_resolved_item_name(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         name: UnresolvedItemName,
     ) -> Result<ResolvedItemName, PlanError> {
         let partial = normalize::unresolved_item_name(name)?;
@@ -720,7 +720,7 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem {
+    pub fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem {
         self.catalog.get_item(id)
     }
 
@@ -865,7 +865,7 @@ impl<'a> StatementContext<'a> {
         match (ssh_tunnel, aws_privatelink) {
             (None, None) => Ok(Tunnel::Direct),
             (Some(ssh_tunnel), None) => {
-                let id = GlobalId::from(ssh_tunnel);
+                let id = CatalogItemId::from(ssh_tunnel);
                 let ssh_tunnel = self.catalog.get_item(&id);
                 match ssh_tunnel.connection()? {
                     Connection::Ssh(_connection) => Ok(Tunnel::Ssh(SshTunnel {

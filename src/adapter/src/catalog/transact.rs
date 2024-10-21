@@ -37,7 +37,7 @@ use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{strconv, GlobalId};
+use mz_repr::{strconv, CatalogItemId, GlobalId};
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
     CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, RoleAttributes, RoleMembership,
@@ -69,7 +69,7 @@ use crate::AdapterError;
 #[derive(Debug, Clone)]
 pub enum Op {
     AlterRetainHistory {
-        id: GlobalId,
+        id: CatalogItemId,
         value: Option<Value>,
         window: CompactionWindow,
     },
@@ -107,7 +107,7 @@ pub enum Op {
         reason: ReplicaCreateDropReason,
     },
     CreateItem {
-        id: GlobalId,
+        id: CatalogItemId,
         name: QualifiedItemName,
         item: CatalogItem,
         owner_id: RoleId,
@@ -136,7 +136,7 @@ pub enum Op {
         to_name: String,
     },
     RenameItem {
-        id: GlobalId,
+        id: CatalogItemId,
         current_full_name: FullItemName,
         to_name: String,
     },
@@ -176,12 +176,12 @@ pub enum Op {
         config: ReplicaConfig,
     },
     UpdateItem {
-        id: GlobalId,
+        id: CatalogItemId,
         name: QualifiedItemName,
         to_item: CatalogItem,
     },
     UpdateSourceReferences {
-        source_id: GlobalId,
+        source_id: CatalogItemId,
         references: SourceReferences,
     },
     UpdateSystemConfiguration {
@@ -221,7 +221,7 @@ pub enum DropObjectInfo {
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Role(RoleId),
-    Item(GlobalId),
+    Item(CatalogItemId),
 }
 
 impl DropObjectInfo {
@@ -238,7 +238,7 @@ impl DropObjectInfo {
             ObjectId::Database(database_id) => DropObjectInfo::Database(database_id),
             ObjectId::Schema(schema) => DropObjectInfo::Schema(schema),
             ObjectId::Role(role_id) => DropObjectInfo::Role(role_id),
-            ObjectId::Item(global_id) => DropObjectInfo::Item(global_id),
+            ObjectId::Item(item_id) => DropObjectInfo::Item(item_id),
         }
     }
 
@@ -253,7 +253,7 @@ impl DropObjectInfo {
             DropObjectInfo::Database(database_id) => ObjectId::Database(database_id.clone()),
             DropObjectInfo::Schema(schema) => ObjectId::Schema(schema.clone()),
             DropObjectInfo::Role(role_id) => ObjectId::Role(role_id.clone()),
-            DropObjectInfo::Item(global_id) => ObjectId::Item(global_id.clone()),
+            DropObjectInfo::Item(item_id) => ObjectId::Item(*item_id),
         }
     }
 }
@@ -2108,7 +2108,7 @@ impl Catalog {
         Ok((weird_builtin_table_update, temporary_item_updates))
     }
 
-    fn log_update(state: &CatalogState, id: &GlobalId) {
+    fn log_update(state: &CatalogState, id: &CatalogItemId) {
         let entry = state.get_entry(id);
         info!(
             "update {} {} ({})",
@@ -2197,7 +2197,7 @@ pub(crate) struct ObjectsToDrop {
     pub clusters: BTreeSet<ClusterId>,
     pub replicas: BTreeMap<ReplicaId, (ClusterId, ReplicaCreateDropReason)>,
     pub roles: BTreeSet<RoleId>,
-    pub items: Vec<GlobalId>,
+    pub items: Vec<CatalogItemId>,
 }
 
 impl ObjectsToDrop {

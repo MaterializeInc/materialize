@@ -27,7 +27,7 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
-use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     CreateSinkOption, CreateSinkOptionName, CteBlock, ExplainPlanOption, ExplainPlanOptionName,
     ExplainPushdownStatement, ExplainSinkSchemaFor, ExplainSinkSchemaStatement,
@@ -1022,7 +1022,7 @@ fn plan_copy_to_expr(
     options: CopyOptionExtracted,
 ) -> Result<Plan, PlanError> {
     let conn_id = match options.aws_connection {
-        Some(conn_id) => GlobalId::from(conn_id),
+        Some(conn_id) => CatalogItemId::from(conn_id),
         None => sql_bail!("AWS CONNECTION is required for COPY ... TO <expr>"),
     };
     let connection = scx.get_item(&conn_id).connection()?;

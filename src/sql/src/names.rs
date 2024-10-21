@@ -21,7 +21,7 @@ use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_repr::{ColumnName, RelationVersionSelector};
 use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, Version};
 use mz_sql_parser::ident;
@@ -416,7 +416,7 @@ pub struct ItemQualifiers {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedItemName {
     Item {
-        id: GlobalId,
+        id: CatalogItemId,
         qualifiers: ItemQualifiers,
         full_name: FullItemName,
         // Whether this object, when printed out, should use [id AS name] syntax. We
@@ -453,7 +453,7 @@ impl ResolvedItemName {
         }
     }
 
-    pub fn item_id(&self) -> &GlobalId {
+    pub fn item_id(&self) -> &CatalogItemId {
         match self {
             ResolvedItemName::Item { id, .. } => id,
             _ => panic!("cannot call item_id on non-object"),
@@ -648,7 +648,7 @@ pub enum ResolvedDataType {
         value_type: Box<ResolvedDataType>,
     },
     Named {
-        id: GlobalId,
+        id: CatalogItemId,
         qualifiers: ItemQualifiers,
         full_name: FullItemName,
         modifiers: Vec<i64>,
@@ -934,7 +934,7 @@ pub enum ObjectId {
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Role(RoleId),
-    Item(GlobalId),
+    Item(CatalogItemId),
 }
 
 impl ObjectId {
@@ -968,7 +968,7 @@ impl ObjectId {
             _ => panic!("ObjectId::unwrap_role_id called on {self:?}"),
         }
     }
-    pub fn unwrap_item_id(self) -> GlobalId {
+    pub fn unwrap_item_id(self) -> CatalogItemId {
         match self {
             ObjectId::Item(id) => id,
             _ => panic!("ObjectId::unwrap_item_id called on {self:?}"),
@@ -1122,14 +1122,14 @@ impl From<&RoleId> for ObjectId {
     }
 }
 
-impl From<GlobalId> for ObjectId {
-    fn from(id: GlobalId) -> Self {
+impl From<CatalogItemId> for ObjectId {
+    fn from(id: CatalogItemId) -> Self {
         ObjectId::Item(id)
     }
 }
 
-impl From<&GlobalId> for ObjectId {
-    fn from(id: &GlobalId) -> Self {
+impl From<&CatalogItemId> for ObjectId {
+    fn from(id: &CatalogItemId) -> Self {
         ObjectId::Item(*id)
     }
 }
@@ -1137,17 +1137,17 @@ impl From<&GlobalId> for ObjectId {
 impl From<CommentObjectId> for ObjectId {
     fn from(id: CommentObjectId) -> Self {
         match id {
-            CommentObjectId::Table(global_id)
-            | CommentObjectId::View(global_id)
-            | CommentObjectId::MaterializedView(global_id)
-            | CommentObjectId::Source(global_id)
-            | CommentObjectId::Sink(global_id)
-            | CommentObjectId::Index(global_id)
-            | CommentObjectId::Func(global_id)
-            | CommentObjectId::Connection(global_id)
-            | CommentObjectId::Type(global_id)
-            | CommentObjectId::Secret(global_id)
-            | CommentObjectId::ContinualTask(global_id) => ObjectId::Item(global_id),
+            CommentObjectId::Table(item_id)
+            | CommentObjectId::View(item_id)
+            | CommentObjectId::MaterializedView(item_id)
+            | CommentObjectId::Source(item_id)
+            | CommentObjectId::Sink(item_id)
+            | CommentObjectId::Index(item_id)
+            | CommentObjectId::Func(item_id)
+            | CommentObjectId::Connection(item_id)
+            | CommentObjectId::Type(item_id)
+            | CommentObjectId::Secret(item_id)
+            | CommentObjectId::ContinualTask(item_id) => ObjectId::Item(item_id),
             CommentObjectId::Role(id) => ObjectId::Role(id),
             CommentObjectId::Database(id) => ObjectId::Database(id),
             CommentObjectId::Schema(id) => ObjectId::Schema(id),
@@ -1185,22 +1185,23 @@ impl From<ObjectId> for SystemObjectId {
 }
 
 /// Comments can be applied to multiple kinds of objects (e.g. Tables and Role), so we need a way
-/// to represent these different types and their IDs (e.g. [`GlobalId`] and [`RoleId`]), as well as
-/// the inner kind of object that is represented, e.g. [`GlobalId`] is used to identify both Tables
-/// and Views. No other kind of ID encapsulates all of this, hence this new "*Id" type.
+/// to represent these different types and their IDs (e.g. [`CatalogItemId`] and [`RoleId`]), as
+/// well as the inner kind of object that is represented, e.g. [`CatalogItemId`] is used to
+/// identify both Tables and Views. No other kind of ID encapsulates all of this, hence this new
+/// "*Id" type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
 pub enum CommentObjectId {
-    Table(GlobalId),
-    View(GlobalId),
-    MaterializedView(GlobalId),
-    Source(GlobalId),
-    Sink(GlobalId),
-    Index(GlobalId),
-    Func(GlobalId),
-    Connection(GlobalId),
-    Type(GlobalId),
-    Secret(GlobalId),
-    ContinualTask(GlobalId),
+    Table(CatalogItemId),
+    View(CatalogItemId),
+    MaterializedView(CatalogItemId),
+    Source(CatalogItemId),
+    Sink(CatalogItemId),
+    Index(CatalogItemId),
+    Func(CatalogItemId),
+    Connection(CatalogItemId),
+    Type(CatalogItemId),
+    Secret(CatalogItemId),
+    ContinualTask(CatalogItemId),
     Role(RoleId),
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),

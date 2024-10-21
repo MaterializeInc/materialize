@@ -34,8 +34,8 @@ use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
-    arb_row_for_relation, Datum, GlobalId, ProtoRelationDesc, ProtoRow, RelationDesc, Row,
-    RowColumnarDecoder, RowColumnarEncoder,
+    arb_row_for_relation, CatalogItemId, Datum, GlobalId, ProtoRelationDesc, ProtoRow,
+    RelationDesc, Row, RowColumnarDecoder, RowColumnarEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
 use proptest::prelude::any;
@@ -681,7 +681,7 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
 
     /// The id of the connection object (i.e the one obtained from running `CREATE CONNECTION`) in
     /// the catalog, if any.
-    fn connection_id(&self) -> Option<GlobalId>;
+    fn connection_id(&self) -> Option<CatalogItemId>;
 
     /// If this source connection can output to a primary collection, contains the source-specific
     /// details of that export, else is set to `SourceExportDetails::None` to indicate that
@@ -1030,7 +1030,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         }
     }
 
-    fn connection_id(&self) -> Option<GlobalId> {
+    fn connection_id(&self) -> Option<CatalogItemId> {
         match self {
             Self::Kafka(conn) => conn.connection_id(),
             Self::Postgres(conn) => conn.connection_id(),

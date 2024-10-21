@@ -32,7 +32,7 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
-use mz_repr::{strconv, GlobalId, RelationDesc, RelationVersionSelector, Timestamp};
+use mz_repr::{strconv, CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
@@ -291,7 +291,7 @@ pub async fn purify_statement(
 /// underlying materialized view).
 pub(crate) fn purify_create_sink_avro_doc_on_options(
     catalog: &dyn SessionCatalog,
-    from_id: GlobalId,
+    from_id: CatalogItemId,
     format: &mut Option<FormatSpecifier<Aug>>,
 ) -> Result<(), PlanError> {
     // Collect all objects referenced by the sink.

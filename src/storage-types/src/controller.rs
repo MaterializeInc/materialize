@@ -50,11 +50,7 @@ pub struct CollectionMetadata {
 }
 
 impl crate::AlterCompatible for CollectionMetadata {
-    fn alter_compatible(
-        &self,
-        id: mz_repr::GlobalId,
-        other: &Self,
-    ) -> Result<(), self::AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), self::AlterError> {
         if self == other {
             return Ok(());
         }

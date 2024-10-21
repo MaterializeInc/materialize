@@ -275,7 +275,7 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(crate) async fn sequence_rotate_keys(&mut self, ctx: ExecuteContext, id: GlobalId) {
+    pub(crate) async fn sequence_rotate_keys(&mut self, ctx: ExecuteContext, id: CatalogItemId) {
         // If the secret is deleted from the catalog during
         // `rotate_keys_ensure()`, this will prevent `rotate_keys_finish()` from
         // issuing the catalog update for the change. The state of the persisted

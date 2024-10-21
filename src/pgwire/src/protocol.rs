@@ -34,7 +34,7 @@ use mz_ore::{assert_none, assert_ok, instrument};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3};
 use mz_repr::{
-    Datum, GlobalId, RelationDesc, RelationType, RowArena, RowIterator, RowRef, ScalarType,
+    CatalogItemId, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef, ScalarType,
 };
 use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
@@ -2060,7 +2060,7 @@ where
     #[instrument(level = "debug")]
     async fn copy_from(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         columns: Vec<usize>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
@@ -2096,7 +2096,7 @@ where
 
     async fn copy_from_inner(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         columns: Vec<usize>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,

@@ -257,7 +257,7 @@ pub fn plan_insert_query(
     returning: Vec<SelectItem<Aug>>,
 ) -> Result<
     (
-        GlobalId,
+        CatalogItemId,
         HirRelationExpr,
         PlannedRootQuery<Vec<HirScalarExpr>>,
     ),
@@ -475,7 +475,7 @@ pub fn plan_copy_item(
     scx: &StatementContext,
     item_name: ResolvedItemName,
     columns: Vec<Ident>,
-) -> Result<(GlobalId, RelationDesc, Vec<usize>), PlanError> {
+) -> Result<(CatalogItemId, RelationDesc, Vec<usize>), PlanError> {
     let item = scx.get_item_by_resolved_name(&item_name)?;
 
     let mut desc = item
@@ -559,7 +559,7 @@ pub fn plan_copy_from(
 pub fn plan_copy_from_rows(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<HirRelationExpr, PlanError> {
@@ -626,7 +626,7 @@ pub fn plan_copy_from_rows(
 
 /// Common information used for DELETE, UPDATE, and INSERT INTO ... SELECT plans.
 pub struct ReadThenWritePlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     /// Read portion of query.
     ///
     /// NOTE: Even if the WHERE filter is left off, we still need to perform a read to generate
@@ -5691,7 +5691,7 @@ pub fn scalar_type_from_sql(
 
 pub fn scalar_type_from_catalog(
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     modifiers: &[i64],
 ) -> Result<ScalarType, PlanError> {
     let entry = catalog.get_item(&id);
