@@ -245,8 +245,12 @@ auction ended. As new auction and bid data appears, the query must be rerun to
 get up-to-date results.
 
 1. Using the [`CREATE VIEW`](/sql/create-view/) command, create a
-   [**view**](/concepts/views/ "Saved name/alias for a query") `winning_bids`
-   for the query that finds winning bids for auctions that have ended.
+   [**view**](/concepts/views/ "Saved name/alias for a query") to find the
+   winning (highest) bids. Materialize provides an idiomatic way to perform
+   [Top-K queries](/transform-data/idiomatic-materialize-sql/top-k/). For K = 1,
+   the idiomatic Materialize SQL uses the PostgreSQL expression [`DISTINCT
+   ON`](/transform-data/idiomatic-materialize-sql/top-k/#for-k--1-1) to return,
+   for each distinct auction id, the first row.
 
    ```mzsql
    CREATE VIEW winning_bids AS
@@ -261,11 +265,6 @@ get up-to-date results.
      b.bid_time,
      b.buyer;
    ```
-
-   [`SELECT DISTINCT ON
-   (...)`](https://www.postgresql.org/docs/current/sql-select.html#SQL-DISTINCT)
-   is a PostgreSQL expression that keeps only the first row of each set of
-   matching rows.
 
 1. [`SELECT`](/sql/select/) from the view to execute the underlying query.
    For example:
@@ -668,6 +667,8 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 - [Indexes](/concepts/indexes)
 - [Sources](/concepts/sources)
 - [Views](/concepts/views/)
+- [Idiomatic Materialize SQL
+  chart](/transform-data/idiomatic-materialize-sql/appendix/idiomatic-sql-chart/)
 - [Usage & Billing](/administration/billing/#compute)
 - [`CREATE INDEX`](/sql/create-index/)
 - [`CREATE SCHEMA`](/sql/create-schema/)
