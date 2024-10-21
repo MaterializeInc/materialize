@@ -65,10 +65,7 @@ pub fn upgrade(
             }
             Some(v68::state_update_kind::Kind::GidMapping(old_mapping)) => {
                 let new_mapping = v69::state_update_kind::GidMapping {
-                    key: old_mapping
-                        .key
-                        .as_ref()
-                        .map(v69::GidMappingKey::convert),
+                    key: old_mapping.key.as_ref().map(v69::GidMappingKey::convert),
                     // ** MIGRATION **
                     value: old_mapping
                         .value

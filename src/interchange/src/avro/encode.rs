@@ -20,9 +20,7 @@ use mz_avro::Schema;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
-use mz_repr::{
-    CatalogItemId, ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType,
-};
+use mz_repr::{CatalogItemId, ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use serde_json::json;
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};

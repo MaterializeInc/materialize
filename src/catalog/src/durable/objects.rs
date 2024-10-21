@@ -1204,7 +1204,7 @@ pub struct ItemValue {
     pub(crate) privileges: Vec<MzAclItem>,
     pub(crate) oid: u32,
     pub(crate) global_id: GlobalId,
-    pub(crate) versions: BTreeMap<RelationVersion, GlobalId>
+    pub(crate) versions: BTreeMap<RelationVersion, GlobalId>,
 }
 
 impl ItemValue {
