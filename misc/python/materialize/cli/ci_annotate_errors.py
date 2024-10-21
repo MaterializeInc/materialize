@@ -169,6 +169,19 @@ IGNORE_RE = re.compile(
     re.VERBOSE | re.MULTILINE,
 )
 
+# Product limits (finding new limits) intentionally runs into the *actual*
+# product limits. The normal IGNORE_RE doesn't allow filtering "out of memory"
+# errors specific to a test, since it doesn't contain the test name
+PRODUCT_LIMITS_FIND_IGNORE_RE = re.compile(
+    rb"""
+    ( Memory\ cgroup\ out\ of\ memory
+    | limits-materialized .* \| .* fatal\ runtime\ error:\ stack\ overflow
+    | limits-materialized .* \| .* has\ overflowed\ its\ stack
+    )
+    """,
+    re.VERBOSE | re.MULTILINE,
+)
+
 # We don't want any plaintext passwords in our logs, fail the test if it contains any
 PASSWORD_RE = re.compile(
     rb"""
@@ -785,6 +798,13 @@ def _collect_errors_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
 
     for match in ERROR_RE.finditer(data):
         if IGNORE_RE.search(match.group(0)):
+            continue
+        label = os.getenv("BUILDKITE_LABEL")
+        if (
+            label
+            and label.startswith("Product limits (finding new limits) ")
+            and PRODUCT_LIMITS_FIND_IGNORE_RE.search(match.group(0))
+        ):
             continue
         # environmentd segfaults during normal shutdown in coverage builds, see database-issues#5980
         # Ignoring this in regular ways would still be quite spammy.

@@ -281,6 +281,12 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     ///
     /// Received updates are applied by [`Instance::apply_read_hold_changes`].
     read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
+    /// Stashed read hold changes.
+    ///
+    /// Used by [`Instance::apply_read_hold_changes`] to stash read hold changes that cannot be
+    /// applied immediately until they can be applied.
+    stashed_read_hold_changes: BTreeMap<GlobalId, ChangeBatch<T>>,
+
     /// A sender for responses from replicas.
     replica_tx: mz_ore::channel::InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
     /// A receiver for responses from replicas.
@@ -789,6 +795,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             wallclock_lag_last_refresh,
             read_holds_tx: _,
             read_holds_rx: _,
+            stashed_read_hold_changes,
             replica_tx: _,
             replica_rx: _,
         } = self;
@@ -823,6 +830,10 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .map(|(id, epoch)| (id.to_string(), epoch))
             .collect();
         let wallclock_lag_last_refresh = format!("{wallclock_lag_last_refresh:?}");
+        let stashed_read_hold_changes: BTreeMap<_, _> = stashed_read_hold_changes
+            .iter()
+            .map(|(id, changes)| (id.to_string(), changes))
+            .collect();
 
         let map = serde_json::Map::from_iter([
             field("initialized", initialized)?,
@@ -835,6 +846,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field("envd_epoch", envd_epoch)?,
             field("replica_epochs", replica_epochs)?,
             field("wallclock_lag_last_refresh", wallclock_lag_last_refresh)?,
+            field("stashed_read_hold_changes", stashed_read_hold_changes)?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
@@ -903,6 +915,7 @@ where
             wallclock_lag_last_refresh: Instant::now(),
             read_holds_tx,
             read_holds_rx,
+            stashed_read_hold_changes: Default::default(),
             replica_tx,
             replica_rx,
         }
@@ -1623,13 +1636,14 @@ where
     /// Apply collection read hold changes pending in `read_holds_rx`.
     fn apply_read_hold_changes(&mut self) {
         let mut allowed_compaction = BTreeMap::new();
+        let mut stashed_changes = std::mem::take(&mut self.stashed_read_hold_changes);
 
         // It's more efficient to apply updates for greater IDs before updates for smaller IDs,
         // since ID order usually matches dependency order and downgrading read holds on a
         // collection can cause downgrades on its dependencies. So instead of processing changes as
         // they come in, we batch them up as much as we can and process them in reverse ID order.
         let mut recv_batch = || {
-            let mut batch = BTreeMap::<_, ChangeBatch<_>>::new();
+            let mut batch = std::mem::take(&mut stashed_changes);
             while let Ok((id, mut update)) = self.read_holds_rx.try_recv() {
                 batch
                     .entry(id)
@@ -1644,9 +1658,14 @@ where
         while let Some(batch) = recv_batch() {
             for (id, mut update) in batch.into_iter().rev() {
                 let Some(collection) = self.collections.get_mut(&id) else {
-                    soft_panic_or_log!(
-                        "read hold change for absent collection (id={id}, changes={update:?})"
-                    );
+                    // The `ComputeController` provides a sync API for creating collections and
+                    // taking out read holds on them, without waiting for the collection to be
+                    // created in the `Instance`. Thus we might see read hold changes for
+                    // collections that haven't been created yet. Stash them for later application.
+                    self.stashed_read_hold_changes
+                        .entry(id)
+                        .and_modify(|e| e.extend(update.drain()))
+                        .or_insert(update);
                     continue;
                 };
 
