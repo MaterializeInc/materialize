@@ -637,14 +637,16 @@ pub trait CatalogItem {
 
     /// Reports whether this catalog entry is a subsource and, if it is, the
     /// ingestion it is an export of, as well as the item it exports.
-    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)>;
+    fn subsource_details(
+        &self,
+    ) -> Option<(CatalogItemId, &UnresolvedItemName, &SourceExportDetails)>;
 
     /// Reports whether this catalog entry is a source export and, if it is, the
     /// ingestion it is an export of, as well as the item it exports.
     fn source_export_details(
         &self,
     ) -> Option<(
-        GlobalId,
+        CatalogItemId,
         &UnresolvedItemName,
         &SourceExportDetails,
         &SourceExportDataConfig<ReferencedConnection>,

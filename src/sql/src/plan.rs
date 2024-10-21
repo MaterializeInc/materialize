@@ -1396,7 +1396,7 @@ pub enum DataSourceDesc {
     /// This source receives its data from the identified ingestion,
     /// specifically the output identified by `external_reference`.
     IngestionExport {
-        ingestion_id: GlobalId,
+        ingestion_id: CatalogItemId,
         external_reference: UnresolvedItemName,
         details: SourceExportDetails,
         data_config: SourceExportDataConfig<ReferencedConnection>,

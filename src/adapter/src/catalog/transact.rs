@@ -1083,7 +1083,7 @@ impl Catalog {
                                 // Ingestion exports don't have their own cluster, but
                                 // run on their ingestion's cluster.
                                 DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                                    match state.get_entry_by_global_id(&ingestion_id).cluster_id() {
+                                    match state.get_entry(&ingestion_id).cluster_id() {
                                         Some(cluster_id) => Some(cluster_id.to_string()),
                                         None => None,
                                     }

@@ -608,15 +608,21 @@ impl Coordinator {
                             external_reference: _,
                             details,
                             data_config,
-                        } => (
-                            DataSource::IngestionExport {
-                                ingestion_id,
-                                details,
-                                data_config: data_config
-                                    .into_inline_connection(coord.catalog().state()),
-                            },
-                            source_status_collection_id,
-                        ),
+                        } => {
+                            // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                            // this will always be a Source or a Table.
+                            let ingestion_id =
+                                coord.catalog().get_entry(&ingestion_id).latest_global_id();
+                            (
+                                DataSource::IngestionExport {
+                                    ingestion_id,
+                                    details,
+                                    data_config: data_config
+                                        .into_inline_connection(coord.catalog().state()),
+                                },
+                                source_status_collection_id,
+                            )
+                        }
                         DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) = coord.catalog().state().try_get_webhook_url(&item_id)
@@ -1041,6 +1047,10 @@ impl Coordinator {
                                         .get_entry(&source_status_item_id)
                                         .latest_global_id(),
                                 );
+                                // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                                // this will always be a Source or a Table.
+                                let ingestion_id =
+                                    coord.catalog().get_entry(&ingestion_id).latest_global_id();
                                 let collection_desc = CollectionDescription::<Timestamp> {
                                     desc: table.desc.clone(),
                                     data_source: DataSource::IngestionExport {
@@ -3935,15 +3945,21 @@ impl Coordinator {
                             external_reference: _,
                             details,
                             data_config,
-                        } => (
-                            DataSource::IngestionExport {
-                                ingestion_id,
-                                details,
-                                data_config: data_config
-                                    .into_inline_connection(self.catalog().state()),
-                            },
-                            source_status_collection_id,
-                        ),
+                        } => {
+                            // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                            // this will always be a Source or a Table.
+                            let ingestion_id =
+                                self.catalog().get_entry(&ingestion_id).latest_global_id();
+                            (
+                                DataSource::IngestionExport {
+                                    ingestion_id,
+                                    details,
+                                    data_config: data_config
+                                        .into_inline_connection(self.catalog().state()),
+                                },
+                                source_status_collection_id,
+                            )
+                        }
                         o => {
                             unreachable!(
                                 "ALTER SOURCE...ADD SUBSOURCE only creates SourceExport but got {:?}",

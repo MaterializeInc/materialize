@@ -1945,7 +1945,7 @@ impl Coordinator {
                         {
                             policy = Some(
                                 self.catalog()
-                                    .get_entry_by_global_id(&ingestion_id)
+                                    .get_entry(&ingestion_id)
                                     .source()
                                     .expect("must be source")
                                     .custom_logical_compaction_window
@@ -2510,14 +2510,19 @@ impl Coordinator {
                     external_reference: _,
                     details,
                     data_config,
-                } => (
-                    DataSource::IngestionExport {
-                        ingestion_id,
-                        details,
-                        data_config: data_config.into_inline_connection(catalog.state()),
-                    },
-                    Some(source_status_collection_id),
-                ),
+                } => {
+                    // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                    // this will always be a Source or a Table.
+                    let ingestion_id = catalog.get_entry(&ingestion_id).latest_global_id();
+                    (
+                        DataSource::IngestionExport {
+                            ingestion_id,
+                            details,
+                            data_config: data_config.into_inline_connection(catalog.state()),
+                        },
+                        Some(source_status_collection_id),
+                    )
+                }
                 DataSourceDesc::Webhook { .. } => {
                     (DataSource::Webhook, Some(source_status_collection_id))
                 }

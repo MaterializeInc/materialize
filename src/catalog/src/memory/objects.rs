@@ -736,14 +736,16 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
         self.entry.used_by()
     }
 
-    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
+    fn subsource_details(
+        &self,
+    ) -> Option<(CatalogItemId, &UnresolvedItemName, &SourceExportDetails)> {
         self.entry.subsource_details()
     }
 
     fn source_export_details(
         &self,
     ) -> Option<(
-        GlobalId,
+        CatalogItemId,
         &UnresolvedItemName,
         &SourceExportDetails,
         &SourceExportDataConfig<ReferencedConnection>,
@@ -887,7 +889,7 @@ pub enum DataSourceDesc {
     /// The `external_reference` field is only used here for displaying
     /// human-readable names in system tables.
     IngestionExport {
-        ingestion_id: GlobalId,
+        ingestion_id: CatalogItemId,
         external_reference: UnresolvedItemName,
         details: SourceExportDetails,
         data_config: SourceExportDataConfig<ReferencedConnection>,
@@ -2245,7 +2247,7 @@ impl CatalogEntry {
     /// ingestion it is an export of, as well as the item it exports.
     pub fn subsource_details(
         &self,
-    ) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
+    ) -> Option<(CatalogItemId, &UnresolvedItemName, &SourceExportDetails)> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::IngestionExport {
@@ -2265,7 +2267,7 @@ impl CatalogEntry {
     pub fn source_export_details(
         &self,
     ) -> Option<(
-        GlobalId,
+        CatalogItemId,
         &UnresolvedItemName,
         &SourceExportDetails,
         &SourceExportDataConfig<ReferencedConnection>,
@@ -3080,14 +3082,16 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.used_by()
     }
 
-    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
+    fn subsource_details(
+        &self,
+    ) -> Option<(CatalogItemId, &UnresolvedItemName, &SourceExportDetails)> {
         self.subsource_details()
     }
 
     fn source_export_details(
         &self,
     ) -> Option<(
-        GlobalId,
+        CatalogItemId,
         &UnresolvedItemName,
         &SourceExportDetails,
         &SourceExportDataConfig<ReferencedConnection>,

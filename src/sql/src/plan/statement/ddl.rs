@@ -1446,9 +1446,7 @@ pub fn plan_create_subsource(
     let data_source = if let Some(source_reference) = of_source {
         // This is a subsource with the "natural" dependency order, i.e. it is
         // not a legacy subsource with the inverted structure.
-        let ingestion_id = scx
-            .catalog
-            .resolve_global_id(source_reference.item_id(), *source_reference.version());
+        let ingestion_id = *source_reference.item_id();
         let external_reference = external_reference.unwrap();
 
         // Decode the details option stored on the subsource statement, which contains information
@@ -1567,7 +1565,7 @@ pub fn plan_create_table_from_source(
     } = with_options.clone().try_into()?;
 
     let source_item = scx.get_item_by_resolved_name(source)?;
-    let ingestion_id = source_item.global_id();
+    let ingestion_id = source_item.id();
 
     // Decode the details option stored on the statement, which contains information
     // created during the purification process.
@@ -6863,10 +6861,9 @@ pub fn plan_comment(
                 CatalogItemType::Table => (CommentObjectId::Table(item.id()), Some(pos + 1)),
                 CatalogItemType::Source => (CommentObjectId::Source(item.id()), Some(pos + 1)),
                 CatalogItemType::View => (CommentObjectId::View(item.id()), Some(pos + 1)),
-                CatalogItemType::MaterializedView => (
-                    CommentObjectId::MaterializedView(item.id()),
-                    Some(pos + 1),
-                ),
+                CatalogItemType::MaterializedView => {
+                    (CommentObjectId::MaterializedView(item.id()), Some(pos + 1))
+                }
                 CatalogItemType::Type => (CommentObjectId::Type(item.id()), Some(pos + 1)),
                 r => {
                     return Err(PlanError::Unsupported {

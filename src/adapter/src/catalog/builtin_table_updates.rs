@@ -495,7 +495,7 @@ impl CatalogState {
                             data_config: _,
                         } => {
                             let ingestion_entry = self
-                                .get_entry_by_global_id(ingestion_id)
+                                .get_entry(ingestion_id)
                                 .source_desc()
                                 .expect("primary source exists")
                                 .expect("primary source is a source");
@@ -565,7 +565,7 @@ impl CatalogState {
                     // Ingestion exports don't have their own cluster, but
                     // run on their ingestion's cluster.
                     DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                        self.get_entry_by_global_id(&ingestion_id)
+                        self.get_entry(&ingestion_id)
                     }
                     _ => entry,
                 };
@@ -610,7 +610,7 @@ impl CatalogState {
                         data_config: _,
                     } => {
                         let ingestion_entry = self
-                            .get_entry_by_global_id(ingestion_id)
+                            .get_entry(ingestion_id)
                             .source_desc()
                             .expect("primary source exists")
                             .expect("primary source is a source");
