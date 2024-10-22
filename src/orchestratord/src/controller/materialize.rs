@@ -21,9 +21,9 @@ use tracing::{debug, trace};
 
 use crate::metrics::Metrics;
 use mz_cloud_resources::crd::materialize::v1alpha1::{Materialize, MaterializeStatus};
+use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
-use mz_ore::cast::CastFrom;
-use mz_ore::instrument;
+use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 
 mod resources;
 
@@ -35,8 +35,6 @@ pub struct Args {
     region: String,
     #[clap(long)]
     local_development: bool,
-    #[clap(long)]
-    environmentd_target_arch: String,
 
     #[clap(flatten)]
     aws_info: AwsInfo,
@@ -45,6 +43,13 @@ pub struct Args {
     scheduler_name: Option<String>,
     #[clap(long)]
     enable_security_context: bool,
+
+    #[clap(long)]
+    environmentd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long)]
+    clusterd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long, default_value = "always", arg_enum)]
+    image_pull_policy: KubernetesImagePullPolicy,
 
     #[clap(long, default_value_t = default_cluster_replica_sizes())]
     environmentd_cluster_replica_sizes: String,

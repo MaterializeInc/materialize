@@ -14,8 +14,7 @@ use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
         core::v1::{
-            Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, NodeAffinity,
-            NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, Pod, PodSecurityContext,
+            Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, Pod, PodSecurityContext,
             PodSpec, PodTemplateSpec, Probe, ResourceRequirements, SeccompProfile,
             SecretKeySelector, SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec,
             TCPSocketAction, Toleration,
@@ -771,9 +770,17 @@ fn create_statefulset_object(
             "--orchestrator-kubernetes-service-account={}",
             &mz.service_account_name()
         ),
-        "--orchestrator-kubernetes-service-node-selector=workload=materialize-instance".into(),
-        "--orchestrator-kubernetes-image-pull-policy=if-not-present".into(),
+        format!(
+            "--orchestrator-kubernetes-image-pull-policy={}",
+            config.image_pull_policy.as_kebab_case_str(),
+        ),
     ]);
+    for selector in &config.clusterd_node_selector {
+        args.push(format!(
+            "--orchestrator-kubernetes-service-node-selector={}={}",
+            selector.key, selector.value,
+        ));
+    }
     if let Some(scheduler_name) = &config.scheduler_name {
         args.push(format!(
             "--orchestrator-kubernetes-scheduler-name={}",
@@ -923,6 +930,7 @@ fn create_statefulset_object(
     let container = Container {
         name: "environmentd".to_owned(),
         image: Some(mz.spec.environmentd_image_ref.to_owned()),
+        image_pull_policy: Some(config.image_pull_policy.to_string()),
         ports: Some(ports),
         command,
         args: Some(args),
@@ -959,31 +967,6 @@ fn create_statefulset_object(
         "materialize.cloud/generation".to_owned() => generation.to_string(),
     };
 
-    let affinity = Some(Affinity {
-        node_affinity: Some(NodeAffinity {
-            preferred_during_scheduling_ignored_during_execution: None,
-            required_during_scheduling_ignored_during_execution: Some(NodeSelector {
-                node_selector_terms: vec![NodeSelectorTerm {
-                    match_expressions: Some(vec![
-                        NodeSelectorRequirement {
-                            key: "workload".to_owned(),
-                            operator: "In".to_owned(),
-                            values: Some(vec!["materialize-instance".to_owned()]),
-                        },
-                        NodeSelectorRequirement {
-                            key: "kubernetes.io/arch".to_owned(),
-                            operator: "In".to_owned(),
-                            values: Some(vec![config.environmentd_target_arch.clone()]),
-                        },
-                    ]),
-                    match_fields: None,
-                }],
-            }),
-        }),
-        pod_affinity: None,
-        pod_anti_affinity: None,
-    });
-
     let tolerations = Some(vec![
         // When the node becomes `NotReady` it indicates there is a problem with the node,
         // By default kubernetes waits 300s (5 minutes) before doing anything in this case,
@@ -1014,7 +997,13 @@ fn create_statefulset_object(
         }),
         spec: Some(PodSpec {
             containers: vec![container],
-            affinity,
+            node_selector: Some(
+                config
+                    .environmentd_node_selector
+                    .iter()
+                    .map(|selector| (selector.key.clone(), selector.value.clone()))
+                    .collect(),
+            ),
             scheduler_name: config.scheduler_name.clone(),
             service_account_name: Some(mz.service_account_name()),
             volumes: None,

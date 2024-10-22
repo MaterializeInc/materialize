@@ -116,6 +116,16 @@ impl fmt::Display for KubernetesImagePullPolicy {
     }
 }
 
+impl KubernetesImagePullPolicy {
+    pub fn as_kebab_case_str(&self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::IfNotPresent => "if-not-present",
+            Self::Never => "never",
+        }
+    }
+}
+
 /// An orchestrator backed by Kubernetes.
 pub struct KubernetesOrchestrator {
     client: Client,
