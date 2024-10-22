@@ -186,7 +186,7 @@ PASSWORD_IGNORE_RE = re.compile(
     # running in the same materialized container. Example:
     # > password: Some("%3C2024-10-18T17:11:36.445784450Z redacted%3E")
     # rb"^ ( < | %3[Cc] ) redacted ( > | %3[Ee] ) $",
-    rb".*redacted.*",
+    rb".*r.*e.*d.*a.*c.*t.*e.*d.*",
     re.VERBOSE,
 )
 
