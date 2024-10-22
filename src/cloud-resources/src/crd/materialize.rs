@@ -82,26 +82,6 @@ pub mod v1alpha1 {
             format!("materialize-backend-{}", self.name_unchecked())
         }
 
-        pub fn cockroach_database_name(&self) -> String {
-            format!("materialize_{}", self.name_unchecked())
-        }
-
-        pub fn cockroach_role_name(&self) -> String {
-            self.cockroach_database_name()
-        }
-
-        pub fn oidc_sub(&self) -> String {
-            format!(
-                "system:serviceaccount:{}:{}",
-                self.name_unchecked(),
-                self.service_account_name()
-            )
-        }
-
-        pub fn persistence_bucket_prefix(&self) -> String {
-            self.oidc_sub()
-        }
-
         pub fn namespace(&self) -> String {
             self.meta().namespace.clone().unwrap()
         }
@@ -120,10 +100,6 @@ pub mod v1alpha1 {
 
         pub fn environmentd_statefulset_name(&self, generation: u64) -> String {
             format!("environmentd-{}-{generation}", self.name_unchecked())
-        }
-
-        pub fn environmentd_container_name() -> String {
-            "environmentd".to_string()
         }
 
         pub fn environmentd_service_name(&self) -> String {

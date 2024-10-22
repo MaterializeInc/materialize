@@ -757,13 +757,10 @@ fn create_statefulset_object(
             args.push(format!("--aws-account-id={account_id}"));
         }
 
-        args.extend([
-            format!("--aws-secrets-controller-tags=Owner={}", mz.oidc_sub()),
-            format!(
-                "--aws-secrets-controller-tags=Environment={}",
-                mz.name_unchecked()
-            ),
-        ]);
+        args.extend([format!(
+            "--aws-secrets-controller-tags=Environment={}",
+            mz.name_unchecked()
+        )]);
         args.extend_from_slice(&config.aws_info.aws_secrets_controller_tags);
     }
 
@@ -839,28 +836,6 @@ fn create_statefulset_object(
             &config.bootstrap_builtin_analytics_cluster_replica_size
         ),
     ]);
-
-    // Add Frontegg arguments.
-    if let (Some(jwk_pem), Some(url), Some(admin_role)) = (
-        &config.frontegg_jwk,
-        &config.frontegg_url,
-        &config.frontegg_admin_role,
-    ) {
-        args.extend([
-            format!("--frontegg-tenant={}", mz.name_unchecked()),
-            format!("--frontegg-jwk={jwk_pem}"),
-            format!("--frontegg-api-token-url={url}/identity/resources/auth/v1/api-token",),
-            format!("--frontegg-admin-role={admin_role}"),
-        ]);
-    }
-
-    // Add storage retention arguments -- see
-    // https://github.com/MaterializeInc/cloud/issues/5142#issuecomment-1385496948
-    // for why 14 months in particular
-    let retention_days = 427;
-    args.push(format!(
-        "--storage-usage-retention-period={retention_days}days"
-    ));
 
     // Add Persist PubSub arguments
     args.push(format!(
@@ -946,7 +921,7 @@ fn create_statefulset_object(
     ];
 
     let container = Container {
-        name: Materialize::environmentd_container_name().to_owned(),
+        name: "environmentd".to_owned(),
         image: Some(mz.spec.environmentd_image_ref.to_owned()),
         ports: Some(ports),
         command,

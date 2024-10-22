@@ -42,16 +42,6 @@ pub struct Args {
     aws_info: AwsInfo,
 
     #[clap(long)]
-    persist_bucket: Option<String>,
-
-    #[clap(long)]
-    frontegg_jwk: Option<String>,
-    #[clap(long)]
-    frontegg_url: Option<String>,
-    #[clap(long)]
-    frontegg_admin_role: Option<String>,
-
-    #[clap(long)]
     scheduler_name: Option<String>,
     #[clap(long)]
     enable_security_context: bool,
