@@ -977,27 +977,7 @@ where
                         }
                     }
 
-                    if PartialOrder::less_than(&resume_upper, &persist_upper) || persist_stash.len() > 0 {
-                        // We have received the first updates based on the
-                        // source snapshot (back on the feedback edge), or we
-                        // have finished ingesting an empty source snapshot.
-
-                        if state.is_none() {
-                            // Yank the ephemeral state we keep for emitting
-                            // updates while ingesting the initial source
-                            // snapshot. Initialize our "real" state.
-                            let mut partial_state = partial_snapshot_state.take().expect("missing partial snapshot state");
-                            partial_state.clear().await.expect("error cleaning out partial state");
-                            state = Some(partial_state);
-                        }
-                    }
-
                     if snapshotting_persist {
-                        if state.is_none() {
-                            tracing::info!(?persist_upper, ?resume_upper, "while snapshotting, real stash not yet available");
-                            continue;
-                        }
-
                         // Determine if this is the last time we call
                         // consolidate_snapshot_chunk, and update our
                         // `snapshotting_persist` state.
@@ -1023,6 +1003,27 @@ where
                         } else {
                             PartialOrder::less_equal(&resume_upper, &persist_upper)
                         };
+
+                        // We need to transition from our partial upsert state
+                        // to real upsert state when either a) we received some
+                        // updates on the persist input, or b) we know we're
+                        // done snapshotting the initial source input or an
+                        // empty snapshot from persist.
+                        if last_snapshot || persist_stash.len() > 0 {
+                            if state.is_none() {
+                                // Yank the ephemeral state we keep for emitting
+                                // updates while ingesting the initial source
+                                // snapshot. Initialize our "real" state.
+                                let mut partial_state = partial_snapshot_state.take().expect("missing partial snapshot state");
+                                partial_state.clear().await.expect("error cleaning out partial state");
+                                state = Some(partial_state);
+                            }
+                        }
+
+                        if state.is_none() {
+                            tracing::info!(?persist_upper, ?resume_upper, "while snapshotting, real stash not yet available");
+                            continue;
+                        }
 
                         // Sort by ts and only present updates that are not
                         // beyond the resume upper.
