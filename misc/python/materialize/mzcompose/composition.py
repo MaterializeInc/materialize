@@ -1379,7 +1379,7 @@ class Composition:
 
         self.exec("mc", "mc", "version", "enable", "persist/persist")
 
-    def backup_crdb(self) -> None:
+    def backup_cockroach(self) -> None:
         self.up("mc", persistent=True)
         self.exec("mc", "mc", "mb", "--ignore-existing", "persist/crdb-backup")
         self.exec(
@@ -1396,7 +1396,7 @@ class Composition:
             """,
         )
 
-    def restore_mz(self, mz_service: str = "materialized") -> None:
+    def restore_cockroach(self, mz_service: str = "materialized") -> None:
         self.kill(mz_service)
         self.exec(
             "cockroach",
@@ -1424,6 +1424,62 @@ class Composition:
             "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
         )
         self.up(mz_service)
+
+    def backup_postgres(self) -> None:
+        backup = self.exec(
+            "cockroach",
+            "pg_dumpall",
+            "--user",
+            "postgres",
+            capture=True,
+        ).stdout
+        with open("backup.sql", "w") as f:
+            f.write(backup)
+
+    def restore_postgres(self, mz_service: str = "materialized") -> None:
+        self.kill(mz_service)
+        self.kill("cockroach")
+        self.rm("cockroach")
+        self.up("cockroach")
+        with open("backup.sql") as f:
+            backup = f.read()
+        self.exec(
+            "cockroach",
+            "psql",
+            "--user",
+            "postgres",
+            "--file",
+            "-",
+            stdin=backup,
+        )
+        self.up("persistcli", persistent=True)
+        self.exec(
+            "persistcli",
+            "persistcli",
+            "admin",
+            "--commit",
+            "restore-blob",
+            f"--blob-uri={minio_blob_uri()}",
+            "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
+        )
+        self.up(mz_service)
+
+    def backup(self) -> None:
+        print(self.compose["services"])
+        if self.compose["services"]["cockroach"]["image"].startswith(
+            "cockroachdb/cockroach"
+        ):
+            self.backup_cockroach()
+        else:
+            self.backup_postgres()
+
+    def restore(self, mz_service: str = "materialized") -> None:
+        if self.compose["services"]["cockroach"]["image"].startswith(
+            "cockroachdb/cockroach"
+        ):
+            self.restore_cockroach(mz_service)
+        else:
+            self.restore_postgres(mz_service)
 
     def await_mz_deployment_status(
         self,

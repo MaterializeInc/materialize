@@ -14,14 +14,14 @@ Basic Backup & Restore test with a table
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.persistcli import Persistcli
+from materialize.mzcompose.services.postgres import PostgresAsCockroach
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    PostgresAsCockroach(),
     Minio(setup_materialize=True),
     Mc(),
     Materialized(external_minio=True, external_cockroach=True, sanity_restart=False),
@@ -51,7 +51,7 @@ def workflow_default(c: Composition) -> None:
         )
     )
 
-    c.backup_cockroach()
+    c.backup_postgres()
 
     # Make further updates to Materialize's state
     for i in range(0, 100):
@@ -69,15 +69,13 @@ def workflow_default(c: Composition) -> None:
         )
 
     # Restore CRDB from backup, run persistcli restore-blob and restart Mz
-    c.restore_cockroach()
+    c.restore_postgres()
 
     # Confirm that the database is readable / has shard data
     c.exec(
         "cockroach",
-        "cockroach",
-        "sql",
-        "--insecure",
-        "-e",
+        "psql",
+        "--command",
         "SELECT shard, min(sequence_number), max(sequence_number) "
         "FROM consensus.consensus GROUP BY 1 ORDER BY 2 DESC, 3 DESC, 1 ASC LIMIT 32;",
     )
