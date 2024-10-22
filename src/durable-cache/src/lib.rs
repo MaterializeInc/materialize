@@ -25,18 +25,21 @@ use timely::progress::Antichain;
 
 pub trait DurableCacheCodec {
     type Key: Ord + Hash + Clone + Debug;
-    type Val: Ord + Debug;
-    type KeyCodec: Codec + Debug;
-    type ValCodec: Codec + Debug;
+    type Val: Eq + Debug;
+    type KeyCodec: Codec + Ord + Debug;
+    type ValCodec: Codec + Ord + Debug;
 
     fn schemas() -> (
         <Self::KeyCodec as Codec>::Schema,
         <Self::ValCodec as Codec>::Schema,
     );
-    fn encode_key(key: &Self::Key) -> Self::KeyCodec;
-    fn encode_val(val: &Self::Val) -> Self::ValCodec;
-    fn decode_key(key: Self::KeyCodec) -> Self::Key;
-    fn decode_val(val: Self::ValCodec) -> Self::Val;
+    fn encode(key: &Self::Key, val: &Self::Val) -> (Self::KeyCodec, Self::ValCodec);
+    fn decode(key: Self::KeyCodec, val: Self::ValCodec) -> (Self::Key, Self::Val);
+}
+
+#[derive(Debug, Clone)]
+pub enum Error {
+    WriteConflict,
 }
 
 #[derive(Debug)]
@@ -98,7 +101,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 match event {
                     ListenEvent::Updates(x) => {
                         for ((k, v), t, d) in x {
-                            let (key, val) = (C::decode_key(k.unwrap()), C::decode_val(v.unwrap()));
+                            let (key, val) = C::decode(k.unwrap(), v.unwrap());
                             if d == 1 {
                                 self.local.expect_insert(key, val, "duplicate cache entry");
                             } else if d == -1 {
@@ -147,7 +150,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         let val = val_fn();
         let mut expected_upper = self.local_progress;
         loop {
-            let update = ((C::encode_key(key), C::encode_val(&val)), expected_upper, 1);
+            let update = (C::encode(key, &val), expected_upper, 1);
             let new_upper = expected_upper + 1;
             let ret = self
                 .write
@@ -174,55 +177,78 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         }
     }
 
+    /// Return all entries stored in the cache, without syncing with the durable store.
+    pub fn entries_local(&self) -> impl Iterator<Item = (&C::Key, &C::Val)> {
+        self.local.iter()
+    }
+
     /// Durably set `key` to `value`. A `value` of `None` deletes the entry from the cache.
+    ///
+    /// Failures will update the cache and retry until the cache is written successfully.
     pub async fn set(&mut self, key: &C::Key, value: Option<&C::Val>) {
-        self.set_many(&[(key, value)]).await
+        while self.try_set(key, value).await.is_err() {}
     }
 
     /// Durably set multiple key-value pairs in `entries`. Values of `None` deletes the
     /// corresponding entries from the cache.
+    ///
+    /// Failures will update the cache and retry until the cache is written successfully.
     pub async fn set_many(&mut self, entries: &[(&C::Key, Option<&C::Val>)]) {
-        let mut expected_upper = self.local_progress;
-        loop {
-            let mut updates = Vec::new();
-            let mut seen_keys = HashSet::new();
+        while self.try_set_many(entries).await.is_err() {}
+    }
 
-            for (key, val) in entries {
-                // If there are duplicate keys we ignore all but the first one.
-                if seen_keys.insert(key) {
-                    if let Some(prev) = self.local.get(key) {
-                        updates.push(((key, prev), expected_upper, -1));
-                    }
-                    if let Some(val) = val {
-                        updates.push(((key, val), expected_upper, 1));
-                    }
+    /// Tries to durably set `key` to `value`. A `value` of `None` deletes the entry from the cache.
+    ///
+    /// On both successes and failures, the cache will update its contents with the most recent
+    /// updates from the durable store.
+    pub async fn try_set(&mut self, key: &C::Key, value: Option<&C::Val>) -> Result<(), Error> {
+        self.try_set_many(&[(key, value)]).await
+    }
+
+    /// Tries to durably set multiple key-value pairs in `entries`. Values of `None` deletes the
+    /// corresponding entries from the cache.
+    ///
+    /// On both successes and failures, the cache will update its contents with the most recent
+    /// updates from the durable store.
+    pub async fn try_set_many(
+        &mut self,
+        entries: &[(&C::Key, Option<&C::Val>)],
+    ) -> Result<(), Error> {
+        let expected_upper = self.local_progress;
+        let mut updates = Vec::new();
+        let mut seen_keys = HashSet::new();
+
+        for (key, val) in entries {
+            // If there are duplicate keys we ignore all but the first one.
+            if seen_keys.insert(key) {
+                if let Some(prev) = self.local.get(key) {
+                    updates.push((C::encode(key, prev), expected_upper, -1));
+                }
+                if let Some(val) = val {
+                    updates.push((C::encode(key, val), expected_upper, 1));
                 }
             }
-            consolidate_updates(&mut updates);
+        }
+        consolidate_updates(&mut updates);
 
-            let updates = updates
-                .into_iter()
-                .map(|((key, val), ts, d)| ((C::encode_key(key), C::encode_val(val)), ts, d));
-
-            let new_upper = expected_upper + 1;
-            let ret = self
-                .write
-                .compare_and_append(
-                    updates,
-                    Antichain::from_elem(expected_upper),
-                    Antichain::from_elem(new_upper),
-                )
-                .await
-                .expect("usage should be valid");
-            match ret {
-                Ok(()) => {
-                    self.sync_to(Some(new_upper)).await;
-                    return;
-                }
-                Err(err) => {
-                    expected_upper = self.sync_to(err.current.into_option()).await;
-                    continue;
-                }
+        let new_upper = expected_upper + 1;
+        let ret = self
+            .write
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(expected_upper),
+                Antichain::from_elem(new_upper),
+            )
+            .await
+            .expect("usage should be valid");
+        match ret {
+            Ok(()) => {
+                self.sync_to(Some(new_upper)).await;
+                Ok(())
+            }
+            Err(err) => {
+                self.sync_to(err.current.into_option()).await;
+                Err(Error::WriteConflict)
             }
         }
     }
@@ -252,17 +278,12 @@ mod tests {
             (StringSchema, StringSchema)
         }
 
-        fn encode_key(key: &Self::Key) -> Self::KeyCodec {
-            key.clone()
+        fn encode(key: &Self::Key, val: &Self::Val) -> (Self::KeyCodec, Self::ValCodec) {
+            (key.clone(), val.clone())
         }
-        fn encode_val(val: &Self::Val) -> Self::ValCodec {
-            val.clone()
-        }
-        fn decode_key(key: Self::KeyCodec) -> Self::Key {
-            key
-        }
-        fn decode_val(val: Self::ValCodec) -> Self::Val {
-            val
+
+        fn decode(key: Self::KeyCodec, val: Self::ValCodec) -> (Self::Key, Self::Val) {
+            (key, val)
         }
     }
 
@@ -279,6 +300,10 @@ mod tests {
         let mut cache0 = DurableCache::<TestCodec>::new(&persist, shard_id, "test1").await;
         assert_none!(cache0.get_local(&"foo".into()));
         assert_eq!(cache0.get(&"foo".into(), || "bar".into()).await, "bar");
+        assert_eq!(
+            cache0.entries_local().collect::<Vec<_>>(),
+            vec![(&"foo".into(), &"bar".into())]
+        );
 
         cache0.set(&"k1".into(), Some(&"v1".into())).await;
         cache0.set(&"k2".into(), Some(&"v2".into())).await;
@@ -286,9 +311,21 @@ mod tests {
         assert_eq!(cache0.get(&"k1".into(), || "v10".into()).await, &"v1");
         assert_eq!(cache0.get_local(&"k2".into()), Some(&"v2".into()));
         assert_eq!(cache0.get(&"k2".into(), || "v20".into()).await, &"v2");
+        assert_eq!(
+            cache0.entries_local().collect::<Vec<_>>(),
+            vec![
+                (&"foo".into(), &"bar".into()),
+                (&"k1".into(), &"v1".into()),
+                (&"k2".into(), &"v2".into())
+            ]
+        );
 
         cache0.set(&"k1".into(), None).await;
         assert_none!(cache0.get_local(&"k1".into()));
+        assert_eq!(
+            cache0.entries_local().collect::<Vec<_>>(),
+            vec![(&"foo".into(), &"bar".into()), (&"k2".into(), &"v2".into())]
+        );
 
         cache0
             .set_many(&[
@@ -300,6 +337,13 @@ mod tests {
         assert_eq!(cache0.get_local(&"k1".into()), Some(&"v10".into()));
         assert_none!(cache0.get_local(&"k2".into()));
         assert_none!(cache0.get_local(&"k3".into()));
+        assert_eq!(
+            cache0.entries_local().collect::<Vec<_>>(),
+            vec![
+                (&"foo".into(), &"bar".into()),
+                (&"k1".into(), &"v10".into()),
+            ]
+        );
 
         cache0
             .set_many(&[
@@ -313,11 +357,29 @@ mod tests {
             .await;
         assert_eq!(cache0.get_local(&"k4".into()), Some(&"v40".into()));
         assert_eq!(cache0.get_local(&"k5".into()), Some(&"v50".into()));
+        assert_eq!(
+            cache0.entries_local().collect::<Vec<_>>(),
+            vec![
+                (&"foo".into(), &"bar".into()),
+                (&"k1".into(), &"v10".into()),
+                (&"k4".into(), &"v40".into()),
+                (&"k5".into(), &"v50".into()),
+            ]
+        );
 
         let mut cache1 = DurableCache::<TestCodec>::new(&persist, shard_id, "test2").await;
         assert_eq!(cache1.get(&"foo".into(), || panic!("boom")).await, "bar");
         assert_eq!(cache1.get(&"k1".into(), || panic!("boom")).await, &"v10");
         assert_none!(cache1.get_local(&"k2".into()));
         assert_none!(cache1.get_local(&"k3".into()));
+        assert_eq!(
+            cache1.entries_local().collect::<Vec<_>>(),
+            vec![
+                (&"foo".into(), &"bar".into()),
+                (&"k1".into(), &"v10".into()),
+                (&"k4".into(), &"v40".into()),
+                (&"k5".into(), &"v50".into()),
+            ]
+        );
     }
 }
