@@ -18,19 +18,7 @@ ALTER SYSTEM SET enable_kafka_sink_partition_by = true
 > CREATE CONNECTION k
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
-> CREATE TABLE input (a int);
-
-# Test that `PARTITION BY` does not work with `ENVELOPE DEBEZIUM`.
-
-! CREATE SINK bad
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM input
-  INTO KAFKA CONNECTION k (
-    TOPIC 'testdrive-bad-${testdrive.seed}',
-    PARTITION BY part
-  )
-  FORMAT JSON ENVELOPE DEBEZIUM
-contains:PARTITION BY option is not supported with ENVELOPE DEBEZIUM
+> CREATE TABLE input (a int, b int);
 
 # Test that `PARTITION BY` does not work with an invalid data type.
 
@@ -57,6 +45,17 @@ contains:PARTITION BY does not support casting from date to uint8
   KEY (a) NOT ENFORCED
   FORMAT JSON ENVELOPE UPSERT
 contains:column "noexist" does not exist
+
+! CREATE SINK bad
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM input
+  INTO KAFKA CONNECTION k (
+    TOPIC 'testdrive-bad-${testdrive.seed}',
+    PARTITION BY b
+  )
+  KEY (a) NOT ENFORCED
+  FORMAT JSON ENVELOPE DEBEZIUM
+contains:PARTITION BY expression cannot refer to non-key column "b"
 
 # Test that `PARTITION BY` works for direct partition assignment.
 
@@ -155,3 +154,38 @@ $ kafka-verify-data format=json sink=materialize.public.invalid_output sort-mess
 {"a": 1, "b": 0}  partition=0
 {"a": 1, "b": 1}  partition=1
 {"a": 2, "b": 1}  partition=2
+
+# Test that `PARTITION BY` works with `ENVELOPE DEBEZIUM`.
+
+> DROP MATERIALIZED VIEW input CASCADE
+> CREATE TABLE input (k int, v text);
+
+> CREATE SINK debezium_output
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM input
+  INTO KAFKA CONNECTION k (
+    TOPIC 'testdrive-debezium-${testdrive.seed}',
+    TOPIC PARTITION COUNT 2,
+    PARTITION BY k
+  )
+  KEY (k) NOT ENFORCED
+  FORMAT JSON
+  ENVELOPE DEBEZIUM
+
+> INSERT INTO input VALUES (0, 'apple'), (1, 'banana');
+
+$ kafka-verify-data format=json sink=materialize.public.debezium_output sort-messages=true
+{"before": null, "after": {"k": 0, "v": "apple"}} partition=0
+{"before": null, "after": {"k": 1, "v": "banana"}} partition=1
+
+> UPDATE input SET v = v || 's'
+
+$ kafka-verify-data format=json sink=materialize.public.debezium_output sort-messages=true
+{"before": {"k": 0, "v": "apple"}, "after": {"k": 0, "v": "apples"}} partition=0
+{"before": {"k": 1, "v": "banana"}, "after": {"k": 1, "v": "bananas"}} partition=1
+
+> DELETE FROM input
+
+$ kafka-verify-data format=json sink=materialize.public.debezium_output sort-messages=true
+{"before": {"k": 0, "v": "apples"}, "after": null} partition=0
+{"before": {"k": 1, "v": "bananas"}, "after": null} partition=1
