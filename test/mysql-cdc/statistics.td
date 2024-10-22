@@ -34,7 +34,7 @@ CREATE TABLE t1 (f1 TEXT);
 
 INSERT INTO t1 VALUES ('one');
 
-> CREATE CLUSTER stats_cluster SIZE '${arg.default-replica-size}'
+> CREATE CLUSTER stats_cluster SIZE '${arg.default-replica-size}', REPLICATION FACTOR 2
 
 > CREATE SOURCE mz_source IN CLUSTER stats_cluster FROM MYSQL CONNECTION mysqc;
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);

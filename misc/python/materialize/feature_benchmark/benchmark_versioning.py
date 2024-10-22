@@ -23,7 +23,7 @@ SHA256_OF_FRAMEWORK: dict[str, str] = {
 
 # Consider increasing the scenario's class #version() if changes are expected to impact results!
 SHA256_BY_SCENARIO_FILE: dict[str, str] = {
-    "benchmark_main.py": "a898f6d8990476422ef99a6f156a36571d52fab9b10414664d32c023ad591357",
+    "benchmark_main.py": "e8cdb583b82a10ce0cdaea9f3f9884fbf79076cbf28df55226f05616ade2106f",
     "concurrency.py": "2e9c149c136b83b3853abc923a1adbdaf55a998ab4557712f8424c8b16f2adb1",
     "customer.py": "d1e72837a342c3ebf1f4a32ec583b1b78a78644cdba495030a6df45ebbffe703",
     "optbench.py": "9e60513af0b4df5f2580555c8775e3758a66158e03c257e9f3c303bd972fa625",

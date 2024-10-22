@@ -37,6 +37,7 @@ SERVICES = [
 #
 def workflow_default(c: Composition) -> None:
     c.up("mysql", "materialized", "toxiproxy")
+    c.setup_quickstart_cluster()
     seed = random.getrandbits(16)
     c.run_testdrive_files(
         "--no-reset",

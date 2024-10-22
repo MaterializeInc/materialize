@@ -62,7 +62,7 @@ SERVICES = [
 TD_CMD = [
     f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
     f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-    "--var=single-replica-cluster=quickstart",
+    "--var=single-replica-cluster=singlereplica",
     *[f"testdrive/{td}" for td in ["kafka-sinks.td", "kafka-upsert-sources.td"]],
 ]
 
@@ -80,6 +80,7 @@ def workflow_default(c: Composition) -> None:
         with c.override(Redpanda(version=redpanda_version)):
             c.down(destroy_volumes=True)
             c.up("redpanda", "materialized")
+            c.setup_quickstart_cluster()
             c.run_testdrive_files(*TD_CMD)
 
     confluent_versions = buildkite.shard_list(CONFLUENT_PLATFORM_VERSIONS, lambda v: v)
@@ -96,4 +97,5 @@ def workflow_default(c: Composition) -> None:
         ):
             c.down(destroy_volumes=True)
             c.up("zookeeper", "kafka", "schema-registry", "materialized")
+            c.setup_quickstart_cluster()
             c.run_testdrive_files(*TD_CMD)

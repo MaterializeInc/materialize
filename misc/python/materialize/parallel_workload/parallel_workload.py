@@ -67,6 +67,7 @@ def run(
     scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
+    replicas: int,
     composition: Composition | None,
     sanity_restart: bool,
 ) -> None:
@@ -75,7 +76,7 @@ def run(
     rng = random.Random(random.randrange(SEED_RANGE))
 
     print(
-        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} (--host={host})"
+        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} --replicas={replicas} (--host={host})"
     )
     initialize_logging()
 
@@ -132,6 +133,17 @@ def run(
             system_exe.execute(
                 f"ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON {object_type} TO PUBLIC"
             )
+
+        if replicas > 1:
+            system_exe.execute("DROP CLUSTER quickstart CASCADE")
+            replica_names = [f"r{replica_id}" for replica_id in range(0, replicas)]
+            replica_string = ",".join(
+                f"{replica_name} (SIZE '4')" for replica_name in replica_names
+            )
+            system_exe.execute(
+                f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
+            )
+
         system_conn.close()
         conn = psycopg.connect(
             host=host,
@@ -474,6 +486,7 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Whether to initialize expensive parts like SQLsmith, sources, sinks (for fast local testing, reduces coverage)",
     )
+    parser.add_argument("--replicas", type=int, default=2, help="use multiple replicas")
 
 
 def main() -> int:
@@ -524,6 +537,7 @@ def main() -> int:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
+        args.replicas,
         composition=None,  # only works in mzcompose
         sanity_restart=False,  # only works in mzcompose
     )

@@ -28,7 +28,7 @@ $ set-max-tries max-tries=20
     PASSWORD SECRET mysqlpass
   )
 
-> CREATE CLUSTER cdc_cluster SIZE '${arg.default-replica-size}'
+> CREATE CLUSTER cdc_cluster SIZE '${arg.default-replica-size}', REPLICATION FACTOR 2
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
@@ -541,7 +541,7 @@ true
 # Ensure we can start a source with more workers
 #
 
-> CREATE CLUSTER large_cluster SIZE '16';
+> CREATE CLUSTER large_cluster SIZE '16', REPLICATION FACTOR 2;
 
 > CREATE SOURCE large_cluster_source
   IN CLUSTER large_cluster

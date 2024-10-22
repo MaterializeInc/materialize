@@ -323,6 +323,7 @@ def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
 def initialize(c: Composition, create_source: bool = True) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized", "mysql", "toxiproxy")
+    c.setup_quickstart_cluster()
 
     run_testdrive_files(
         c,

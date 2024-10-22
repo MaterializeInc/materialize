@@ -115,6 +115,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     mysql_version = get_targeted_mysql_version(parser)
     with c.override(create_mysql(mysql_version)):
         c.up("materialized", "mysql")
+        c.setup_quickstart_cluster()
 
         valid_ssl_context = retrieve_ssl_context_for_mysql(c)
         wrong_ssl_context = retrieve_invalid_ssl_context_for_mysql(c)
@@ -140,6 +141,7 @@ def workflow_replica_connection(c: Composition, parser: WorkflowArgumentParser) 
     mysql_version = get_targeted_mysql_version(parser)
     with c.override(create_mysql(mysql_version), create_mysql_replica(mysql_version)):
         c.up("materialized", "mysql", "mysql-replica")
+        c.setup_quickstart_cluster()
         c.run_testdrive_files(
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
             "override/10-replica-connection.td",
@@ -157,6 +159,7 @@ def workflow_schema_change_restart(
     mysql_version = get_targeted_mysql_version(parser)
     with c.override(create_mysql(mysql_version)):
         c.up("materialized", "mysql")
+        c.setup_quickstart_cluster()
         c.run_testdrive_files(
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
             "schema-restart/before-restart.td",
@@ -166,6 +169,7 @@ def workflow_schema_change_restart(
         # Restart mz
         c.kill("materialized")
         c.up("materialized")
+        c.setup_quickstart_cluster()
 
         c.run_testdrive_files(
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
@@ -201,6 +205,7 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
     mysql_version = get_targeted_mysql_version(parser)
     with c.override(create_mysql(mysql_version)):
         c.up("materialized", "mysql")
+        c.setup_quickstart_cluster()
         c.up("testdrive", persistent=True)
 
         # Records to before creating the source.
