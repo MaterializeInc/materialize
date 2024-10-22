@@ -25,6 +25,7 @@ class Clusterd(Service):
         memory: str | None = None,
         options: list[str] = [],
         restart: str = "no",
+        stop_grace_period: str = "60s",
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -60,6 +61,7 @@ class Clusterd(Service):
                 "environment": environment,
                 "volumes": DEFAULT_MZ_VOLUMES,
                 "restart": restart,
+                "stop_grace_period": stop_grace_period,
             }
         )
 

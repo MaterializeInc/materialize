@@ -59,6 +59,7 @@ class Materialized(Service):
         deploy_generation: int | None = None,
         force_migrations: str | None = None,
         publish: bool | None = None,
+        stop_grace_period: str = "60s",
     ) -> None:
         if name is None:
             name = "materialized"
@@ -260,6 +261,7 @@ class Materialized(Service):
                     # A fully loaded Materialize can take a long time to start.
                     "start_period": "600s",
                 },
+                "stop_grace_period": stop_grace_period,
             }
         )
 
