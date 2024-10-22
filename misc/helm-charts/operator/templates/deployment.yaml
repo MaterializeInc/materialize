@@ -26,6 +26,10 @@ spec:
         {{- include "materialize-operator.selectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "materialize-operator.serviceAccountName" . }}
+      {{- if .Values.operator.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.operator.nodeSelector | nindent 8 }}
+      {{- end }}
       containers:
       - name: {{ .Chart.Name }}
         image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
@@ -37,6 +41,12 @@ spec:
         {{- if .Values.operator.args.localDevelopment }}
         - "--local-development"
         {{- end }}
-        - "--environmentd-target-arch={{ .Values.operator.args.environmentdTargetArch }}"
+        - "--image-pull-policy={{ kebabcase .Values.operator.image.pullPolicy }}"
+        {{- range $key, $value := .Values.environmentd.nodeSelector }}
+        - "--environmentd-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- range $key, $value := .Values.clusterd.nodeSelector }}
+        - "--clusterd-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
         resources:
           {{- toYaml .Values.operator.resources | nindent 12 }}

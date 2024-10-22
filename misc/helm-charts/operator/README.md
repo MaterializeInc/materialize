@@ -37,6 +37,8 @@ The following table lists the configurable parameters of the Materialize operato
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `clusterd.nodeSelector` |  | ``{}`` |
+| `environmentd.nodeSelector` |  | ``{}`` |
 | `namespace.create` |  | ``false`` |
 | `namespace.name` |  | ``"materialize"`` |
 | `networkPolicies.enabled` |  | ``false`` |
@@ -44,13 +46,13 @@ The following table lists the configurable parameters of the Materialize operato
 | `observability.enabled` |  | ``false`` |
 | `observability.prometheus.enabled` |  | ``false`` |
 | `operator.args.cloudProvider` |  | ``"local"`` |
-| `operator.args.environmentdTargetArch` |  | ``"arm64"`` |
 | `operator.args.localDevelopment` |  | ``true`` |
 | `operator.args.region` |  | ``"kind"`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
 | `operator.image.repository` |  | ``"materialize/orchestratord"`` |
 | `operator.image.tag` |  | ``"v0.122.0-dev.0--pr.g8bb641fc00c77f98ba5556dcdca43670776eacfa"`` |
+| `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits.cpu` |  | ``"500m"`` |
 | `operator.resources.limits.memory` |  | ``"512Mi"`` |
 | `operator.resources.requests.cpu` |  | ``"100m"`` |
