@@ -18,6 +18,7 @@ fn main() {
         .compile_protos(
             &[
                 "repr/src/antichain.proto",
+                "repr/src/catalog_item_id.proto",
                 "repr/src/global_id.proto",
                 "repr/src/row.proto",
                 "repr/src/row/collection.proto",
