@@ -61,12 +61,12 @@ Explained Query:
     cte l0 =
       Project (#2) // { arity: 1 }
         Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
-          Filter (#0 = #0) AND (#1 = #1) // { arity: 2 }
+          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.test2 // { arity: 2 }
 
 Source materialize.public.test1
 Source materialize.public.test2
-  filter=((#0 = #0) AND (#1 = #1))
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 
 Target cluster: quickstart
 

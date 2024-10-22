@@ -242,7 +242,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
     }));
 
     // 4) Self-reduce predicates based on potential equivalences.
-    // This includes noticing that predicates imply things about other predicates, 
+    // This includes noticing that predicates imply things about other predicates,
     // but also that predicates like `a == b` may enable further simplification.
     let mut preds = predicates.clone();
     preds.push(MirScalarExpr::literal_true());
@@ -887,13 +887,13 @@ pub mod equivalences {
 
                         for expr in iter {
                             results.push({
-                                let mut result =
-                                    expr.clone().call_binary(expr0.clone(), BinaryFunc::Eq);
                                 if is_nullable {
-                                    result = result
-                                        .or(expr.call_is_null().and(expr0.clone().call_is_null()));
+                                    expr.clone()
+                                        .call_binary(expr0.clone(), BinaryFunc::Eq)
+                                        .or(expr.call_is_null().and(expr0.clone().call_is_null()))
+                                } else {
+                                    expr.call_binary(expr0.clone(), BinaryFunc::Eq)
                                 }
-                                result
                             })
                         }
                     }
