@@ -63,7 +63,7 @@ enum NetworkPolicyRuleAction {
     // Deny - may be added later
 }
 
-enum NetworkPolicyRuleAction {
+enum NetworkPolicyRuleDirection {
     Ingress
     // egress - will be added later
 
