@@ -160,7 +160,7 @@ impl Resources {
             }
 
             let environmentd_url =
-                environmentd_internal_http_address(args, namespace, self.generation);
+                environmentd_internal_http_address(args, namespace, &*self.generation_service);
 
             let http_client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
@@ -236,15 +236,7 @@ impl Resources {
             }
         } else {
             trace!("restarting environmentd pod to pick up statefulset changes");
-            let Some(generation) = self
-                .statefulset
-                .annotations()
-                .get("materialize.cloud/generation")
-                .and_then(|generation| generation.parse().ok())
-            else {
-                bail!("failed to restart environmentd pod: missing generation");
-            };
-            delete_resource(&pod_api, &Materialize::environmentd_pod_name(generation)).await?;
+            delete_resource(&pod_api, &statefulset_pod_name(&*self.statefulset, 0)).await?;
         }
 
         Ok(None)
@@ -268,30 +260,26 @@ impl Resources {
     pub async fn teardown_generation(
         &self,
         client: &Client,
-        namespace: &str,
+        mz: &Materialize,
         generation: u64,
     ) -> Result<(), anyhow::Error> {
-        let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
-        let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
+        let service_api: Api<Service> = Api::namespaced(client.clone(), &mz.namespace());
+        let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), &mz.namespace());
 
         trace!("deleting environmentd statefulset for generation {generation}");
         delete_resource(
             &statefulset_api,
-            &Materialize::environmentd_statefulset_name(generation),
+            &mz.environmentd_statefulset_name(generation),
         )
         .await?;
 
         trace!("deleting persist pubsub service for generation {generation}");
-        delete_resource(
-            &service_api,
-            &Materialize::persist_pubsub_service_name(generation),
-        )
-        .await?;
+        delete_resource(&service_api, &mz.persist_pubsub_service_name(generation)).await?;
 
         trace!("deleting environmentd per-generation service for generation {generation}");
         delete_resource(
             &service_api,
-            &Materialize::environmentd_generation_service_name(generation),
+            &mz.environmentd_generation_service_name(generation),
         )
         .await?;
 
@@ -484,12 +472,7 @@ fn create_public_service_object(
     mz: &Materialize,
     generation: u64,
 ) -> Service {
-    create_base_service_object(
-        config,
-        mz,
-        generation,
-        &Materialize::environmentd_service_name(),
-    )
+    create_base_service_object(config, mz, generation, &mz.environmentd_service_name())
 }
 
 fn create_generation_service_object(
@@ -501,7 +484,7 @@ fn create_generation_service_object(
         config,
         mz,
         generation,
-        &Materialize::environmentd_generation_service_name(generation),
+        &mz.environmentd_generation_service_name(generation),
     )
 }
 
@@ -538,7 +521,7 @@ fn create_base_service_object(
         },
     ];
 
-    let selector = btreemap! {"materialize.cloud/name".to_string() => Materialize::environmentd_pod_name(generation)};
+    let selector = btreemap! {"materialize.cloud/name".to_string() => mz.environmentd_statefulset_name(generation)};
 
     let spec = if config.local_development {
         ServiceSpec {
@@ -571,12 +554,12 @@ fn create_persist_pubsub_service(
     generation: u64,
 ) -> Service {
     Service {
-        metadata: mz.managed_resource_meta(Materialize::persist_pubsub_service_name(generation)),
+        metadata: mz.managed_resource_meta(mz.persist_pubsub_service_name(generation)),
         spec: Some(ServiceSpec {
             type_: Some("ClusterIP".to_string()),
             cluster_ip: Some("None".to_string()),
             selector: Some(btreemap! {
-                "materialize.cloud/name".to_string() => Materialize::environmentd_pod_name(generation),
+                "materialize.cloud/name".to_string() => mz.environmentd_statefulset_name(generation),
             }),
             ports: Some(vec![ServicePort {
                 name: Some("grpc".to_string()),
@@ -882,7 +865,7 @@ fn create_statefulset_object(
     // Add Persist PubSub arguments
     args.push(format!(
         "--persist-pubsub-url=http://{}:{}",
-        Materialize::persist_pubsub_service_name(generation),
+        mz.persist_pubsub_service_name(generation),
         config.environmentd_internal_persist_pubsub_port,
     ));
     args.push(format!(
@@ -983,11 +966,11 @@ fn create_statefulset_object(
     let mut pod_template_labels = mz.default_labels();
     pod_template_labels.insert(
         "materialize.cloud/name".to_owned(),
-        Materialize::environmentd_pod_name(generation),
+        mz.environmentd_statefulset_name(generation),
     );
     pod_template_labels.insert(
         "materialize.cloud/app".to_owned(),
-        Materialize::environmentd_service_name(),
+        mz.environmentd_service_name(),
     );
     pod_template_labels.insert("app".to_owned(), "environmentd".to_string());
 
@@ -1095,7 +1078,7 @@ fn create_statefulset_object(
     let mut match_labels = BTreeMap::new();
     match_labels.insert(
         "materialize.cloud/name".to_owned(),
-        Materialize::environmentd_pod_name(generation),
+        mz.environmentd_statefulset_name(generation),
     );
 
     let statefulset_spec = StatefulSetSpec {
@@ -1105,7 +1088,7 @@ fn create_statefulset_object(
             rolling_update: None,
             type_: Some("OnDelete".to_owned()),
         }),
-        service_name: Materialize::environmentd_service_name(),
+        service_name: mz.environmentd_service_name(),
         selector: LabelSelector {
             match_expressions: None,
             match_labels: Some(match_labels),
@@ -1119,7 +1102,7 @@ fn create_statefulset_object(
                 "materialize.cloud/generation".to_owned() => generation.to_string(),
                 "materialize.cloud/force".to_owned() => mz.spec.force_rollout.to_string(),
             }),
-            ..mz.managed_resource_meta(Materialize::environmentd_statefulset_name(generation))
+            ..mz.managed_resource_meta(mz.environmentd_statefulset_name(generation))
         },
         spec: Some(statefulset_spec),
         status: None,
@@ -1141,16 +1124,20 @@ enum BecomeLeaderResult {
 fn environmentd_internal_http_address(
     args: &super::Args,
     namespace: &str,
-    generation: u64,
+    generation_service: &Service,
 ) -> String {
     let host = if let Some(host_override) = &args.environmentd_internal_http_host_override {
         host_override.to_string()
     } else {
         format!(
             "{}.{}.svc.cluster.local",
-            Materialize::environmentd_generation_service_name(generation),
+            generation_service.name_unchecked(),
             namespace,
         )
     };
     format!("{}:{}", host, args.environmentd_internal_http_port)
+}
+
+fn statefulset_pod_name(statefulset: &StatefulSet, idx: u64) -> String {
+    format!("{}-{}", statefulset.name_unchecked(), idx)
 }

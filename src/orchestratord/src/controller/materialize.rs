@@ -348,7 +348,7 @@ impl k8s_controller::Context for Context {
                         resources.promote_services(&client, &mz.namespace()).await?;
                         if increment_generation {
                             resources
-                                .teardown_generation(&client, &mz.namespace(), active_generation)
+                                .teardown_generation(&client, mz, active_generation)
                                 .await?;
                         }
                         self.update_status(
@@ -376,7 +376,7 @@ impl k8s_controller::Context for Context {
                     }
                     Err(e) => {
                         resources
-                            .teardown_generation(&client, &mz.namespace(), next_generation)
+                            .teardown_generation(&client, mz, next_generation)
                             .await?;
                         self.update_status(
                             &mz_api,
@@ -410,7 +410,7 @@ impl k8s_controller::Context for Context {
                 let mut needs_update = mz.conditions_need_update();
                 if mz.update_in_progress() {
                     resources
-                        .teardown_generation(&client, &mz.namespace(), next_generation)
+                        .teardown_generation(&client, mz, next_generation)
                         .await?;
                     needs_update = true;
                 }
@@ -448,7 +448,7 @@ impl k8s_controller::Context for Context {
             let mut needs_update = mz.conditions_need_update() || mz.rollout_requested();
             if mz.update_in_progress() {
                 resources
-                    .teardown_generation(&client, &mz.namespace(), next_generation)
+                    .teardown_generation(&client, mz, next_generation)
                     .await?;
                 needs_update = true;
             }

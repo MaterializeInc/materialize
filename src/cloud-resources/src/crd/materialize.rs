@@ -118,28 +118,24 @@ pub mod v1alpha1 {
             self.name_unchecked()
         }
 
-        pub fn environmentd_statefulset_name(generation: u64) -> String {
-            format!("environmentd-{generation}")
+        pub fn environmentd_statefulset_name(&self, generation: u64) -> String {
+            format!("environmentd-{}-{generation}", self.name_unchecked())
         }
 
         pub fn environmentd_container_name() -> String {
             "environmentd".to_string()
         }
 
-        pub fn environmentd_service_name() -> String {
-            "environmentd".to_string()
+        pub fn environmentd_service_name(&self) -> String {
+            format!("environmentd-{}", self.name_unchecked())
         }
 
-        pub fn environmentd_generation_service_name(generation: u64) -> String {
-            format!("environmentd-{generation}")
+        pub fn environmentd_generation_service_name(&self, generation: u64) -> String {
+            format!("environmentd-{}-{generation}", self.name_unchecked())
         }
 
-        pub fn environmentd_pod_name(generation: u64) -> String {
-            format!("{}-0", Self::environmentd_statefulset_name(generation))
-        }
-
-        pub fn persist_pubsub_service_name(generation: u64) -> String {
-            format!("persist-pubsub-{generation}")
+        pub fn persist_pubsub_service_name(&self, generation: u64) -> String {
+            format!("persist-pubsub-{}-{generation}", self.name_unchecked())
         }
 
         pub fn default_labels(&self) -> BTreeMap<String, String> {
