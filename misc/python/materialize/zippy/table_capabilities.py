@@ -7,11 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.zippy.framework import Capability
+from materialize.zippy.watermarked_object_capabilities import WatermarkedObjectExists
 from materialize.zippy.watermarks import Watermarks
 
 
-class TableExists(Capability):
+class TableExists(WatermarkedObjectExists):
     """A Table exists in the Mz instance."""
 
     @classmethod
@@ -26,3 +26,6 @@ class TableExists(Capability):
 
     def get_watermarks(self) -> Watermarks:
         return self.watermarks
+
+    def get_name_for_query(self) -> str:
+        return self.name

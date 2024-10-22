@@ -10,14 +10,14 @@
 from typing import Union
 
 from materialize.zippy.debezium_capabilities import DebeziumSourceExists
-from materialize.zippy.framework import Capability
 from materialize.zippy.mysql_cdc_capabilities import MySqlCdcTableExists
 from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
 from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.table_capabilities import TableExists
+from materialize.zippy.watermarked_object_capabilities import WatermarkedObjectExists
 from materialize.zippy.watermarks import Watermarks
 
-WatermarkedObjects = list[
+WatermarkedObjectExistss = list[
     Union[
         TableExists,
         SourceExists,
@@ -29,7 +29,7 @@ WatermarkedObjects = list[
 ]
 
 
-class ViewExists(Capability):
+class ViewExists(WatermarkedObjectExists):
     """A view exists in Materialize."""
 
     @classmethod
@@ -39,7 +39,7 @@ class ViewExists(Capability):
     def __init__(
         self,
         name: str,
-        inputs: WatermarkedObjects,
+        inputs: list[WatermarkedObjectExists],
         expensive_aggregates: bool | None = None,
         has_index: bool = False,
     ) -> None:

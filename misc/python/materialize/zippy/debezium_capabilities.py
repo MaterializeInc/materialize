@@ -10,6 +10,7 @@
 
 from materialize.zippy.framework import Capability
 from materialize.zippy.postgres_capabilities import PostgresTableExists
+from materialize.zippy.watermarked_object_capabilities import WatermarkedObjectExists
 from materialize.zippy.watermarks import Watermarks
 
 
@@ -19,7 +20,7 @@ class DebeziumRunning(Capability):
     pass
 
 
-class DebeziumSourceExists(Capability):
+class DebeziumSourceExists(WatermarkedObjectExists):
     """A Debezium source exists in Materialize."""
 
     def __init__(
@@ -31,3 +32,6 @@ class DebeziumSourceExists(Capability):
     def get_watermarks(self) -> Watermarks:
         assert self.postgres_table is not None
         return self.postgres_table.watermarks
+
+    def get_name_for_query(self) -> str:
+        return f"{self.name}_tbl"
