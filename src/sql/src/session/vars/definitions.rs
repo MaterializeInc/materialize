@@ -2139,8 +2139,14 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_create_continual_task,
+        name: enable_continual_task_create,
         desc: "CREATE CONTINUAL TASK",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_continual_task_transform,
+        desc: "CREATE CONTINUAL TASK .. FROM TRANSFORM .. USING",
         default: false,
         enable_for_item_parsing: true,
     },

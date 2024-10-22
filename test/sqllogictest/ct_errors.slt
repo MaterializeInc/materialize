@@ -13,7 +13,7 @@ statement ok
 CREATE TABLE foo (key INT)
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_create_continual_task = false
+ALTER SYSTEM SET enable_continual_task_create = false
 ----
 COMPLETE 0
 
@@ -23,7 +23,7 @@ CREATE CONTINUAL TASK nope (key INT) ON INPUT foo AS (
 )
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_create_continual_task = true
+ALTER SYSTEM SET enable_continual_task_create = true
 ----
 COMPLETE 0
 
@@ -51,4 +51,11 @@ CREATE VIEW some_view AS SELECT *, 'bar' FROM foo;
 statement error CONTINUAL TASK cannot use view as an input
 CREATE CONTINUAL TASK nope (key INT, val STRING) ON INPUT some_view AS (
     INSERT INTO nope SELECT * FROM foo;
+)
+
+# Must provide columns for recursive CTs
+statement error statement 1: INSERT has more expressions than target columns
+CREATE CONTINUAL TASK nope ON INPUT foo AS (
+    DELETE FROM nope;
+    INSERT INTO nope SELECT *, 'bar' FROM foo;
 )
