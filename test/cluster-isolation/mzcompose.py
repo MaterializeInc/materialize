@@ -208,9 +208,11 @@ A
 
 > CREATE SOURCE source1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source1-${testdrive.seed}')
+
+> CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-source1-${testdrive.seed}")
   FORMAT BYTES
 
-> SELECT * FROM source1
+> SELECT * FROM source1_tbl
 A
 
 # TODO: This should be made reliable without sleeping, database-issues#7611

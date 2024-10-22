@@ -184,11 +184,13 @@ class KafkaScenario(Scenario):
         """
         > CREATE SOURCE s1
           IN CLUSTER clusterd
-          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}');
+
+        > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-topic1-${testdrive.seed}")
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE UPSERT;
 
-        > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM s1;
+        > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM s1_tbl;
         """
     )
 
@@ -741,13 +743,15 @@ SCENARIOS = [
             """
             > CREATE SOURCE s1
               IN CLUSTER clusterd
-              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}');
+
+            > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-topic1-${testdrive.seed}")
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
 
             > DROP CLUSTER REPLICA clusterd.r1;
 
-            > CREATE INDEX i1 IN CLUSTER clusterd ON s1 (f1);
+            > CREATE INDEX i1 IN CLUSTER clusterd ON s1_tbl (f1);
             """
         ),
         post_restart=KafkaScenario.SCHEMAS
@@ -761,7 +765,7 @@ SCENARIOS = [
 
             > SET CLUSTER = clusterd;
 
-            > SELECT count(*) FROM s1;
+            > SELECT count(*) FROM s1_tbl;
             {90 * REPEAT + 2}
             # Delete all rows except markers
             $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}

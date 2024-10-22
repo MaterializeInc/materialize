@@ -127,6 +127,9 @@ database_objects = [
     #
     #        > CREATE SOURCE obj
     #          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-update-${{testdrive.seed}}')
+    #
+    #        > CREATE TABLE obj_tbl
+    #          FROM SOURCE obj (REFERENCE "testdrive-upsert-update-${{testdrive.seed}}")
     #          FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
     #          ENVELOPE UPSERT
     #        """) + "\n".join([dedent(
@@ -136,7 +139,7 @@ database_objects = [
     #            """
     #        ) for i in range(1,11)]) + dedent(
     #        """
-    #        > SELECT COUNT(*) FROM obj WHERE a::integer = 10;
+    #        > SELECT COUNT(*) FROM obj_tbl WHERE a::integer = 10;
     #        5000000
     #        """
     #    ),

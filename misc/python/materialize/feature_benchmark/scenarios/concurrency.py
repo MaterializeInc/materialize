@@ -39,7 +39,7 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
         drop_sources = "\n".join(
             [
                 f"""
-> DROP SOURCE IF EXISTS s{s}
+> DROP SOURCE IF EXISTS s{s} CASCADE
 > DROP CLUSTER IF EXISTS s{s}_cluster
 """
                 for s in sources
@@ -61,6 +61,8 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
 > CREATE SOURCE s{s}
   IN CLUSTER s{s}_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-parallel-ingestion-${{testdrive.seed}}')
+
+> CREATE TABLE s{s}_tbl FROM SOURCE s{s} (REFERENCE "testdrive-kafka-parallel-ingestion-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 """
                 for s in sources
@@ -79,7 +81,7 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
         selects = "\n".join(
             [
                 f"""
-> SELECT * FROM s{s} WHERE f2 = {self.n()-1}
+> SELECT * FROM s{s}_tbl WHERE f2 = {self.n()-1}
 {self.n()-1}
 """
                 for s in sources

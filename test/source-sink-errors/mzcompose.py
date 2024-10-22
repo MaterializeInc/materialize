@@ -192,6 +192,8 @@ class KafkaDisruption:
                     TOPIC 'testdrive-source-topic-${testdrive.seed}',
                     TOPIC METADATA REFRESH INTERVAL '1s'
                   )
+
+                > CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-source-topic-${testdrive.seed}")
                   FORMAT BYTES
                   ENVELOPE NONE
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/database-issues/issues/4800
@@ -199,10 +201,10 @@ class KafkaDisruption:
                 # Ensure the source makes _real_ progress before we disrupt it. This also
                 # ensures the sink makes progress, which is required to hit certain stalls.
                 # As of implementing correctness property #2, this is required.
-                > SELECT count(*) from source1
+                > SELECT count(*) from source1_tbl
                 1
 
-                > CREATE SINK sink1 FROM source1
+                > CREATE SINK sink1 FROM source1_tbl
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
@@ -232,7 +234,7 @@ class KafkaDisruption:
                 $ kafka-ingest topic=source-topic format=bytes
                 ABC
 
-                > SELECT COUNT(*) FROM source1;
+                > SELECT COUNT(*) FROM source1_tbl;
                 2
 
                 > SELECT status, error
@@ -301,11 +303,13 @@ class KafkaSinkDisruption:
 
                 > CREATE SOURCE source1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source-topic-${testdrive.seed}')
+
+                > CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-source-topic-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/database-issues/issues/4800
 
-                > CREATE SINK sink1 FROM source1
+                > CREATE SINK sink1 FROM source1_tbl
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
@@ -404,7 +408,7 @@ class PgDisruption:
 
                 > CREATE SOURCE "pg_source"
                   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-                > CREATE TABLE "source1" FROM SOURCE "pg_source" (REFERENCE "source1");
+                > CREATE TABLE "source1_tbl" FROM SOURCE "pg_source" (REFERENCE "source1");
                 """
             )
         )
@@ -422,7 +426,7 @@ class PgDisruption:
                       SELECT name, id FROM mz_sources UNION SELECT name, id FROM mz_tables
                     ) ON id = source_id
                     WHERE (
-                        name = 'source1' OR name = 'pg_source'
+                        name = 'source1_tbl' OR name = 'pg_source'
                     ) AND (status = 'stalled' OR status = 'ceased')
                     ORDER BY occurred_at DESC LIMIT 1;
                 true
@@ -439,11 +443,11 @@ class PgDisruption:
 
                 > SELECT status, error
                   FROM mz_internal.mz_source_statuses
-                  WHERE name = 'source1'
+                  WHERE name = 'source1_tbl'
                   AND type = 'table'
                 running <null>
 
-                > SELECT f1 FROM source1;
+                > SELECT f1 FROM source1_tbl;
                 1
                 2
                 3
@@ -576,7 +580,7 @@ def delete_sink_topic(c: Composition, seed: int) -> None:
             $ kafka-ingest topic=source-topic format=avro schema=${schema}
             {"f1": "B"}
 
-            > SELECT COUNT(*) FROM source1;
+            > SELECT COUNT(*) FROM source1_tbl;
             2
             """
         )
