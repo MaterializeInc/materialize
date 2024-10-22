@@ -126,7 +126,12 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let mut x = ::mz_dyncfg::ConfigUpdates::default();
                     x.add_dynamic("persist_encoding_enable_dictionary", ::mz_dyncfg::ConfigVal::Bool(true));
                     x
-                }
+                },
+                {
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_batch_max_run_len", ::mz_dyncfg::ConfigVal::Usize(4));
+                    x
+                },
             ];
 
             for (idx, dyncfgs) in dyncfgs.into_iter().enumerate() {

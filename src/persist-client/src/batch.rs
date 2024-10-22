@@ -25,7 +25,7 @@ use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use futures_util::stream::{ StreamExt};
+use futures_util::stream::StreamExt;
 use futures_util::{stream, FutureExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
