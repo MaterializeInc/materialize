@@ -15,7 +15,7 @@ from materialize.checks.executors import Executor
 class Backup(Action):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
-        c.backup_crdb()
+        c.backup()
 
     def join(self, e: Executor) -> None:
         # Action is blocking
@@ -25,7 +25,7 @@ class Backup(Action):
 class Restore(Action):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
-        c.restore_mz()
+        c.restore()
 
     def join(self, e: Executor) -> None:
         # Action is blocking

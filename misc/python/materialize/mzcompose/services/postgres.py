@@ -9,7 +9,7 @@
 
 import os
 
-from materialize import MZ_ROOT
+from materialize import MZ_ROOT, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import (
     Service,
@@ -31,6 +31,7 @@ class Postgres(Service):
         max_wal_senders: int = 100,
         max_replication_slots: int = 100,
         setup_materialize: bool = False,
+        restart: str = "no",
     ) -> None:
         command: list[str] = [
             "postgres",
@@ -68,6 +69,7 @@ class Postgres(Service):
                     "interval": "1s",
                     "start_period": "30s",
                 },
+                "restart": restart,
                 "volumes": volumes,
             }
         )
@@ -75,12 +77,15 @@ class Postgres(Service):
 
 
 class PostgresAsCockroach(Postgres):
-    def __init__(
-        self,
-    ) -> None:
-        super().__init__(name="cockroach", setup_materialize=True, ports=["26257"])
+    def __init__(self, restart: str = "no") -> None:
+        super().__init__(
+            name="cockroach", setup_materialize=True, ports=["26257"], restart=restart
+        )
 
 
 CockroachOrPostgres = (
-    Cockroach if os.getenv("BUILDKITE_TAG", "").startswith("v") else PostgresAsCockroach
+    Cockroach
+    if os.getenv("BUILDKITE_TAG", "").startswith("v")
+    or ui.env_is_truthy("CI_FORCE_POSTGRES")
+    else PostgresAsCockroach
 )

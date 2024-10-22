@@ -24,7 +24,7 @@ class BackupAndRestore(Action):
         # Required because of database-issues#6880
         c.kill("storaged")
 
-        c.backup_crdb()
+        c.backup()
         with c.override(
             Materialized(
                 name=state.mz_service,
@@ -36,6 +36,6 @@ class BackupAndRestore(Action):
                 restart="on-failure",
             )
         ):
-            c.restore_mz(state.mz_service)
+            c.restore(state.mz_service)
 
         c.up("storaged")

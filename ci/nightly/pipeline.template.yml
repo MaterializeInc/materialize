@@ -1595,6 +1595,16 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: backup-restore
 
+  - id: backup-restore-postgres
+    label: "Postgres / Persist backup and restore"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: backup-restore-postgres
+
   - group: "Language tests"
     key: language-tests
     steps:
