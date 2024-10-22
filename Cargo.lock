@@ -9789,9 +9789,8 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81b6f390cec7160992fd8502fe02064a0f52dcfd2978544f4999f18664b709aa"
+version = "0.12.0"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=0d453df386ed6589d2f970540c3e1793f63d79f0#0d453df386ed6589d2f970540c3e1793f63d79f0"
 dependencies = [
  "bincode",
  "crossbeam-channel",
@@ -9807,6 +9806,7 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
+<<<<<<< HEAD
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f8a545b35b019b8b63afb913214695f542cbbf39032c7b7349e1a15b7f2a2cf"
 
@@ -9815,6 +9815,14 @@ name = "timely_communication"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22d602b340fd8d5d4128660a577f7886070098b860dc9a9aa46512a2e0d683b4"
+=======
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=0d453df386ed6589d2f970540c3e1793f63d79f0#0d453df386ed6589d2f970540c3e1793f63d79f0"
+
+[[package]]
+name = "timely_communication"
+version = "0.12.0"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=0d453df386ed6589d2f970540c3e1793f63d79f0#0d453df386ed6589d2f970540c3e1793f63d79f0"
+>>>>>>> 821384402a (use timely-differential#593 to use operator spans instead of addresses)
 dependencies = [
  "bincode",
  "byteorder",
@@ -9828,8 +9836,12 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
+<<<<<<< HEAD
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ddfa4639c9390c6fac4ff66e47aa1bcfbc5f5bba6d520d5a7c55978165e7b14"
+=======
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=0d453df386ed6589d2f970540c3e1793f63d79f0#0d453df386ed6589d2f970540c3e1793f63d79f0"
+>>>>>>> 821384402a (use timely-differential#593 to use operator spans instead of addresses)
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -9838,9 +9850,14 @@ dependencies = [
 
 [[package]]
 name = "timely_logging"
+<<<<<<< HEAD
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b73a034d62792b507397701ee660001c8ba3e9dbffce29bc7a25319a36ebaa86"
+=======
+version = "0.12.0"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=0d453df386ed6589d2f970540c3e1793f63d79f0#0d453df386ed6589d2f970540c3e1793f63d79f0"
+>>>>>>> 821384402a (use timely-differential#593 to use operator spans instead of addresses)
 
 [[package]]
 name = "tiny-keccak"
@@ -11266,3 +11283,23 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "timely_bytes"
+version = "0.12.0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+
+[[patch.unused]]
+name = "timely_communication"
+version = "0.12.0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+
+[[patch.unused]]
+name = "timely_container"
+version = "0.12.0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+
+[[patch.unused]]
+name = "timely_logging"
+version = "0.12.0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"

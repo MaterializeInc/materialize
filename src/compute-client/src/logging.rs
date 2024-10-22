@@ -539,14 +539,8 @@ impl LogVariant {
                 .with_column("lir_id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("operator", ScalarType::String.nullable(false))
-                .with_column(
-                    "address",
-                    ScalarType::List {
-                        element_type: Box::new(ScalarType::UInt64),
-                        custom_id: None,
-                    }
-                    .nullable(false),
-                )
+                .with_column("operator_id_start", ScalarType::UInt64.nullable(true))
+                .with_column("operator_id_end", ScalarType::UInt64.nullable(true))
                 .with_key(vec![0, 1])
                 .finish(),
 

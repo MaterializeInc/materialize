@@ -887,9 +887,17 @@ where
             // TODO(mgree) need ExprHumanizer in DataflowDescription (ActiveComputeState doesn't have a catalog reference)
             let operator = node.humanize(&DummyHumanizer);
 
+            let operator_id_start = self.scope.peek_identifier();
             let mut bundle = self.render_plan_node(node, &collections);
+            let operator_id_end = self.scope.peek_identifier();
 
-            self.log_lir_mapping(object_id, lir_id, operator, bundle.scope().addr());
+            let operator_span = if operator_id_start == operator_id_end {
+                None
+            } else {
+                Some((operator_id_start, operator_id_end))
+            };
+
+            self.log_lir_mapping(object_id, lir_id, operator, operator_span);
             self.log_operator_hydration(&mut bundle, lir_id);
 
             collections.insert(lir_id, bundle);
@@ -1109,14 +1117,14 @@ where
         global_id: GlobalId,
         lir_id: LirId,
         operator: String,
-        address: Rc<[usize]>,
+        operator_span: Option<(usize, usize)>,
     ) {
         if let Some(logger) = &self.compute_logger {
             logger.log(ComputeEvent::LirMapping {
                 global_id,
                 lir_id,
                 operator,
-                address,
+                operator_span,
             });
         }
     }
