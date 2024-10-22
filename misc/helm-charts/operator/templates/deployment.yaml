@@ -34,17 +34,9 @@ spec:
         - "--startup-log-filter={{ .Values.operator.args.startupLogFilter }}"
         - "--cloud-provider={{ .Values.operator.args.cloudProvider }}"
         - "--region={{ .Values.operator.args.region }}"
-        {{- if .Values.operator.args.manageCockroachDatabase }}
-        - "--manage-cockroach-database"
-        {{- end }}
         {{- if .Values.operator.args.localDevelopment }}
         - "--local-development"
         {{- end }}
         - "--environmentd-target-arch={{ .Values.operator.args.environmentdTargetArch }}"
-        - "--cockroach-endpoint={{ .Values.metadatadb.endpoint }}"
-        - "--cockroach-port={{ .Values.metadatadb.port }}"
-        - "--cockroach-username={{ .Values.metadatadb.username }}"
-        - "--cockroach-password={{ .Values.metadatadb.password }}"
-        - "--cockroach-ca-cert={{ .Values.metadatadb.caCert | replace "\n" "\\n" }}"
         resources:
           {{- toYaml .Values.operator.resources | nindent 12 }}

@@ -19,10 +19,10 @@ spec:
     {{- toYaml .Values.environment.environmentdExtraArgs | nindent 4 }}
   {{- end }}
   {{- if .Values.environment.environmentdCpuAllocation }}
-  environmentdCpuAllocation: {{ .Values.environment.environmentdCpuAllocation }}
+  environmentdCpuAllocation: {{ .Values.environment.environmentdCpuAllocation | quote }}
   {{- end }}
   {{- if .Values.environment.environmentdMemoryAllocation }}
-  environmentdMemoryAllocation: {{ .Values.environment.environmentdMemoryAllocation }}
+  environmentdMemoryAllocation: {{ .Values.environment.environmentdMemoryAllocation | quote }}
   {{- end }}
   {{- if .Values.environment.requestRollout }}
   requestRollout: {{ .Values.environment.requestRollout }}

@@ -15,14 +15,6 @@ templates:
 tests:
   - it: should create environment with default values
     asserts:
-      # Test namespace.yaml
-      - template: namespace.yaml
-        isKind:
-          of: Namespace
-      - template: namespace.yaml
-        equal:
-          path: metadata.name
-          value: materialize-environment
 
       # Test secret.yaml
       - template: secret.yaml
@@ -65,7 +57,7 @@ tests:
         environmentdImageRef: materialize/environmentd:custom
         environmentdExtraArgs:
           - "--feature-flag=experimental"
-        environmentdCpuAllocation: 2
+        environmentdCpuAllocation: "2"
         environmentdMemoryAllocation: "2Gi"
         requestRollout: custom-rollout
         forceRollout: custom-force
@@ -93,8 +85,22 @@ tests:
       - template: environmentd.yaml
         equal:
           path: spec.environmentdCpuAllocation
-          value: 2
+          value: "2"
       - template: environmentd.yaml
         equal:
           path: spec.environmentdMemoryAllocation
           value: "2Gi"
+
+  - it: should create namespace
+    set:
+      namespace:
+        create: true
+        name: materialize-environment-test
+    asserts:
+      - template: namespace.yaml
+        equal:
+          path: metadata.name
+          value: materialize-environment-test
+      - template: namespace.yaml
+        isKind:
+          of: Namespace
