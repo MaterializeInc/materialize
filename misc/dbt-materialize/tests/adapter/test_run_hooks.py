@@ -16,11 +16,14 @@
 import os
 
 import pytest
-from dbt.tests.adapter.hooks import test_run_hooks as core_base
+from dbt.tests.adapter.hooks.test_run_hooks import (
+    BaseAfterRunHooks,
+    BasePrePostRunHooks,
+)
 from fixtures import run_hook, test_run_operation
 
 
-class TestPrePostRunHooksMaterialize(core_base.TestPrePostRunHooks):
+class TestPrePostRunHooksMaterialize(BasePrePostRunHooks):
     @pytest.fixture(scope="function")
     def setUp(self, project):
         project.run_sql(f"drop table if exists { project.test_schema }.on_run_hook")
@@ -52,5 +55,5 @@ class TestPrePostRunHooksMaterialize(core_base.TestPrePostRunHooks):
         ), "invocation_id was not set"
 
 
-class TestAfterRunHooksMaterialize(core_base.TestAfterRunHooks):
+class TestAfterRunHooksMaterialize(BaseAfterRunHooks):
     pass
