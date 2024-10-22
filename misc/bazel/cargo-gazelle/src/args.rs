@@ -17,6 +17,9 @@ pub struct Args {
     /// Path to an executable that can be used to format `BUILD.bazel` files.
     #[clap(long, value_name = "FORMATTER", env = "FORMATTER")]
     pub formatter: Option<PathBuf>,
+    /// Path to the Cargo binary for gathering metadata about a crate.
+    #[clap(long, value_name = "CARGO_BINARY", env = "CARGO_BINARY")]
+    pub cargo: Option<PathBuf>,
     /// Doesn't actually update any files, just checks if they would have changed.
     #[clap(long)]
     pub check: bool,
