@@ -22,7 +22,7 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import PostgresAsCockroach
+from materialize.mzcompose.services.postgres import CockroachOrPostgres
 
 
 class Operation(Enum):
@@ -87,7 +87,7 @@ WORKLOADS = [
 
 SERVICES = [
     Minio(setup_materialize=True),
-    PostgresAsCockroach(),
+    CockroachOrPostgres(),
     # Overriden below
     Materialized(name="mz_first"),
     Materialized(name="mz_second"),
