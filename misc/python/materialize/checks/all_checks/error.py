@@ -156,8 +156,14 @@ class DecodeError(Check):
                 $ kafka-ingest format=avro topic=decode-error schema=${schema-f1} repeat=1
                 {"f1": "A"}
 
-                > CREATE SOURCE decode_error
+                >[version<11900] CREATE SOURCE decode_error
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version>=11900] CREATE SOURCE decode_error_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE decode_error FROM SOURCE decode_error_src (REFERENCE "testdrive-decode-error-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
             """
@@ -213,9 +219,17 @@ class DecodeErrorUpsertValue(Check):
 
                 > CREATE CLUSTER decode_error_upsert_value_cluster SIZE '1';
 
-                > CREATE SOURCE decode_error_upsert_value
+                >[version<11900] CREATE SOURCE decode_error_upsert_value
                   IN CLUSTER decode_error_upsert_value_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-upsert-value-${testdrive.seed}')
+                  KEY FORMAT TEXT
+                  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+                  ENVELOPE UPSERT
+
+                >[version>=11900] CREATE SOURCE decode_error_upsert_value_src
+                  IN CLUSTER decode_error_upsert_value_cluster
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-upsert-value-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE decode_error_upsert_value FROM SOURCE decode_error_upsert_value_src (REFERENCE "testdrive-decode-error-upsert-value-${testdrive.seed}")
                   KEY FORMAT TEXT
                   VALUE FORMAT AVRO USING SCHEMA '${schema}'
                   ENVELOPE UPSERT
@@ -301,8 +315,15 @@ class DecodeErrorUpsertKey(Check):
                 {"f1": 1} value1
                 {"f1": 2} value2
 
-                > CREATE SOURCE decode_error_upsert_key
+                >[version<11900] CREATE SOURCE decode_error_upsert_key
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-upsert-key-${testdrive.seed}')
+                  KEY FORMAT AVRO USING SCHEMA '${key-schema}'
+                  VALUE FORMAT BYTES
+                  ENVELOPE UPSERT
+
+                >[version>=11900] CREATE SOURCE decode_error_upsert_key_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-upsert-key-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE decode_error_upsert_key FROM SOURCE decode_error_upsert_key_src (REFERENCE "testdrive-decode-error-upsert-key-${testdrive.seed}")
                   KEY FORMAT AVRO USING SCHEMA '${key-schema}'
                   VALUE FORMAT BYTES
                   ENVELOPE UPSERT

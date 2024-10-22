@@ -31,8 +31,14 @@ class UpsertWideValue(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-wide-value key-schema=${{keyschema}} schema=${{schema}}
                 {{"key1": "A"}} {{"f1": "{PAD_100K}"}}
 
-                > CREATE SOURCE upsert_wide_value
+                >[version<11900] CREATE SOURCE upsert_wide_value
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-wide-value-${{testdrive.seed}}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE UPSERT
+
+                >[version>=11900] CREATE SOURCE upsert_wide_value_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-wide-value-${{testdrive.seed}}')
+                >[version>=11900] CREATE TABLE upsert_wide_value FROM SOURCE upsert_wide_value_src (REFERENCE "testdrive-upsert-wide-value-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
@@ -100,8 +106,14 @@ class UpsertWideKey(Check):
                 {{"key1": "B{PAD_1M}"}} {{"f1": "B1"}}
                 {{"key1": "C{PAD_1M}"}} {{"f1": "C1"}}
 
-                > CREATE SOURCE upsert_wide_key
+                >[version<11900] CREATE SOURCE upsert_wide_key
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-wide-key-${{testdrive.seed}}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE UPSERT
+
+                >[version>=11900] CREATE SOURCE upsert_wide_key_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-wide-key-${{testdrive.seed}}')
+                >[version>=11900] CREATE TABLE upsert_wide_key FROM SOURCE upsert_wide_key_src (REFERENCE "testdrive-upsert-wide-key-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 

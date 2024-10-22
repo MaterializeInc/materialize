@@ -10,6 +10,7 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
+from materialize.mz_version import MzVersion
 
 
 @externally_idempotent(False)
@@ -37,15 +38,22 @@ class RenameSource(Check):
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "A"}
 
-                > CREATE SOURCE rename_source1
+                >[version<11900] CREATE SOURCE rename_source1_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rename-source-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version>=11900] CREATE SOURCE rename_source1_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rename-source-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE rename_source1_tbl FROM SOURCE rename_source1_src (REFERENCE "testdrive-rename-source-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "B"}
 
-                > CREATE MATERIALIZED VIEW rename_source_view AS SELECT DISTINCT f1 FROM rename_source1;
+                >[version<11900] CREATE MATERIALIZED VIEW rename_source_view AS SELECT DISTINCT f1 FROM rename_source1_src;
+                >[version>=11900] CREATE MATERIALIZED VIEW rename_source_view AS SELECT DISTINCT f1 FROM rename_source1_tbl;
 
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "C"}
@@ -60,7 +68,7 @@ class RenameSource(Check):
                 """
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "D"}
-                > ALTER SOURCE rename_source1 RENAME to rename_source2;
+                > ALTER SOURCE rename_source1_src RENAME to rename_source2_src;
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "E"}
                 """,
@@ -69,11 +77,11 @@ class RenameSource(Check):
                 # owned by default_role, thus we have to change the owner
                 # before dropping it:
                 $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SOURCE rename_source2 OWNER TO materialize;
+                ALTER SOURCE rename_source2_src OWNER TO materialize;
 
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "F"}
-                > ALTER SOURCE rename_source2 RENAME to rename_source3;
+                > ALTER SOURCE rename_source2_src RENAME to rename_source3_src;
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "G"}
                 """,
@@ -81,10 +89,16 @@ class RenameSource(Check):
         ]
 
     def validate(self) -> Testdrive:
+        query_obj = (
+            "rename_source3_src"
+            if self.base_version < MzVersion.parse_mz("v0.119.0")
+            else "rename_source1_tbl"
+        )
+
         return Testdrive(
             dedent(
-                """
-                > SELECT * FROM rename_source3;
+                f"""
+                > SELECT * FROM {query_obj};
                 A
                 B
                 C

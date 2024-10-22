@@ -315,11 +315,18 @@ class RetainHistoryOnKafkaSource(Check):
 
                 > INSERT INTO time_for_source VALUES (3, now());
 
-                > CREATE SOURCE retain_history_source
+                >[version<11900] CREATE SOURCE retain_history_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-retain-history-${{testdrive.seed}}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
                   WITH (RETAIN HISTORY FOR '{RETAIN_HISTORY_DURATION}')
+
+                >[version>=11900] CREATE SOURCE retain_history_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-retain-history-${{testdrive.seed}}')
+                  WITH (RETAIN HISTORY FOR '{RETAIN_HISTORY_DURATION}')
+                >[version>=11900] CREATE TABLE retain_history_source FROM SOURCE retain_history_source_src (REFERENCE "testdrive-retain-history-${{testdrive.seed}}")
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE UPSERT
 
                 # Give it some time
                 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"

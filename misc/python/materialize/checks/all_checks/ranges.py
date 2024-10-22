@@ -57,8 +57,14 @@ class Range(Check):
             $ kafka-ingest format=avro topic=ranges schema=${schema} repeat=10
             {"f1": "A${kafka-ingest.iteration}"}
 
-            > CREATE SOURCE range_source
+            >[version<11900] CREATE SOURCE range_source
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-ranges-${testdrive.seed}')
+              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+              ENVELOPE NONE
+
+            >[version>=11900] CREATE SOURCE range_source
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-ranges-${testdrive.seed}')
+            >[version>=11900] CREATE TABLE range_source_tbl FROM SOURCE range_source (REFERENCE "testdrive-ranges-${testdrive.seed}")
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE
             """

@@ -33,8 +33,14 @@ class AlterIndex(Check):
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "A${kafka-ingest.iteration}"}
 
-                > CREATE SOURCE alter_index_source
+                >[version<11900] CREATE SOURCE alter_index_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-index-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                >[version>=11900] CREATE SOURCE alter_index_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-index-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE alter_index_source FROM SOURCE alter_index_source_src (REFERENCE "testdrive-alter-index-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 

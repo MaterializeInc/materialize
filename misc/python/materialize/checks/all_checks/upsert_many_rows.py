@@ -27,8 +27,14 @@ class UpsertManyRows(Check):
                 {"key1": "B${kafka-ingest.iteration}"} {"f1": "X"}
                 {"key1": "C${kafka-ingest.iteration}"} {"f1": "X"}
 
-                > CREATE SOURCE upsert_many_rows
+                >[version<11900] CREATE SOURCE upsert_many_rows
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-many-rows-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE UPSERT
+
+                >[version>=11900] CREATE SOURCE upsert_many_rows_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-many-rows-${testdrive.seed}')
+                >[version>=11900] CREATE TABLE upsert_many_rows FROM SOURCE upsert_many_rows_src (REFERENCE "testdrive-upsert-many-rows-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
