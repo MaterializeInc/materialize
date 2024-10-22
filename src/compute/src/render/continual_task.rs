@@ -107,6 +107,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
@@ -163,7 +164,7 @@ pub(crate) enum ContinualTaskSourceTransformer {
     ///
     /// We'll presumably have the same for deletes eventually, but it's not
     /// exposed in the SQL frontend yet.
-    InsertsInput,
+    InsertsInput { source_id: GlobalId },
     /// A self-reference to the continual task's output. This is essentially a
     /// timely feedback loop via the persist shard. See module rustdoc for how
     /// this works.
@@ -177,7 +178,7 @@ impl ContinualTaskSourceTransformer {
     pub fn snapshot_mode(&self) -> SnapshotMode {
         use ContinualTaskSourceTransformer::*;
         match self {
-            InsertsInput => SnapshotMode::Exclude,
+            InsertsInput { .. } => SnapshotMode::Exclude,
             SelfReference { .. } | NormalReference => SnapshotMode::Include,
         }
     }
@@ -200,22 +201,19 @@ impl ContinualTaskSourceTransformer {
         match self {
             // Make a collection s.t, for each time T in the input, the output
             // contains the inserts at T.
-            InsertsInput => {
+            InsertsInput { source_id } => {
+                let name = source_id.to_string();
                 // Keep only the inserts.
                 let oks = oks.inner.filter(|(_, _, diff)| *diff > 0);
                 // Grab the original times for use in the sink operator.
-                //
-                // TODO(ct2): This clones every Row just to throw it away,
-                // wasting work and potentially doubling memory usage. The fix
-                // is a specialized 2-input 1-output operator.
-                let times = oks.map(|(_row, ts, diff)| ((), ts, diff));
+                let (oks, times) = oks.as_collection().times_extract(&name);
                 // Then retract everything at the next timestamp.
-                let oks = oks.flat_map(|(row, ts, diff)| {
+                let oks = oks.inner.flat_map(|(row, ts, diff)| {
                     let retract_ts = ts.step_forward();
                     let negation = -diff;
                     [(row.clone(), ts, diff), (row, retract_ts, negation)]
                 });
-                (oks.as_collection(), errs, times.as_collection())
+                (oks.as_collection(), errs, times)
             }
             NormalReference => {
                 let times = Collection::empty(&oks.scope());
@@ -231,8 +229,8 @@ impl ContinualTaskSourceTransformer {
                 // capability with a time that cannot be stepped forward (i.e.
                 // because it is already the max). We're safe here because this
                 // is stepping `T-1` forward to `T`.
-                let oks = step_forward(&name, oks);
-                let errs = step_forward(&name, errs);
+                let oks = oks.step_forward(&name);
+                let errs = errs.step_forward(&name);
                 (oks, errs, times)
             }
         }
@@ -293,7 +291,7 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
         ) {
             (false, false) => ContinualTaskSourceTransformer::NormalReference,
             (false, true) => ContinualTaskSourceTransformer::SelfReference { source_id },
-            (true, false) => ContinualTaskSourceTransformer::InsertsInput,
+            (true, false) => ContinualTaskSourceTransformer::InsertsInput { source_id },
             (true, true) => panic!("ct output is not allowed to be an input"),
         };
         Some(transformer)
@@ -314,7 +312,7 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
         );
         // Reduce this down to one update per-time-per-worker before exchanging
         // it, so we don't waste work on unnecessarily high data volumes.
-        let ct_times = times_reduce(name, ct_times);
+        let ct_times = ct_times.times_reduce(name);
         Some(ct_times)
     }
 }
@@ -632,91 +630,153 @@ impl<D: Ord> SinkState<D, Timestamp> {
     }
 }
 
-/// Translates a collection one timestamp "forward" (i.e. `T` -> `T+1` as
-/// defined by `TimestampManipulation::step_forward`).
-///
-/// This includes:
-/// - The differential timestamps in each data.
-/// - The capabilities paired with that data.
-/// - (As a consequence of the previous) the output frontier is one step forward
-///   of the input frontier.
-///
-/// The caller is responsible for ensuring that all data and capabilities given
-/// to this operator can be stepped forward without panicking, otherwise the
-/// operator will panic at runtime.
-///
-/// TODO(ct3): Convert `step_forward` to an extension trait on `Collection`.
-fn step_forward<G, D, R>(name: &str, input: Collection<G, D, R>) -> Collection<G, D, R>
+trait StepForward<G: Scope, D, R> {
+    /// Translates a collection one timestamp "forward" (i.e. `T` -> `T+1` as
+    /// defined by `TimestampManipulation::step_forward`).
+    ///
+    /// This includes:
+    /// - The differential timestamps in each data.
+    /// - The capabilities paired with that data.
+    /// - (As a consequence of the previous) the output frontier is one step forward
+    ///   of the input frontier.
+    ///
+    /// The caller is responsible for ensuring that all data and capabilities given
+    /// to this operator can be stepped forward without panicking, otherwise the
+    /// operator will panic at runtime.
+    fn step_forward(&self, name: &str) -> Collection<G, D, R>;
+}
+
+impl<G, D, R> StepForward<G, D, R> for Collection<G, D, R>
 where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
     R: Semigroup + 'static,
 {
-    let name = format!("ct_step_forward({})", name);
-    let mut builder = OperatorBuilder::new(name, input.scope());
-    let (mut output, output_stream) = builder.new_output();
-    // We step forward (by one) each data timestamp and capability. As a result
-    // the output's frontier is guaranteed to be one past the input frontier, so
-    // make this promise to timely.
-    let step_forward_summary = Timestamp::from(1);
-    let mut input = builder.new_input_connection(
-        &input.inner,
-        Pipeline,
-        vec![Antichain::from_elem(step_forward_summary)],
-    );
-    builder.set_notify(false);
-    builder.build(move |_caps| {
-        let mut buf = Vec::new();
-        move |_frontiers| {
-            let mut output = output.activate();
-            while let Some((cap, data)) = input.next() {
-                data.swap(&mut buf);
-                for (_, ts, _) in &mut buf {
-                    *ts = ts.step_forward();
+    fn step_forward(&self, name: &str) -> Collection<G, D, R> {
+        let name = format!("ct_step_forward({})", name);
+        let mut builder = OperatorBuilder::new(name, self.scope());
+        let (mut output, output_stream) = builder.new_output();
+        // We step forward (by one) each data timestamp and capability. As a
+        // result the output's frontier is guaranteed to be one past the input
+        // frontier, so make this promise to timely.
+        let step_forward_summary = Timestamp::from(1);
+        let mut input = builder.new_input_connection(
+            &self.inner,
+            Pipeline,
+            vec![Antichain::from_elem(step_forward_summary)],
+        );
+        builder.set_notify(false);
+        builder.build(move |_caps| {
+            let mut buf = Vec::new();
+            move |_frontiers| {
+                let mut output = output.activate();
+                while let Some((cap, data)) = input.next() {
+                    data.swap(&mut buf);
+                    for (_, ts, _) in &mut buf {
+                        *ts = ts.step_forward();
+                    }
+                    let cap = cap.delayed(&cap.time().step_forward());
+                    output.session(&cap).give_container(&mut buf);
                 }
-                let cap = cap.delayed(&cap.time().step_forward());
-                output.session(&cap).give_container(&mut buf);
             }
-        }
-    });
+        });
 
-    output_stream.as_collection()
+        output_stream.as_collection()
+    }
 }
 
-// This is essentially a specialized impl of consolidate, with a HashMap instead
-// of the Trace.
-fn times_reduce<G, R>(name: &str, input: Collection<G, (), R>) -> Collection<G, (), R>
+trait TimesExtract<G: Scope, D, R> {
+    /// Returns a collection with the times changed in the input collection.
+    ///
+    /// This works by mapping the data piece of the differential tuple to `()`.
+    /// It is essentially the same as the following, but without cloning
+    /// everything in the input.
+    ///
+    /// ```ignore
+    /// input.map(|(_data, ts, diff)| ((), ts, diff))
+    /// ```
+    ///
+    /// The output may be partially consolidated, but no consolidation
+    /// guarantees are made.
+    fn times_extract(&self, name: &str) -> (Collection<G, D, R>, Collection<G, (), R>);
+}
+
+impl<G, D, R> TimesExtract<G, D, R> for Collection<G, D, R>
+where
+    G: Scope<Timestamp = Timestamp>,
+    D: Clone + 'static,
+    R: Semigroup + 'static + std::fmt::Debug,
+{
+    fn times_extract(&self, name: &str) -> (Collection<G, D, R>, Collection<G, (), R>) {
+        let name = format!("ct_times_extract({})", name);
+        let mut builder = OperatorBuilder::new(name, self.scope());
+        let (mut passthrough, passthrough_stream) = builder.new_output();
+        let (mut times, times_stream) = builder.new_output::<ConsolidatingContainerBuilder<_>>();
+        let mut input = builder.new_input(&self.inner, Pipeline);
+        builder.set_notify(false);
+        builder.build(|_caps| {
+            let mut passthrough_buf = Vec::new();
+            move |_frontiers| {
+                let mut passthrough = passthrough.activate();
+                let mut times = times.activate();
+                while let Some((cap, data)) = input.next() {
+                    data.swap(&mut passthrough_buf);
+                    let times_iter = passthrough_buf
+                        .iter()
+                        .map(|(_data, ts, diff)| ((), *ts, diff.clone()));
+                    times.session_with_builder(&cap).give_iterator(times_iter);
+                    passthrough
+                        .session(&cap)
+                        .give_container(&mut passthrough_buf);
+                }
+            }
+        });
+        (
+            passthrough_stream.as_collection(),
+            times_stream.as_collection(),
+        )
+    }
+}
+
+trait TimesReduce<G: Scope, R> {
+    /// This is essentially a specialized impl of consolidate, with a HashMap
+    /// instead of the Trace.
+    fn times_reduce(&self, name: &str) -> Collection<G, (), R>;
+}
+
+impl<G, R> TimesReduce<G, R> for Collection<G, (), R>
 where
     G: Scope<Timestamp = Timestamp>,
     R: Semigroup + 'static + std::fmt::Debug,
 {
-    let name = format!("ct_times_reduce({})", name);
-    input
-        .inner
-        .unary_frontier(Pipeline, &name, |_caps, _info| {
-            let mut notificator = FrontierNotificator::new();
-            let mut stash = HashMap::<_, R>::new();
-            let mut buf = Vec::new();
-            move |input, output| {
-                while let Some((cap, data)) = input.next() {
-                    data.swap(&mut buf);
-                    for ((), ts, diff) in buf.drain(..) {
-                        notificator.notify_at(cap.delayed(&ts));
-                        if let Some(sum) = stash.get_mut(&ts) {
-                            sum.plus_equals(&diff);
-                        } else {
-                            stash.insert(ts, diff);
+    fn times_reduce(&self, name: &str) -> Collection<G, (), R> {
+        let name = format!("ct_times_reduce({})", name);
+        self.inner
+            .unary_frontier(Pipeline, &name, |_caps, _info| {
+                let mut notificator = FrontierNotificator::new();
+                let mut stash = HashMap::<_, R>::new();
+                let mut buf = Vec::new();
+                move |input, output| {
+                    while let Some((cap, data)) = input.next() {
+                        data.swap(&mut buf);
+                        for ((), ts, diff) in buf.drain(..) {
+                            notificator.notify_at(cap.delayed(&ts));
+                            if let Some(sum) = stash.get_mut(&ts) {
+                                sum.plus_equals(&diff);
+                            } else {
+                                stash.insert(ts, diff);
+                            }
                         }
                     }
+                    notificator.for_each(&[input.frontier()], |cap, _not| {
+                        if let Some(diff) = stash.remove(cap.time()) {
+                            output.session(&cap).give(((), cap.time().clone(), diff));
+                        }
+                    });
                 }
-                notificator.for_each(&[input.frontier()], |cap, _not| {
-                    if let Some(diff) = stash.remove(cap.time()) {
-                        output.session(&cap).give(((), cap.time().clone(), diff));
-                    }
-                });
-            }
-        })
-        .as_collection()
+            })
+            .as_collection()
+    }
 }
 
 #[cfg(test)]
@@ -729,13 +789,17 @@ mod tests {
     use timely::progress::Antichain;
     use timely::Config;
 
+    use super::*;
+
     #[mz_ore::test]
     fn step_forward() {
         timely::execute(Config::thread(), |worker| {
             let (mut input, probe, output) = worker.dataflow(|scope| {
                 let (handle, input) = scope.new_input();
                 let mut probe = ProbeHandle::<Timestamp>::new();
-                let output = super::step_forward("test", input.as_collection())
+                let output = input
+                    .as_collection()
+                    .step_forward("test")
                     .probe_with(&mut probe)
                     .inner
                     .capture();
@@ -771,6 +835,40 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn times_extract() {
+        struct PanicOnClone;
+
+        impl Clone for PanicOnClone {
+            fn clone(&self) -> Self {
+                panic!("boom")
+            }
+        }
+
+        let output = timely::execute_directly(|worker| {
+            worker.dataflow(|scope| {
+                let input = [
+                    (PanicOnClone, Timestamp::new(0), 0),
+                    (PanicOnClone, Timestamp::new(1), 1),
+                    (PanicOnClone, Timestamp::new(1), 1),
+                    (PanicOnClone, Timestamp::new(2), -2),
+                    (PanicOnClone, Timestamp::new(2), 1),
+                ]
+                .to_stream(scope)
+                .as_collection();
+                let (_passthrough, times) = input.times_extract("test");
+                times.inner.capture()
+            })
+        });
+        let expected = vec![((), Timestamp::new(1), 2), ((), Timestamp::new(2), -1)];
+        let actual = output
+            .extract()
+            .into_iter()
+            .flat_map(|x| x.1)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[mz_ore::test]
     fn times_reduce() {
         let output = timely::execute_directly(|worker| {
             worker.dataflow(|scope| {
@@ -784,7 +882,7 @@ mod tests {
                 ]
                 .to_stream(scope)
                 .as_collection();
-                super::times_reduce("test", input).inner.capture()
+                input.times_reduce("test").inner.capture()
             })
         });
         let expected = vec![
