@@ -48,6 +48,10 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE TABLE t1 (a int);
 > INSERT INTO t1 VALUES (201), (202), (203);
 
+# TODO: Reenable when database-issues#8619 is fixed
+$ skip-if
+SELECT true
+
 # Note: the important bit is making sure this EXPLAIN returns "can respond immediately: true"
 $ set-regex match=(\d{13}|([\d\-]{10}\s[\d:.]{12})|u\d+) replacement=<NON_CONSTANT>
 > EXPLAIN TIMESTAMP FOR SELECT COUNT(t1.a) FROM t1, pg_t1;

@@ -31,7 +31,7 @@ ALTER SYSTEM SET max_clusters = 15
 
 > CREATE SOURCE src
   IN CLUSTER source
-  FROM LOAD GENERATOR counter (UP TO 100)
+  FROM LOAD GENERATOR counter
 
 > CREATE TABLE tbl (a int)
 
@@ -172,10 +172,6 @@ snk
 
 # Test that when there are multiple inputs to a materialization the right one
 # is reported as the "slowest".
-
-# TODO(def-) Reenable when database-issues#8626 is fixed
-$ skip-if
-SELECT true
 
 > ALTER CLUSTER source SET (REPLICATION FACTOR 0)
 

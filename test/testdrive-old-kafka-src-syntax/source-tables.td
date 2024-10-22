@@ -32,6 +32,7 @@ contains: not supported
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_create_table_from_source = true
+ALTER SYSTEM SET enable_load_generator_key_value = true
 
 #
 # Multi-output load generator source using source-fed tables
@@ -46,6 +47,9 @@ ALTER SYSTEM SET enable_create_table_from_source = true
 > SELECT count(*) FROM bids
 255
 
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'bids';
+running
+
 # Create another table from the same bids upstream using a less qualified reference
 > CREATE TABLE bids2 FROM SOURCE auction_house (REFERENCE "bids");
 
@@ -54,7 +58,24 @@ ALTER SYSTEM SET enable_create_table_from_source = true
 > SELECT count(*) FROM bids2
 255
 
+
+# Validate that the available source references table was correctly populated
+> SELECT u.name, u.namespace, u.columns
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_references u ON s.id = u.source_id
+  WHERE
+  s.name = 'auction_house'
+  ORDER BY u.name;
+accounts auction {id,org_id,balance}
+auctions auction {id,seller,item,end_time}
+bids auction {id,buyer,auction_id,amount,bid_time}
+organizations auction {id,name}
+users auction {id,org_id,name}
+
 > DROP SOURCE auction_house CASCADE;
+
+> SELECT count(*) FROM mz_internal.mz_source_references;
+0
 
 #
 # Single-output load generator source using source-fed tables
@@ -73,6 +94,9 @@ ALTER SYSTEM SET enable_create_table_from_source = true
 
 > SELECT count(*) from counter_2;
 5
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'counter_2';
+running
 
 > DROP SOURCE counter CASCADE;
 
@@ -127,6 +151,9 @@ var0 0
 var1 1234
 var0 1
 var1 5678
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'pg_table_1';
+running
 
 > CREATE TABLE pg_table_2 FROM SOURCE pg_source (REFERENCE "pg_table") WITH (TEXT COLUMNS = (a));
 
@@ -233,6 +260,9 @@ contains:referenced tables use unsupported types
 var0 0
 var1 1234
 
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mysql_table_1';
+running
+
 $ mysql-execute name=mysql
 INSERT INTO mysql_table VALUES ('var1', 5678), ('var0', 1);
 
@@ -274,18 +304,44 @@ var1 5678 <null>
 var0 5555 6666
 var1 4444 12
 
+# Validate that the available source references table reflects the state of the upstream
+# when the create source was run
+> SELECT u.name, u.namespace, u.columns
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_references u ON s.id = u.source_id
+  WHERE
+  s.name = 'mysql_source'
+  ORDER BY u.name;
+mysql_table public {a,b}
+
+# Create a new table in MySQL and refresh to see if the new available reference is picked up
+$ mysql-execute name=mysql
+USE public;
+CREATE TABLE mysql_table_new (foo INTEGER, bar INTEGER);
+
+> ALTER SOURCE mysql_source REFRESH REFERENCES;
+
+> SELECT u.name, u.namespace, u.columns
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_references u ON s.id = u.source_id
+  WHERE
+  s.name = 'mysql_source'
+  ORDER BY u.name;
+mysql_table public {a,b,c}
+mysql_table_new public {foo,bar}
+
+
 > DROP SOURCE mysql_source CASCADE;
 
 # ensure that CASCADE propagates to the tables
 ! SELECT * FROM mysql_table_3;
 contains:unknown catalog item 'mysql_table_3'
 
+> SELECT count(*) FROM mz_internal.mz_source_references;
+0
+
 # TODO(def-) Remove when database-issues#8515 and database-issues#8526 are fixed
 $ skip-end
-
-# TODO(def-) Remove when database-issues#8625 is fixed
-$ skip-if
-SELECT true
 
 #
 # Kafka source using source-fed tables
@@ -340,6 +396,13 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
+> CREATE TABLE avro_table_append_cols (a, b) FROM SOURCE avro_source (REFERENCE "testdrive-avroavro-${testdrive.seed}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'avro_table_upsert';
+running
+
 > SELECT * from avro_table_upsert
 key           f1       f2
 ---------------------------
@@ -357,3 +420,56 @@ goose    1
 moose    1
 moose    2
 moose    42
+
+> SELECT * from avro_table_append_cols
+a       b
+---------------
+fish     1000
+geese    2
+geese    56
+goose    1
+moose    1
+moose    2
+moose    42
+
+
+#
+# Key-value load generator source using source-fed tables
+#
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_table_from_source = true
+ALTER SYSTEM SET enable_load_generator_key_value = true
+
+> CREATE SOURCE keyvalue
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR KEY VALUE (
+    KEYS 16,
+    PARTITIONS 4,
+    SNAPSHOT ROUNDS 3,
+    SEED 123,
+    VALUE SIZE 10,
+    BATCH SIZE 2,
+    TICK INTERVAL '1s'
+  );
+
+> CREATE TABLE kv_1 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE UPSERT;
+
+> CREATE TABLE kv_2 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE NONE;
+
+> SELECT partition, count(*) FROM kv_1 GROUP BY partition
+0   4
+1   4
+2   4
+3   4
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'kv_1';
+running
+
+> SELECT partition, count(*) > 10 FROM kv_2 GROUP BY partition
+0   true
+1   true
+2   true
+3   true
+
+> DROP SOURCE keyvalue CASCADE;
