@@ -657,7 +657,7 @@ impl Coordinator {
     pub fn begin_statement_execution(
         &mut self,
         session: &mut Session,
-        params: Params,
+        params: &Params,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
     ) -> Option<StatementLoggingId> {
         if session.user().is_internal() {
