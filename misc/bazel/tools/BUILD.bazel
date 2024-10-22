@@ -20,16 +20,33 @@ This should only be used for non-essential tools like linters! Anything is used
 for building or running code should be included via a Bazel toolchain.
 """
 
-sh_binary(
+load("@bazel_skylib//rules:native_binary.bzl", "native_binary")
+
+native_binary(
     name = "buildifier",
-    srcs = select(
+    src = select(
         {
-            "@//misc/bazel/platforms:macos_x86_64": ["@buildifier-darwin-amd64//file"],
-            "@//misc/bazel/platforms:macos_arm": ["@buildifier-darwin-arm64//file"],
-            "@//misc/bazel/platforms:linux_x86_64": ["@buildifier-linux-amd64//file"],
-            "@//misc/bazel/platforms:linux_arm": ["@buildifier-linux-arm64//file"],
+            "@//misc/bazel/platforms:macos_x86_64": "@buildifier-darwin-amd64//file",
+            "@//misc/bazel/platforms:macos_arm": "@buildifier-darwin-arm64//file",
+            "@//misc/bazel/platforms:linux_x86_64": "@buildifier-linux-amd64//file",
+            "@//misc/bazel/platforms:linux_arm": "@buildifier-linux-arm64//file",
         },
         no_match_error = "`buildifier` is not supported on the current platform.",
+    ),
+)
+
+# Note: We don't use `cargo` for building code, but some tools require it for generating metadata
+# for crates in our repo.
+native_binary(
+    name = "cargo",
+    src = select(
+        {
+            "@//misc/bazel/platforms:macos_x86_64": "@rust_darwin_x86_64__x86_64-apple-darwin__stable_tools//:cargo",
+            "@//misc/bazel/platforms:macos_arm": "@rust_darwin_aarch64__aarch64-apple-darwin__stable_tools//:cargo",
+            "@//misc/bazel/platforms:linux_x86_64": "@rust_linux_x86_64__x86_64-apple-darwin__stable_tools//:cargo",
+            "@//misc/bazel/platforms:linux_arm": "@rust_linux_aarch64__aarch64-apple-darwin__stable_tools//:cargo",
+        },
+        no_match_error = "`cargo` is not supported on the current platform.",
     ),
 )
 
@@ -37,9 +54,13 @@ sh_binary(
 sh_binary(
     name = "cargo-gazelle",
     srcs = ["@//misc/bazel/cargo-gazelle:main"],
-    data = ["@//misc/bazel/tools:buildifier"],
+    data = [
+        "@//misc/bazel/tools:buildifier",
+        "@//misc/bazel/tools:cargo",
+    ],
     env = {
         "FORMATTER": "$(location @//misc/bazel/tools:buildifier)",
+        "CARGO_BINARY": "$(location @//misc/bazel/tools:cargo)",
     },
 )
 

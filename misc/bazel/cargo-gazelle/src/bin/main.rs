@@ -30,6 +30,7 @@ fn main() -> Result<(), anyhow::Error> {
         .init();
 
     let args = Args::try_parse()?;
+    tracing::debug!(?args, "Running with Args");
     let path = args.path;
 
     if args.formatter.is_none() {
@@ -39,10 +40,16 @@ fn main() -> Result<(), anyhow::Error> {
         tracing::warn!("Running in 'check' mode, won't generate any updates.");
     }
 
-    let graph = guppy::MetadataCommand::new()
-        .manifest_path(&path)
-        .build_graph()
-        .context("building crate graph")?;
+    let mut command = guppy::MetadataCommand::new();
+    command.manifest_path(&path);
+
+    // Note: In the past we've seen the way metadata gets generated to change between Cargo
+    // versions which introduces skew with how BUILD.bazel files are generated.
+    if let Some(cargo_binary) = &args.cargo {
+        command.cargo_path(cargo_binary);
+    }
+
+    let graph = command.build_graph().context("building crate graph")?;
     let manifest = Manifest::from_path(&path).context("reading manifest")?;
 
     // Generate for either a single package, or an entire workspace.
