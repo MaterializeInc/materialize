@@ -16,14 +16,13 @@ namespace:
 
 # Environment configuration for Materialize
 environment:
-  # The name of the environment to be deployed
-  name: "default-environment"
+  # The name of the environment to be deployed, this should be a UUID
+  name: "environment-12345678-1234-1234-1234-123456789012"
   # Docker image reference for the Materialize `environmentd` service
-  environmentdImageRef: "materialize/environmentd:v0.121.0"
+  environmentdImageRef: "materialize/environmentd:v0.122.0-dev.0--pr.g8bb641fc00c77f98ba5556dcdca43670776eacfa"
   # Optional additional arguments to be passed to `environmentd`
-  # Uncomment and set as needed
-  # environmentdExtraArgs:
-  #   - "--log-filter=info"
+  environmentdExtraArgs:
+    - "--orchestrator-kubernetes-ephemeral-volume-class=hostpath" # Use hostpath for ephemeral storage in testing
   # CPU allocation for the `environmentd` service (in cores)
   environmentdCpuAllocation: 1
   # Memory allocation for the `environmentd` service (e.g., "1Gi" for 1 GB)

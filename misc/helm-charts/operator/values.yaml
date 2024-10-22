@@ -13,7 +13,7 @@ operator:
     # The Docker repository for the operator image
     repository: materialize/orchestratord
     # The tag/version of the operator image to be used
-    tag: v0.122.0-dev.0--main.g69acd7a8c926e9c5829e1d2c02f33237cec0c2b7
+    tag: v0.122.0-dev.0--pr.g8bb641fc00c77f98ba5556dcdca43670776eacfa
     # Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
   args:
