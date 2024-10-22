@@ -101,7 +101,7 @@ cargo_build_script(
 )
 
 rust_binary(
-    name = "mz_fivetran_destination_bin",
+    name = "mz_fivetran_destination",
     srcs = glob(["src/**/*.rs"]),
     aliases = aliases(
         normal = True,

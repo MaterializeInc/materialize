@@ -109,7 +109,7 @@ rust_test(
 )
 
 rust_binary(
-    name = "mz_frontegg_mock_bin",
+    name = "mz_frontegg_mock",
     srcs = glob(["src/**/*.rs"]),
     aliases = aliases(
         normal = True,

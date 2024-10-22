@@ -121,7 +121,7 @@ rust_test(
 )
 
 rust_binary(
-    name = "mz_lsp_server_bin",
+    name = "mz_lsp_server",
     srcs = glob(["src/**/*.rs"]),
     aliases = aliases(
         normal = True,

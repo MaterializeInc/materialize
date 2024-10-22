@@ -68,7 +68,7 @@ rust_doc_test(
 )
 
 rust_binary(
-    name = "mz_pgtest_bin",
+    name = "mz_pgtest",
     srcs = glob(["src/**/*.rs"]),
     aliases = aliases(
         normal = True,
