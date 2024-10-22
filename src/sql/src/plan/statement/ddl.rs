@@ -127,7 +127,8 @@ use crate::names::{
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::query::{
-    plan_expr, scalar_type_from_catalog, scalar_type_from_sql, CteDesc, ExprContext, QueryLifetime,
+    cast_relation, plan_expr, scalar_type_from_catalog, scalar_type_from_sql, CteDesc, ExprContext,
+    QueryLifetime,
 };
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
@@ -2779,6 +2780,26 @@ pub fn plan_create_continual_task(
         RelationDesc::from_names_and_types(desc_columns)
     };
     let input = scx.get_item_by_resolved_name(&stmt.input)?;
+    match input.item_type() {
+        // Input must be a thing directly backed by a persist shard, so we can
+        // use a persist listen to efficiently rehydrate.
+        CatalogItemType::ContinualTask
+        | CatalogItemType::Table
+        | CatalogItemType::MaterializedView
+        | CatalogItemType::Source => {}
+        CatalogItemType::Sink
+        | CatalogItemType::View
+        | CatalogItemType::Index
+        | CatalogItemType::Type
+        | CatalogItemType::Func
+        | CatalogItemType::Secret
+        | CatalogItemType::Connection => {
+            sql_bail!(
+                "CONTINUAL TASK cannot use {} as an input",
+                input.item_type()
+            );
+        }
+    }
 
     let mut qcx = QueryContext::root(scx, QueryLifetime::MaterializedView);
     let ct_name = stmt.name;
@@ -2797,31 +2818,47 @@ pub fn plan_create_continual_task(
     };
 
     let mut exprs = Vec::new();
-    for stmt in &stmt.stmts {
-        let query = continual_task_query(&ct_name, stmt).ok_or_else(|| sql_err!("TODO(ct2)"))?;
+    for (idx, stmt) in stmt.stmts.iter().enumerate() {
+        let query = continual_task_query(&ct_name, stmt).ok_or_else(|| sql_err!("TODO(ct3)"))?;
         let query::PlannedRootQuery {
             mut expr,
             desc: desc_query,
             finishing,
             scope: _,
         } = query::plan_ct_query(&mut qcx, query)?;
-        // We get back a trivial finishing, see comment in `plan_view`.
+        // We get back a trivial finishing because we plan with a "maintained"
+        // QueryLifetime, see comment in `plan_view`.
         assert!(finishing.is_trivial(expr.arity()));
-        // TODO(ct2): Is this right?
         expr.bind_parameters(params)?;
-        // TODO(ct2): Make this error message more closely match the various ones
-        // given for INSERT/DELETE.
-        if desc_query
-            .iter_types()
-            .map(|x| &x.scalar_type)
-            .ne(desc.iter_types().map(|x| &x.scalar_type))
-        {
+
+        // We specify the columns for DELETE, so if any columns types don't
+        // match, it's because it's an INSERT.
+        if desc_query.arity() > desc.arity() {
             sql_bail!(
-                "CONTINUAL TASK query columns did not match: {:?} vs {:?}",
-                desc_query.iter().collect::<Vec<_>>(),
-                desc.iter().collect::<Vec<_>>()
+                "statement {}: INSERT has more expressions than target columns",
+                idx
             );
         }
+        if desc_query.arity() < desc.arity() {
+            sql_bail!(
+                "statement {}: INSERT has more target columns than expressions",
+                idx
+            );
+        }
+        // Ensure the types of the source query match the types of the target table,
+        // installing assignment casts where necessary and possible.
+        let target_types = desc.iter_types().map(|x| &x.scalar_type);
+        let expr = cast_relation(&qcx, CastContext::Assignment, expr, target_types);
+        let expr = expr.map_err(|e| {
+            sql_err!(
+                "statement {}: column {} is of type {} but expression is of type {}",
+                idx,
+                desc.get_name(e.column).as_str().quoted(),
+                qcx.humanize_scalar_type(&e.target_type),
+                qcx.humanize_scalar_type(&e.source_type),
+            )
+        })?;
+
         // Update ct nullability as necessary. The `ne` above verified that the
         // types are the same len.
         let zip_types = || desc.iter_types().zip(desc_query.iter_types());
@@ -2841,12 +2878,12 @@ pub fn plan_create_continual_task(
             ast::ContinualTaskStmt::Delete(_) => exprs.push(expr.negate()),
         }
     }
-    // TODO(ct2): Collect things by output and assert that there is only one (or
+    // TODO(ct3): Collect things by output and assert that there is only one (or
     // support multiple outputs).
     let expr = exprs
         .into_iter()
         .reduce(|acc, expr| acc.union(expr))
-        .ok_or_else(|| sql_err!("TODO(ct2)"))?;
+        .ok_or_else(|| sql_err!("TODO(ct3)"))?;
 
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
     if let Some(dup) = column_names.iter().duplicates().next() {
