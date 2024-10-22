@@ -37,24 +37,20 @@ The following table lists the configurable parameters of the Materialize operato
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `metadatadb.caCert` |  | ``"-----BEGIN CERTIFICATE-----\nTODO\n-----END CERTIFICATE-----\n"`` |
-| `metadatadb.endpoint` |  | ``"cockroachdb-public.cockroachdb.svc.cluster.local"`` |
-| `metadatadb.password` |  | ``"password"`` |
-| `metadatadb.port` |  | ``26257`` |
-| `metadatadb.username` |  | ``"environment-controller"`` |
+| `namespace.create` |  | ``false`` |
+| `namespace.name` |  | ``"materialize"`` |
 | `networkPolicies.enabled` |  | ``false`` |
 | `networkPolicies.useNativeKubernetesPolicy` |  | ``true`` |
 | `observability.enabled` |  | ``false`` |
 | `observability.prometheus.enabled` |  | ``false`` |
 | `operator.args.cloudProvider` |  | ``"local"`` |
-| `operator.args.environmentdTargetArch` |  | ``"amd64"`` |
+| `operator.args.environmentdTargetArch` |  | ``"arm64"`` |
 | `operator.args.localDevelopment` |  | ``true`` |
-| `operator.args.manageCockroachDatabase` |  | ``true`` |
 | `operator.args.region` |  | ``"kind"`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
 | `operator.image.repository` |  | ``"materialize/orchestratord"`` |
-| `operator.image.tag` |  | ``"v0.121.0-dev.0--main.g0c02fecf8c5a05f697925366a1c2baae20472b81"`` |
+| `operator.image.tag` |  | ``"v0.122.0-dev.0--pr.g8bb641fc00c77f98ba5556dcdca43670776eacfa"`` |
 | `operator.resources.limits.cpu` |  | ``"500m"`` |
 | `operator.resources.limits.memory` |  | ``"512Mi"`` |
 | `operator.resources.requests.cpu` |  | ``"100m"`` |

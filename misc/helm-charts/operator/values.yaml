@@ -7,59 +7,65 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Operator configuration for orchestrating Materialize
 operator:
   image:
+    # The Docker repository for the operator image
     repository: materialize/orchestratord
-    tag: v0.121.0-dev.0--main.g0c02fecf8c5a05f697925366a1c2baae20472b81
+    # The tag/version of the operator image to be used
+    tag: v0.122.0-dev.0--pr.g8bb641fc00c77f98ba5556dcdca43670776eacfa
+    # Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
   args:
+    # Log filtering settings for startup logs
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
+    # Cloud provider setting (in this case, for local development)
     cloudProvider: "local"
+    # The region where the cluster is deployed (for this example, using Kind)
     region: "kind"
-    manageCockroachDatabase: true
+    # Flag to indicate whether the environment is for local development
     localDevelopment: true
-    environmentdTargetArch: "amd64"
+    # Target architecture for environmentd (set to "arm64" for ARM systems, can also be "amd64" for Intel/AMD)
+    environmentdTargetArch: "arm64" # amd64
   resources:
+    # Resources requested by the operator for CPU and memory
     requests:
       cpu: 100m
       memory: 128Mi
+    # Resource limits for the operator's CPU and memory
     limits:
       cpu: 500m
       memory: 512Mi
 
-# TODO: Change with Postgres
-metadatadb:
-  endpoint: "cockroachdb-public.cockroachdb.svc.cluster.local"
-  port: 26257
-  username: "environment-controller"
-  password: "password"
-  caCert: |
-    -----BEGIN CERTIFICATE-----
-    TODO
-    -----END CERTIFICATE-----
-
+# RBAC (Role-Based Access Control) settings
 rbac:
+  # Whether to create necessary RBAC roles and bindings
   create: true
 
+# Service account settings
 serviceAccount:
+  # Whether to create a new service account for the operator
   create: true
+  # The name of the service account to be created
   name: "orchestratord"
 
+# Observability settings (disabled in this case)
 observability:
   enabled: false
   prometheus:
+    # Whether to enable Prometheus integration for monitoring (disabled here)
     enabled: false
 
+# Network policies configuration
 networkPolicies:
+  # Whether to enable network policies for securing communication between pods
   enabled: false
+  # Use native Kubernetes NetworkPolicies if enabled
   useNativeKubernetesPolicy: true
 
-# Users can add environment configurations here:
-# materializeEnvironments:
-#   - name: default-environment
-#     environmentdImageRef: materialize/environmentd:v0.119.2
-#     environmentdCpuAllocation: "500m"
-#     environmentdMemoryAllocation: "1Gi"
-#     requestRollout: 22222222-2222-2222-2222-222222222222
-#     forceRollout: 33333333-3333-3333-3333-333333333333
-#     inPlaceRollout: false
+# Namespace configuration
+namespace:
+  # Whether to create a new namespace for the deployment
+  create: false
+  # Name of the namespace where the operator and environment will be deployed
+  name: "materialize"

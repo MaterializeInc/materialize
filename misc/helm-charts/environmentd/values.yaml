@@ -1,0 +1,42 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Namespace configuration for the Materialize environment
+namespace:
+  # Whether to create a new namespace or use an existing one
+  create: false
+  # The name of the namespace where the Materialize environment will be deployed
+  name: "materialize-environment"
+
+# Environment configuration for Materialize
+environment:
+  # The name of the environment to be deployed, this should be a UUID
+  name: "environment-12345678-1234-1234-1234-123456789012"
+  # Docker image reference for the Materialize `environmentd` service
+  environmentdImageRef: "materialize/environmentd:v0.122.0-dev.0--pr.g8bb641fc00c77f98ba5556dcdca43670776eacfa"
+  # Optional additional arguments to be passed to `environmentd`
+  environmentdExtraArgs:
+    - "--orchestrator-kubernetes-ephemeral-volume-class=hostpath" # Use hostpath for ephemeral storage in testing
+  # CPU allocation for the `environmentd` service (in cores)
+  environmentdCpuAllocation: 1
+  # Memory allocation for the `environmentd` service (e.g., "1Gi" for 1 GB)
+  environmentdMemoryAllocation: "1Gi"
+  # UUID for managing rollouts of the environment, this triggers rollouts when changed
+  requestRollout: 22222222-2222-2222-2222-222222222222
+  # UUID to force a rollout of the environment, typically for emergency or specific updates
+  forceRollout: 33333333-3333-3333-3333-333333333333
+  # Whether rollouts should be done in place or with restarts
+  inPlaceRollout: false
+
+  # Secret configuration for database and persistence backends
+  secret:
+    # URL for the metadata backend
+    metadataBackendUrl: "postgres://materialize_user:materialize_pass@postgres.materialize-environment.svc.cluster.local:5432/materialize_db?sslmode=disable"
+    # URL for the persistence backend
+    persistBackendUrl: "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize-environment.svc.cluster.local%3A9000&region=minio"
