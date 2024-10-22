@@ -146,8 +146,8 @@ pub enum ComputeEvent {
         lir_id: LirId,
         /// The LIR operator, as a string (see `FlatPlanNode::humanize`).
         operator: String,
-        /// Operator address.
-        address: Rc<[usize]>,
+        /// Operator id span; may not be present if not operators were rendered.
+        operator_span: Option<(usize, usize)>,
     },
     DataflowGlobal {
         /// The identifier of the dataflow.
@@ -413,35 +413,30 @@ pub(super) fn construct<A: Allocate + 'static>(
             }
         });
 
-        let mut packer = PermutedRowPacker::new(ComputeLog::LirMapping);
+        let packer = PermutedRowPacker::new(ComputeLog::LirMapping);
         let lir_mapping = lir_mapping.as_collection().map({
             move |datum| {
-                // we can't use `pack_slice` because we need `RowPacker::push_list`
-                packer.pack_by_index(|packer, index| match index {
-                    0 => {
-                        let mut scratch = String::new();
-                        packer.push(make_string_datum(datum.global_id, &mut scratch))
-                    }
-                    1 => packer.push(Datum::UInt64(datum.lir_id)),
-                    2 => packer.push(Datum::UInt64(u64::cast_from(worker_id))),
-                    3 => {
-                        let mut scratch = String::new();
-                        packer.push(make_string_datum(&datum.operator, &mut scratch))
-                    }
-                    4 => packer.push_list(
-                        datum
-                            .address
-                            .iter()
-                            .copied()
-                            .map(u64::cast_from)
-                            .map(Datum::UInt64),
+                let mut scratch1 = String::new();
+                let mut scratch2 = String::new();
+                let (span_start, span_end) = match datum.operator_span {
+                    Some((start, end)) => (
+                        Datum::UInt64(u64::cast_from(start)),
+                        Datum::UInt64(u64::cast_from(end)),
                     ),
-                    _ => unreachable!("bad index {index} in lir_mapping"),
-                })
+                    None => (Datum::Null, Datum::Null),
+                };
+                packer.pack_slice(&[
+                    make_string_datum(datum.global_id, &mut scratch1),
+                    Datum::UInt64(datum.lir_id),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    make_string_datum(&datum.operator, &mut scratch2),
+                    span_start,
+                    span_end,
+                ])
             }
         });
 
-        let mut packer = PermutedRowPacker::new(ComputeLog::DataflowGlobal);
+        let packer = PermutedRowPacker::new(ComputeLog::DataflowGlobal);
         let dataflow_global_ids = dataflow_global_ids.as_collection().map({
             move |datum| {
                 let mut scratch = String::new();
@@ -521,8 +516,8 @@ struct DemuxState<A: Allocate> {
     peek_stash: BTreeMap<Uuid, Duration>,
     /// Arrangement size stash.
     arrangement_size: BTreeMap<usize, ArrangementSizeState>,
-    /// LIR -> address mapping.
-    lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, (String, Vec<usize>)>>,
+    /// LIR -> operator span mapping.
+    lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, (String, Option<(usize, usize)>)>>,
     /// Dataflow -> `GlobalId` mapping (many-to-one)/
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
 }
@@ -655,7 +650,7 @@ struct LirMappingDatum {
     global_id: GlobalId,
     lir_id: LirId,
     operator: String,
-    address: Vec<usize>,
+    operator_span: Option<(usize, usize)>,
 }
 
 #[derive(Clone)]
@@ -737,8 +732,8 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                 global_id,
                 lir_id,
                 operator,
-                address,
-            } => self.handle_lir_mapping(global_id, lir_id, operator, address),
+                operator_span,
+            } => self.handle_lir_mapping(global_id, lir_id, operator, operator_span),
             DataflowGlobal { id, global_id } => self.handle_dataflow_global(id, global_id),
         }
     }
@@ -848,12 +843,12 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
                 // Remove LIR mapping.
                 if let Some(mappings) = self.state.lir_mapping.remove(&global_id) {
-                    for (lir_id, (operator, address)) in mappings {
+                    for (lir_id, (operator, operator_span)) in mappings {
                         let datum = LirMappingDatum {
                             global_id,
                             lir_id,
                             operator,
-                            address,
+                            operator_span,
                         };
                         self.output.lir_mapping.give((datum, ts, -1));
                     }
@@ -1081,21 +1076,19 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         global_id: GlobalId,
         lir_id: LirId,
         operator: String,
-        address: Rc<[usize]>,
+        operator_span: Option<(usize, usize)>,
     ) {
-        let address = address.to_vec();
-
         // record the state (for the later drop)
         self.state
             .lir_mapping
             .entry(global_id)
             .and_modify(|id_mapping| {
-                let existing = id_mapping.insert(lir_id, (operator.clone(), address.clone()));
-                if let Some(old_address) = existing {
-                    error!(%global_id, %lir_id, "lir mapping to {address:?} already registered as {old_address:?}");
+                let existing = id_mapping.insert(lir_id, (operator.clone(), operator_span.clone()));
+                if let Some(old_operator_span) = existing {
+                    error!(%global_id, %lir_id, "lir mapping to operator span {operator_span:?} already registered as {old_operator_span:?}");
                 }
             })
-            .or_insert_with(|| BTreeMap::from([(lir_id, (operator.clone(), address.clone()))]));
+            .or_insert_with(|| BTreeMap::from([(lir_id, (operator.clone(), operator_span.clone()))]));
 
         // send the datum out
         let ts = self.ts();
@@ -1103,7 +1096,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             global_id,
             lir_id,
             operator,
-            address,
+            operator_span,
         };
         self.output.lir_mapping.give((datum, ts, 1));
     }

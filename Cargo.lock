@@ -9779,7 +9779,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=0d453df386ed6589d2f970540c3e1793f63d79f0#0d453df386ed6589d2f970540c3e1793f63d79f0"
 dependencies = [
  "bincode",
  "crossbeam-channel",
@@ -9795,12 +9795,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=0d453df386ed6589d2f970540c3e1793f63d79f0#0d453df386ed6589d2f970540c3e1793f63d79f0"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=0d453df386ed6589d2f970540c3e1793f63d79f0#0d453df386ed6589d2f970540c3e1793f63d79f0"
 dependencies = [
  "bincode",
  "byteorder",
@@ -9814,7 +9814,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=0d453df386ed6589d2f970540c3e1793f63d79f0#0d453df386ed6589d2f970540c3e1793f63d79f0"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -9824,7 +9824,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=0d453df386ed6589d2f970540c3e1793f63d79f0#0d453df386ed6589d2f970540c3e1793f63d79f0"
 
 [[package]]
 name = "tiny-keccak"
@@ -11250,3 +11250,23 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "timely_bytes"
+version = "0.12.0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+
+[[patch.unused]]
+name = "timely_communication"
+version = "0.12.0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+
+[[patch.unused]]
+name = "timely_container"
+version = "0.12.0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+
+[[patch.unused]]
+name = "timely_logging"
+version = "0.12.0"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"

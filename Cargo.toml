@@ -271,7 +271,7 @@ debug = 2
 # version of Materialize.
 [patch.crates-io]
 # Projects that do not reliably release to crates.io.
-timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow.git", rev = "0d453df386ed6589d2f970540c3e1793f63d79f0" }
 timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
