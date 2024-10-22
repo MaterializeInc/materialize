@@ -233,10 +233,15 @@ impl Analysis for Equivalences {
             MirRelationExpr::Union { .. } => {
                 // TODO: `EquivalenceClasses::union` takes references, and we could probably skip much of this cloning.
                 let expr_index = index;
-                depends
+                let mut child_equivs = depends
                     .children_of_rev(expr_index, expr.children().count())
-                    .flat_map(|c| results[c].clone())
-                    .reduce(|e1, e2| e1.union(&e2))
+                    .flat_map(|c| &results[c]);
+                if let Some(first) = child_equivs.next() {
+                    let rest = child_equivs.collect::<Vec<_>>();
+                    Some(first.union_many(&rest[..]))
+                } else {
+                    None
+                }
             }
             MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
@@ -554,29 +559,55 @@ impl EquivalenceClasses {
 
     /// Produce the equivalences present in both inputs.
     pub fn union(&self, other: &Self) -> Self {
-        // TODO: seems like this could be extended, with similar concepts to localization:
-        //       We may removed non-shared constraints, but ones that remain could take over
-        //       and substitute in to retain more equivalences.
+        self.union_many(&[other])
+    }
 
-        // For each pair of equivalence classes, their intersection.
-        let mut equivalences = EquivalenceClasses {
-            classes: Vec::new(),
-            remap: Default::default(),
-        };
-        for class1 in self.classes.iter() {
-            for class2 in other.classes.iter() {
-                let class = class1
-                    .iter()
-                    .filter(|e1| class2.iter().any(|e2| e1 == &e2))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if class.len() > 1 {
-                    equivalences.classes.push(class);
+    /// The equivalence classes of terms equivalent in all inputs.
+    ///
+    /// This method currently misses opportunities, because it only looks for exactly matches in expressions,
+    /// which may not include all possible matches. For example, `f(#1) == g(#1)` may exist in one class, but
+    /// in another class where `#0 == #1` it may exist as `f(#0) == g(#0)`.
+    pub fn union_many(&self, others: &[&Self]) -> Self {
+        if others.is_empty() {
+            self.clone()
+        } else {
+            // Map from expression to an equivalence class identifier.
+            // That identifier is a pair of integer and expression reference, where
+            // the integer is a bit of a "hashcons" of accumulated class representatives.
+            let mut intersection: BTreeMap<&MirScalarExpr, usize> = Default::default();
+            let mut rekey: BTreeMap<_, _> = Default::default();
+            for (key, val) in self.remap.iter() {
+                if !rekey.contains_key(val) {
+                    rekey.insert(val, rekey.len());
                 }
+                intersection.insert(key, rekey[val]);
             }
+            for other in others {
+                let mut rekey: BTreeMap<(usize, &MirScalarExpr), usize> = Default::default();
+                intersection = intersection
+                    .into_iter()
+                    .flat_map(move |(key, idx)| {
+                        other.remap.get(key).map(|val| {
+                            if !rekey.contains_key(&(idx, val)) {
+                                rekey.insert((idx, val), rekey.len());
+                            }
+                            (key, rekey[&(idx, val)])
+                        })
+                    })
+                    .collect()
+            }
+            let mut classes: BTreeMap<_, Vec<MirScalarExpr>> = Default::default();
+            for (key, vals) in intersection {
+                classes.entry(vals).or_default().push(key.clone())
+            }
+            let classes = classes.into_values().collect::<Vec<_>>();
+            let mut equivalences = EquivalenceClasses {
+                classes,
+                remap: Default::default(),
+            };
+            equivalences.minimize(&None);
+            equivalences
         }
-        equivalences.minimize(&None);
-        equivalences
     }
 
     /// Permutes each expression, looking up each column reference in `permutation` and replacing with what it finds.
