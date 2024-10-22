@@ -351,7 +351,7 @@ practices on when to use views and materialized views in Materialize, see
 #### Views
 
 dbt models are materialized as [views](/sql/create-view) by default. Although
-this means you can skip the `materialized` configuration parameter in the model
+this means you can skip the `materialized` configuration in the model
 definition to create views in Materialize, we recommend explicitly setting the
 materialization type for maintainability.
 
@@ -388,7 +388,7 @@ For guidance and best practices on how to use indexes in Materialize, see
 {{</ tip >}}
 
 To keep results **up-to-date** in Materialize, you can create [indexes](/concepts/indexes/)
-on view models using the [`index` configuration parameter](#indexes). This
+on view models using the [`index` configuration](#indexes). This
 allows you to bypass the need for maintaining complex incremental logic or
 re-running dbt to refresh your models.
 
@@ -420,7 +420,7 @@ performance and make queries against views fast and computationally free.
 #### Materialized views
 
 To materialize a model as a [materialized view](/concepts/views/#materialized-views),
-set the `materialized` configuration parameter to `materialized_view`.
+set the `materialized` configuration to `materialized_view`.
 
 **Filename:** models/materialized_view_a.sql
 ```mzsql
@@ -461,7 +461,7 @@ These results are **incrementally updated** in durable storage — which makes
 them available across clusters — but aren't optimized for performance. To make
 results also available in memory within a [cluster](/concepts/clusters/), you
 can create [indexes](/concepts/indexes/) on materialized view models using the
-[`index` configuration parameter](#indexes).
+[`index` configuration](#indexes).
 
 **Filename:** models/materialized_view_a.sql
 ```mzsql
@@ -488,6 +488,53 @@ As new data arrives, results are **incrementally updated** in durable storage
 and also accessible in memory within the [cluster](/concepts/clusters/) the
 index is created in. Indexes help optimize query performance and make queries
 against materialized views faster.
+
+##### Using refresh strategies
+
+{{< tip >}}
+For guidance and best practices on how to use refresh strategies in Materialize,
+see [Refresh strategies](/sql/create-materialized-view/#refresh-strategies).
+{{</ tip >}}
+
+{{< private-preview />}}
+
+For data that doesn't require up-to-the-second freshness, or that can be
+accessed using different patterns to optimize for performance and cost
+(e.g., hot vs. cold data), you may consider using a non-default
+[refresh strategy](/sql/create-materialized-view/#refresh-strategies).
+
+To tweak the refresh strategy of a materialized view model, use the
+[`refresh_interval` configuration](#configuration-refresh-strategies). As a
+reminder, these models need to be deployed in a [scheduled cluster](/sql/create-cluster/#scheduling),
+so you must also specify a valid scheduled `cluster` using the
+[`cluster` configuration](#configuration).
+
+**Filename:** models/materialized_view_refresh.sql
+```mzsql
+{{ config(materialized='materialized_view', cluster='my_scheduled_cluster', refresh_interval={'at_creation': True, 'every': '1 day', 'aligned_to': '2024-10-22T10:40:33+00:00'}) }}
+
+SELECT
+    col_a, ...
+FROM {{ ref('view_a') }}
+```
+
+The model above will be compiled to the following SQL statement:
+
+```mzsql
+CREATE MATERIALIZED VIEW database.schema.materialized_view_refresh
+IN CLUSTER my_scheduled_cluster
+WITH (
+  -- Refresh at creation, so the view is populated ahead of
+  -- the first user-specified refresh time
+  REFRESH AT CREATION,
+  -- Refresh every day at 10PM UTC
+  REFRESH EVERY '1 day' ALIGNED TO '2024-10-22T10:40:33+00:00'
+) AS
+SELECT ...;
+```
+
+Materialized views configured with a refresh strategy are **not incrementally
+maintained**, and must recompute their results from scratch on every refresh.
 
 ### Sinks
 
@@ -558,14 +605,14 @@ unspecified, the default database for the connection is used.
 
 #### Indexes
 
-Use the `indexes` option to define a list of [indexes](/concepts/indexes/) on
+Use the `indexes` configuration to define a list of [indexes](/concepts/indexes/) on
 `source`, `view`, `table` or `materialized view` materializations. In
 Materialize, [indexes](/concepts/indexes/) on a view maintain view results in
 memory within a [cluster](/concepts/clusters/ "pools of compute resources (CPU,
 memory, and scratch disk space)"). As the underlying data changes, indexes
 **incrementally update** the view results in memory.
 
-Each index option can have the following components:
+Each `index` configuration can have the following components:
 
 Component                            | Value     | Description
 -------------------------------------|-----------|--------------------------------------------------
@@ -587,6 +634,25 @@ Component                            | Value     | Description
 {{ config(materialized='view',
     indexes=[{'default': True}]) }}
 ```
+
+### Configuration: refresh strategies {#configuration-refresh-strategies}
+
+{{< private-preview />}}
+
+**Minimum requirements:** `dbt-materialize` v1.7.3+
+
+Use the `refresh_interval` configuration to define [refresh strategies](#using-refresh-strategies)
+for materialized view models.
+
+The `refresh_interval` configuration can have the following components:
+
+Component       | Value    | Description
+----------------|----------|--------------------------------------------------
+`at`            | `string` | The specific time to refresh the materialized view at, using the [refresh at](/sql/create-materialized-view/#refresh-at) strategy.
+`at_creation`   | `bool`   | Default: `False`. If set to `True`, triggers a first refresh when the materialized view is created.
+`every`         | `string` | The regular interval to refresh the materialized view at, using the [refresh every](/sql/create-materialized-view/#refresh-every) strategy.
+`aligned_to`    | `string` | The _phase_ of the regular interval to refresh the materialized view at, using the [refresh every](/sql/create-materialized-view/#refresh-every) strategy. If unspecified, defaults to the time when the materialized view is created.
+`on_commit`     | `bool`   | Default: `False`. If set to `True`, configures the default [refresh on commit](/sql/create-materialized-view/#refresh-on-commit) strategy. This is equivalent to **not specifying** `refresh_interval` in the configuration block, so we recommend only setting this component for the special case of parametrizing the configuration option (e.g. in macros).
 
 ### Configuration: model contracts and constraints {#configuration-contracts}
 

@@ -148,8 +148,8 @@ WHERE mz_now() <= event_ts + INTERVAL '1' WEEK;
 CREATE MATERIALIZED VIEW mv_refresh_every
 WITH (
   -- Refresh at creation, so the view is populated ahead of
-  -- the first scheduled refresh on Jun 18
-  REFRESH AT '2024-06-17 00:00:00',
+  -- the first user-specified refresh time
+  REFRESH AT CREATION,
   -- Refresh every day at midnight UTC
   REFRESH EVERY '1 day' ALIGNED TO '2024-04-17 00:00:00'
 ) AS
