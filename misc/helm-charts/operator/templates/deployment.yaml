@@ -39,4 +39,4 @@ spec:
         {{- end }}
         - "--environmentd-target-arch={{ .Values.operator.args.environmentdTargetArch }}"
         resources:
-          {{- toYaml .Values.operator.resources | nindent 12 }}
+          {{- toYaml .Values.operator.resources | nindent 10 }}
