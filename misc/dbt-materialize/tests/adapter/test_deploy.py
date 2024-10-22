@@ -284,16 +284,6 @@ class TestRunWithDeploy:
         }
 
     @pytest.fixture(scope="class")
-    def project_config_update(self):
-        return {
-            "vars": {
-                "deployment": {
-                    "default": {"clusters": ["quickstart"], "schemas": ["public"]}
-                }
-            }
-        }
-
-    @pytest.fixture(scope="class")
     def models(self):
         return {
             "test_source.sql": test_source,
@@ -355,16 +345,6 @@ class TestRunWithDeploy:
 
 class TestSinkFail:
     @pytest.fixture(scope="class")
-    def project_config_update(self):
-        return {
-            "vars": {
-                "deployment": {
-                    "default": {"clusters": ["quickstart"], "schemas": ["public"]}
-                }
-            }
-        }
-
-    @pytest.fixture(scope="class")
     def models(self):
         return {
             "test_materialized_view.sql": test_materialized_view,
@@ -383,30 +363,40 @@ class TestSinkFail:
 
 class TestTargetDeploy:
     @pytest.fixture(scope="class")
-    def project_config_update(self):
+    def dbt_profile_target(self):
         return {
-            "vars": {
-                "deployment": {
-                    "default": {
-                        "clusters": ["prod"],
-                        "schemas": ["prod"],
-                    }
-                },
-            }
+            "type": "materialize",
+            "threads": 1,
+            "host": "{{ env_var('DBT_HOST', 'localhost') }}",
+            "user": "materialize",
+            "pass": "password",
+            "database": "materialize",
+            "port": "{{ env_var('DBT_PORT', 6875) }}",
+            "cluster": "prod",
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "model1.sql": "SELECT 1 AS id",
+            "model2.sql": "SELECT 2 AS id",
+            "model3.sql": "SELECT 3 AS id",
         }
 
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
         project.run_sql("DROP CLUSTER IF EXISTS prod CASCADE")
         project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS prod CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql(
+            f"DROP SCHEMA IF EXISTS {project.test_schema}_dbt_deploy CASCADE"
+        )
 
     def test_dbt_deploy(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
-        project.run_sql("CREATE SCHEMA prod")
-        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        schema_name = f"{project.test_schema}"
+        deployment_schema_name = f"{project.test_schema}_dbt_deploy"
+
+        run_dbt(["run-operation", "deploy_init"])
 
         before_clusters = dict(
             project.run_sql(
@@ -416,7 +406,9 @@ class TestTargetDeploy:
         )
         before_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                f"""
+                SELECT name, id FROM mz_schemas WHERE name IN ('{schema_name}', '{deployment_schema_name}')
+                """,
                 fetch="all",
             )
         )
@@ -431,15 +423,17 @@ class TestTargetDeploy:
         )
         after_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                f"""
+                SELECT name, id FROM mz_schemas WHERE name IN ('{schema_name}', '{deployment_schema_name}')
+                """,
                 fetch="all",
             )
         )
 
         assert before_clusters["prod"] != after_clusters["prod_dbt_deploy"]
         assert before_clusters["prod_dbt_deploy"] != after_clusters["prod"]
-        assert before_schemas["prod"] != after_schemas["prod_dbt_deploy"]
-        assert before_schemas["prod"] != after_schemas["prod_dbt_deploy"]
+        assert before_schemas[schema_name] != after_schemas[deployment_schema_name]
+        assert before_schemas[deployment_schema_name] != after_schemas[schema_name]
 
         run_dbt(["run-operation", "deploy_promote"])
 
@@ -451,21 +445,24 @@ class TestTargetDeploy:
         )
         after_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                f"""
+                SELECT name, id FROM mz_schemas WHERE name IN ('{schema_name}', '{deployment_schema_name}')
+                """,
                 fetch="all",
             )
         )
 
         assert before_clusters["prod"] == after_clusters["prod_dbt_deploy"]
         assert before_clusters["prod_dbt_deploy"] == after_clusters["prod"]
-        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
-        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
+        assert before_schemas[schema_name] == after_schemas[deployment_schema_name]
+        assert before_schemas[deployment_schema_name] == after_schemas[schema_name]
 
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
-        project.run_sql("CREATE SCHEMA prod")
-        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        schema_name = f"{project.test_schema}"
+        deployment_schema_name = f"{project.test_schema}_dbt_deploy"
+
+        run_dbt(["run-operation", "deploy_init"])
 
         before_clusters = dict(
             project.run_sql(
@@ -475,7 +472,9 @@ class TestTargetDeploy:
         )
         before_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                f"""
+                SELECT name, id FROM mz_schemas WHERE name IN ('{schema_name}', '{deployment_schema_name}')
+                """,
                 fetch="all",
             )
         )
@@ -490,33 +489,35 @@ class TestTargetDeploy:
         )
         after_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                f"""
+                SELECT name, id FROM mz_schemas WHERE name IN ('{schema_name}', '{deployment_schema_name}')
+                """,
                 fetch="all",
             )
         )
 
         assert before_clusters["prod"] == after_clusters["prod_dbt_deploy"]
         assert before_clusters["prod_dbt_deploy"] == after_clusters["prod"]
-        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
-        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
+        assert before_schemas[schema_name] == after_schemas[deployment_schema_name]
+        assert before_schemas[deployment_schema_name] == after_schemas[schema_name]
 
     def test_dbt_deploy_missing_deployment_cluster(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE SCHEMA prod")
-        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+
+        # Do not run deploy_init to simulate a missing deployment cluster
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
     def test_dbt_deploy_missing_deployment_schema(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
-        project.run_sql("CREATE SCHEMA prod")
+
+        # Do not run deploy_init to simulate a missing deployment schema
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
     def test_fails_on_unmanaged_cluster(self, project):
         project.run_sql("CREATE CLUSTER prod REPLICAS ()")
-        project.run_sql("CREATE SCHEMA prod")
 
         run_dbt(["run-operation", "deploy_init"], expect_pass=False)
 
@@ -524,7 +525,6 @@ class TestTargetDeploy:
         project.run_sql(
             "CREATE CLUSTER prod (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))"
         )
-        project.run_sql("CREATE SCHEMA prod")
 
         run_dbt(["run-operation", "deploy_init"])
 
@@ -543,7 +543,7 @@ class TestTargetDeploy:
 
     def test_dbt_deploy_init_and_cleanup(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE SCHEMA prod")
+        deployment_schema_name = f"{project.test_schema}_dbt_deploy"
 
         run_dbt(["run-operation", "deploy_init"])
 
@@ -556,8 +556,10 @@ class TestTargetDeploy:
         assert replication_factor == "1"
 
         result = project.run_sql(
-            "SELECT count(*) = 1 FROM mz_schemas WHERE name = 'prod_dbt_deploy'",
-            fetch="one",
+            f"""
+            SELECT count(*) = 1 FROM mz_schemas WHERE name = '{deployment_schema_name}'
+            """,
+            fetch="all",
         )
         assert bool(result[0])
 
@@ -570,15 +572,15 @@ class TestTargetDeploy:
         assert bool(result[0])
 
         result = project.run_sql(
-            "SELECT count(*) = 0 FROM mz_schemas WHERE name = 'prod_dbt_deploy'",
-            fetch="one",
+            f"""
+            SELECT count(*) = 0 FROM mz_schemas WHERE name = '{deployment_schema_name}'
+            """,
+            fetch="all",
         )
         assert bool(result[0])
 
     def test_cluster_contains_objects(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE SCHEMA prod")
-        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
 
         project.run_sql(
@@ -596,12 +598,11 @@ class TestTargetDeploy:
         )
 
     def test_schema_contains_objects(self, project):
+        deployment_schema_name = f"{project.test_schema}_dbt_deploy"
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE SCHEMA prod")
-        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
-
-        project.run_sql("CREATE VIEW prod_dbt_deploy.view AS SELECT 1")
+        project.run_sql(f"CREATE SCHEMA {deployment_schema_name}")
+        project.run_sql(f"CREATE VIEW {deployment_schema_name}.view AS SELECT 1")
 
         run_dbt(["run-operation", "deploy_init"], expect_pass=False)
         run_dbt(
@@ -616,19 +617,32 @@ class TestTargetDeploy:
 
 class TestLagTolerance:
     @pytest.fixture(scope="class")
-    def project_config_update(self):
+    def dbt_profile_target(self):
         return {
-            "vars": {
-                "deployment": {
-                    "default": {"clusters": ["quickstart"], "schemas": ["public"]}
-                }
-            }
+            "type": "materialize",
+            "threads": 1,
+            "host": "{{ env_var('DBT_HOST', 'localhost') }}",
+            "user": "materialize",
+            "pass": "password",
+            "database": "materialize",
+            "port": "{{ env_var('DBT_PORT', 6875) }}",
+            "cluster": "quickstart",
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "model1.sql": "SELECT 1 AS id",
+            "model2.sql": "SELECT 2 AS id",
+            "model3.sql": "SELECT 3 AS id",
         }
 
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
         project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
+        project.run_sql(
+            f"DROP SCHEMA IF EXISTS {project.test_schema}_dbt_deploy CASCADE"
+        )
 
     def test_deploy_await_custom_lag_threshold(self, project):
         run_dbt(["run-operation", "deploy_init"])
@@ -672,6 +686,69 @@ class TestLagTolerance:
         assert len(result) > 0 and result[0].status == "success"
 
 
+class TestDeploymentEdgeCases:
+    @pytest.fixture(scope="class")
+    def dbt_profile_target(self):
+        return {
+            "type": "materialize",
+            "threads": 1,
+            "host": "{{ env_var('DBT_HOST', 'localhost') }}",
+            "user": "materialize",
+            "pass": "password",
+            "database": "materialize",
+            "port": "{{ env_var('DBT_PORT', 6875) }}",
+            "cluster": "prod",
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "model1.sql": "SELECT 1 AS id",
+            "model2.sql": "{{ config(cluster='prod') }} SELECT 2 AS id",
+        }
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS prod CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql(
+            f"DROP SCHEMA IF EXISTS {project.test_schema}_dbt_deploy CASCADE"
+        )
+
+    def test_deploy_init_with_existing_deployment_cluster(self, project, capsys):
+        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '2'")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        captured = capsys.readouterr()
+        output = captured.out
+
+        assert "Deployment cluster prod_dbt_deploy already exists" in output
+
+    def test_deploy_init_with_different_cluster_sizes(self, project):
+        project.run_sql("CREATE CLUSTER prod SIZE = '4'")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        size = project.run_sql(
+            "SELECT size FROM mz_clusters WHERE name = 'prod_dbt_deploy'", fetch="one"
+        )[0]
+
+        assert (
+            size == "4"
+        ), "Deployment cluster should have the same size as the production cluster"
+
+    def test_deploy_cleanup_idempotency(self, project):
+        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        run_dbt(["run-operation", "deploy_init"])
+
+        run_dbt(["run-operation", "deploy_cleanup"])
+
+        result = run_dbt(["run-operation", "deploy_cleanup"])
+        assert result[0].status == "success"
+
+
 class TestEndToEndDeployment:
     @pytest.fixture(scope="class")
     def dbt_profile_target(self):
@@ -696,7 +773,9 @@ class TestEndToEndDeployment:
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
         project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
+        project.run_sql(
+            f"DROP SCHEMA IF EXISTS {project.test_schema}_dbt_deploy CASCADE"
+        )
         project.run_sql("DROP CLUSTER IF EXISTS sinks_cluster CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS sinks_schema CASCADE")
         project.run_sql("DROP TABLE IF EXISTS source_table")
@@ -712,9 +791,30 @@ class TestEndToEndDeployment:
         run_dbt(["run"])
 
         created_schema = project.created_schemas[0]
+        sinks_schema = f"{created_schema}_sinks_schema"
 
-        project_config = f"{{deployment: {{default: {{clusters: ['quickstart'], schemas: ['{created_schema}']}}}}}}"
-        project_config_deploy = f"{{deployment: {{default: {{clusters: ['quickstart'], schemas: ['{created_schema}']}}}}, deploy: True}}"
+        project_config = f"""
+        {{
+            deployment: {{
+                default: {{
+                    exclude_clusters: ['sinks_cluster'],
+                    exclude_schemas: ['{sinks_schema}']
+                }}
+            }}
+        }}
+        """
+
+        project_config_deploy = f"""
+        {{
+            deployment: {{
+                default: {{
+                    exclude_clusters: ['sinks_cluster'],
+                    exclude_schemas: ['{sinks_schema}']
+                }}
+            }},
+            deploy: True
+        }}
+        """
 
         # Validate the initial sink result
         project.run_sql(
@@ -818,6 +918,69 @@ class TestEndToEndDeployment:
         ), "Sink's view ID should be different after deployment"
 
         run_dbt(["run-operation", "deploy_cleanup", "--vars", project_config])
+
+
+class TestDeployGetObjects:
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "vars": {
+                "deployment": {
+                    "default": {
+                        "exclude_clusters": ["excluded_cluster"],
+                        "exclude_schemas": ["excluded_schema"],
+                    }
+                }
+            }
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "model1.sql": "SELECT 1 AS id",
+            "model2.sql": "{{ config(schema='test_schema') }} SELECT 2 AS id",
+            "model3.sql": "{{ config(cluster='test_cluster') }} SELECT 3 AS id",
+        }
+
+    def test_deploy_get_objects(self, project, capsys):
+        run_dbt(["run-operation", "deploy_get_objects", "--args", "{dry_run: true}"])
+
+        captured = capsys.readouterr()
+        output = captured.out
+
+        assert (
+            "DRY RUN: Excluded clusters from deployment: ['excluded_cluster']" in output
+        )
+        assert (
+            "DRY RUN: Excluded schemas from deployment: ['excluded_schema']" in output
+        )
+        assert "DRY RUN: Final cluster list for deployment: ['test_cluster']" in output
+        assert "DRY RUN: Final schema list for deployment: ['" in output
+        assert "_test_deploy_test_schema'" in output
+        assert "_test_deploy']" in output
+
+    def test_deploy_get_objects_no_exclusions(self, project, capsys):
+        project_config_no_excludes = "{deployment: {default: {}}}"
+        run_dbt(
+            [
+                "run-operation",
+                "deploy_get_objects",
+                "--args",
+                "{dry_run: true}",
+                "--vars",
+                project_config_no_excludes,
+            ]
+        )
+
+        captured = capsys.readouterr()
+        output = captured.out
+
+        assert "DRY RUN: Excluded clusters from deployment: []" in output
+        assert "DRY RUN: Excluded schemas from deployment: []" in output
+        assert "DRY RUN: Final cluster list for deployment: ['test_cluster']" in output
+        assert "DRY RUN: Final schema list for deployment: ['" in output
+        assert "_test_deploy_test_schema'" in output
+        assert "_test_deploy']" in output
 
 
 def run_with_retry(project, sql, expected_count, retries=5, delay=3, fetch="one"):
