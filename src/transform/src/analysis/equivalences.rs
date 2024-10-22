@@ -293,13 +293,15 @@ pub struct EquivalenceClasses {
     /// The first element should be the "canonical" simplest element, that any other element
     /// can be replaced by.
     /// These classes are unified whenever possible, to minimize the number of classes.
+    /// They are only guaranteed to form an equivalence relation after a call to `minimimize`,
+    /// which refreshes both `self.classes` and `self.remap`.
     pub classes: Vec<Vec<MirScalarExpr>>,
 
     /// An expression simplification map.
     ///
     /// This map reflects an equivalence relation based on a prior version of `self.classes`.
     /// As users may add to `self.classes`, `self.remap` may become stale. We refresh `remap`
-    /// in `self.refresh()`, to the equivalence relation that derives from `self.classes`.
+    /// only in `self.refresh()`, to the equivalence relation that derives from `self.classes`.
     remap: BTreeMap<MirScalarExpr, MirScalarExpr>,
 }
 
@@ -349,13 +351,16 @@ impl EquivalenceClasses {
 
     /// Restore equivalence relation structure to `self.classes` and refresh `self.remap`.
     ///
-    /// This method takes roughly linear time, and returns true iff `remap` has changed.
+    /// This method takes roughly linear time, and returns true iff `self.remap` has changed.
+    /// This is the only method that changes `self.remap`, and is a perfect place to decide
+    /// whether the equivalence classes it represents have experienced any changes since the
+    /// last refresh.
     fn refresh(&mut self) -> bool {
         self.tidy();
 
         // remap may already be the correct answer, and if so we should avoid the work of rebuilding it.
         // If it contains the same number of expressions as `self.classes`, and for every expression in
-        // `self.classes` the two agree on the representative, the are identical.
+        // `self.classes` the two agree on the representative, they are identical.
         if self.remap.len() == self.classes.iter().map(|c| c.len()).sum::<usize>()
             && self
                 .classes
@@ -413,7 +418,7 @@ impl EquivalenceClasses {
         // This should strictly reduce complexity, and reach a fixed point.
         // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
 
-        // Ensure `self.classes` and `self.refresh` are equivalence relations.
+        // Ensure `self.classes` and `self.remap` are equivalence relations.
         // Users are allowed to mutate `self.classes`, so we must perform this normalization at least once.
         self.refresh();
 
@@ -543,8 +548,7 @@ impl EquivalenceClasses {
         }
         self.classes.extend(to_add);
 
-        // Tidy up classes, restore representative.
-        // Specifically, we want to remove literal errors before restoring the equivalence class structure.
+        // 3. Restore equivalence relation structure and observe if any changes result.
         self.refresh()
     }
 
@@ -668,6 +672,9 @@ impl EquivalenceClasses {
     }
 
     /// Perform any exact replacement for `expr`, report if it had an effect.
+    ///
+    /// This method is only used internal to `Equivalences`, and should eventually be replaced
+    /// by the use of `self.remap` or something akin to it. The linear scan is not appropriate.
     fn replace(&self, expr: &mut MirScalarExpr) -> bool {
         for class in self.classes.iter() {
             // TODO: If `class` is sorted We only need to iterate through "simpler" expressions;
@@ -683,6 +690,9 @@ impl EquivalenceClasses {
     }
 
     /// Perform any simplification, report if effective.
+    ///
+    /// This method is only used internal to `Equivalences`, and should eventually be replaced
+    /// by the use of `self.remap` or something akin to it. The linear scan is not appropriate.
     fn reduce_expr(&self, expr: &mut MirScalarExpr) -> bool {
         let mut simplified = false;
         simplified = simplified || self.reduce_child(expr);
@@ -691,6 +701,9 @@ impl EquivalenceClasses {
     }
 
     /// Perform any simplification on children, report if effective.
+    ///
+    /// This method is only used internal to `Equivalences`, and should eventually be replaced
+    /// by the use of `self.remap` or something akin to it. The linear scan is not appropriate.
     fn reduce_child(&self, expr: &mut MirScalarExpr) -> bool {
         let mut simplified = false;
         match expr {
