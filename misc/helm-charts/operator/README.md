@@ -41,8 +41,12 @@ The following table lists the configurable parameters of the Materialize operato
 | `environmentd.nodeSelector` |  | ``{}`` |
 | `namespace.create` |  | ``false`` |
 | `namespace.name` |  | ``"materialize"`` |
-| `networkPolicies.enabled` |  | ``false`` |
-| `networkPolicies.useNativeKubernetesPolicy` |  | ``true`` |
+| `networkPolicies.enabled` | Whether to install any network policies. | ``true`` |
+| `networkPolicies.internal.enabled` | Whether to install network policies allowing communication between Materialize pods. | ``true`` |
+| `networkPolicies.ingress.enabled` | Whether to install network policies allowing communication from external locations to environmentd or balancerd SQL or HTTP ports. | ``true`` |
+| `networkPolicies.ingress.cidrs` | List of CIDR blocks to allow to reach environmentd or balancerd. | ``["0.0.0.0/0"]`` |
+| `networkPolicies.egress.enabled` | Whether to install network policies allowing communication from Materialize pods to external sources and sinks. | ``true`` |
+| `networkPolicies.egress.cidrs` | List of CIDR blocks to allow Materialize pods to reach for sources and sinks. | ``["0.0.0.0/0"]`` |
 | `observability.enabled` |  | ``false`` |
 | `observability.prometheus.enabled` |  | ``false`` |
 | `operator.args.cloudProvider` |  | ``"local"`` |
@@ -87,7 +91,17 @@ To enable observability features, set `observability.enabled=true`. This will cr
 
 ### Network Policies
 
-Network policies can be enabled by setting `networkPolicies.enabled=true`. By default, the chart uses native Kubernetes network policies. To use Cilium network policies instead, set `networkPolicies.useNativeKubernetesPolicy=false`.
+Network policies can be enabled by setting `networkPolicies.enabled=true`.
+
+To enable policies for internal communication between Materialize pods, set `networkPolicies.internal.enabled=true`.
+
+To enable policies for ingress HTTP or SQL communication to Materialize environmentd or balancerd pods, set `networkPolicies.ingress.enabled=true`.
+
+Ingress policies can configure the list of CIDR blocks to allow with `networkPolicies.ingress.cidrs`.
+
+To enable policies for egress communication from Materialize pods to sources and sinks, set `networkPolicies.egress.enabled=true`.
+
+Egress policies can configure the list of CIDR blocks to allow with `networkPolicies.ingress.cidrs`.
 
 ## Troubleshooting
 

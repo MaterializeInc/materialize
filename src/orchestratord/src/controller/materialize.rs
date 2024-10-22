@@ -50,6 +50,8 @@ pub struct Args {
     clusterd_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long, default_value = "always", arg_enum)]
     image_pull_policy: KubernetesImagePullPolicy,
+    #[clap(flatten)]
+    network_policies: NetworkPolicyConfig,
 
     #[clap(long, default_value_t = default_cluster_replica_sizes())]
     environmentd_cluster_replica_sizes: String,
@@ -133,6 +135,24 @@ pub struct AwsInfo {
     aws_secrets_controller_tags: Vec<String>,
     #[clap(long)]
     environmentd_availability_zones: Option<Vec<String>>,
+}
+
+#[derive(clap::Parser)]
+pub struct NetworkPolicyConfig {
+    #[clap(long = "network-policies-internal-enabled", default_value = "false")]
+    internal_enabled: bool,
+
+    #[clap(long = "network-policies-ingress-enabled", default_value = "false")]
+    ingress_enabled: bool,
+
+    #[clap(long = "network-policies-ingress-cidrs")]
+    ingress_cidrs: Vec<String>,
+
+    #[clap(long = "network-policies-egress-enabled", default_value = "false")]
+    egress_enabled: bool,
+
+    #[clap(long = "network-policies-egress-cidrs")]
+    egress_cidrs: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
