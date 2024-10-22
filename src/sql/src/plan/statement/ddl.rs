@@ -1730,6 +1730,11 @@ pub fn plan_create_table_from_source(
         plan_utils::maybe_rename_columns(format!("source table {}", name), &mut desc, col_names)?;
     }
 
+    let names: Vec<_> = desc.iter_names().cloned().collect();
+    if let Some(dup) = names.iter().duplicates().next() {
+        sql_bail!("column {} specified more than once", dup.as_str().quoted());
+    }
+
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
 
     // Allow users to specify a timeline. If they do not, determine a default
