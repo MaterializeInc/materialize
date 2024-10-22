@@ -65,7 +65,7 @@ CREATE DEFAULT INDEX ON t
 query T multiline
 SELECT redacted_create_sql FROM mz_indexes WHERE name = 't_primary_idx'
 ----
-CREATE INDEX t_primary_idx IN CLUSTER [u1] ON materialize.public.t (i)
+CREATE INDEX t_primary_idx IN CLUSTER [u1] ON [u3 AS materialize.public.t] (i)
 EOF
 
 statement ok
