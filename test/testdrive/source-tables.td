@@ -12,7 +12,7 @@ $ set-arg-default single-replica-cluster=quickstart
 
 # TODO(def-) Remove when database-issues#8515 and database-issues#8526 are fixed
 $ skip-if
-SELECT true
+SELECT '${arg.default-replica-size}' = '8'
 
 #
 # Validate feature flag
