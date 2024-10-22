@@ -1533,6 +1533,7 @@ generate_extracted_config!(
     (TextColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (Timeline, String),
+    (IgnoreKeys, bool),
     (Details, String)
 );
 
@@ -1562,6 +1563,7 @@ pub fn plan_create_table_from_source(
         exclude_columns,
         details,
         timeline,
+        ignore_keys,
         seen: _,
     } = with_options.clone().try_into()?;
 
@@ -1721,7 +1723,7 @@ pub fn plan_create_table_from_source(
         format,
         key_desc,
         value_desc,
-        None,
+        ignore_keys,
         include_metadata,
         metadata_columns_desc,
         source_connection,

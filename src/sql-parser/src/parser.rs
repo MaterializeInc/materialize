@@ -4541,7 +4541,7 @@ impl<'a> Parser<'a> {
         &mut self,
     ) -> Result<TableFromSourceOption<Raw>, ParserError> {
         let option = match self.expect_one_of_keywords(&[TEXT, EXCLUDE, IGNORE, DETAILS])? {
-            ref keyword @ (TEXT | IGNORE | EXCLUDE) => {
+            ref keyword @ (TEXT | EXCLUDE) => {
                 self.expect_keyword(COLUMNS)?;
 
                 let _ = self.consume_token(&Token::Eq);
@@ -4557,8 +4557,7 @@ impl<'a> Parser<'a> {
                 TableFromSourceOption {
                     name: match *keyword {
                         TEXT => TableFromSourceOptionName::TextColumns,
-                        // IGNORE is historical syntax for this option.
-                        EXCLUDE | IGNORE => TableFromSourceOptionName::ExcludeColumns,
+                        EXCLUDE => TableFromSourceOptionName::ExcludeColumns,
                         _ => unreachable!(),
                     },
                     value,
@@ -4568,6 +4567,31 @@ impl<'a> Parser<'a> {
                 name: TableFromSourceOptionName::Details,
                 value: self.parse_optional_option_value()?,
             },
+            IGNORE => {
+                match self.expect_one_of_keywords(&[COLUMNS, KEYS])? {
+                    COLUMNS => {
+                        let _ = self.consume_token(&Token::Eq);
+
+                        let value =
+                            self.parse_option_sequence(Parser::parse_identifier)?
+                                .map(|inner| {
+                                    WithOptionValue::Sequence(
+                                        inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
+                                    )
+                                });
+                        TableFromSourceOption {
+                            // IGNORE is historical syntax for this option.
+                            name: TableFromSourceOptionName::ExcludeColumns,
+                            value,
+                        }
+                    }
+                    KEYS => TableFromSourceOption {
+                        name: TableFromSourceOptionName::IgnoreKeys,
+                        value: self.parse_optional_option_value()?,
+                    },
+                    _ => unreachable!(),
+                }
+            }
             _ => unreachable!(),
         };
         Ok(option)
