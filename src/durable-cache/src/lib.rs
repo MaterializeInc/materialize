@@ -267,6 +267,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
     async fn durable_cache() {
         let persist = PersistClientCache::new_no_metrics();
         let persist = persist
