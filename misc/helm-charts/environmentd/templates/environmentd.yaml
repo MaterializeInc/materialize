@@ -7,31 +7,27 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-{{- if .Values.materializeEnvironments }}
-{{- range .Values.materializeEnvironments }}
----
 apiVersion: materialize.cloud/v1alpha1
 kind: Materialize
 metadata:
-  name: {{ .name }}
+  name: {{ .Values.environment.name }}
+  namespace: {{ .Values.namespace.name }}
 spec:
-  environmentdImageRef: {{ .environmentdImageRef }}
-  {{- if .environmentdExtraArgs }}
+  environmentdImageRef: {{ .Values.environment.environmentdImageRef }}
+  {{- if .Values.environment.environmentdExtraArgs }}
   environmentdExtraArgs:
-    {{- toYaml .environmentdExtraArgs | nindent 4 }}
+    {{- toYaml .Values.environment.environmentdExtraArgs | nindent 4 }}
   {{- end }}
-  {{- if .environmentdCpuAllocation }}
-  environmentdCpuAllocation: {{ .environmentdCpuAllocation }}
+  {{- if .Values.environment.environmentdCpuAllocation }}
+  environmentdCpuAllocation: {{ .Values.environment.environmentdCpuAllocation }}
   {{- end }}
-  {{- if .environmentdMemoryAllocation }}
-  environmentdMemoryAllocation: {{ .environmentdMemoryAllocation }}
+  {{- if .Values.environment.environmentdMemoryAllocation }}
+  environmentdMemoryAllocation: {{ .Values.environment.environmentdMemoryAllocation }}
   {{- end }}
-  {{- if .requestRollout }}
-  requestRollout: {{ .requestRollout }}
+  {{- if .Values.environment.requestRollout }}
+  requestRollout: {{ .Values.environment.requestRollout }}
   {{- end }}
-  {{- if .forceRollout }}
-  forceRollout: {{ .forceRollout }}
+  {{- if .Values.environment.forceRollout }}
+  forceRollout: {{ .Values.environment.forceRollout }}
   {{- end }}
-  inPlaceRollout: {{ .inPlaceRollout }}
-{{- end }}
-{{- end }}
+  inPlaceRollout: {{ .Values.environment.inPlaceRollout }}

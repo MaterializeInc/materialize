@@ -4,7 +4,7 @@
 
 Materialize Kubernetes Environmentd Helm Chart
 
-This Helm chart deploys Materialize environments on a Kubernetes cluster. It requires the Materialize operator to be installed first.
+This Helm chart deploys a single Materialize environment on a Kubernetes cluster. It requires the Materialize operator to be installed first.
 
 ## Prerequisites
 
@@ -14,20 +14,28 @@ This Helm chart deploys Materialize environments on a Kubernetes cluster. It req
 
 ## Installing the Chart
 
-To install the chart with the release name `my-materialize-environments`:
+To install the chart for a production environment:
 
 ```shell
-helm install my-materialize-environments materialize/misc/helm-charts/environmentd
+helm install prod-env materialize/misc/helm-charts/environmentd \
+  --set environment.name=prod-environment
 ```
 
-This command deploys Materialize environments on the Kubernetes cluster with default configuration. The [Parameters](#parameters) section lists the parameters that can be configured during installation.
+For a staging environment:
+
+```shell
+helm install staging-env materialize/misc/helm-charts/environmentd \
+  --set environment.name=staging-environment
+```
+
+Each installation creates a separate environment with its own configuration. The [Parameters](#parameters) section lists the parameters that can be configured during installation.
 
 ## Uninstalling the Chart
 
-To uninstall/delete the `my-materialize-environments` deployment:
+To uninstall/delete an environment:
 
 ```shell
-helm delete my-materialize-environments
+helm delete prod-env
 ```
 
 This command removes all the Kubernetes components associated with the chart and deletes the release.
@@ -38,55 +46,99 @@ The following table lists the configurable parameters of the Materialize environ
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `global.operatorNamespace` |  | ``"materialize-system"`` |
-| `materializeEnvironments[0].environmentdCpuAllocation` |  | ``"1"`` |
-| `materializeEnvironments[0].environmentdExtraArgs[0]` |  | ``"--log-filter=info"`` |
-| `materializeEnvironments[0].environmentdImageRef` |  | ``"materialize/environmentd:v0.119.2"`` |
-| `materializeEnvironments[0].environmentdMemoryAllocation` |  | ``"1Gi"`` |
-| `materializeEnvironments[0].forceRollout` |  | ``"33333333-3333-3333-3333-333333333333"`` |
-| `materializeEnvironments[0].inPlaceRollout` |  | ``false`` |
-| `materializeEnvironments[0].name` |  | ``"default-environment"`` |
-| `materializeEnvironments[0].requestRollout` |  | ``"22222222-2222-2222-2222-222222222222"`` |
-| `materializeEnvironments[0].secret.metadataBackendUrl` |  | ``"postgres://user:pass@cockroachdb-public.cockroachdb.svc.cluster.local:26257/db?sslmode=verify-full&sslrootcert_inline=ca_cert"`` |
-| `materializeEnvironments[0].secret.name` |  | ``"materialize-backend-12345678-1234-1234-1234-123456789012"`` |
-| `materializeEnvironments[0].secret.persistBackendUrl` |  | ``"s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.minio.svc.cluster.local%3A9000&region=minio"`` |
+| `environment.environmentdCpuAllocation` |  | ``"1"`` |
+| `environment.environmentdExtraArgs[0]` |  | ``"--log-filter=info"`` |
+| `environment.environmentdImageRef` |  | ``"materialize/environmentd:v0.119.2"`` |
+| `environment.environmentdMemoryAllocation` |  | ``"1Gi"`` |
+| `environment.forceRollout` |  | ``"33333333-3333-3333-3333-333333333333"`` |
+| `environment.inPlaceRollout` |  | ``false`` |
+| `environment.name` |  | ``"default-environment"`` |
+| `environment.requestRollout` |  | ``"22222222-2222-2222-2222-222222222222"`` |
+| `environment.secret.metadataBackendUrl` |  | ``"postgres://user:pass@cockroachdb-public.cockroachdb.svc.cluster.local:26257/db?sslmode=verify-full&sslrootcert_inline=ca_cert"`` |
+| `environment.secret.persistBackendUrl` |  | ``"s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.minio.svc.cluster.local%3A9000&region=minio"`` |
 | `namespace.create` |  | ``true`` |
 | `namespace.name` |  | ``"materialize-environment"`` |
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example:
 
 ```shell
-helm install my-materialize-environments \
-  --set materializeEnvironments[0].name=custom-env \
-  materialize/materialize-environmentd
+helm install prod-env materialize/materialize-environmentd \
+  --set environment.name=prod \
+  --set environment.environmentdImageRef=materialize/environmentd:v1.0.0
 ```
 
 Alternatively, a YAML file that specifies the values for the parameters can be provided while installing the chart. For example:
 
 ```shell
-helm install my-materialize-environments -f values.yaml materialize/materialize-environmentd
+helm install prod-env -f prod-values.yaml materialize/materialize-environmentd
 ```
 
 ## Configuration and Installation Details
 
-### Multiple Environments
+### Namespace Configuration
 
-You can define multiple Materialize environments by adding more entries to the `materializeEnvironments` list in your `values.yaml` file or by using the `--set` flag multiple times.
+By default, the chart creates a namespace called `materialize-environment`. You can customize this using the `namespace.name` parameter:
+
+```shell
+helm install prod-env . --set namespace.name=custom-namespace
+```
 
 ### Resource Allocation
 
-You can specify CPU and memory allocation for each environment using the `environmentdCpuAllocation` and `environmentdMemoryAllocation` parameters.
+You can specify CPU and memory allocation for the environment using the `environment.environmentdCpuAllocation` and `environment.environmentdMemoryAllocation` parameters:
+
+```shell
+helm install prod-env . \
+  --set environment.environmentdCpuAllocation=2 \
+  --set environment.environmentdMemoryAllocation=2Gi
+```
 
 ### Rollout Configuration
 
-Use the `requestRollout`, `forceRollout`, and `inPlaceRollout` parameters to control how updates to your environments are rolled out.
+Control environment updates using the rollout parameters:
+- `environment.requestRollout`: Request a rolling update
+- `environment.forceRollout`: Force an immediate update
+- `environment.inPlaceRollout`: Perform an in-place update
+
+### Secret Configuration
+
+The chart automatically creates a secret named `materialize-backend-{environment.name}` containing:
+- `metadata_backend_url`: Database connection URL
+- `persist_backend_url`: Storage backend URL
+
+## Managing Multiple Environments
+
+To manage multiple environments, create separate installations of the chart:
+
+```shell
+# Create production environment
+helm install prod-env . \
+  --set environment.name=prod \
+  --set environment.environmentdCpuAllocation=4
+
+# Create staging environment
+helm install staging-env . \
+  --set environment.name=staging \
+  --set environment.environmentdCpuAllocation=2
+
+# Create development environment
+helm install dev-env . \
+  --set environment.name=dev \
+  --set environment.environmentdCpuAllocation=1
+```
+
+This approach allows independent lifecycle management for each environment.
 
 ## Troubleshooting
 
-If you encounter issues with Materialize environments, check the environment logs:
+To check the status of an environment:
 
 ```shell
-kubectl logs -l app.kubernetes.io/name=materialize-environmentd
+# Get environment status
+kubectl get materialize -n materialize-environment
+
+# Check environment logs
+kubectl logs -l app.kubernetes.io/name=materialize-environmentd -n materialize-environment
 ```
 
 For more detailed information on using and troubleshooting Materialize environments, refer to the [Materialize documentation](https://materialize.com/docs).
