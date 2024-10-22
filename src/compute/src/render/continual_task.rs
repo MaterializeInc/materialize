@@ -107,6 +107,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
@@ -691,9 +692,12 @@ trait TimesExtract<G: Scope, D, R> {
     /// It is essentially the same as the following, but without cloning
     /// everything in the input.
     ///
-    /// ```no_run
+    /// ```ignore
     /// input.map(|(_data, ts, diff)| ((), ts, diff))
     /// ```
+    ///
+    /// The output may be partially consolidated, but no consolidation
+    /// guarantees are made.
     fn times_extract(&self, name: &str) -> (Collection<G, D, R>, Collection<G, (), R>);
 }
 
@@ -707,39 +711,23 @@ where
         let name = format!("ct_times_extract({})", name);
         let mut builder = OperatorBuilder::new(name, self.scope());
         let (mut passthrough, passthrough_stream) = builder.new_output();
-        let (mut times, times_stream) = builder.new_output();
+        let (mut times, times_stream) = builder.new_output::<ConsolidatingContainerBuilder<_>>();
         let mut input = builder.new_input(&self.inner, Pipeline);
         builder.set_notify(false);
         builder.build(|_caps| {
-            // We need to drain but iteration order doesn't matter. A BTreeMap
-            // would also be fine but slightly wasteful.
-            #[allow(clippy::disallowed_types)]
-            let mut times_hash = std::collections::HashMap::<_, R>::new();
-
             let mut passthrough_buf = Vec::new();
-            let mut times_buf = Vec::new();
             move |_frontiers| {
                 let mut passthrough = passthrough.activate();
                 let mut times = times.activate();
                 while let Some((cap, data)) = input.next() {
                     data.swap(&mut passthrough_buf);
-                    for (_data, ts, diff) in &passthrough_buf {
-                        if let Some(d) = times_hash.get_mut(ts) {
-                            d.plus_equals(diff);
-                        } else {
-                            times_hash.insert(*ts, diff.clone());
-                        };
-                    }
-                    let times_iter = times_hash
-                        .drain()
-                        // Silly to emit zero diffs.
-                        .filter(|(_, diff)| !diff.is_zero())
-                        .map(|(ts, diff)| ((), ts, diff));
-                    times_buf.extend(times_iter);
+                    let times_iter = passthrough_buf
+                        .iter()
+                        .map(|(_data, ts, diff)| ((), *ts, diff.clone()));
+                    times.session_with_builder(&cap).give_iterator(times_iter);
                     passthrough
                         .session(&cap)
                         .give_container(&mut passthrough_buf);
-                    times.session(&cap).give_container(&mut times_buf);
                 }
             }
         });
