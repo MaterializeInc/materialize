@@ -12,7 +12,9 @@ $ schema-registry-wait topic=sql-server.test.dbo.transaction_table1
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE transaction_table1
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.transaction_table1')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.transaction_table1');
+
+> CREATE TABLE transaction_table1_tbl FROM SOURCE transaction_table1 (REFERENCE "sql-server.test.dbo.transaction_table1")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -23,7 +25,9 @@ $ schema-registry-wait topic=sql-server.test.dbo.transaction_table2
   );
 
 > CREATE SOURCE transaction_table2
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.transaction_table2')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.transaction_table2');
+
+> CREATE TABLE transaction_table2_tbl FROM SOURCE transaction_table2 (REFERENCE "sql-server.test.dbo.transaction_table2")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -35,7 +39,7 @@ USE test;
 BEGIN TRANSACTION INSERT INTO transaction_table1 VALUES ('t1-trans3-event1'); INSERT INTO transaction_table2 VALUES ('t2-trans3-event1'); INSERT INTO transaction_table1 VALUES ('t1-trans3-event2'); INSERT INTO transaction_table2 VALUES ('t2-trans3-event2'); COMMIT;
 BEGIN TRANSACTION INSERT INTO transaction_table1 VALUES ('t1-trans4-event1'); INSERT INTO transaction_table2 VALUES ('t2-trans4-event1'); INSERT INTO transaction_table1 VALUES ('t1-trans4-event2'); INSERT INTO transaction_table2 VALUES ('t2-trans4-event2'); COMMIT;
 
-> SELECT * FROM transaction_table1
+> SELECT * FROM transaction_table1_tbl
 t1-trans1-event1
 t1-trans1-event2
 t1-trans2-event1
@@ -45,7 +49,7 @@ t1-trans3-event2
 t1-trans4-event1
 t1-trans4-event2
 
-> SELECT * FROm transaction_table2
+> SELECT * FROM transaction_table2_tbl
 t2-trans1-event1
 t2-trans1-event2
 t2-trans2-event1

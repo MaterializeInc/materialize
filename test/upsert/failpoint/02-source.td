@@ -17,6 +17,8 @@ $ kafka-create-topic topic=failpoint
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-failpoint-${testdrive.seed}'
   )
+
+> CREATE TABLE failpoint_tbl FROM SOURCE failpoint (REFERENCE "testdrive-failpoint-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
@@ -24,7 +26,7 @@ $ kafka-ingest format=bytes topic=failpoint key-format=bytes key-terminator=:
 fish:fish
 bird:goose
 
-> SELECT * from failpoint
+> SELECT * from failpoint_tbl
 key           text
 -------------------
 fish          fish

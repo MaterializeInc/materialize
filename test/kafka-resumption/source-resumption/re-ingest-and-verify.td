@@ -12,7 +12,7 @@ four
 five
 six
 
-> SELECT * from topic
+> SELECT * from topic_tbl
 data         offset
 -----------------------------------
 one          0

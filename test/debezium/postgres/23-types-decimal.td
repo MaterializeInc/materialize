@@ -25,13 +25,15 @@ $ schema-registry-wait topic=postgres.public.decimal_type
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE decimal_type
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_type')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_type');
+
+> CREATE TABLE decimal_type_tbl FROM SOURCE decimal_type (REFERENCE "postgres.public.decimal_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 # NaN arrives as NULL
 
-> SELECT f1 FROM decimal_type;
+> SELECT f1 FROM decimal_type_tbl;
 12.345
 <null>
 <null>
@@ -42,7 +44,7 @@ UPDATE decimal_type SET f1 = NULL WHERE f1 = 'NaN';
 UPDATE decimal_type SET f1 = 0.123 WHERE f1 = 12.345;
 UPDATE decimal_type SET f1 = 'NaN' WHERE f1 IS NULL;
 
-> SELECT f1 FROM decimal_type;
+> SELECT f1 FROM decimal_type_tbl;
 <null>
 <null>
 <null>

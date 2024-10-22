@@ -67,9 +67,11 @@ contains:server error 401: Unauthorized
 > CREATE SOURCE avro_data FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
+
+> CREATE TABLE avro_data_tbl FROM SOURCE avro_data (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
 
-> SELECT * FROM avro_data
+> SELECT * FROM avro_data_tbl
 a
 ----
 1
@@ -87,9 +89,11 @@ a
 > CREATE SOURCE avro_data_ssh FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
+
+> CREATE TABLE avro_data_ssh_tbl FROM SOURCE avro_data_ssh (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
 
-> SELECT * FROM avro_data_ssh
+> SELECT * FROM avro_data_ssh_tbl
 a
 ----
 1
@@ -107,7 +111,7 @@ a
 
 #### Create a backup sink
 
-> CREATE SINK snk_backup FROM avro_data
+> CREATE SINK snk_backup FROM avro_data_tbl
   INTO KAFKA CONNECTION kafka_backup (TOPIC 'snk_backup')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
   ENVELOPE DEBEZIUM
@@ -122,7 +126,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk_backup sort-messages
 $ kafka-ingest topic=avro-data format=avro schema=${schema} timestamp=2
 {"a": 2}
 
-> SELECT * FROM avro_data
+> SELECT * FROM avro_data_tbl
 1
 2
 
@@ -188,8 +192,9 @@ contains:Unauthorized
 
 $ kafka-create-topic topic=data partitions=1
 
-! CREATE SOURCE kafka_broken_csr_connector_source_broken
+> CREATE SOURCE kafka_broken_csr_connector_source_broken
   FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-data-${testdrive.seed}')
+! CREATE TABLE kafka_broken_csr_connector_source_broken_tbl FROM SOURCE kafka_broken_csr_connector_source_broken (REFERENCE "testdrive-data-${testdrive.seed}")
     FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
 contains:failed to fetch schema subject
@@ -199,8 +204,10 @@ contains:failed to fetch schema subject
 > CREATE SOURCE kafka_broken_csr_connector_source_fixed FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
+
+> CREATE TABLE kafka_broken_csr_connector_source_fixed_tbl FROM SOURCE kafka_broken_csr_connector_source_fixed (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
 
-> SELECT * FROM kafka_broken_csr_connector_source_fixed
+> SELECT * FROM kafka_broken_csr_connector_source_fixed_tbl
 1
 2

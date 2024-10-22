@@ -42,10 +42,12 @@ one
 > CREATE SOURCE remote1
   IN CLUSTER storage_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote1-${testdrive.seed}')
+> CREATE TABLE remote1_tbl FROM SOURCE remote1 (REFERENCE "testdrive-remote1-${testdrive.seed}")
   FORMAT TEXT
 > CREATE SOURCE remote2
   IN CLUSTER storage_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote2-${testdrive.seed}')
+> CREATE TABLE remote2_tbl FROM SOURCE remote2 (REFERENCE "testdrive-remote2-${testdrive.seed}")
   FORMAT TEXT
 
 > CREATE SOURCE webhook_text IN CLUSTER storage_cluster FROM WEBHOOK
@@ -54,9 +56,9 @@ one
 $ webhook-append database=materialize schema=public name=webhook_text
 a
 
-> SELECT * from remote1
+> SELECT * from remote1_tbl
 one
-> SELECT * from remote2
+> SELECT * from remote2_tbl
 one
 
 > SELECT s.name,
@@ -68,8 +70,8 @@ one
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 true 1 1 1
-remote2 true 1 1 1
+remote1 true 2 1 1
+remote2 true 2 1 1
 
 > SELECT s.name,
   SUM(u.updates_committed)

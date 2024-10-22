@@ -104,15 +104,17 @@ $ kafka-ingest format=avro topic=foo schema=${schema}
 > CREATE SOURCE data_foo
   IN CLUSTER single_replica_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
   WITH (TIMELINE 'user')
 
-> CREATE MATERIALIZED VIEW foo AS SELECT a, b FROM data_foo
+> CREATE TABLE data_foo_tbl FROM SOURCE data_foo (REFERENCE "testdrive-foo-${testdrive.seed}")
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
+
+> CREATE MATERIALIZED VIEW foo AS SELECT a, b FROM data_foo_tbl
 
 $ kafka-ingest format=avro topic=foo schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[],"counts":[{"time":1,"count":1}]}}
 
-> SELECT * FROM data_foo;
+> SELECT * FROM data_foo_tbl;
 a  b
 ----
 1  1

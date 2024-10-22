@@ -43,8 +43,10 @@ $ kafka-ingest format=avro topic=kafka-counters key-format=avro key-schema=${key
 
 > CREATE SOURCE kafka_counters
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-counters-${testdrive.seed}')
+
+> CREATE TABLE kafka_counters_tbl FROM SOURCE kafka_counters (REFERENCE "testdrive-kafka-counters-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
-> SELECT COUNT(*) FROM kafka_counters;
+> SELECT COUNT(*) FROM kafka_counters_tbl;
 "${count}"

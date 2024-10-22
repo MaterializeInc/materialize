@@ -28,6 +28,8 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=3
 
 > CREATE SOURCE kafka_multi_broker
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-multi-broker-${testdrive.seed}')
+
+> CREATE TABLE kafka_multi_broker_tbl FROM SOURCE kafka_multi_broker (REFERENCE "testdrive-kafka-multi-broker-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE NONE
 
@@ -45,7 +47,7 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=6
   );
 
 > CREATE SINK multi_broker_sink
-  FROM kafka_multi_broker
+  FROM kafka_multi_broker_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-multi-broker-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

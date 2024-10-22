@@ -28,5 +28,5 @@ $ set schema={
 $ kafka-ingest format=avro topic=upsert-deletion key-format=avro key-schema=${keyschema} schema=${schema} repeat=5000
 {"f1": ${kafka-ingest.iteration}}
 
-> SELECT COUNT(*), MIN(f1), MAX(f1), MIN(f2) , MAX(f2) FROM upsert_deletion;
+> SELECT COUNT(*), MIN(f1), MAX(f1), MIN(f2) , MAX(f2) FROM upsert_deletion_tbl;
 5000 5000 9999 5000 9999

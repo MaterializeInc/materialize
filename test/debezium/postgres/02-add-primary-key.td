@@ -26,11 +26,13 @@ INSERT INTO alter_add_primary_key VALUES (123), (234);
   );
 
 > CREATE SOURCE alter_add_primary_key
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_add_primary_key')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_add_primary_key');
+
+> CREATE TABLE alter_add_primary_key_tbl FROM SOURCE alter_add_primary_key (REFERENCE "postgres.public.alter_add_primary_key")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_add_primary_key;
+> SELECT * FROM alter_add_primary_key_tbl;
 123
 234
 
@@ -39,6 +41,6 @@ ALTER TABLE alter_add_primary_key ADD PRIMARY KEY (f1);
 INSERT INTO alter_add_primary_key VALUES (345);
 DELETE FROM alter_add_primary_key WHERE f1 = 123;
 
-> SELECT * FROM alter_add_primary_key;
+> SELECT * FROM alter_add_primary_key_tbl;
 234
 345
