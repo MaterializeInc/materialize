@@ -177,7 +177,7 @@ pub struct InitializeStateResult {
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
     pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
-    pub new_builtins: BTreeSet<CatalogItemId>,
+    pub new_builtins: BTreeSet<GlobalId>,
     /// A list of builtin table updates corresponding to the initialized state.
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
     /// The version of the catalog that existed before initializing the catalog.
@@ -192,7 +192,7 @@ pub struct OpenCatalogResult {
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
     pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
-    pub new_builtins: BTreeSet<CatalogItemId>,
+    pub new_builtins: BTreeSet<GlobalId>,
     /// A list of builtin table updates corresponding to the initialized state.
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
 }
@@ -898,7 +898,7 @@ impl CatalogState {
 fn add_new_remove_old_builtin_items_migration(
     builtins_cfg: &BuiltinsConfig,
     txn: &mut mz_catalog::durable::Transaction<'_>,
-) -> Result<(Vec<CatalogItemId>, Vec<CatalogItemId>), mz_catalog::durable::CatalogError> {
+) -> Result<(Vec<CatalogItemId>, Vec<GlobalId>), mz_catalog::durable::CatalogError> {
     let mut new_builtins = Vec::new();
     let mut new_builtin_ids = Vec::new();
     let mut migrated_builtin_ids = Vec::new();
@@ -985,7 +985,7 @@ fn add_new_remove_old_builtin_items_migration(
                         fingerprint,
                     },
                 });
-                new_builtin_ids.push(item_id);
+                new_builtin_ids.push(collection_id);
 
                 // Runtime-alterable system objects are durably recorded to the
                 // usual items collection, so that they can be later altered at

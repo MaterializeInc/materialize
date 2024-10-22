@@ -3793,10 +3793,7 @@ pub fn serve(
         let clusters_caught_up_check =
             clusters_caught_up_trigger.map(|trigger| CaughtUpCheckContext {
                 trigger,
-                exclude_collections: new_builtins
-                    .into_iter()
-                    .flat_map(|item_id| catalog.get_entry(&item_id).global_ids())
-                    .collect(),
+                exclude_collections: new_builtins.into_iter().collect(),
             });
 
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
