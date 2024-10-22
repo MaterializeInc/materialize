@@ -46,17 +46,16 @@ The following table lists the configurable parameters of the Materialize environ
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `environment.environmentdCpuAllocation` |  | ``"1"`` |
-| `environment.environmentdExtraArgs[0]` |  | ``"--log-filter=info"`` |
-| `environment.environmentdImageRef` |  | ``"materialize/environmentd:v0.119.2"`` |
+| `environment.environmentdCpuAllocation` |  | ``1`` |
+| `environment.environmentdImageRef` |  | ``"materialize/environmentd:v0.121.0"`` |
 | `environment.environmentdMemoryAllocation` |  | ``"1Gi"`` |
 | `environment.forceRollout` |  | ``"33333333-3333-3333-3333-333333333333"`` |
 | `environment.inPlaceRollout` |  | ``false`` |
 | `environment.name` |  | ``"default-environment"`` |
 | `environment.requestRollout` |  | ``"22222222-2222-2222-2222-222222222222"`` |
-| `environment.secret.metadataBackendUrl` |  | ``"postgres://user:pass@cockroachdb-public.cockroachdb.svc.cluster.local:26257/db?sslmode=verify-full&sslrootcert_inline=ca_cert"`` |
-| `environment.secret.persistBackendUrl` |  | ``"s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.minio.svc.cluster.local%3A9000&region=minio"`` |
-| `namespace.create` |  | ``true`` |
+| `environment.secret.metadataBackendUrl` |  | ``"postgres://materialize_user:materialize_pass@postgres.materialize-environment.svc.cluster.local:5432/materialize_db?sslmode=disable"`` |
+| `environment.secret.persistBackendUrl` |  | ``"s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize-environment.svc.cluster.local%3A9000&region=minio"`` |
+| `namespace.create` |  | ``false`` |
 | `namespace.name` |  | ``"materialize-environment"`` |
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example:

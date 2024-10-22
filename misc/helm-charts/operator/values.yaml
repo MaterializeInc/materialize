@@ -7,41 +7,65 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Operator configuration for orchestrating Materialize
 operator:
   image:
+    # The Docker repository for the operator image
     repository: materialize/orchestratord
+    # The tag/version of the operator image to be used
     tag: v0.122.0-dev.0--main.g69acd7a8c926e9c5829e1d2c02f33237cec0c2b7
+    # Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
   args:
+    # Log filtering settings for startup logs
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
+    # Cloud provider setting (in this case, for local development)
     cloudProvider: "local"
+    # The region where the cluster is deployed (for this example, using Kind)
     region: "kind"
+    # Flag to indicate whether the environment is for local development
     localDevelopment: true
+    # Target architecture for environmentd (set to "arm64" for ARM systems, can also be "amd64" for Intel/AMD)
     environmentdTargetArch: "arm64" # amd64
   resources:
+    # Resources requested by the operator for CPU and memory
     requests:
       cpu: 100m
       memory: 128Mi
+    # Resource limits for the operator's CPU and memory
     limits:
       cpu: 500m
       memory: 512Mi
 
+# RBAC (Role-Based Access Control) settings
 rbac:
+  # Whether to create necessary RBAC roles and bindings
   create: true
 
+# Service account settings
 serviceAccount:
+  # Whether to create a new service account for the operator
   create: true
+  # The name of the service account to be created
   name: "orchestratord"
 
+# Observability settings (disabled in this case)
 observability:
   enabled: false
   prometheus:
+    # Whether to enable Prometheus integration for monitoring (disabled here)
     enabled: false
 
+# Network policies configuration
 networkPolicies:
+  # Whether to enable network policies for securing communication between pods
   enabled: false
+  # Use native Kubernetes NetworkPolicies if enabled
   useNativeKubernetesPolicy: true
 
+# Namespace configuration
 namespace:
+  # Whether to create a new namespace for the deployment
   create: false
+  # Name of the namespace where the operator and environment will be deployed
   name: "materialize"
