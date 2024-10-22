@@ -31,10 +31,9 @@ operator:
     # Resources requested by the operator for CPU and memory
     requests:
       cpu: 100m
-      memory: 128Mi
+      memory: 512Mi
     # Resource limits for the operator's CPU and memory
     limits:
-      cpu: 500m
       memory: 512Mi
 
 # RBAC (Role-Based Access Control) settings
