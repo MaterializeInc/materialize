@@ -6848,34 +6848,37 @@ pub fn plan_comment(
             let item = scx.get_item_by_resolved_name(name)?;
             match (com_ty, item.item_type()) {
                 (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
-                    (CommentObjectId::Table(item.id()), None)
+                    (CommentObjectId::Table(item.id().to_item_id()), None)
                 }
                 (CommentObjectType::View { .. }, CatalogItemType::View) => {
-                    (CommentObjectId::View(item.id()), None)
+                    (CommentObjectId::View(item.id().to_item_id()), None)
                 }
                 (CommentObjectType::MaterializedView { .. }, CatalogItemType::MaterializedView) => {
-                    (CommentObjectId::MaterializedView(item.id()), None)
+                    (
+                        CommentObjectId::MaterializedView(item.id().to_item_id()),
+                        None,
+                    )
                 }
                 (CommentObjectType::Index { .. }, CatalogItemType::Index) => {
-                    (CommentObjectId::Index(item.id()), None)
+                    (CommentObjectId::Index(item.id().to_item_id()), None)
                 }
                 (CommentObjectType::Func { .. }, CatalogItemType::Func) => {
-                    (CommentObjectId::Func(item.id()), None)
+                    (CommentObjectId::Func(item.id().to_item_id()), None)
                 }
                 (CommentObjectType::Connection { .. }, CatalogItemType::Connection) => {
-                    (CommentObjectId::Connection(item.id()), None)
+                    (CommentObjectId::Connection(item.id().to_item_id()), None)
                 }
                 (CommentObjectType::Source { .. }, CatalogItemType::Source) => {
-                    (CommentObjectId::Source(item.id()), None)
+                    (CommentObjectId::Source(item.id().to_item_id()), None)
                 }
                 (CommentObjectType::Sink { .. }, CatalogItemType::Sink) => {
-                    (CommentObjectId::Sink(item.id()), None)
+                    (CommentObjectId::Sink(item.id().to_item_id()), None)
                 }
                 (CommentObjectType::Secret { .. }, CatalogItemType::Secret) => {
-                    (CommentObjectId::Secret(item.id()), None)
+                    (CommentObjectId::Secret(item.id().to_item_id()), None)
                 }
                 (CommentObjectType::ContinualTask { .. }, CatalogItemType::ContinualTask) => {
-                    (CommentObjectId::ContinualTask(item.id()), None)
+                    (CommentObjectId::ContinualTask(item.id().to_item_id()), None)
                 }
                 (com_ty, cat_ty) => {
                     let expected_type = match com_ty {
@@ -6907,20 +6910,31 @@ pub fn plan_comment(
                 if !modifiers.is_empty() {
                     sql_bail!("cannot comment on type with modifiers");
                 }
-                (CommentObjectId::Type(*id), None)
+                (CommentObjectId::Type(id.to_item_id()), None)
             }
             ResolvedDataType::Error => unreachable!("should have been caught in name resolution"),
         },
         CommentObjectType::Column { name } => {
             let (item, pos) = scx.get_column_by_resolved_name(name)?;
             match item.item_type() {
-                CatalogItemType::Table => (CommentObjectId::Table(item.id()), Some(pos + 1)),
-                CatalogItemType::Source => (CommentObjectId::Source(item.id()), Some(pos + 1)),
-                CatalogItemType::View => (CommentObjectId::View(item.id()), Some(pos + 1)),
-                CatalogItemType::MaterializedView => {
-                    (CommentObjectId::MaterializedView(item.id()), Some(pos + 1))
+                CatalogItemType::Table => (
+                    CommentObjectId::Table(item.id().to_item_id()),
+                    Some(pos + 1),
+                ),
+                CatalogItemType::Source => (
+                    CommentObjectId::Source(item.id().to_item_id()),
+                    Some(pos + 1),
+                ),
+                CatalogItemType::View => {
+                    (CommentObjectId::View(item.id().to_item_id()), Some(pos + 1))
                 }
-                CatalogItemType::Type => (CommentObjectId::Type(item.id()), Some(pos + 1)),
+                CatalogItemType::MaterializedView => (
+                    CommentObjectId::MaterializedView(item.id().to_item_id()),
+                    Some(pos + 1),
+                ),
+                CatalogItemType::Type => {
+                    (CommentObjectId::Type(item.id().to_item_id()), Some(pos + 1))
+                }
                 r => {
                     return Err(PlanError::Unsupported {
                         feature: format!("Specifying comments on a column of {r}"),

@@ -234,18 +234,18 @@ impl CatalogState {
         let mut comment_inconsistencies = Vec::new();
         for (comment_object_id, col_pos, _comment) in self.comments.iter() {
             match comment_object_id {
-                CommentObjectId::Table(global_id)
-                | CommentObjectId::View(global_id)
-                | CommentObjectId::MaterializedView(global_id)
-                | CommentObjectId::Source(global_id)
-                | CommentObjectId::Sink(global_id)
-                | CommentObjectId::Index(global_id)
-                | CommentObjectId::Func(global_id)
-                | CommentObjectId::Connection(global_id)
-                | CommentObjectId::Type(global_id)
-                | CommentObjectId::Secret(global_id)
-                | CommentObjectId::ContinualTask(global_id) => {
-                    let entry = self.entry_by_id.get(&global_id);
+                CommentObjectId::Table(item_id)
+                | CommentObjectId::View(item_id)
+                | CommentObjectId::MaterializedView(item_id)
+                | CommentObjectId::Source(item_id)
+                | CommentObjectId::Sink(item_id)
+                | CommentObjectId::Index(item_id)
+                | CommentObjectId::Func(item_id)
+                | CommentObjectId::Connection(item_id)
+                | CommentObjectId::Type(item_id)
+                | CommentObjectId::Secret(item_id)
+                | CommentObjectId::ContinualTask(item_id) => {
+                    let entry = self.entry_by_id.get(&item_id.to_global_id());
                     match entry {
                         None => comment_inconsistencies
                             .push(CommentInconsistency::Dangling(comment_object_id)),

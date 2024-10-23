@@ -183,7 +183,9 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn get_item(&self, id: &GlobalId) -> Option<Item> {
-        let key = ItemKey { gid: *id };
+        let key = ItemKey {
+            id: id.to_item_id(),
+        };
         self.items
             .get(&key)
             .map(|v| DurableType::from_key_value(key, v.clone()))
@@ -437,6 +439,7 @@ impl<'a> Transaction<'a> {
             let introspection_source_index = IntrospectionSourceIndex {
                 cluster_id,
                 name: builtin.name.to_string(),
+                item_id: index_id.to_item_id(),
                 index_id,
                 oid,
             };
@@ -567,6 +570,7 @@ impl<'a> Transaction<'a> {
                 let introspection_source_index = IntrospectionSourceIndex {
                     cluster_id,
                     name,
+                    item_id: index_id.to_item_id(),
                     index_id,
                     oid,
                 };
@@ -614,7 +618,9 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
     ) -> Result<(), CatalogError> {
         match self.items.insert(
-            ItemKey { gid: id },
+            ItemKey {
+                id: id.to_item_id(),
+            },
             ItemValue {
                 schema_id,
                 name: item_name.to_string(),
@@ -622,6 +628,8 @@ impl<'a> Transaction<'a> {
                 owner_id,
                 privileges,
                 oid,
+                global_id: id,
+                extra_versions: BTreeMap::new(),
             },
             self.op_id,
         ) {
@@ -939,7 +947,12 @@ impl<'a> Transaction<'a> {
     pub fn remove_source_references(&mut self, source_id: GlobalId) -> Result<(), CatalogError> {
         let deleted = self
             .source_references
-            .delete_by_key(SourceReferencesKey { source_id }, self.op_id)
+            .delete_by_key(
+                SourceReferencesKey {
+                    source_id: source_id.to_item_id(),
+                },
+                self.op_id,
+            )
             .is_some();
         if deleted {
             Ok(())
@@ -1089,7 +1102,13 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::remove_items`] instead.
     pub fn remove_item(&mut self, id: GlobalId) -> Result<(), CatalogError> {
-        let prev = self.items.set(ItemKey { gid: id }, None, self.op_id)?;
+        let prev = self.items.set(
+            ItemKey {
+                id: id.to_item_id(),
+            },
+            None,
+            self.op_id,
+        )?;
         if prev.is_some() {
             Ok(())
         } else {
@@ -1108,12 +1127,23 @@ impl<'a> Transaction<'a> {
             return Ok(());
         }
 
-        let ks: Vec<_> = ids.clone().into_iter().map(|gid| ItemKey { gid }).collect();
+        let ks: Vec<_> = ids
+            .clone()
+            .into_iter()
+            .map(|id| ItemKey {
+                id: id.to_item_id(),
+            })
+            .collect();
         let n = self.items.delete_by_keys(ks, self.op_id).len();
         if n == ids.len() {
             Ok(())
         } else {
-            let item_gids = self.items.items().keys().map(|k| k.gid).collect();
+            let item_gids = self
+                .items
+                .items()
+                .keys()
+                .map(|k| k.id.to_global_id())
+                .collect();
             let mut unknown = ids.difference(&item_gids);
             Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
         }
@@ -1213,9 +1243,13 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
     pub fn update_item(&mut self, id: GlobalId, item: Item) -> Result<(), CatalogError> {
-        let updated =
-            self.items
-                .update_by_key(ItemKey { gid: id }, item.into_key_value().1, self.op_id)?;
+        let updated = self.items.update_by_key(
+            ItemKey {
+                id: id.to_item_id(),
+            },
+            item.into_key_value().1,
+            self.op_id,
+        )?;
         if updated {
             Ok(())
         } else {
@@ -1239,14 +1273,26 @@ impl<'a> Transaction<'a> {
         let kvs: Vec<_> = items
             .clone()
             .into_iter()
-            .map(|(gid, item)| (ItemKey { gid }, item.into_key_value().1))
+            .map(|(id, item)| {
+                (
+                    ItemKey {
+                        id: id.to_item_id(),
+                    },
+                    item.into_key_value().1,
+                )
+            })
             .collect();
         let n = self.items.update_by_keys(kvs, self.op_id)?;
         let n = usize::try_from(n).expect("Must be positive and fit in usize");
         if n == update_ids.len() {
             Ok(())
         } else {
-            let item_ids: BTreeSet<_> = self.items.items().keys().map(|k| k.gid).collect();
+            let item_ids: BTreeSet<_> = self
+                .items
+                .items()
+                .keys()
+                .map(|k| k.id.to_global_id())
+                .collect();
             let mut unknown = update_ids.difference(&item_ids);
             Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
         }
@@ -1313,7 +1359,7 @@ impl<'a> Transaction<'a> {
 
         let n = self.system_gid_mapping.update(
             |_k, v| {
-                if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
+                if let Some(mapping) = mappings.get(&GlobalId::from(v.global_id)) {
                     let (_, new_value) = mapping.clone().into_key_value();
                     Some(new_value)
                 } else {
@@ -1537,6 +1583,7 @@ impl<'a> Transaction<'a> {
                 |((cluster_id, name, index_id), oid)| IntrospectionSourceIndex {
                     cluster_id,
                     name,
+                    item_id: index_id.to_item_id(),
                     index_id,
                     oid,
                 },
@@ -1717,7 +1764,9 @@ impl<'a> Transaction<'a> {
         references: Vec<SourceReference>,
         updated_at: u64,
     ) -> Result<(), CatalogError> {
-        let key = SourceReferencesKey { source_id };
+        let key = SourceReferencesKey {
+            source_id: source_id.to_item_id(),
+        };
         let value = SourceReferencesValue {
             references,
             updated_at,

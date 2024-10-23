@@ -664,7 +664,8 @@ impl Catalog {
                             object_name: entry.name().item.clone(),
                         },
                         unique_identifier: SystemObjectUniqueIdentifier {
-                            id: new_id,
+                            catalog_id: new_id.to_item_id(),
+                            global_id: new_id,
                             fingerprint: fingerprint.clone(),
                         },
                     },
@@ -949,7 +950,7 @@ fn add_new_remove_old_builtin_items_migration(
                 !builtin.runtime_alterable(),
                 "setting the runtime alterable flag on an existing object is not permitted"
             );
-            migrated_builtin_ids.push(system_object_mapping.unique_identifier.id);
+            migrated_builtin_ids.push(system_object_mapping.unique_identifier.global_id);
         }
     }
 
@@ -961,7 +962,11 @@ fn add_new_remove_old_builtin_items_migration(
                 object_type: builtin.catalog_item_type(),
                 object_name: builtin.name().to_string(),
             },
-            unique_identifier: SystemObjectUniqueIdentifier { id, fingerprint },
+            unique_identifier: SystemObjectUniqueIdentifier {
+                catalog_id: id.to_item_id(),
+                global_id: id,
+                fingerprint,
+            },
         });
 
         // Runtime-alterable system objects are durably recorded to the
@@ -1004,7 +1009,7 @@ fn add_new_remove_old_builtin_items_migration(
     for (_, mapping) in system_object_mappings {
         deleted_system_objects.insert(mapping.description);
         if mapping.unique_identifier.fingerprint == RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL {
-            deleted_runtime_alterable_system_ids.insert(mapping.unique_identifier.id);
+            deleted_runtime_alterable_system_ids.insert(mapping.unique_identifier.global_id);
         }
     }
     // If you are 100% positive that it is safe to delete a system object outside any of the

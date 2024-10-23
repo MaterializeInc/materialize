@@ -604,7 +604,7 @@ pub struct SystemObjectDescription {
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct SystemObjectUniqueIdentifier {
     pub catalog_id: CatalogItemId,
-    pub collection_id: GlobalId,
+    pub global_id: GlobalId,
     pub fingerprint: String,
 }
 
@@ -644,9 +644,9 @@ impl DurableType for SystemObjectMapping {
                     .catalog_id
                     .try_into()
                     .expect("catalog_id to be in the system namespace"),
-                collection_id: self
+                global_id: self
                     .unique_identifier
-                    .collection_id
+                    .global_id
                     .try_into()
                     .expect("collection_id to be in the system namespace"),
                 fingerprint: self.unique_identifier.fingerprint,
@@ -663,7 +663,7 @@ impl DurableType for SystemObjectMapping {
             },
             unique_identifier: SystemObjectUniqueIdentifier {
                 catalog_id: value.catalog_id.into(),
-                collection_id: value.collection_id.into(),
+                global_id: value.global_id.into(),
                 fingerprint: value.fingerprint,
             },
         }
@@ -1094,7 +1094,7 @@ pub struct GidMappingKey {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct GidMappingValue {
     pub(crate) catalog_id: SystemCatalogItemId,
-    pub(crate) collection_id: SystemGlobalId,
+    pub(crate) global_id: SystemGlobalId,
     pub(crate) fingerprint: String,
 }
 
