@@ -391,3 +391,49 @@ class PreflightCheckRollback(Scenario):
             ),
             Validate(self),
         ]
+
+
+class ActivateSourceVersioningMigration(Scenario):
+    """
+    Starts MZ, initializes and manipulates, then forces the migration
+    of sources to the new table model (introducing Source Versioning).
+    """
+
+    def base_version(self) -> MzVersion:
+        return get_last_version()
+
+    def actions(self) -> list[Action]:
+        print(f"Upgrading from tag {self.base_version()}")
+        return [
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
+            Initialize(self),
+            Manipulate(self, phase=1),
+            KillMz(
+                capture_logs=True
+            ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
+            StartMz(
+                self,
+                tag=None,
+                # Activate the `force_source_table_syntax` flag
+                # which should trigger the migration of sources
+                # using the old syntax to the new table model.
+                additional_system_parameter_defaults={
+                    "force_source_table_syntax": "true",
+                },
+            ),
+            Manipulate(self, phase=2),
+            Validate(self),
+            # A second restart while already on the new version
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=None,
+                additional_system_parameter_defaults={
+                    "force_source_table_syntax": "true",
+                },
+            ),
+            Validate(self),
+        ]
