@@ -83,7 +83,7 @@ class RestartMz(TransactionDef):
                     name=self.workload.mz_service,
                     ports=ports,
                     external_minio=True,
-                    external_cockroach=True,
+                    external_metadata_store=True,
                     system_parameter_defaults=get_default_system_parameters(
                         zero_downtime=True
                     ),
@@ -130,7 +130,7 @@ class ZeroDowntimeDeploy(TransactionDef):
                     name=self.workload.mz_service,
                     ports=ports,
                     external_minio=True,
-                    external_cockroach=True,
+                    external_metadata_store=True,
                     system_parameter_defaults=get_default_system_parameters(
                         zero_downtime=True
                     ),

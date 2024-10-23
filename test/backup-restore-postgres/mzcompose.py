@@ -17,15 +17,20 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.persistcli import Persistcli
-from materialize.mzcompose.services.postgres import PostgresAsCockroach
+from materialize.mzcompose.services.postgres import PostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
-    PostgresAsCockroach(),
+    PostgresMetadata(),
     Minio(setup_materialize=True),
     Mc(),
-    Materialized(external_minio=True, external_cockroach=True, sanity_restart=False),
-    Testdrive(no_reset=True),
+    Materialized(
+        external_minio=True,
+        external_metadata_store=True,
+        sanity_restart=False,
+        metadata_store="postgres-metadata",
+    ),
+    Testdrive(no_reset=True, metadata_store="postgres-metadata"),
     Persistcli(),
 ]
 
@@ -73,7 +78,7 @@ def workflow_default(c: Composition) -> None:
 
     # Confirm that the database is readable / has shard data
     c.exec(
-        "cockroach",
+        "postgres-metadata",
         "psql",
         "--command",
         "SELECT shard, min(sequence_number), max(sequence_number) "

@@ -9,7 +9,7 @@
 
 import os
 
-from materialize import MZ_ROOT, ui
+from materialize import MZ_ROOT
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import (
     Service,
@@ -76,15 +76,20 @@ class Postgres(Service):
         super().__init__(name=name, config=config)
 
 
-class PostgresAsCockroach(Postgres):
+class PostgresMetadata(Postgres):
     def __init__(self, restart: str = "no") -> None:
         super().__init__(
-            name="cockroach", setup_materialize=True, ports=["26257"], restart=restart
+            name="postgres-metadata",
+            setup_materialize=True,
+            ports=["26257"],
+            restart=restart,
         )
 
 
-CockroachOrPostgres = (
-    Cockroach
-    if os.getenv("BUILDKITE_TAG", "") != "" or ui.env_is_truthy("CI_FORCE_POSTGRES")
-    else PostgresAsCockroach
+CockroachOrPostgresMetadata = (
+    Cockroach if os.getenv("BUILDKITE_TAG", "") != "" else PostgresMetadata
+)
+
+METADATA_STORE: str = (
+    "cockroach" if CockroachOrPostgresMetadata == Cockroach else "postgres-metadata"
 )

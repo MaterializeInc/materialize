@@ -71,7 +71,7 @@ class StartMz(MzcomposeAction):
         mz = Materialized(
             name=self.mz_service,
             image=image,
-            external_cockroach=True,
+            external_metadata_store=True,
             external_minio=True,
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
@@ -84,6 +84,7 @@ class StartMz(MzcomposeAction):
             restart=self.restart,
             force_migrations=self.force_migrations,
             publish=self.publish,
+            metadata_store="cockroach",
         )
 
         # Don't fail since we are careful to explicitly kill and collect logs
@@ -340,8 +341,8 @@ class RestartCockroach(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        c.kill("cockroach")
-        c.up("cockroach")
+        c.kill(c.metadata_store())
+        c.up(c.metadata_store())
 
 
 class RestartSourcePostgres(MzcomposeAction):

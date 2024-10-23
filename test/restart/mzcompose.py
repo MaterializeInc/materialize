@@ -23,7 +23,7 @@ from psycopg.errors import OperationalError
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.postgres import CockroachOrPostgres
+from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -42,7 +42,7 @@ SERVICES = [
         ],
     ),
     testdrive_no_reset,
-    CockroachOrPostgres(),
+    CockroachOrPostgresMetadata(),
 ]
 
 
@@ -236,16 +236,16 @@ def workflow_stash(c: Composition) -> None:
     )
     c.rm_volumes("mzdata", force=True)
 
-    with c.override(Materialized(external_cockroach=True)):
-        c.up("cockroach")
+    with c.override(Materialized(external_metadata_store=True)):
+        c.up(c.metadata_store())
 
         c.up("materialized")
 
         cursor = c.sql_cursor()
         cursor.execute("CREATE TABLE a (i INT)")
 
-        c.stop("cockroach")
-        c.up("cockroach")
+        c.stop(c.metadata_store())
+        c.up(c.metadata_store())
 
         cursor.execute("CREATE TABLE b (i INT)")
 

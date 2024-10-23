@@ -25,8 +25,8 @@ mz_options: dict[MzVersion, str] = {}
 
 SERVICES = [
     Cockroach(setup_materialize=True),
-    Materialized(external_cockroach=True),
-    Testdrive(no_reset=True),
+    Materialized(external_metadata_store=True, metadata_store="cockroach"),
+    Testdrive(no_reset=True, metadata_store="cockroach"),
 ]
 
 
@@ -64,12 +64,13 @@ def workflow_test_version_skips(c: Composition) -> None:
     with c.override(
         Materialized(
             image=f"materialize/materialized:{two_minor_releases_before}",
-            external_cockroach=True,
+            external_metadata_store=True,
             options=[
                 opt
                 for start_version, opt in mz_options.items()
                 if two_minor_releases_before >= start_version
             ],
+            metadata_store="cockroach",
         )
     ):
         c.up("materialized")

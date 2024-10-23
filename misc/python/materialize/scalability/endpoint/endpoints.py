@@ -158,7 +158,11 @@ class MaterializeContainer(MaterializeNonRemote):
 
         if self.image is not None and self.alternative_image is not None:
             if not self.composition.try_pull_service_image(
-                Materialized(image=self.image, external_cockroach=True)
+                Materialized(
+                    image=self.image,
+                    external_metadata_store=True,
+                    metadata_store="cockroach",
+                )
             ):
                 # explicitly specified image cannot be found and alternative exists
                 print(
@@ -174,7 +178,10 @@ class MaterializeContainer(MaterializeNonRemote):
     def up_internal(self) -> None:
         with self.composition.override(
             Materialized(
-                image=self.image, sanity_restart=False, external_cockroach=True
+                image=self.image,
+                sanity_restart=False,
+                external_metadata_store=True,
+                metadata_store="cockroach",
             )
         ):
             self.composition.up("materialized")

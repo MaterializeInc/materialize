@@ -219,6 +219,7 @@ def run_one_scenario(
                 materialize_url=f"postgres://materialize@{entrypoint_host}:6875",
                 default_timeout=default_timeout,
                 materialize_params={"statement_timeout": f"'{default_timeout}'"},
+                metadata_store="cockroach",
             )
         ):
             c.testdrive(
@@ -315,7 +316,8 @@ def create_mz_service(
         environment_id=f"local-az1-{uuid.uuid4()}-0",
         soft_assertions=False,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
-        external_cockroach=True,
+        external_metadata_store=True,
+        metadata_store="cockroach",
         external_minio=True,
         sanity_restart=False,
     )

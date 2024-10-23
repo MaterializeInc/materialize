@@ -33,7 +33,7 @@ from launchdarkly_api.model.variation import Variation  # type: ignore
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_ORG_ID
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.postgres import CockroachOrPostgres
+from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
@@ -53,7 +53,7 @@ LD_CONTEXT_KEY = DEFAULT_MZ_ENVIRONMENT_ID
 LD_FEATURE_FLAG_KEY = f"ci-test-{BUILDKITE_JOB_ID}"
 
 SERVICES = [
-    CockroachOrPostgres(),
+    CockroachOrPostgresMetadata(),
     Materialized(
         environment_extra=[
             f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
@@ -63,7 +63,7 @@ SERVICES = [
         additional_system_parameter_defaults={
             "log_filter": "mz_adapter::catalog=debug,mz_adapter::config=debug",
         },
-        external_cockroach=True,
+        external_metadata_store=True,
     ),
     Testdrive(no_reset=True, seed=1),
 ]
@@ -89,7 +89,7 @@ def workflow_default(c: Composition) -> None:
         c.up("testdrive", persistent=True)
 
         # Assert that the default max_result_size is served when sync is disabled.
-        with c.override(Materialized(external_cockroach=True)):
+        with c.override(Materialized(external_metadata_store=True)):
             c.up("materialized")
             c.testdrive("\n".join(["> SHOW max_result_size", "1GB"]))
             c.stop("materialized")
@@ -126,7 +126,7 @@ def workflow_default(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "log_filter": "mz_adapter::catalog=debug,mz_adapter::config=debug",
                 },
-                external_cockroach=True,
+                external_metadata_store=True,
             )
         ):
             c.up("materialized")
@@ -135,7 +135,7 @@ def workflow_default(c: Composition) -> None:
 
         # Assert that the last value is persisted and available upon restart,
         # even if the parameter sync loop is not running.
-        with c.override(Materialized(external_cockroach=True)):
+        with c.override(Materialized(external_metadata_store=True)):
             c.up("materialized")
             c.testdrive("\n".join(["> SHOW max_result_size", "2GB"]))
             c.stop("materialized")

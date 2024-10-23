@@ -14,6 +14,7 @@ from materialize.mzcompose import (
 from materialize.mzcompose.service import (
     Service,
 )
+from materialize.mzcompose.services.postgres import METADATA_STORE
 
 
 class SqlLogicTest(Service):
@@ -25,7 +26,7 @@ class SqlLogicTest(Service):
             "MZ_SOFT_ASSERTIONS=1",
         ],
         volumes: list[str] = ["../..:/workdir"],
-        depends_on: list[str] = ["cockroach"],
+        depends_on: list[str] = [METADATA_STORE],
     ) -> None:
         environment += [
             "MZ_SYSTEM_PARAMETER_DEFAULT="

@@ -15,12 +15,12 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.postgres import CockroachOrPostgres
+from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
-    CockroachOrPostgres(),
-    Materialized(propagate_crashes=True, external_cockroach=True),
+    CockroachOrPostgresMetadata(),
+    Materialized(propagate_crashes=True, external_metadata_store=True),
     Testdrive(no_reset=True, default_timeout="5s"),
 ]
 
