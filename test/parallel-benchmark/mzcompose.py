@@ -263,21 +263,23 @@ class Statistics:
         ]
 
 
-def upload_plot(
-    plot_path: str,
+def upload_plots(
+    plot_paths: list[str],
     scenario_name: str,
     variant: str,
 ):
     if buildkite.is_in_buildkite():
-        buildkite.upload_artifact(plot_path, cwd=MZ_ROOT, quiet=True)
+        for plot_path in plot_paths:
+            buildkite.upload_artifact(plot_path, cwd=MZ_ROOT, quiet=True)
         print(f"+++ Plot for {scenario_name} ({variant})")
-        print(
-            buildkite.inline_image(
-                f"artifact://{plot_path}", f"Plot for {scenario_name} ({variant})"
+        for plot_path in plot_paths:
+            print(
+                buildkite.inline_image(
+                    f"artifact://{plot_path}", f"Plot for {scenario_name} ({variant})"
+                )
             )
-        )
     else:
-        print(f"Saving plot to {plot_path}")
+        print(f"Saving plots to {plot_paths}")
 
 
 def report(
@@ -291,21 +293,10 @@ def report(
     scenario_name = type(scenario).name()
     stats: dict[str, Statistics] = {}
     failures: list[TestFailureDetails] = []
+    end_time = time.time()
 
-    plot = isinstance(measurements, MemoryStore)
-
-    if plot:
-        plt.figure(figsize=(10, 6))
     for action in measurements.actions():
         stats[action] = Statistics(action, measurements, start_time)
-        if plot:
-            times: list[float] = [
-                x.timestamp - start_time for x in measurements.data[action]
-            ]
-            durations: list[float] = [
-                x.duration * 1000 for x in measurements.data[action]
-            ]
-            plt.scatter(times, durations, label=action[:60], marker=MarkerStyle("+"))
         print(f"Statistics for {action}:\n{stats[action]}")
         if action in scenario.guarantees and guarantees:
             for stat, guarantee in scenario.guarantees[action].items():
@@ -326,20 +317,35 @@ def report(
                         f"Scenario {scenario_name} succeeded: {action}: {stat}: {duration:.2f} {'>=' if less_than else '<='} {guarantee:.2f}"
                     )
 
-    if plot:
+    plot_paths: list[str] = []
+    num_plots = 1 if isinstance(measurements, MemoryStore) else 24
+    for i in range(num_plots):
+        plt.figure(figsize=(10, 6))
+        for action in measurements.actions():
+            interval = (end_time - start_time) / num_plots
+            times, durations = measurements.get_data(
+                action, start_time + interval * i, start_time + interval * (i + 1)
+            )
+            plt.scatter(times, durations, label=action[:60], marker=MarkerStyle("+"))
+
         plt.xlabel("time [s]")
         plt.ylabel("latency [ms]")
         plt.yscale("log")
-        plt.title(f"{scenario_name} against {mz_string}")
+        title = f"{scenario_name}\nagainst {mz_string}"
+        if num_plots > 1:
+            title += f"\n(part {i}/{num_plots})"
+        plt.title(title)
         plt.legend(loc="best")
         plt.grid(True)
         plt.ylim(bottom=0)
-        plot_path = f"plots/{scenario_name}_{suffix}_timeline.png"
+        plot_path = f"plots/{scenario_name}_{suffix}_{i}_timeline.png"
         plt.savefig(MZ_ROOT / plot_path, dpi=300)
-        upload_plot(plot_path, scenario_name, "timeline")
+        plot_paths.append(plot_path)
+        plt.close()
 
-        plt.clf()
+    upload_plots(plot_paths, scenario_name, "timeline")
 
+    if isinstance(measurements, MemoryStore):
         # Plot CCDF
         plt.grid(True, which="both")
         plt.xscale("log")
@@ -357,7 +363,8 @@ def report(
 
         plot_path = f"plots/{scenario_name}_{suffix}_ccdf.png"
         plt.savefig(MZ_ROOT / plot_path, dpi=300)
-        upload_plot(plot_path, scenario_name, "ccdf")
+        upload_plots([plot_path], scenario_name, "ccdf")
+        plt.close()
 
     return stats, failures
 
