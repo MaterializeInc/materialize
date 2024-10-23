@@ -137,16 +137,16 @@ build:ci --sandbox_base=/dev/shm
 
 # Release Build Configuration
 #
-build:release --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
+build:release --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_NONE
 build:release --copt=-O3
 build:release --copt=-DNDEBUG
 build:release --compilation_mode=opt
-build:release --copt=-flto=thin
-build:release --linkopt=-flto=thin
-build:release --@rules_rust//:extra_rustc_flag=-Clto=thin
+build:release --copt=-flto
+build:release --linkopt=-flto
+build:release --@rules_rust//:extra_rustc_flag=-Clto=fat
 # `rules_rust` defaults to stripping debug symbols for release builds, undo that.
-build:release --strip=never
-build:release --@rules_rust//:extra_rustc_flag=-Cstrip=none
+#build:release --strip=never
+#build:release --@rules_rust//:extra_rustc_flag=-Cstrip=none
 
 # Builds from `main` or tagged builds.
 #
@@ -168,7 +168,7 @@ build:rust-nightly --@rules_rust//rust/toolchain/channel=nightly
 # TODO(parkmycar): Re-enable these. They eiter cause a compilation failure because of
 # missing object files, or (seemingly) makes the number of codegen units 1 which compiles
 # way too slow.
-#build:release --@rules_rust//:extra_rustc_flag="-Clinker-plugin-lto"
+build:release --@rules_rust//:extra_rustc_flag="-Clinker-plugin-lto"
 #build:linux --@rules_rust//rust/settings:experimental_use_cc_common_link=True
 
 # This 'features' option comes from the `unix_cc_toolchain_config` in Bazel core and sets all the
