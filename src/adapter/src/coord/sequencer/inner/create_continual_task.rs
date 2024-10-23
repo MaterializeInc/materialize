@@ -23,7 +23,8 @@ use mz_ore::instrument;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{GlobalId, Timestamp};
-use mz_sql::ast::{ContinualTaskStmt, RawItemName};
+use mz_sql::ast::visit_mut::{VisitMut, VisitMutNode};
+use mz_sql::ast::{ContinualTaskStmt, Raw, RawItemName};
 use mz_sql::names::{FullItemName, PartialItemName, ResolvedIds};
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
@@ -278,6 +279,15 @@ fn update_create_sql(
     let f =
         |x: &mut RawItemName| *x = RawItemName::Name(PartialItemName::from(ct_name.clone()).into());
 
+    struct ReplaceName(FullItemName);
+    impl<'ast> VisitMut<'ast, Raw> for ReplaceName {
+        fn visit_item_name_mut(&mut self, node: &'ast mut RawItemName) {
+            if node.name().0.last().map(|x| x.as_str()) == Some(&self.0.item) {
+                *node = RawItemName::Name(PartialItemName::from(self.0.clone()).into());
+            }
+        }
+    }
+
     let mut ast = mz_sql_parser::parser::parse_statements(create_sql)
         .expect("non-system items must be parseable")
         .into_element()
@@ -291,6 +301,11 @@ fn update_create_sql(
                     ContinualTaskStmt::Insert(stmt) => f(&mut stmt.table_name),
                 }
             }
+            // Do the same name replacement for the contents of the statements.
+            //
+            // TODO(ct2): I think we should be able to replace the above with
+            // this?
+            stmt.visit_mut(&mut ReplaceName(ct_name.clone()));
             if let Some(as_of) = as_of {
                 stmt.as_of = Some(as_of.into());
             }
