@@ -215,12 +215,13 @@ WHERE EXTRACT(YEAR FROM inserted_at) = 2021;
 ----
 Explained Query:
   Project (#0{content}, #1{inserted_at})
-    Filter (2021 = extract_year_ts(#1{inserted_at}))
-      ReadStorage materialize.public.events_timestamped
+    Filter (#1{inserted_at}) IS NOT NULL AND (#3 = 2021)
+      Map (extract_year_ts(#1{inserted_at}))
+        ReadStorage materialize.public.events_timestamped
 
 Source materialize.public.events_timestamped
-  filter=((2021 = extract_year_ts(#1{inserted_at})))
-  pushdown=((2021 = extract_year_ts(#1{inserted_at})))
+  filter=((#1{inserted_at}) IS NOT NULL AND (2021 = extract_year_ts(#1{inserted_at})))
+  pushdown=((#1{inserted_at}) IS NOT NULL AND (2021 = extract_year_ts(#1{inserted_at})))
 
 Target cluster: quickstart
 

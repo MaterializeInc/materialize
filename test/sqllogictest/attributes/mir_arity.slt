@@ -152,7 +152,7 @@ Explained Query:
               Filter (#1 = 1) // { arity: 2 }
                 Get l0 // { arity: 2 }
             Project (#0) // { arity: 1 }
-              Filter error("more than one record produced in subquery") AND (#1 > 1) // { arity: 2 }
+              Filter (#1 > 1) // { arity: 2 }
                 Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
                   Project (#0) // { arity: 1 }
                     Get l0 // { arity: 2 }

@@ -222,8 +222,9 @@ Explained Query:
       Project (#1, #2)
         Get l0
     cte l0 =
-      Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
-        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+      Filter (#3 = 4) AND (#4 = 3)
+        Map (greatest(#1, #2), least(#1, #2))
+          ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
@@ -338,8 +339,9 @@ Explained Query:
       Project (#1, #2)
         Get l0
     cte l0 =
-      Filter (3 = least(#1, #2)) AND (4 = greatest(#1, #2))
-        ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+      Filter (#3 = 4) AND (#4 = 3)
+        Map (greatest(#1, #2), least(#1, #2))
+          ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)

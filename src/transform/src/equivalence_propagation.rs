@@ -30,10 +30,11 @@
 
 use std::collections::BTreeMap;
 
+use mz_expr::canonicalize::equivalences::{EquivalenceClasses, ExpressionReducer};
 use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
 use mz_repr::Datum;
 
-use crate::analysis::equivalences::{EquivalenceClasses, Equivalences, ExpressionReducer};
+use crate::analysis::equivalences::Equivalences;
 use crate::analysis::{Arity, DerivedView, RelationType};
 
 use crate::{TransformCtx, TransformError};
