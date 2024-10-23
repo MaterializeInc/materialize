@@ -66,9 +66,21 @@ observability:
 # Network policies configuration
 networkPolicies:
   # Whether to enable network policies for securing communication between pods
-  enabled: false
-  # Use native Kubernetes NetworkPolicies if enabled
-  useNativeKubernetesPolicy: true
+  enabled: true
+  # internal communication between Materialize pods
+  internal:
+    enabled: true
+  # ingress to the SQL and HTTP interfaces
+  # on environmentd or balancerd
+  ingress:
+    enabled: true
+    cidrs:
+      - 0.0.0.0/0
+  # egress from Materialize pods to sources and sinks
+  egress:
+    enabled: true
+    cidrs:
+      - 0.0.0.0/0
 
 # Namespace configuration
 namespace:

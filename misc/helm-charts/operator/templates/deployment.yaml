@@ -48,5 +48,22 @@ spec:
         {{- range $key, $value := .Values.clusterd.nodeSelector }}
         - "--clusterd-node-selector={{ $key }}={{ $value }}"
         {{- end }}
+        {{- if .Values.networkPolicies.enabled }}
+        {{- if .Values.networkPolicies.internal.enabled }}
+        - "--network-policies-internal-enabled=true"
+        {{- end }}
+        {{- if .Values.networkPolicies.ingress.enabled }}
+        - "--network-policies-ingress-enabled=true"
+        {{- range $cidr := .Values.networkPolicies.ingress.cidrs }}
+        - "--network-policies-ingress-cidrs={{$cidr}}"
+        {{- end }}
+        {{- end }}
+        {{- if .Values.networkPolicies.egress.enabled }}
+        - "--network-policies-egress-enabled=true"
+        {{- range $cidr := .Values.networkPolicies.egress.cidrs }}
+        - "--network-policies-egress-cidrs={{$cidr}}"
+        {{- end }}
+        {{- end }}
+        {{- end }}
         resources:
           {{- toYaml .Values.operator.resources | nindent 10 }}

@@ -114,6 +114,10 @@ pub mod v1alpha1 {
             format!("persist-pubsub-{}-{generation}", self.name_unchecked())
         }
 
+        pub fn name_prefixed(&self, suffix: &str) -> String {
+            format!("{}-{}", self.name_unchecked(), suffix)
+        }
+
         pub fn default_labels(&self) -> BTreeMap<String, String> {
             BTreeMap::from_iter([
                 (

@@ -20,8 +20,8 @@ use k8s_openapi::{
             TCPSocketAction, Toleration,
         },
         networking::v1::{
-            NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule, NetworkPolicyPeer,
-            NetworkPolicyPort, NetworkPolicySpec,
+            IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
+            NetworkPolicyPeer, NetworkPolicyPort, NetworkPolicySpec,
         },
         rbac::v1::{PolicyRule, Role, RoleBinding, RoleRef, Subject},
     },
@@ -299,60 +299,130 @@ fn create_network_policies(
     mz: &Materialize,
     orchestratord_namespace: &str,
 ) -> Vec<NetworkPolicy> {
-    vec![
-        // Allow all clusterd/environmentd traffic (within the namespace)
-        NetworkPolicy {
-            metadata: mz.managed_resource_meta("allow-all-within-namespace".to_owned()),
+    let mut network_policies = Vec::new();
+    if config.network_policies.internal_enabled {
+        network_policies.extend([
+            // Allow all clusterd/environmentd traffic (within the namespace)
+            NetworkPolicy {
+                metadata: mz.managed_resource_meta(mz.name_prefixed("allow-all-within-namespace")),
+                spec: Some(NetworkPolicySpec {
+                    egress: Some(vec![NetworkPolicyEgressRule {
+                        to: Some(vec![NetworkPolicyPeer {
+                            pod_selector: Some(LabelSelector::default()),
+                            ..Default::default()
+                        }]),
+                        ..Default::default()
+                    }]),
+                    ingress: Some(vec![NetworkPolicyIngressRule {
+                        from: Some(vec![NetworkPolicyPeer {
+                            pod_selector: Some(LabelSelector::default()),
+                            ..Default::default()
+                        }]),
+                        ..Default::default()
+                    }]),
+                    policy_types: Some(vec!["Ingress".to_owned(), "Egress".to_owned()]),
+                    ..Default::default()
+                }),
+            },
+            // Allow traffic from orchestratord to environmentd in order to hit
+            // the promotion endpoints during upgrades
+            NetworkPolicy {
+                metadata: mz.managed_resource_meta(mz.name_prefixed("allow-orchestratord")),
+                spec: Some(NetworkPolicySpec {
+                    ingress: Some(vec![NetworkPolicyIngressRule {
+                        from: Some(vec![NetworkPolicyPeer {
+                            namespace_selector: Some(LabelSelector {
+                                match_labels: Some(btreemap! {
+                                    "kubernetes.io/metadata.name".into() => orchestratord_namespace.into(),
+                                }),
+                                ..Default::default()
+                            }),
+                            pod_selector: Some(LabelSelector {
+                                match_labels: Some(btreemap! {
+                                    "materialize.cloud/app".into() => "orchestratord".into(),
+                                }),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }]),
+                        ports: Some(vec![NetworkPolicyPort {
+                            port: Some(IntOrString::Int(config.environmentd_internal_http_port)),
+                            protocol: Some("TCP".to_string()),
+                            ..Default::default()
+                        }]),
+                        ..Default::default()
+                    }]),
+                    policy_types: Some(vec!["Ingress".to_owned()]),
+                    ..Default::default()
+                }),
+            },
+        ]);
+    }
+    if config.network_policies.ingress_enabled {
+        network_policies.extend([NetworkPolicy {
+            metadata: mz.managed_resource_meta(mz.name_prefixed("sql-and-http-ingress")),
+            spec: Some(NetworkPolicySpec {
+                ingress: Some(vec![NetworkPolicyIngressRule {
+                    from: Some(
+                        config
+                            .network_policies
+                            .ingress_cidrs
+                            .iter()
+                            .map(|cidr| NetworkPolicyPeer {
+                                ip_block: Some(IPBlock {
+                                    cidr: cidr.to_owned(),
+                                    except: None,
+                                }),
+                                ..Default::default()
+                            })
+                            .collect(),
+                    ),
+                    ports: Some(vec![
+                        NetworkPolicyPort {
+                            port: Some(IntOrString::Int(config.environmentd_http_port)),
+                            protocol: Some("TCP".to_string()),
+                            ..Default::default()
+                        },
+                        NetworkPolicyPort {
+                            port: Some(IntOrString::Int(config.environmentd_sql_port)),
+                            protocol: Some("TCP".to_string()),
+                            ..Default::default()
+                        },
+                    ]),
+                    ..Default::default()
+                }]),
+                policy_types: Some(vec!["Ingress".to_owned()]),
+                ..Default::default()
+            }),
+        }]);
+    }
+    if config.network_policies.egress_enabled {
+        network_policies.extend([NetworkPolicy {
+            metadata: mz.managed_resource_meta(mz.name_prefixed("sources-and-sinks-egress")),
             spec: Some(NetworkPolicySpec {
                 egress: Some(vec![NetworkPolicyEgressRule {
-                    to: Some(vec![NetworkPolicyPeer {
-                        pod_selector: Some(LabelSelector::default()),
-                        ..Default::default()
-                    }]),
+                    to: Some(
+                        config
+                            .network_policies
+                            .egress_cidrs
+                            .iter()
+                            .map(|cidr| NetworkPolicyPeer {
+                                ip_block: Some(IPBlock {
+                                    cidr: cidr.to_owned(),
+                                    except: None,
+                                }),
+                                ..Default::default()
+                            })
+                            .collect(),
+                    ),
                     ..Default::default()
                 }]),
-                ingress: Some(vec![NetworkPolicyIngressRule {
-                    from: Some(vec![NetworkPolicyPeer {
-                        pod_selector: Some(LabelSelector::default()),
-                        ..Default::default()
-                    }]),
-                    ..Default::default()
-                }]),
+                policy_types: Some(vec!["Egress".to_owned()]),
                 ..Default::default()
             }),
-        },
-        // Allow traffic from orchestratord to environmentd in order to hit
-        // the promotion endpoints during upgrades
-        NetworkPolicy {
-            metadata: mz.managed_resource_meta("allow-orchestratord".to_owned()),
-            spec: Some(NetworkPolicySpec {
-                ingress: Some(vec![NetworkPolicyIngressRule {
-                    from: Some(vec![NetworkPolicyPeer {
-                        namespace_selector: Some(LabelSelector {
-                            match_labels: Some(btreemap! {
-                                "kubernetes.io/metadata.name".into() => orchestratord_namespace.into(),
-                            }),
-                            ..Default::default()
-                        }),
-                        pod_selector: Some(LabelSelector {
-                            match_labels: Some(btreemap! {
-                                "materialize.cloud/app".into() => "orchestratord".into(),
-                            }),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }]),
-                    ports: Some(vec![NetworkPolicyPort {
-                        port: Some(IntOrString::Int(config.environmentd_internal_http_port)),
-                        protocol: Some("TCP".to_string()),
-                        ..Default::default()
-                    }]),
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }),
-        },
-    ]
+        }]);
+    }
+    network_policies
 }
 
 fn create_service_account_object(config: &super::Args, mz: &Materialize) -> ServiceAccount {
