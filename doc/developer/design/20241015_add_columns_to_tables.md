@@ -148,10 +148,16 @@ text representation for IDs that is persisted in `create_sql` will get parsed as
 In planning (or possibly name resolution) is where we will convert from the `CatalogItemId(u1)`
 and `VERSION` syntax in `create_sql` to `GlobalId`s.
 
-In the durable Catalog we will reuse the existing id allocator that currently mints `GlobalId`s to
-mint `CatalogItemId`s. We will create a new id allocator specifically for `GlobalId`s that will be
-initialized to the same value as the original allocator, this prevents accidental `GlobalId` re-use
-if they are persisted outside the Catalog. Additionally we will extend the existing
+In the durable Catalog we will reuse the existing ID allocator that currently mints `GlobalId`s to
+mint `CatalogItemId`s. We also will create a new ID allocator specifically for `GlobalId`s that will be
+initialized to the same value as the original allocator.
+
+We need to start `CatalogItemId`s at the current value of the `GlobalId` allocator so all existing
+items can continue to be identified by the same text representation of their current ID, and thus
+to prevent ID re-use. For example, if a user has a table named "orders" with `GlobalId::User(42)`,
+we'll migrate that to `CatalogItemId::User(42)` so externally that table continues to have the ID
+of `'u42'`. Additionally, resuming `GlobalId` allocation from the current value prevents accidental
+`GlobalId` re-use if they are persisted outside the Catalog. Additionally we will extend the existing
 [ItemValue](https://github.com/MaterializeInc/materialize/blob/b579caa68b6d287426dead8626c0adc885205740/src/catalog/protos/objects.proto#L119-L126)
 protobuf type to include a map of `VERSION -> GlobalId`. Externally to map between `CatalogItemId`s
 and `GlobalId`s we’ll introduce a new Catalog table, `mz_internal.mz_collection_ids`.
@@ -170,8 +176,11 @@ Persist Shard, if there are other `GlobalId`s that still reference said shard.
 
 ### Compute
 
-Our Compute layer will operate entirely on `GlobalId`s. Other than some refactoring of what Catalog
-APIs our Compute layer uses, I don’t anticipate any material changes here.
+Our Compute layer will operate entirely on `GlobalId`s and require only minor refactors the Catalog
+APIs our Compute layer uses. Additionally, we'll should eventually add some Notices around Index
+selection for tables. If a user creates an Index on a Table, then later adds a column to said
+Table, that Index will no longer get used when querying the table because it is built on a previous
+version.
 
 ## Minimal Viable Prototype
 
