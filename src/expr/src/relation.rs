@@ -2731,7 +2731,7 @@ impl AggregateExpr {
             AggregateFunc::WindowAggregate {
                 wrapped_aggregate,
                 window_frame,
-                ..
+                order_by: _,
             } => {
                 // TODO: deduplicate code between the various window function cases.
 
@@ -2754,20 +2754,15 @@ impl AggregateExpr {
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
                 // Extract the input value
-                let expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+                let arg_expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
 
-                // If the window frame includes the current (single) row, evaluate the aggregate on
-                // that row. Otherwise, return the default value for the aggregate.
-                let value = if window_frame.includes_current_row() {
-                    AggregateExpr {
-                        func: (**wrapped_aggregate).clone(),
-                        expr,
-                        distinct: false, // We have just one input element; DISTINCT doesn't matter.
-                    }
-                    .on_unique(input_type)
-                } else {
-                    MirScalarExpr::literal_ok(wrapped_aggregate.default(), window_agg_return_type)
-                };
+                let (result, column_name) = Self::on_unique_window_agg(
+                    window_frame,
+                    arg_expr,
+                    input_type,
+                    window_agg_return_type,
+                    wrapped_aggregate,
+                );
 
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::ListCreate {
@@ -2775,12 +2770,80 @@ impl AggregateExpr {
                     },
                     exprs: vec![MirScalarExpr::CallVariadic {
                         func: VariadicFunc::RecordCreate {
+                            field_names: vec![column_name, ColumnName::from("?record?")],
+                        },
+                        exprs: vec![result, original_row],
+                    }],
+                }
+            }
+
+            // The input type is ((OriginalRow, (Arg1, Arg2, ...)), OrderByExprs...)
+            AggregateFunc::FusedWindowAggregate {
+                wrapped_aggregates,
+                order_by: _,
+                window_frame,
+            } => {
+                // Throw away OrderByExprs
+                let tuple = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the original row
+                let original_row = tuple
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the args of the fused call
+                let all_args = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+
+                let return_type_with_orig_row = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+
+                let all_func_return_types =
+                    return_type_with_orig_row.unwrap_record_element_type()[0].clone();
+                let mut func_result_exprs = Vec::new();
+                let mut col_names = Vec::new();
+                for (idx, wrapped_aggr) in wrapped_aggregates.iter().enumerate() {
+                    let arg = all_args
+                        .clone()
+                        .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(idx)));
+                    let return_type =
+                        all_func_return_types.unwrap_record_element_type()[idx].clone();
+                    let (result, column_name) = Self::on_unique_window_agg(
+                        window_frame,
+                        arg,
+                        input_type,
+                        return_type,
+                        wrapped_aggr,
+                    );
+                    func_result_exprs.push(result);
+                    col_names.push(column_name);
+                }
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: return_type_with_orig_row,
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
                             field_names: vec![
-                                ColumnName::from("?window_agg?"),
+                                ColumnName::from("?fused_window_aggr?"),
                                 ColumnName::from("?record?"),
                             ],
                         },
-                        exprs: vec![value, original_row],
+                        exprs: vec![
+                            MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::RecordCreate {
+                                    field_names: col_names,
+                                },
+                                exprs: func_result_exprs,
+                            },
+                            original_row,
+                        ],
                     }],
                 }
             }
@@ -2967,6 +3030,7 @@ impl AggregateExpr {
         }
     }
 
+    /// `on_unique` for `lag` and `lead`
     fn on_unique_lag_lead(
         lag_lead: &LagLeadType,
         encoded_args: MirScalarExpr,
@@ -3002,6 +3066,7 @@ impl AggregateExpr {
         (result_expr, column_name)
     }
 
+    /// `on_unique` for `first_value` and `last_value`
     fn on_unique_first_value_last_value(
         window_frame: &WindowFrame,
         arg: MirScalarExpr,
@@ -3014,6 +3079,29 @@ impl AggregateExpr {
             MirScalarExpr::literal_null(return_type)
         };
         (result_expr, ColumnName::from("?first_value?"))
+    }
+
+    /// `on_unique` for window aggregations
+    fn on_unique_window_agg(
+        window_frame: &WindowFrame,
+        arg_expr: MirScalarExpr,
+        input_type: &[ColumnType],
+        return_type: ScalarType,
+        wrapped_aggr: &AggregateFunc,
+    ) -> (MirScalarExpr, ColumnName) {
+        // If the window frame includes the current (single) row, evaluate the aggregate on
+        // that row. Otherwise, return the default value for the aggregate.
+        let result_expr = if window_frame.includes_current_row() {
+            AggregateExpr {
+                func: wrapped_aggr.clone(),
+                expr: arg_expr,
+                distinct: false, // We have just one input element; DISTINCT doesn't matter.
+            }
+            .on_unique(input_type)
+        } else {
+            MirScalarExpr::literal_ok(wrapped_aggr.default(), return_type)
+        };
+        (result_expr, ColumnName::from("?window_agg?"))
     }
 
     /// Returns whether the expression is COUNT(*) or not.  Note that

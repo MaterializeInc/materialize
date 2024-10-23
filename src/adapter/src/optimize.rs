@@ -255,6 +255,7 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
             enable_value_window_function_fusion: config
                 .features
                 .enable_value_window_function_fusion,
+            enable_window_aggregation_fusion: config.features.enable_window_aggregation_fusion,
         }
     }
 }
