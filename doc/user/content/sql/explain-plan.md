@@ -74,7 +74,7 @@ Modifier | Description
 ------|-----
 **arity** | Annotate each subplan with its number of produced columns. This is useful due to the use of offset-based column names.
 **cardinality** | Annotate each subplan with a symbolic estimate of its cardinality.
-**join implementations** | Render details about the implementation strategy of optimized MIR `Join` nodes.
+**join implementations** | Render details about the [implementation strategy of optimized MIR `Join` nodes](#explain-with-join-implementations).
 **keys** | Annotate each subplan with its unique keys.
 **node identifiers** | Annotate each subplan in a `PHYSICAL PLAN` with its node ID.
 **redacted** | Anonymize literals in the output.
@@ -186,9 +186,12 @@ Many operators need to refer to columns in their input. These are displayed like
 `#3` for column number 3. (Columns are numbered starting from column 0). To get a better sense of
 columns assigned to `Map` operators, it might be useful to request [the `arity` output modifier](#output-modifiers).
 
-Each operator can also be annotated with additional metadata. Details are shown by default in
-the `EXPLAIN PHYSICAL PLAN` output, but are hidden elsewhere. In `EXPLAIN OPTIMIZED PLAN`, details
-about the implementation in the `Join` operator can be requested with [the `join_impls` output modifier](#output-modifiers):
+Each operator can also be annotated with additional metadata. Details are shown
+by default in the `EXPLAIN PHYSICAL PLAN` output, but are hidden elsewhere. <a
+name="explain-with-join-implementations"></a>In `EXPLAIN OPTIMIZED
+PLAN`, details about the implementation in the `Join` operator can be requested
+with [the `join implementations` output modifier](#output-modifiers) (that is,
+`EXPLAIN OPTIMIZED PLAN WITH (join implementations) FOR ...`).
 
 ```text
 Join on=(#1 = #2 AND #3 = #4) type=delta
