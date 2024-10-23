@@ -742,6 +742,10 @@ impl PersistClient {
     }
 }
 
+fn foobar(x: usize) -> String {
+    "hello"
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::Future;
