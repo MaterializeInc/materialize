@@ -892,7 +892,7 @@ impl Source {
     }
 
     /// Connection ID of the source, if one exists.
-    pub fn connection_id(&self) -> Option<GlobalId> {
+    pub fn connection_id(&self) -> Option<CatalogItemId> {
         match &self.data_source {
             DataSourceDesc::Ingestion { ingestion_desc, .. } => {
                 ingestion_desc.desc.connection.connection_id()
@@ -997,7 +997,7 @@ impl Sink {
         (key_format, value_format)
     }
 
-    pub fn connection_id(&self) -> Option<GlobalId> {
+    pub fn connection_id(&self) -> Option<CatalogItemId> {
         self.connection.connection_id()
     }
 }

@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 
 pub mod cache;
 
@@ -25,14 +25,14 @@ pub mod cache;
 pub trait SecretsController: Debug + Send + Sync {
     /// Creates or updates the specified secret with the specified binary
     /// contents.
-    async fn ensure(&self, id: GlobalId, contents: &[u8]) -> Result<(), anyhow::Error>;
+    async fn ensure(&self, id: CatalogItemId, contents: &[u8]) -> Result<(), anyhow::Error>;
 
     /// Deletes the specified secret.
-    async fn delete(&self, id: GlobalId) -> Result<(), anyhow::Error>;
+    async fn delete(&self, id: CatalogItemId) -> Result<(), anyhow::Error>;
 
     /// Lists known secrets. Unrecognized secret objects do not produce an error
     /// and are ignored.
-    async fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error>;
+    async fn list(&self) -> Result<Vec<CatalogItemId>, anyhow::Error>;
 
     /// Returns a reader for the secrets managed by this controller.
     fn reader(&self) -> Arc<dyn SecretsReader>;
@@ -52,12 +52,12 @@ pub struct CachingPolicy {
 #[async_trait]
 pub trait SecretsReader: Debug + Send + Sync {
     /// Returns the binary contents of the specified secret.
-    async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error>;
+    async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error>;
 
     /// Returns the string contents of the specified secret.
     ///
     /// Returns an error if the secret's contents cannot be decoded as UTF-8.
-    async fn read_string(&self, id: GlobalId) -> Result<String, anyhow::Error> {
+    async fn read_string(&self, id: CatalogItemId) -> Result<String, anyhow::Error> {
         let contents = self.read(id).await?;
         String::from_utf8(contents).context("converting secret value to string")
     }
@@ -65,7 +65,7 @@ pub trait SecretsReader: Debug + Send + Sync {
 
 #[derive(Debug)]
 pub struct InMemorySecretsController {
-    data: Arc<Mutex<BTreeMap<GlobalId, Vec<u8>>>>,
+    data: Arc<Mutex<BTreeMap<CatalogItemId, Vec<u8>>>>,
 }
 
 impl InMemorySecretsController {
@@ -78,17 +78,17 @@ impl InMemorySecretsController {
 
 #[async_trait]
 impl SecretsController for InMemorySecretsController {
-    async fn ensure(&self, id: GlobalId, contents: &[u8]) -> Result<(), anyhow::Error> {
+    async fn ensure(&self, id: CatalogItemId, contents: &[u8]) -> Result<(), anyhow::Error> {
         self.data.lock().unwrap().insert(id, contents.to_vec());
         Ok(())
     }
 
-    async fn delete(&self, id: GlobalId) -> Result<(), anyhow::Error> {
+    async fn delete(&self, id: CatalogItemId) -> Result<(), anyhow::Error> {
         self.data.lock().unwrap().remove(&id);
         Ok(())
     }
 
-    async fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error> {
+    async fn list(&self) -> Result<Vec<CatalogItemId>, anyhow::Error> {
         Ok(self.data.lock().unwrap().keys().cloned().collect())
     }
 
@@ -101,7 +101,7 @@ impl SecretsController for InMemorySecretsController {
 
 #[async_trait]
 impl SecretsReader for InMemorySecretsController {
-    async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
+    async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
         let contents = self.data.lock().unwrap().get(&id).cloned();
         contents.ok_or_else(|| anyhow::anyhow!("secret does not exist"))
     }

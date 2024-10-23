@@ -16,7 +16,7 @@ use mysql_async::{Conn, Opts, OptsBuilder};
 
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::option::OptionExt;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use serde::{Deserialize, Serialize};
@@ -44,7 +44,7 @@ pub enum TunnelConfig {
     /// service.
     AwsPrivatelink {
         /// The ID of the AWS PrivateLink service.
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
     },
 }
 

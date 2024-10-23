@@ -15,6 +15,7 @@ package mz_compute_types.sinks;
 
 import "google/protobuf/empty.proto";
 import "repr/src/antichain.proto";
+import "repr/src/catalog_item_id.proto";
 import "repr/src/global_id.proto";
 import "repr/src/refresh_schedule.proto";
 import "repr/src/relation_and_scalar.proto";
@@ -54,6 +55,6 @@ message ProtoContinualTaskConnection {
 message ProtoCopyToS3OneshotSinkConnection {
   mz_storage_types.sinks.ProtoS3UploadInfo upload_info = 1;
   mz_storage_types.connections.aws.ProtoAwsConnection aws_connection = 2;
-  mz_repr.global_id.ProtoGlobalId connection_id = 3;
+  mz_repr.catalog_item_id.ProtoCatalogItemId connection_id = 3;
   uint64 output_batch_count = 4;
 }
