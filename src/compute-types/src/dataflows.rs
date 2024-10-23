@@ -33,6 +33,7 @@ use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
+use timely::PartialOrder;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_types.dataflows.rs"));
 
@@ -134,6 +135,11 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
             let mut result = Antichain::new();
             if let Some(expiration) = definiteness.apply(*expiration) {
                 result.insert(expiration);
+            }
+            // We don't need to expire data if the dataflow's until is less or equal to the expiration time.
+            if PartialOrder::less_equal(&self.until, &result) {
+                // Disable expiration if the until is less than or equal to the expiration.
+                return Antichain::default();
             }
             println!("Returning result: {:?}", result);
             return result;
