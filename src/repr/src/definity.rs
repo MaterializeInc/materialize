@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Description of how a dataflow follows time, independent of time.
+
 use crate::refresh_schedule::RefreshSchedule;
 use crate::Timestamp;
 use mz_proto::{RustType, TryFromProtoError};
@@ -17,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.definity.rs"));
 
+/// Description of how a dataflow follows time.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub enum Indefiniteness {
     /// Potentially valid for all times.
@@ -28,6 +31,7 @@ pub enum Indefiniteness {
 }
 
 impl Indefiniteness {
+    /// Normalizes by removing unnecessary nesting.
     pub fn normalize(&mut self) {
         use Indefiniteness::*;
         match self {
@@ -38,6 +42,8 @@ impl Indefiniteness {
         }
     }
 
+    /// Unify two indefinitenesses. A definite value is the least specific, followed by a refresh
+    /// schedule, and finally wallclock time.
     pub fn unify(&mut self, other: &Self) {
         use Indefiniteness::*;
         match (self, other) {
@@ -54,9 +60,9 @@ impl Indefiniteness {
         }
     }
 
+    /// Applies the indefiniteness to a wall clock time.
     pub fn apply(&self, wall_clock: Timestamp) -> Option<Timestamp> {
-        println!("apply: {:?} {:?}", self, wall_clock);
-        let result = match self {
+        match self {
             Indefiniteness::Definite => None,
             Indefiniteness::RefreshSchedule(schedule, inner) => {
                 let result = inner.iter().map(|inner| inner.apply(wall_clock)).min()??;
@@ -70,9 +76,7 @@ impl Indefiniteness {
                 }
             }
             Indefiniteness::Wallclock => Some(wall_clock),
-        };
-        println!("result: {:?}", result);
-        result
+        }
     }
 }
 
@@ -131,5 +135,105 @@ impl Arbitrary for Indefiniteness {
             Just(Indefiniteness::Wallclock).boxed(),
         ])
         .boxed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_indefiniteness_normalize() {
+        let mut i = Indefiniteness::RefreshSchedule(None, vec![Indefiniteness::Wallclock]);
+        i.normalize();
+        assert_eq!(i, Indefiniteness::Wallclock);
+
+        let mut i = Indefiniteness::RefreshSchedule(
+            Some(RefreshSchedule {
+                everies: vec![],
+                ats: vec![Timestamp::from(1000)],
+            }),
+            vec![Indefiniteness::Wallclock],
+        );
+        i.normalize();
+        assert_eq!(
+            i,
+            Indefiniteness::RefreshSchedule(
+                Some(RefreshSchedule {
+                    everies: vec![],
+                    ats: vec![Timestamp::from(1000)],
+                }),
+                vec![Indefiniteness::Wallclock]
+            )
+        );
+
+        i = Indefiniteness::Wallclock;
+        i.normalize();
+        assert_eq!(i, Indefiniteness::Wallclock);
+
+        i = Indefiniteness::Definite;
+        i.normalize();
+        assert_eq!(i, Indefiniteness::Definite);
+    }
+
+    #[test]
+    fn test_indefiniteness_unify() {
+        let mut i = Indefiniteness::Definite;
+        i.unify(&Indefiniteness::Definite);
+        assert_eq!(i, Indefiniteness::Definite);
+
+        i = Indefiniteness::Definite;
+        i.unify(&Indefiniteness::RefreshSchedule(
+            None,
+            vec![Indefiniteness::Wallclock],
+        ));
+        assert_eq!(
+            i,
+            Indefiniteness::RefreshSchedule(
+                None,
+                vec![Indefiniteness::RefreshSchedule(
+                    None,
+                    vec![Indefiniteness::Wallclock]
+                )]
+            )
+        );
+
+        i = Indefiniteness::Definite;
+        i.unify(&Indefiniteness::Wallclock);
+        assert_eq!(i, Indefiniteness::Wallclock);
+
+        i = Indefiniteness::RefreshSchedule(None, vec![Indefiniteness::Wallclock]);
+        i.unify(&Indefiniteness::RefreshSchedule(
+            None,
+            vec![Indefiniteness::Wallclock],
+        ));
+        assert_eq!(
+            i,
+            Indefiniteness::RefreshSchedule(
+                None,
+                vec![
+                    Indefiniteness::Wallclock,
+                    Indefiniteness::RefreshSchedule(None, vec![Indefiniteness::Wallclock],)
+                ]
+            )
+        );
+
+        i = Indefiniteness::RefreshSchedule(None, vec![Indefiniteness::Wallclock]);
+        i.unify(&Indefiniteness::Definite);
+        assert_eq!(
+            i,
+            Indefiniteness::RefreshSchedule(None, vec![Indefiniteness::Wallclock])
+        );
+
+        i = Indefiniteness::Wallclock;
+        i.unify(&Indefiniteness::Definite);
+        assert_eq!(i, Indefiniteness::Wallclock);
+
+        i = Indefiniteness::Wallclock;
+        i.unify(&Indefiniteness::RefreshSchedule(
+            None,
+            vec![Indefiniteness::Wallclock],
+        ));
+        assert_eq!(i, Indefiniteness::Wallclock);
     }
 }
