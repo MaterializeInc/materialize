@@ -876,13 +876,14 @@ where
     ///
     /// The plan must _not_ contain any `Let` or `LetRec` nodes.
     fn render_letfree_plan(&mut self, object_id: GlobalId, plan: FlatPlan) -> CollectionBundle<G> {
-        let (mut nodes, root_id, topological_order) = plan.destruct();
+        let (mut nodes, root_id, topological_order, mut nesting) = plan.destruct();
 
         // Rendered collections by their `LirId`.
         let mut collections = BTreeMap::new();
 
         for lir_id in topological_order {
             let node = nodes.remove(&lir_id).unwrap();
+            let nesting = nesting.remove(&lir_id).unwrap();
 
             // TODO(mgree) need ExprHumanizer in DataflowDescription (ActiveComputeState doesn't have a catalog reference)
             let operator = node.humanize(&DummyHumanizer);
@@ -897,7 +898,7 @@ where
                 Some((operator_id_start, operator_id_end))
             };
 
-            self.log_lir_mapping(object_id, lir_id, operator, operator_span);
+            self.log_lir_mapping(object_id, lir_id, operator, nesting, operator_span);
             self.log_operator_hydration(&mut bundle, lir_id);
 
             collections.insert(lir_id, bundle);
@@ -1117,6 +1118,7 @@ where
         global_id: GlobalId,
         lir_id: LirId,
         operator: String,
+        nesting: u8,
         operator_span: Option<(usize, usize)>,
     ) {
         if let Some(logger) = &self.compute_logger {
@@ -1124,6 +1126,7 @@ where
                 global_id,
                 lir_id,
                 operator,
+                nesting,
                 operator_span,
             });
         }

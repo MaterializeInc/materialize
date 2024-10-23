@@ -146,6 +146,8 @@ pub enum ComputeEvent {
         lir_id: LirId,
         /// The LIR operator, as a string (see `FlatPlanNode::humanize`).
         operator: String,
+        /// How nested this operator is.
+        nesting: u8,
         /// Operator id span; may not be present if not operators were rendered.
         operator_span: Option<(usize, usize)>,
     },
@@ -430,6 +432,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                     Datum::UInt64(datum.lir_id),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     make_string_datum(&datum.operator, &mut scratch2),
+                    Datum::UInt16(u16::cast_from(datum.nesting)),
                     span_start,
                     span_end,
                 ])
@@ -517,9 +520,20 @@ struct DemuxState<A: Allocate> {
     /// Arrangement size stash.
     arrangement_size: BTreeMap<usize, ArrangementSizeState>,
     /// LIR -> operator span mapping.
-    lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, (String, Option<(usize, usize)>)>>,
+    lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, LirMetadata>>,
     /// Dataflow -> `GlobalId` mapping (many-to-one)/
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
+}
+
+/// Metadata for LIR operators.
+#[derive(Debug)]
+struct LirMetadata {
+    /// The operator rendered as a string.
+    operator: String,
+    /// How nested the operator is (for nice indentation).
+    nesting: u8,
+    /// The dataflow operator ids, given as start (inclusive) and end (exclusive).
+    operator_span: Option<(usize, usize)>,
 }
 
 impl<A: Allocate> DemuxState<A> {
@@ -650,6 +664,7 @@ struct LirMappingDatum {
     global_id: GlobalId,
     lir_id: LirId,
     operator: String,
+    nesting: u8,
     operator_span: Option<(usize, usize)>,
 }
 
@@ -732,8 +747,9 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                 global_id,
                 lir_id,
                 operator,
+                nesting,
                 operator_span,
-            } => self.handle_lir_mapping(global_id, lir_id, operator, operator_span),
+            } => self.handle_lir_mapping(global_id, lir_id, operator, nesting, operator_span),
             DataflowGlobal { id, global_id } => self.handle_dataflow_global(id, global_id),
         }
     }
@@ -843,11 +859,20 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
                 // Remove LIR mapping.
                 if let Some(mappings) = self.state.lir_mapping.remove(&global_id) {
-                    for (lir_id, (operator, operator_span)) in mappings {
+                    for (
+                        lir_id,
+                        LirMetadata {
+                            operator,
+                            nesting,
+                            operator_span,
+                        },
+                    ) in mappings
+                    {
                         let datum = LirMappingDatum {
                             global_id,
                             lir_id,
                             operator,
+                            nesting,
                             operator_span,
                         };
                         self.output.lir_mapping.give((datum, ts, -1));
@@ -1076,6 +1101,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         global_id: GlobalId,
         lir_id: LirId,
         operator: String,
+        nesting: u8,
         operator_span: Option<(usize, usize)>,
     ) {
         // record the state (for the later drop)
@@ -1083,12 +1109,20 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             .lir_mapping
             .entry(global_id)
             .and_modify(|id_mapping| {
-                let existing = id_mapping.insert(lir_id, (operator.clone(), operator_span.clone()));
+                let existing = id_mapping.insert(lir_id, LirMetadata {
+                    operator: operator.clone(),
+                    nesting,
+                    operator_span: operator_span.clone(),
+                });
                 if let Some(old_operator_span) = existing {
                     error!(%global_id, %lir_id, "lir mapping to operator span {operator_span:?} already registered as {old_operator_span:?}");
                 }
             })
-            .or_insert_with(|| BTreeMap::from([(lir_id, (operator.clone(), operator_span.clone()))]));
+            .or_insert_with(|| BTreeMap::from([(lir_id, LirMetadata {
+                operator: operator.clone(),
+                nesting,
+                operator_span: operator_span.clone(),
+            })]));
 
         // send the datum out
         let ts = self.ts();
@@ -1096,6 +1130,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             global_id,
             lir_id,
             operator,
+            nesting,
             operator_span,
         };
         self.output.lir_mapping.give((datum, ts, 1));
