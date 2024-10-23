@@ -127,14 +127,6 @@ build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=64"
 # just `.rmeta` instead of the full `.rlib`.
 #build --@rules_rust//rust/settings:pipelined_compilation=True
 
-# As of Jan 2024 all of the x86-64 and aarch64 hardware we run on support these
-# CPU targets.
-build:linux-amd64 --copt="-m64"
-build:linux-amd64 --copt="-march=x86-64-v3"
-build:linux-amd64 --@rules_rust//:extra_rustc_flag="-Ctarget-cpu=x86-64-v3"
-build:linux-arm64 --copt="-mcpu=neoverse-n1"
-build:linux-arm64 --@rules_rust//:extra_rustc_flag="-Ctarget-cpu=neoverse-n1"
-
 # CI Build Configuration
 #
 # Note: This shouldn't change any config of the built binary, just the way it

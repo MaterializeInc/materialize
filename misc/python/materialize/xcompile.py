@@ -111,8 +111,6 @@ def bazel(
     ), "cross compiling to Linux x86_64 is not supported from macOS"
 
     bazel_flags = ["--config=linux"]
-    if sys.platform != "darwin":
-        bazel_flags += [f"--config=linux-{arch.go_str()}"]
 
     rustc_flags = [
         f"--@rules_rust//:extra_rustc_flag={flag}"
@@ -146,8 +144,6 @@ def cargo(
     """
     _target = target(arch)
     _target_env = _target.upper().replace("-", "_")
-    _target_cpu = target_cpu(arch)
-    _target_features = ",".join(target_features(arch))
 
     env = {
         **extra_env,
@@ -156,8 +152,6 @@ def cargo(
     rustflags += [
         "-Clink-arg=-Wl,--compress-debug-sections=zlib",
         "-Csymbol-mangling-version=v0",
-        f"-Ctarget-cpu={_target_cpu}",
-        f"-Ctarget-feature={_target_features}",
         "--cfg=tokio_unstable",
     ]
 
