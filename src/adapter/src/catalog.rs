@@ -557,7 +557,7 @@ impl Catalog {
             catalog,
             storage_collections_to_drop: _,
             migrated_storage_collections_0dt: _,
-            new_builtins: _,
+            new_builtin_collections: _,
             builtin_table_updates: _,
         } = Catalog::open(Config {
             storage,
@@ -735,17 +735,20 @@ impl Catalog {
     }
 
     /// Resolves a `BuiltinTable`.
-    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
+    pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> CatalogItemId {
         self.state.resolve_builtin_table(builtin)
     }
 
     /// Resolves a `BuiltinLog`.
-    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
-        self.state.resolve_builtin_log(builtin)
+    pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> CatalogItemId {
+        self.state.resolve_builtin_log(builtin).0
     }
 
     /// Resolves a `BuiltinSource`.
-    pub fn resolve_builtin_storage_collection(&self, builtin: &'static BuiltinSource) -> GlobalId {
+    pub fn resolve_builtin_storage_collection(
+        &self,
+        builtin: &'static BuiltinSource,
+    ) -> CatalogItemId {
         self.state.resolve_builtin_source(builtin)
     }
 

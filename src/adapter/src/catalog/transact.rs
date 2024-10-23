@@ -899,9 +899,11 @@ impl Catalog {
                         .collect();
                 let introspection_source_ids =
                     tx.allocate_system_item_ids(usize_to_u64(introspection_sources.len()))?;
+
                 let introspection_sources = introspection_sources
                     .into_iter()
-                    .zip(introspection_source_ids.into_iter())
+                    .zip_eq(introspection_source_ids.into_iter())
+                    .map(|(log, (item_id, gid))| (log, item_id, gid))
                     .collect();
 
                 tx.insert_user_cluster(

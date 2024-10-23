@@ -1769,7 +1769,7 @@ impl Coordinator {
     pub(crate) async fn bootstrap(
         &mut self,
         boot_ts: Timestamp,
-        migrated_storage_collections_0dt: BTreeSet<GlobalId>,
+        migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         let bootstrap_start = Instant::now();
@@ -3626,7 +3626,7 @@ pub fn serve(
             mut catalog,
             storage_collections_to_drop,
             migrated_storage_collections_0dt,
-            new_builtins,
+            new_builtin_collections,
             builtin_table_updates,
         } = Catalog::open(mz_catalog::config::Config {
             storage,
@@ -3717,7 +3717,7 @@ pub fn serve(
         let clusters_caught_up_check =
             clusters_caught_up_trigger.map(|trigger| CaughtUpCheckContext {
                 trigger,
-                exclude_collections: new_builtins,
+                exclude_collections: new_builtin_collections.into_iter().collect(),
             });
 
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
