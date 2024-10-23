@@ -45,6 +45,7 @@ use thiserror::Error;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -136,8 +137,8 @@ pub(super) struct Client<T: ComputeControllerTimestamp> {
 }
 
 impl<T: ComputeControllerTimestamp> Client<T> {
-    pub fn send(&self, command: Command<T>) {
-        self.command_tx.send(command).expect("instance not dropped");
+    pub fn send(&self, command: Command<T>) -> Result<(), SendError<Command<T>>> {
+        self.command_tx.send(command)
     }
 }
 
@@ -975,20 +976,35 @@ where
         }
     }
 
-    /// Check that the current instance is empty.
+    /// Shut down this instance.
     ///
-    /// This method exists to help us find bugs where the client drops a compute instance that
-    /// still has replicas or collections installed, and later assumes that said
-    /// replicas/collections still exists.
+    /// This method runs various assertions ensuring the instance state is empty. It exists to help
+    /// us find bugs where the client drops a compute instance that still has replicas or
+    /// collections installed, and later assumes that said replicas/collections still exists.
     ///
     /// # Panics
     ///
     /// Panics if the compute instance still has active replicas.
     /// Panics if the compute instance still has collections installed.
     #[mz_ore::instrument(level = "debug")]
-    pub fn check_empty(&mut self) {
+    pub fn shutdown(&mut self) {
+        // Taking the `command_rx` ensures that the [`Instance::run`] loop terminates.
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let mut command_rx = std::mem::replace(&mut self.command_rx, rx);
+
+        // Apply all outstanding read hold changes. This might cause read hold downgrades to be
+        // added to `command_tx`, so we need to apply those in a loop.
+        while !self.read_holds_rx.is_empty() {
+            self.apply_read_hold_changes();
+
+            // TODO(teskje): Make `Command` an enum and assert that all received commands are read
+            // hold downgrades.
+            while let Ok(cmd) = command_rx.try_recv() {
+                cmd(self);
+            }
+        }
+
         // Collections might have been dropped but not cleaned up yet.
-        self.apply_read_hold_changes();
         self.cleanup_collections();
 
         let stray_replicas: Vec<_> = self.replicas.keys().collect();
