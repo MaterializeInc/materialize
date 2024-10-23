@@ -34,7 +34,9 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import (
+    Postgres,
+)
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
@@ -98,50 +100,56 @@ SERVICES = [
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
     Materialized(
-        external_cockroach=True,
+        external_metadata_store=True,
         external_minio=True,
         sanity_restart=False,
         volumes_extra=["secrets:/share/secrets"],
+        metadata_store="cockroach",
     ),
     Materialized(
         name="mz_1",
-        external_cockroach=True,
+        external_metadata_store=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
         volumes_extra=["secrets:/share/secrets"],
+        metadata_store="cockroach",
     ),
     Materialized(
         name="mz_2",
-        external_cockroach=True,
+        external_metadata_store=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
         volumes_extra=["secrets:/share/secrets"],
+        metadata_store="cockroach",
     ),
     Materialized(
         name="mz_3",
-        external_cockroach=True,
+        external_metadata_store=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
         volumes_extra=["secrets:/share/secrets"],
+        metadata_store="cockroach",
     ),
     Materialized(
         name="mz_4",
-        external_cockroach=True,
+        external_metadata_store=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
         volumes_extra=["secrets:/share/secrets"],
+        metadata_store="cockroach",
     ),
     Materialized(
         name="mz_5",
-        external_cockroach=True,
+        external_metadata_store=True,
         external_minio=True,
         sanity_restart=False,
         restart="on-failure",
         volumes_extra=["secrets:/share/secrets"],
+        metadata_store="cockroach",
     ),
     TestdriveService(
         default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
@@ -154,6 +162,7 @@ SERVICES = [
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
         ],
         volumes_extra=["secrets:/share/secrets"],
+        metadata_store="cockroach",
     ),
     Persistcli(),
     SshBastionHost(),
@@ -171,7 +180,7 @@ class ExecutionMode(Enum):
 
 def setup(c: Composition) -> None:
     c.up("testdrive", persistent=True)
-    c.up("cockroach")
+    c.up(c.metadata_store())
 
     c.up(
         "test-certs",

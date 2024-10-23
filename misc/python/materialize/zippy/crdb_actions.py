@@ -18,7 +18,7 @@ class CockroachStart(Action):
     """Starts a CockroachDB instance."""
 
     def run(self, c: Composition, state: State) -> None:
-        c.up("cockroach")
+        c.up(c.metadata_store())
 
     def provides(self) -> list[Capability]:
         return [CockroachIsRunning()]
@@ -32,6 +32,6 @@ class CockroachRestart(Action):
         return {CockroachIsRunning}
 
     def run(self, c: Composition, state: State) -> None:
-        c.kill("cockroach")
+        c.kill(c.metadata_store())
         time.sleep(1)
-        c.up("cockroach")
+        c.up(c.metadata_store())

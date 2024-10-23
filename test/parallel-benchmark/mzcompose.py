@@ -101,7 +101,7 @@ SERVICES = [
     Balancerd(),
     # Overridden below
     Materialized(),
-    Testdrive(no_reset=True, seed=1),
+    Testdrive(no_reset=True, seed=1, metadata_store="cockroach"),
     Mz(app_password=""),
 ]
 
@@ -430,11 +430,12 @@ def run_once(
                 image=f"materialize/materialized:{tag}" if tag else None,
                 default_size=args.size,
                 soft_assertions=False,
-                external_cockroach=True,
+                external_metadata_store=True,
                 external_minio=True,
                 sanity_restart=False,
                 additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
                 | {"max_connections": "100000"},
+                metadata_store="cockroach",
             )
         ]
         target = None

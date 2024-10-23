@@ -1059,6 +1059,14 @@ class Composition:
                 "Sanity Restart skipped because Mz not in services or `sanity_restart` label not set"
             )
 
+    def metadata_store(self) -> str:
+        for name in ["cockroach", "postgres-metadata"]:
+            if name in self.compose["services"]:
+                return name
+        raise RuntimeError(
+            f"No external metadata store found: {self.compose['services']}"
+        )
+
     def capture_logs(self, *services: str) -> None:
         # Capture logs into services.log since they will be lost otherwise
         # after dowing a composition.
@@ -1427,7 +1435,7 @@ class Composition:
 
     def backup_postgres(self) -> None:
         backup = self.exec(
-            "cockroach",
+            "postgres-metadata",
             "pg_dumpall",
             "--user",
             "postgres",
@@ -1438,13 +1446,13 @@ class Composition:
 
     def restore_postgres(self, mz_service: str = "materialized") -> None:
         self.kill(mz_service)
-        self.kill("cockroach")
-        self.rm("cockroach")
-        self.up("cockroach")
+        self.kill("postgres-metadata")
+        self.rm("postgres-metadata")
+        self.up("postgres-metadata")
         with open("backup.sql") as f:
             backup = f.read()
         self.exec(
-            "cockroach",
+            "postgres-metadata",
             "psql",
             "--user",
             "postgres",
@@ -1460,23 +1468,18 @@ class Composition:
             "--commit",
             "restore-blob",
             f"--blob-uri={minio_blob_uri()}",
-            "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
+            "--consensus-uri=postgres://root@postgres-metadata:26257?options=--search_path=consensus",
         )
         self.up(mz_service)
 
     def backup(self) -> None:
-        print(self.compose["services"])
-        if self.compose["services"]["cockroach"]["image"].startswith(
-            "cockroachdb/cockroach"
-        ):
+        if self.metadata_store() == "cockroach":
             self.backup_cockroach()
         else:
             self.backup_postgres()
 
     def restore(self, mz_service: str = "materialized") -> None:
-        if self.compose["services"]["cockroach"]["image"].startswith(
-            "cockroachdb/cockroach"
-        ):
+        if self.metadata_store() == "cockroach":
             self.restore_cockroach(mz_service)
         else:
             self.restore_postgres(mz_service)

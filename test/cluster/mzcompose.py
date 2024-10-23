@@ -40,7 +40,10 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import CockroachOrPostgres, Postgres
+from materialize.mzcompose.services.postgres import (
+    CockroachOrPostgresMetadata,
+    Postgres,
+)
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -60,9 +63,9 @@ SERVICES = [
     Materialized(
         # We use mz_panic() in some test scenarios, so environmentd must stay up.
         propagate_crashes=False,
-        external_cockroach=True,
+        external_metadata_store=True,
     ),
-    CockroachOrPostgres(),
+    CockroachOrPostgresMetadata(),
     Postgres(),
     Redpanda(),
     Toxiproxy(),
@@ -1278,7 +1281,6 @@ def workflow_test_gh_25633(c: Composition) -> None:
         Testdrive(no_reset=True, consistent_seed=True),
     ):
         c.up(
-            "cockroach",
             "materialized",
         )
 
@@ -1333,7 +1335,6 @@ def workflow_test_remote_storage(c: Composition) -> None:
         Testdrive(no_reset=True, consistent_seed=True),
     ):
         c.up(
-            "cockroach",
             "materialized",
             "clusterd1",
             "clusterd2",
@@ -3216,7 +3217,7 @@ def workflow_test_incident_70(c: Composition) -> None:
 
     with c.override(
         Materialized(
-            external_cockroach=True,
+            external_metadata_store=True,
             external_minio=True,
             sanity_restart=False,
         ),

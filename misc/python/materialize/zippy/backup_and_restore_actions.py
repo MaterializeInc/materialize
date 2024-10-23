@@ -29,11 +29,12 @@ class BackupAndRestore(Action):
             Materialized(
                 name=state.mz_service,
                 external_minio=True,
-                external_cockroach=True,
+                external_metadata_store=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
+                metadata_store="cockroach",
             )
         ):
             c.restore(state.mz_service)

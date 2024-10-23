@@ -21,10 +21,10 @@ from pathlib import Path
 
 from materialize import MZ_ROOT, buildkite, ci_util, file_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.postgres import CockroachOrPostgres
+from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
 
-SERVICES = [CockroachOrPostgres(), SqlLogicTest()]
+SERVICES = [CockroachOrPostgresMetadata(), SqlLogicTest()]
 
 COCKROACH_DEFAULT_PORT = 26257
 
@@ -81,14 +81,14 @@ def run_sqllogictest(
     parser.add_argument("--replicas", default=2, type=int)
     args = parser.parse_args()
 
-    c.up("cockroach")
+    c.up(c.metadata_store())
 
     container_name = "sqllogictest"
 
     exceptions = []
 
     for command, junit_report_path in create_slt_execution_commands(
-        args.replicas, run_config, args, c.name
+        args.replicas, run_config, args, c.name, c.metadata_store()
     ):
         try:
             c.run(container_name, *command)
@@ -126,11 +126,12 @@ class SltRunStepConfig:
         shard_count: int,
         replicas: int,
         junit_report_path: Path,
-        cockroach_port: int = COCKROACH_DEFAULT_PORT,
+        metadata_store: str,
+        metadata_store_port: int = COCKROACH_DEFAULT_PORT,
     ) -> list[str]:
         sqllogictest_config = [
             f"--junit-report={junit_report_path}",
-            f"--postgres-url=postgres://root@cockroach:{cockroach_port}",
+            f"--postgres-url=postgres://root@{metadata_store}:{metadata_store_port}",
             f"--replicas={replicas}",
             f"--shard={shard}",
             f"--shard-count={shard_count}",
@@ -180,7 +181,11 @@ class DefaultSltRunStepConfig(SltRunStepConfig):
 
 
 def create_slt_execution_commands(
-    replicas: int, run_config: SltRunConfig, args: Namespace, composition_name: str
+    replicas: int,
+    run_config: SltRunConfig,
+    args: Namespace,
+    composition_name: str,
+    metadata_store: str,
 ) -> list[tuple[list[str], Path]]:
     shard = buildkite.get_parallelism_index()
     shard_count = buildkite.get_parallelism_count()
@@ -191,7 +196,9 @@ def create_slt_execution_commands(
         step.configure(args)
         # Since we run multiple commands, generate a unique junit report for each
         junit_report_path = ci_util.junit_report_filename(f"{composition_name}-{i}")
-        cmd = step.to_command(shard, shard_count, replicas, junit_report_path)
+        cmd = step.to_command(
+            shard, shard_count, replicas, junit_report_path, metadata_store
+        )
         commands_and_junit_paths.append((cmd, junit_report_path))
 
     return commands_and_junit_paths

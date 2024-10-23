@@ -15,6 +15,7 @@ from materialize.mzcompose.service import (
     Service,
     ServiceDependency,
 )
+from materialize.mzcompose.services.postgres import METADATA_STORE
 
 
 class Testdrive(Service):
@@ -47,12 +48,13 @@ class Testdrive(Service):
         aws_access_key_id: str | None = "minioadmin",
         aws_secret_access_key: str | None = "minioadmin",
         no_consistency_checks: bool = False,
-        external_cockroach: bool = False,
+        external_metadata_store: bool = False,
         external_minio: bool = False,
         fivetran_destination: bool = False,
         fivetran_destination_url: str = "http://fivetran-destination:6874",
         fivetran_destination_files_path: str = "/share/tmp",
         mz_service: str = "materialized",
+        metadata_store: str = METADATA_STORE,
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {}
 
@@ -149,8 +151,8 @@ class Testdrive(Service):
         else:
             entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
 
-        if external_cockroach:
-            depends_graph["cockroach"] = {"condition": "service_healthy"}
+        if external_metadata_store:
+            depends_graph[metadata_store] = {"condition": "service_healthy"}
             entrypoint.append(
                 "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus"
             )

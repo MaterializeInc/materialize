@@ -1604,10 +1604,11 @@ class KillAction(Action):
             Materialized(
                 restart="on-failure",
                 external_minio="toxiproxy",
-                external_cockroach="toxiproxy",
+                external_metadata_store="toxiproxy",
                 ports=["6975:6875", "6976:6876", "6977:6877"],
                 sanity_restart=self.sanity_restart,
                 additional_system_parameter_defaults=self.system_parameters,
+                metadata_store="cockroach",
             )
         ):
             self.composition.up("materialized", detach=True)
@@ -1644,7 +1645,7 @@ class ZeroDowntimeDeployAction(Action):
             Materialized(
                 name=mz_service,
                 external_minio="toxiproxy",
-                external_cockroach="toxiproxy",
+                external_metadata_store="toxiproxy",
                 ports=ports,
                 sanity_restart=self.sanity_restart,
                 deploy_generation=self.deploy_generation,
@@ -1653,6 +1654,7 @@ class ZeroDowntimeDeployAction(Action):
                 ),
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
+                metadata_store="cockroach",
             ),
         ):
             self.composition.up(mz_service, detach=True)

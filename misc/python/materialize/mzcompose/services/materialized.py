@@ -24,6 +24,7 @@ from materialize.mzcompose.service import (
     ServiceDependency,
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
+from materialize.mzcompose.services.postgres import METADATA_STORE
 
 
 class Materialized(Service):
@@ -43,7 +44,7 @@ class Materialized(Service):
         default_size: int | str = Size.DEFAULT_SIZE,
         environment_id: str | None = None,
         propagate_crashes: bool = True,
-        external_cockroach: str | bool = False,
+        external_metadata_store: str | bool = False,
         external_minio: str | bool = False,
         unsafe_mode: bool = True,
         restart: str | None = None,
@@ -60,6 +61,7 @@ class Materialized(Service):
         force_migrations: str | None = None,
         publish: bool | None = None,
         stop_grace_period: str = "60s",
+        metadata_store: str = METADATA_STORE,
     ) -> None:
         if name is None:
             name = "materialized"
@@ -171,9 +173,13 @@ class Materialized(Service):
             f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
         ]
 
-        if external_cockroach:
-            address = "cockroach" if external_cockroach == True else external_cockroach
-            depends_graph["cockroach"] = {"condition": "service_healthy"}
+        if external_metadata_store:
+            address = (
+                metadata_store
+                if external_metadata_store == True
+                else external_metadata_store
+            )
+            depends_graph[metadata_store] = {"condition": "service_healthy"}
             command += [
                 f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
             ]
@@ -198,7 +204,7 @@ class Materialized(Service):
             # Use the service name as the hostname so that it is stable across
             # container recreation. (The default hostname is the container ID,
             # which changes when the container is recreated.) This is important
-            # when using `external_cockroach=False`, as the consensus/blob URLs
+            # when using `external_metadata_store=False`, as the consensus/blob URLs
             # refer to the container's hostname, and we don't want those URLs to
             # change when the container is recreated.
             "hostname": name,

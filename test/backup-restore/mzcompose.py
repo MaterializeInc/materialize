@@ -24,8 +24,13 @@ SERVICES = [
     Cockroach(setup_materialize=True),
     Minio(setup_materialize=True),
     Mc(),
-    Materialized(external_minio=True, external_cockroach=True, sanity_restart=False),
-    Testdrive(no_reset=True),
+    Materialized(
+        external_minio=True,
+        external_metadata_store=True,
+        sanity_restart=False,
+        metadata_store="cockroach",
+    ),
+    Testdrive(no_reset=True, metadata_store="cockroach"),
     Persistcli(),
 ]
 

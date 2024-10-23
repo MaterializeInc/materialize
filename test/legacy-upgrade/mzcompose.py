@@ -58,9 +58,10 @@ SERVICES = [
     # because that would involve maintaining backwards compatibility for all
     # testdrive commands.
     Testdrive(
-        external_cockroach=True,
+        external_metadata_store=True,
         validate_catalog_store=False,
         volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
+        metadata_store="cockroach",
     ),
 ]
 
@@ -188,11 +189,12 @@ def test_upgrade_from_version(
                 if MzVersion.parse_mz(from_version) >= start_version
             ],
             volumes_extra=["secrets:/share/secrets"],
-            external_cockroach=True,
+            external_metadata_store=True,
             system_parameter_defaults=system_parameter_defaults,
             deploy_generation=deploy_generation,
             restart="on-failure",
             sanity_restart=False,
+            metadata_store="cockroach",
         )
         with c.override(mz_from):
             c.up(mz_service)
@@ -201,10 +203,11 @@ def test_upgrade_from_version(
             name=mz_service,
             options=list(mz_options.values()),
             volumes_extra=["secrets:/share/secrets"],
-            external_cockroach=True,
+            external_metadata_store=True,
             system_parameter_defaults=system_parameter_defaults,
             restart="on-failure",
             sanity_restart=False,
+            metadata_store="cockroach",
         )
         with c.override(mz_from):
             c.up(mz_service)
@@ -260,11 +263,12 @@ def test_upgrade_from_version(
                         if version >= start_version
                     ],
                     volumes_extra=["secrets:/share/secrets"],
-                    external_cockroach=True,
+                    external_metadata_store=True,
                     system_parameter_defaults=system_parameter_defaults,
                     deploy_generation=deploy_generation,
                     restart="on-failure",
                     sanity_restart=False,
+                    metadata_store="cockroach",
                 )
             ):
                 c.up(mz_service)
@@ -289,11 +293,12 @@ def test_upgrade_from_version(
         name=mz_service,
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
-        external_cockroach=True,
+        external_metadata_store=True,
         system_parameter_defaults=system_parameter_defaults,
         deploy_generation=deploy_generation,
         restart="on-failure",
         sanity_restart=False,
+        metadata_store="cockroach",
     )
     with c.override(mz_to):
         c.up(mz_service)
@@ -309,9 +314,10 @@ def test_upgrade_from_version(
 
     with c.override(
         Testdrive(
-            external_cockroach=True,
+            external_metadata_store=True,
             validate_catalog_store=True,
             volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
+            metadata_store="cockroach",
         )
     ):
         c.run_testdrive_files(

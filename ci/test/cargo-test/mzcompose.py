@@ -21,7 +21,10 @@ from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import CockroachOrPostgres, Postgres
+from materialize.mzcompose.services.postgres import (
+    CockroachOrPostgresMetadata,
+    Postgres,
+)
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.rustc_flags import Sanitizer
@@ -41,7 +44,7 @@ SERVICES = [
     ),
     SchemaRegistry(),
     Postgres(image="postgres:14.2"),
-    CockroachOrPostgres(),
+    CockroachOrPostgresMetadata(),
     Minio(
         # We need a stable port exposed to the host since we can't pass any arguments
         # to the .pt files used in the tests.
@@ -61,13 +64,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--miri-fast", action="store_true")
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
-    c.up("zookeeper", "kafka", "schema-registry", "postgres", "cockroach", "minio")
+    c.up(
+        "zookeeper", "kafka", "schema-registry", "postgres", c.metadata_store(), "minio"
+    )
     # Heads up: this intentionally runs on the host rather than in a Docker
     # image. See database-issues#3739.
     postgres_url = (
         f"postgres://postgres:postgres@localhost:{c.default_port('postgres')}"
     )
-    cockroach_url = f"postgres://root@localhost:{c.default_port('cockroach')}"
+    cockroach_url = f"postgres://root@localhost:{c.default_port(c.metadata_store())}"
 
     env = dict(
         os.environ,

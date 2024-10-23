@@ -50,15 +50,21 @@ SERVICES = [
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     Balancerd(),
-    Materialized(external_minio=True, external_cockroach=True, sanity_restart=False),
+    Materialized(
+        external_minio=True,
+        external_metadata_store=True,
+        sanity_restart=False,
+        metadata_store="cockroach",
+    ),
     Materialized(
         name="materialized2",
         external_minio=True,
-        external_cockroach=True,
+        external_metadata_store=True,
         sanity_restart=False,
+        metadata_store="cockroach",
     ),
     Clusterd(name="storaged"),
-    Testdrive(),
+    Testdrive(metadata_store="cockroach"),
     Grafana(),
     Prometheus(),
     SshBastionHost(),
@@ -166,6 +172,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "statement_timeout": "'1800s'",
                 "transaction_isolation": f"'{args.transaction_isolation}'",
             },
+            metadata_store="cockroach",
         ),
     ):
         c.up("materialized")

@@ -82,12 +82,13 @@ class MzStart(Action):
             Materialized(
                 name=state.mz_service,
                 external_minio=True,
-                external_cockroach=True,
+                external_metadata_store=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
                 additional_system_parameter_defaults=self.additional_system_parameter_defaults,
+                metadata_store="cockroach",
             )
         ):
             c.up(state.mz_service)
@@ -158,11 +159,12 @@ class MzRestart(Action):
             Materialized(
                 name=state.mz_service,
                 external_minio=True,
-                external_cockroach=True,
+                external_metadata_store=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
+                metadata_store="cockroach",
             )
         ):
             c.kill(state.mz_service)
@@ -189,12 +191,13 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
             Materialized(
                 name=state.mz_service,
                 external_minio=True,
-                external_cockroach=True,
+                external_metadata_store=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
+                metadata_store="cockroach",
             ),
         ):
             c.up(state.mz_service, detach=True)

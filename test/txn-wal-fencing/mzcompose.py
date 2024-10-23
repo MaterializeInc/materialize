@@ -22,7 +22,7 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import CockroachOrPostgres
+from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 
 
 class Operation(Enum):
@@ -87,7 +87,7 @@ WORKLOADS = [
 
 SERVICES = [
     Minio(setup_materialize=True),
-    CockroachOrPostgres(),
+    CockroachOrPostgresMetadata(),
     # Overriden below
     Materialized(name="mz_first"),
     Materialized(name="mz_second"),
@@ -166,7 +166,7 @@ def run_workload(c: Composition, workload: Workload) -> None:
     c.silent = True
 
     c.down(destroy_volumes=True)
-    c.up("minio", "cockroach")
+    c.up("minio", c.metadata_store())
 
     mzs = {
         "mz_first": workload.txn_wal_first,
@@ -177,7 +177,7 @@ def run_workload(c: Composition, workload: Workload) -> None:
         *[
             Materialized(
                 name=mz_name,
-                external_cockroach=True,
+                external_metadata_store=True,
                 external_minio=True,
                 sanity_restart=False,
             )
