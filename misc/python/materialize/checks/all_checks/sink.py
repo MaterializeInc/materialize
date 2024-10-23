@@ -246,6 +246,9 @@ class SinkTables(Check):
 
                 > INSERT INTO sink_large_transaction_table SELECT generate_series, REPEAT('x', 1024) FROM generate_series(1, 100000);
 
+                # Can be slow with a large transaction
+                $ set-sql-timeout duration=120s
+
                 > CREATE MATERIALIZED VIEW sink_large_transaction_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_large_transaction_table;
 
                 > CREATE CLUSTER sink_large_transaction_sink1_cluster SIZE '4';
@@ -291,6 +294,9 @@ class SinkTables(Check):
                 >[version>=11900] CREATE TABLE sink_large_transaction_source FROM SOURCE sink_large_transaction_source_src (REFERENCE "testdrive-sink-large-transaction-sink-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
+
+                # Can be slow with a large transaction
+                $ set-sql-timeout duration=120s
 
                 > CREATE MATERIALIZED VIEW sink_large_transaction_view2
                   AS
