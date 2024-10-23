@@ -637,6 +637,7 @@ impl Coordinator {
                     raw_expr: raw_expr.into(),
                     optimized_expr: local_mir_plan.expr().into(),
                     desc: global_lir_plan.desc().clone(),
+                    global_id,
                     resolved_ids,
                     cluster_id,
                     non_null_assertions,

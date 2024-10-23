@@ -429,6 +429,7 @@ impl Coordinator {
             name: name.clone(),
             item: CatalogItem::Index(Index {
                 create_sql,
+                global_id,
                 keys: keys.into(),
                 on,
                 conn_id: None,
