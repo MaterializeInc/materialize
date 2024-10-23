@@ -25,7 +25,7 @@ use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
     RoleVars,
@@ -364,7 +364,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, CatalogItemId, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -386,7 +386,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, CatalogItemId, GlobalId)>,
         privileges: Vec<MzAclItem>,
         owner_id: RoleId,
         config: ClusterConfig,
@@ -407,7 +407,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, CatalogItemId, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -431,13 +431,13 @@ impl<'a> Transaction<'a> {
         let introspection_source_indexes: Vec<_> = introspection_source_indexes
             .into_iter()
             .zip(oids)
-            .map(|((builtin, index_id), oid)| (builtin, index_id, oid))
+            .map(|((builtin, item_id, index_id), oid)| (builtin, item_id, index_id, oid))
             .collect();
-        for (builtin, index_id, oid) in introspection_source_indexes {
+        for (builtin, item_id, index_id, oid) in introspection_source_indexes {
             let introspection_source_index = IntrospectionSourceIndex {
                 cluster_id,
                 name: builtin.name.to_string(),
-                item_id: index_id.to_item_id(),
+                item_id,
                 index_id,
                 oid,
             };
@@ -561,14 +561,19 @@ impl<'a> Transaction<'a> {
     /// Panics if provided id is not a system id.
     pub fn update_introspection_source_index_gids(
         &mut self,
-        mappings: impl Iterator<Item = (ClusterId, impl Iterator<Item = (String, GlobalId, u32)>)>,
+        mappings: impl Iterator<
+            Item = (
+                ClusterId,
+                impl Iterator<Item = (String, CatalogItemId, GlobalId, u32)>,
+            ),
+        >,
     ) -> Result<(), CatalogError> {
         for (cluster_id, updates) in mappings {
-            for (name, index_id, oid) in updates {
+            for (name, item_id, index_id, oid) in updates {
                 let introspection_source_index = IntrospectionSourceIndex {
                     cluster_id,
                     name,
-                    item_id: index_id.to_item_id(),
+                    item_id,
                     index_id,
                     oid,
                 };
@@ -1327,7 +1332,7 @@ impl<'a> Transaction<'a> {
     /// Panics if provided id is not a system id.
     pub fn update_system_object_mappings(
         &mut self,
-        mappings: BTreeMap<GlobalId, SystemObjectMapping>,
+        mappings: BTreeMap<CatalogItemId, SystemObjectMapping>,
     ) -> Result<(), CatalogError> {
         if mappings.is_empty() {
             return Ok(());
@@ -1335,7 +1340,7 @@ impl<'a> Transaction<'a> {
 
         let n = self.system_gid_mapping.update(
             |_k, v| {
-                if let Some(mapping) = mappings.get(&GlobalId::from(v.global_id)) {
+                if let Some(mapping) = mappings.get(&CatalogItemId::from(v.catalog_id)) {
                     let (_, new_value) = mapping.clone().into_key_value();
                     Some(new_value)
                 } else {
@@ -1543,7 +1548,7 @@ impl<'a> Transaction<'a> {
     /// Insert persisted introspection source index.
     pub fn insert_introspection_source_indexes(
         &mut self,
-        introspection_source_indexes: Vec<(ClusterId, String, GlobalId)>,
+        introspection_source_indexes: Vec<(ClusterId, String, CatalogItemId, GlobalId)>,
         temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
         if introspection_source_indexes.is_empty() {
@@ -1556,10 +1561,10 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .zip(oids)
             .map(
-                |((cluster_id, name, index_id), oid)| IntrospectionSourceIndex {
+                |((cluster_id, name, item_id, index_id), oid)| IntrospectionSourceIndex {
                     cluster_id,
                     name,
-                    item_id: index_id.to_item_id(),
+                    item_id,
                     index_id,
                     oid,
                 },
@@ -1736,13 +1741,11 @@ impl<'a> Transaction<'a> {
 
     pub fn update_source_references(
         &mut self,
-        source_id: GlobalId,
+        source_id: CatalogItemId,
         references: Vec<SourceReference>,
         updated_at: u64,
     ) -> Result<(), CatalogError> {
-        let key = SourceReferencesKey {
-            source_id: source_id.to_item_id(),
-        };
+        let key = SourceReferencesKey { source_id };
         let value = SourceReferencesValue {
             references,
             updated_at,
