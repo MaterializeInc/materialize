@@ -147,9 +147,7 @@ use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::LogDataflowErrors;
-use crate::render::context::{
-    ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
-};
+use crate::render::context::{ArrangementFlavor, Context, MzArrangement, MzArrangementImport};
 use crate::render::continual_task::ContinualTaskCtx;
 use crate::typedefs::{ErrSpine, KeyBatcher};
 
@@ -165,6 +163,7 @@ mod top_k;
 
 pub use context::CollectionBundle;
 pub use join::LinearJoinSpec;
+use mz_timely_util::shutdown::ShutdownToken;
 
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///
@@ -543,8 +542,10 @@ where
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    oks.expire_arrangement_at(expiration);
-                    errs.stream = errs.stream.expire_stream_at(expiration);
+                    oks.expire_arrangement_at(expiration, self.shutdown_token.clone());
+                    errs.stream = errs
+                        .stream
+                        .expire_stream_at(expiration, self.shutdown_token.clone());
                 }
 
                 // Obtain a specialized handle matching the specialized arrangement.
@@ -623,8 +624,10 @@ where
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    oks.expire_arrangement_at(expiration);
-                    errs.stream = errs.stream.expire_stream_at(expiration);
+                    oks.expire_arrangement_at(expiration, self.shutdown_token.clone());
+                    errs.stream = errs
+                        .stream
+                        .expire_stream_at(expiration, self.shutdown_token.clone());
                 }
 
                 let oks_trace = oks.trace_handle();

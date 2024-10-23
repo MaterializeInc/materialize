@@ -21,6 +21,7 @@ use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use tracing::Span;
 
+use crate::catalog::dataflow_expiration::IndefinitenessHelper;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
@@ -464,6 +465,9 @@ impl Coordinator {
                 let notice_builtin_updates_fut = coord
                     .process_dataflow_metainfo(df_meta, exported_index_id, session, notice_ids)
                     .await;
+                let indefiniteness =
+                    IndefinitenessHelper::new(coord.catalog()).indefinite_up_to(exported_index_id);
+                println!("indefiniteness: {:?}", indefiniteness);
 
                 // We're putting in place read holds, such that ship_dataflow,
                 // below, which calls update_read_capabilities, can successfully
@@ -480,6 +484,7 @@ impl Coordinator {
                 df_desc
                     .dataflow_expiration_desc
                     .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
+                df_desc.definiteness = Some(indefiniteness);
 
                 coord
                     .ship_dataflow_and_notice_builtin_table_updates(

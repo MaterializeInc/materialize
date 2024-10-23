@@ -11,7 +11,6 @@
 //! dataflow.
 
 use std::collections::BTreeMap;
-use std::rc::Weak;
 use std::sync::mpsc;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
@@ -28,6 +27,7 @@ use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::shutdown::ShutdownToken;
 use timely::container::columnation::Columnation;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -220,42 +220,6 @@ where
     }
 }
 
-/// Convenient wrapper around an optional `Weak` instance that can be used to check whether a
-/// datalow is shutting down.
-///
-/// Instances created through the `Default` impl act as if the dataflow never shuts down.
-/// Instances created through [`ShutdownToken::new`] defer to the wrapped token.
-#[derive(Clone, Default)]
-pub(super) struct ShutdownToken(Option<Weak<()>>);
-
-impl ShutdownToken {
-    /// Construct a `ShutdownToken` instance that defers to `token`.
-    pub(super) fn new(token: Weak<()>) -> Self {
-        Self(Some(token))
-    }
-
-    /// Probe the token for dataflow shutdown.
-    ///
-    /// This method is meant to be used with the `?` operator: It returns `None` if the dataflow is
-    /// in the process of shutting down and `Some` otherwise.
-    pub(super) fn probe(&self) -> Option<()> {
-        match &self.0 {
-            Some(t) => t.upgrade().map(|_| ()),
-            None => Some(()),
-        }
-    }
-
-    /// Returns whether the dataflow is in the process of shutting down.
-    pub(super) fn in_shutdown(&self) -> bool {
-        self.probe().is_none()
-    }
-
-    /// Returns a reference to the wrapped `Weak`.
-    pub(crate) fn get_inner(&self) -> Option<&Weak<()>> {
-        self.0.as_ref()
-    }
-}
-
 /// A logger for operator hydration events emitted for a dataflow export.
 #[derive(Clone)]
 pub(super) struct HydrationLogger {
@@ -307,10 +271,10 @@ where
     }
 
     /// Panic if the frontier of the underlying arrangement's stream exceeds `expiration` time.
-    pub fn expire_arrangement_at(&mut self, expiration: S::Timestamp) {
+    pub fn expire_arrangement_at(&mut self, expiration: S::Timestamp, token: ShutdownToken) {
         match self {
             MzArrangement::RowRow(inner) => {
-                inner.stream = inner.stream.expire_stream_at(expiration);
+                inner.stream = inner.stream.expire_stream_at(expiration, token);
             }
         }
     }

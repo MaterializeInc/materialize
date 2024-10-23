@@ -33,6 +33,7 @@ pub mod adt;
 pub mod antichain;
 pub mod bytes;
 pub mod catalog_item_id;
+pub mod definity;
 pub mod explain;
 pub mod fixed_length;
 pub mod global_id;
