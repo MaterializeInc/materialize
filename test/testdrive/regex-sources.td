@@ -19,7 +19,7 @@ $ kafka-ingest topic=request-log format=bytes
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE CLUSTER regex_source_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER regex_source_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE regex_source
   IN CLUSTER regex_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-request-log-${testdrive.seed}')
@@ -47,7 +47,7 @@ search_kw
 ------------------
 helper+ins+hennaed
 
-> CREATE CLUSTER regex_source_named_cols_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER regex_source_named_cols_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE regex_source_named_cols (ip, ts, path, search_kw, product_detail_id, code)
   IN CLUSTER regex_source_named_cols_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-request-log-${testdrive.seed}')
@@ -64,7 +64,7 @@ product_detail_id  true      text  ""
 code               true      text  ""
 
 # verify metadata column renaming
-> CREATE CLUSTER regex_source_renamed_cols_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER regex_source_renamed_cols_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE regex_source_renamed_cols (ip, ts, path, search_kw, product_detail_id, code)
   IN CLUSTER regex_source_renamed_cols_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-request-log-${testdrive.seed}')
@@ -95,7 +95,7 @@ $ kafka-ingest topic=malformed-request-log format=bytes
 this line has invalid UTF-8 and will be cause dataflow errors --> \x80 <--
 96.12.83.72 - - [22/Jan/2020 18:59:52] "GET /search/?kw=helper+ins+hennaed HTTP/1.1" 200 -
 
-> CREATE CLUSTER bad_regex_source_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER bad_regex_source_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE bad_regex_source
   IN CLUSTER bad_regex_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-malformed-request-log-${testdrive.seed}')

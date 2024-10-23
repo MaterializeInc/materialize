@@ -18,7 +18,7 @@ $ kafka-create-topic topic=topic partitions=1
 
 > CREATE CONNECTION conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
-> CREATE CLUSTER topic_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER topic_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 
 > CREATE SOURCE topic
   IN CLUSTER topic_cluster

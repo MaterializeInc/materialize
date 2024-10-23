@@ -104,7 +104,7 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
 {"id": 1} {"after": {"row": {"id": 1, "creature": "salamander"}}, "op": "c", "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 {"id": 1} {"after": null, "op": "c", "source": {"file": "binlog3", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
-> CREATE CLUSTER dbz_no_before_cluster SIZE '${arg.default-storage-size}';
+> CREATE CLUSTER dbz_no_before_cluster SIZE '${arg.default-storage-size}', REPLICATION FACTOR = 2;
 > CREATE SOURCE dbz_no_before
   IN CLUSTER dbz_no_before_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbz-no-before-${testdrive.seed}')
