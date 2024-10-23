@@ -1022,6 +1022,8 @@ where
                             }
                         }
 
+                        let _ = snapshot_cap.downgrade(persist_upper.iter());
+
                         if state.is_none() {
                             tracing::info!(worker_id = %source_config.worker_id, source_id = %source_config.id, ?persist_upper, ?resume_upper, "while snapshotting, real stash not yet available");
                             continue;
@@ -1075,12 +1077,11 @@ where
                             )
                             .await
                         {
-                            Ok(_) => {
-                                let _ = snapshot_cap.downgrade(persist_upper.iter());
-                            }
+                            Ok(_) => {}
                             Err(e) => {
                                 // Make sure our persist source can shut down.
                                 persist_token.take();
+                                let _ = snapshot_cap.downgrade(&[]);
                                 UpsertErrorEmitter::<G>::emit(
                                     &mut error_emitter,
                                     "Failed to rehydrate state".to_string(),
