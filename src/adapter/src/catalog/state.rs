@@ -375,13 +375,10 @@ impl CatalogState {
                         seen,
                     ));
                 }
-                id @ ObjectId::Role(_) => {
-                    let unseen = seen.insert(id.clone());
-                    if unseen {
-                        dependents.push(id.clone());
-                    }
+                ObjectId::NetworkPolicy(id) => {
+                    dependents.extend_from_slice(&self.network_policy_dependents(*id, seen));
                 }
-                id @ ObjectId::NetworkPolicy(_) => {
+                id @ ObjectId::Role(_) => {
                     let unseen = seen.insert(id.clone());
                     if unseen {
                         dependents.push(id.clone());
@@ -399,7 +396,7 @@ impl CatalogState {
     /// itself.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
-    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
     /// objects.
     fn cluster_dependents(
         &self,
@@ -430,7 +427,7 @@ impl CatalogState {
     /// itself.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
-    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
     /// objects.
     pub(super) fn cluster_replica_dependents(
         &self,
@@ -451,7 +448,7 @@ impl CatalogState {
     /// itself.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
-    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
     /// objects.
     fn database_dependents(
         &self,
@@ -481,7 +478,7 @@ impl CatalogState {
     /// itself.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
-    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
     /// objects.
     fn schema_dependents(
         &self,
@@ -507,7 +504,7 @@ impl CatalogState {
     /// itself.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
-    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
     /// objects.
     pub(super) fn item_dependents(
         &self,
@@ -531,6 +528,24 @@ impl CatalogState {
             }
         }
         dependents
+    }
+
+    /// Returns all the IDs of all objects that depend on `network_policy_id`, including `network_policy_id`
+    /// itself.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than the roots. This is particularly useful for the order to drop
+    /// objects.
+    pub(super) fn network_policy_dependents(
+        &self,
+        network_policy_id: NetworkPolicyId,
+        _seen: &mut BTreeSet<ObjectId>,
+    ) -> Vec<ObjectId> {
+        let object_id = ObjectId::NetworkPolicy(network_policy_id);
+        // Currently network policies have no dependents
+        // when we add the ability for users or sources/sinks to have policies
+        // this method will need to be updated.
+        vec![object_id]
     }
 
     /// Indicates whether the indicated item is considered stable or not.
@@ -719,6 +734,15 @@ impl CatalogState {
         self.roles_by_name
             .get(role_name)
             .map(|id| &self.roles_by_id[id])
+    }
+
+    pub(super) fn try_get_network_policy_by_name(
+        &self,
+        policy_name: &str,
+    ) -> Option<&NetworkPolicy> {
+        self.network_policies_by_name
+            .get(policy_name)
+            .map(|id| &self.network_policies_by_id[id])
     }
 
     pub(crate) fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {

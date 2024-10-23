@@ -908,6 +908,39 @@ impl Coordinator {
     }
 
     #[instrument]
+    pub(super) async fn sequence_create_network_policy(
+        &mut self,
+        session: &Session,
+        plan::CreateNetworkPolicyPlan { name, rules }: plan::CreateNetworkPolicyPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::CreateNetworkPolicy {
+            rules,
+            name,
+            owner_id: *session.current_role_id(),
+        };
+        self.catalog_transact_conn(Some(session.conn_id()), vec![op])
+            .await
+            .map(|_| ExecuteResponse::CreatedNetworkPolicy)
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_alter_network_policy(
+        &mut self,
+        session: &Session,
+        plan::AlterNetworkPolicyPlan { id, name, rules }: plan::AlterNetworkPolicyPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::AlterNetworkPolicy {
+            id,
+            rules,
+            name,
+            owner_id: *session.current_role_id(),
+        };
+        self.catalog_transact_conn(Some(session.conn_id()), vec![op])
+            .await
+            .map(|_| ExecuteResponse::AlteredObject(ObjectType::NetworkPolicy))
+    }
+
+    #[instrument]
     pub(super) async fn sequence_create_table(
         &mut self,
         ctx: &mut ExecuteContext,

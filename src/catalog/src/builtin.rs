@@ -7318,6 +7318,31 @@ WHERE
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_SHOW_NETWORK_POLICIES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_show_network_policies",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_NETWORK_POLICIES_OID,
+    column_defs: None,
+    sql: "
+WITH comments AS (
+    SELECT id, comment
+    FROM mz_internal.mz_comments
+    WHERE object_type = 'network-policy' AND object_sub_id IS NULL
+)
+SELECT 
+    name,
+    COALESCE(comment, '') as comment
+FROM 
+    mz_internal.mz_network_policies as policy
+LEFT JOIN 
+    comments ON policy.id = comments.id
+WHERE 
+    policy.id NOT LIKE 's%'
+AND 
+    policy.id NOT LIKE 'g%'",
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_cluster_replica_history",
     schema: MZ_INTERNAL_SCHEMA,
@@ -8968,6 +8993,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_COMPUTE_HYDRATION_STATUSES),
         Builtin::View(&MZ_HYDRATION_STATUSES),
         Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),
+        Builtin::View(&MZ_SHOW_NETWORK_POLICIES),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),

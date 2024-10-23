@@ -47,7 +47,7 @@ pub trait AstInfo: Clone {
     /// The type used to specify a column.
     ///
     /// n.b. when implementing visitors, you likely want to build the visitor to
-    /// vist [`crate::ast::ColumnName`] instead of visiting this struct
+    /// visit [`crate::ast::ColumnName`] instead of visiting this struct
     /// directly. The visitor on this should usually just return an error.
     type ColumnReference: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type used for schema names.
@@ -62,6 +62,8 @@ pub trait AstInfo: Clone {
     type CteId: Clone + Hash + Debug + Eq + Ord;
     /// The type used for role references.
     type RoleName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
+    /// The type used for network policy references.
+    type NetworkPolicyName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// They type used for any object names. Objects are the superset of all objects in Materialize.
     type ObjectName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
 }
@@ -79,6 +81,7 @@ impl AstInfo for Raw {
     type DataType = RawDataType;
     type CteId = ();
     type RoleName = Ident;
+    type NetworkPolicyName = RawNetworkPolicyName;
     type ObjectName = UnresolvedObjectName;
 }
 
@@ -165,6 +168,38 @@ where
         F: Fold<Raw, T>,
     {
         f.fold_cluster_name(self)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
+pub enum RawNetworkPolicyName {
+    Unresolved(Ident),
+    Resolved(String),
+}
+
+impl AstDisplay for RawNetworkPolicyName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            RawNetworkPolicyName::Unresolved(id) => f.write_node(id),
+            RawNetworkPolicyName::Resolved(id) => {
+                f.write_str(format!("[{}]", id));
+            }
+        }
+    }
+}
+impl_display!(RawNetworkPolicyName);
+
+impl<T> FoldNode<Raw, T> for RawNetworkPolicyName
+where
+    T: AstInfo,
+{
+    type Folded = T::NetworkPolicyName;
+
+    fn fold<F>(self, f: &mut F) -> Self::Folded
+    where
+        F: Fold<Raw, T>,
+    {
+        f.fold_network_policy_name(self)
     }
 }
 

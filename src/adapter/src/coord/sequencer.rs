@@ -228,6 +228,12 @@ impl Coordinator {
                         .await;
                     ctx.retire(result);
                 }
+                Plan::CreateNetworkPolicy(plan) => {
+                    let res = self
+                        .sequence_create_network_policy(ctx.session(), plan)
+                        .await;
+                    ctx.retire(res);
+                }
                 Plan::Comment(plan) => {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
                     ctx.retire(result);
@@ -469,6 +475,12 @@ impl Coordinator {
                 Plan::AlterTableAddColumn(plan) => {
                     let result = self.sequence_alter_table(ctx.session(), plan).await;
                     ctx.retire(result);
+                }
+                Plan::AlterNetworkPolicy(plan) => {
+                    let res = self
+                        .sequence_alter_network_policy(ctx.session(), plan)
+                        .await;
+                    ctx.retire(res);
                 }
                 Plan::DiscardTemp => {
                     self.drop_temp_items(ctx.session().conn_id()).await;

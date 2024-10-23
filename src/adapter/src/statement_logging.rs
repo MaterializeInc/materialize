@@ -209,6 +209,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedMaterializedView
             | ExecuteResponse::CreatedContinualTask
             | ExecuteResponse::CreatedType
+            | ExecuteResponse::CreatedNetworkPolicy
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::DeclaredCursor
             | ExecuteResponse::Deleted(_)

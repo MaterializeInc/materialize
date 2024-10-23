@@ -1224,6 +1224,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedMaterializedView { .. }
         | ExecuteResponse::CreatedContinualTask { .. }
         | ExecuteResponse::CreatedType
+        | ExecuteResponse::CreatedNetworkPolicy
         | ExecuteResponse::Comment
         | ExecuteResponse::Deleted(_)
         | ExecuteResponse::DiscardedTemp

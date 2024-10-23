@@ -135,6 +135,7 @@ impl StateUpdate {
             roles,
             clusters,
             cluster_replicas,
+            network_policies,
             introspection_sources,
             id_allocator,
             configs,
@@ -157,6 +158,7 @@ impl StateUpdate {
         let roles = from_batch(roles, StateUpdateKind::Role);
         let clusters = from_batch(clusters, StateUpdateKind::Cluster);
         let cluster_replicas = from_batch(cluster_replicas, StateUpdateKind::ClusterReplica);
+        let network_policies = from_batch(network_policies, StateUpdateKind::NetworkPolicy);
         let introspection_sources = from_batch(
             introspection_sources,
             StateUpdateKind::IntrospectionSourceIndex,
@@ -186,6 +188,7 @@ impl StateUpdate {
             .chain(roles)
             .chain(clusters)
             .chain(cluster_replicas)
+            .chain(network_policies)
             .chain(introspection_sources)
             .chain(id_allocators)
             .chain(configs)
