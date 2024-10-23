@@ -16,6 +16,15 @@ ALTER SYSTEM SET enable_connection_validation_syntax TO true;
 COMPLETE 0
 
 statement ok
+CREATE TABLE t (i INT)
+
+query T multiline
+SELECT redacted_create_sql FROM mz_tables WHERE name = 't'
+----
+CREATE TABLE materialize.public.t (i [s20 AS pg_catalog.int4])
+EOF
+
+statement ok
 CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query T multiline
@@ -51,21 +60,12 @@ CREATE TABLE materialize.public.redactable_t (a [s20 AS pg_catalog.int4]) WITH (
 EOF
 
 statement ok
-CREATE TABLE t (i INT)
+CREATE INDEX t_idx_i ON t (i)
 
 query T multiline
-SELECT redacted_create_sql FROM mz_tables WHERE name = 't'
+SELECT redacted_create_sql FROM mz_indexes WHERE name = 't_idx_i'
 ----
-CREATE TABLE materialize.public.t (i [s20 AS pg_catalog.int4])
-EOF
-
-statement ok
-CREATE DEFAULT INDEX ON t
-
-query T multiline
-SELECT redacted_create_sql FROM mz_indexes WHERE name = 't_primary_idx'
-----
-CREATE INDEX t_primary_idx IN CLUSTER [u1] ON [u3 AS materialize.public.t] (i)
+CREATE INDEX t_idx_i IN CLUSTER [u1] ON [u1 AS materialize.public.t] (i)
 EOF
 
 statement ok
