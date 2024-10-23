@@ -19,7 +19,7 @@ use mz_orchestrator::MemoryLimit;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use serde::{Deserialize, Serialize};
@@ -274,7 +274,7 @@ pub struct AwsPrincipalContext {
 }
 
 impl AwsPrincipalContext {
-    pub fn to_principal_string(&self, aws_external_id_suffix: GlobalId) -> String {
+    pub fn to_principal_string(&self, aws_external_id_suffix: CatalogItemId) -> String {
         format!(
             "arn:aws:iam::{}:role/mz_{}_{}",
             self.aws_account_id, self.aws_external_id_prefix, aws_external_id_suffix

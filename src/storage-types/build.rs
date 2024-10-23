@@ -39,6 +39,7 @@ fn main() {
         .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
         .extern_path(".mz_repr.antichain", "::mz_repr::antichain")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
+        .extern_path(".mz_repr.catalog_item_id", "::mz_repr::catalog_item_id")
         .extern_path(".mz_orchestrator", "::mz_orchestrator")
         .extern_path(".mz_pgcopy.copy", "::mz_pgcopy")
         .extern_path(".mz_postgres_util.tunnel", "::mz_postgres_util::tunnel")

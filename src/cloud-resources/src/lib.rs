@@ -18,7 +18,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_repr::Row;
 use serde::{Deserialize, Serialize};
 
@@ -77,17 +77,17 @@ pub trait CloudResourceController: CloudResourceReader {
     /// Creates or updates the specified `VpcEndpoint` Kubernetes object.
     async fn ensure_vpc_endpoint(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         vpc_endpoint: VpcEndpointConfig,
     ) -> Result<(), anyhow::Error>;
 
     /// Deletes the specified `VpcEndpoint` Kubernetes object.
-    async fn delete_vpc_endpoint(&self, id: GlobalId) -> Result<(), anyhow::Error>;
+    async fn delete_vpc_endpoint(&self, id: CatalogItemId) -> Result<(), anyhow::Error>;
 
     /// Lists existing `VpcEndpoint` Kubernetes objects.
     async fn list_vpc_endpoints(
         &self,
-    ) -> Result<BTreeMap<GlobalId, VpcEndpointStatus>, anyhow::Error>;
+    ) -> Result<BTreeMap<CatalogItemId, VpcEndpointStatus>, anyhow::Error>;
 
     /// Lists existing `VpcEndpoint` Kubernetes objects.
     async fn watch_vpc_endpoints(&self) -> BoxStream<'static, VpcEndpointEvent>;
@@ -99,26 +99,26 @@ pub trait CloudResourceController: CloudResourceReader {
 #[async_trait]
 pub trait CloudResourceReader: Debug + Send + Sync {
     /// Reads the specified `VpcEndpoint` Kubernetes object.
-    async fn read(&self, id: GlobalId) -> Result<VpcEndpointStatus, anyhow::Error>;
+    async fn read(&self, id: CatalogItemId) -> Result<VpcEndpointStatus, anyhow::Error>;
 }
 
 /// Returns the name to use for the VPC endpoint with the given ID.
-pub fn vpc_endpoint_name(id: GlobalId) -> String {
+pub fn vpc_endpoint_name(id: CatalogItemId) -> String {
     // This is part of the contract with the VpcEndpointController in the
     // cloud infrastructure layer.
     format!("connection-{id}")
 }
 
 /// Attempts to return the ID used to create the given VPC endpoint name.
-pub fn id_from_vpc_endpoint_name(vpc_endpoint_name: &str) -> Option<GlobalId> {
+pub fn id_from_vpc_endpoint_name(vpc_endpoint_name: &str) -> Option<CatalogItemId> {
     vpc_endpoint_name
         .split_once('-')
-        .and_then(|(_, id_str)| GlobalId::from_str(id_str).ok())
+        .and_then(|(_, id_str)| CatalogItemId::from_str(id_str).ok())
 }
 
 /// Returns the host to use for the VPC endpoint with the given ID and
 /// optionally in the given availability zone.
-pub fn vpc_endpoint_host(id: GlobalId, availability_zone: Option<&str>) -> String {
+pub fn vpc_endpoint_host(id: CatalogItemId, availability_zone: Option<&str>) -> String {
     let name = vpc_endpoint_name(id);
     // This naming scheme is part of the contract with the VpcEndpointController
     // in the cloud infrastructure layer.
@@ -130,7 +130,7 @@ pub fn vpc_endpoint_host(id: GlobalId, availability_zone: Option<&str>) -> Strin
 
 #[derive(Debug)]
 pub struct VpcEndpointEvent {
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     pub status: VpcEndpointState,
     pub time: DateTime<Utc>,
 }

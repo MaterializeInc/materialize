@@ -46,3 +46,4 @@ pub trait AlterCompatible: std::fmt::Debug + PartialEq {
 }
 
 impl AlterCompatible for mz_repr::GlobalId {}
+impl AlterCompatible for mz_repr::CatalogItemId {}

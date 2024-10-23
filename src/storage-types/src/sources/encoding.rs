@@ -76,7 +76,7 @@ impl RustType<ProtoSourceDataEncoding> for SourceDataEncoding {
 }
 
 impl<C: ConnectionAccess> AlterCompatible for SourceDataEncoding<C> {
-    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
@@ -323,7 +323,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<AvroEncoding, R>
 }
 
 impl<C: ConnectionAccess> AlterCompatible for AvroEncoding<C> {
-    fn alter_compatible(&self, id: mz_repr::GlobalId, other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }

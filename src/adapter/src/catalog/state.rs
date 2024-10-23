@@ -2260,7 +2260,7 @@ impl CatalogState {
 impl ConnectionResolver for CatalogState {
     fn resolve_connection(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
     ) -> mz_storage_types::connections::Connection<InlinedConnection> {
         use mz_storage_types::connections::Connection::*;
         match self

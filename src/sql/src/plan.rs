@@ -681,7 +681,8 @@ pub struct CreateConnectionPlan {
 
 #[derive(Debug)]
 pub struct ValidateConnectionPlan {
-    pub id: GlobalId,
+    /// ID of the connection in the Catalog.
+    pub id: CatalogItemId,
     /// The connection to validate.
     pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
 }
@@ -1130,7 +1131,7 @@ pub enum AlterConnectionAction {
 
 #[derive(Debug)]
 pub struct AlterConnectionPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub action: AlterConnectionAction,
 }
 
@@ -1216,7 +1217,7 @@ pub struct AlterClusterSwapPlan {
 
 #[derive(Debug)]
 pub struct AlterSecretPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub secret_as: MirScalarExpr,
 }
 

@@ -874,7 +874,7 @@ pub struct CreateSecretFinish {
 #[derive(Debug)]
 pub struct RotateKeysSecretEnsure {
     validity: PlanValidity,
-    id: GlobalId,
+    id: CatalogItemId,
 }
 
 #[derive(Debug)]
