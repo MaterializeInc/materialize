@@ -287,11 +287,18 @@ def run_one_scenario(
     return result
 
 
+resolved_tags: dict[tuple[str, frozenset[tuple[str, MzVersion]]], str] = {}
+
+
 def resolve_tag(tag: str, scenario_class: type[Scenario], scale: str | None) -> str:
     if tag == "common-ancestor":
-        return resolve_ancestor_image_tag(
-            get_ancestor_overrides_for_performance_regressions(scenario_class, scale)
+        overrides = get_ancestor_overrides_for_performance_regressions(
+            scenario_class, scale
         )
+        key = (tag, frozenset(overrides.items()))
+        if key not in resolved_tags:
+            resolved_tags[key] = resolve_ancestor_image_tag(overrides)
+        return resolved_tags[key]
 
     return tag
 
